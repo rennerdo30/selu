@@ -34,7 +34,7 @@ fn shared_runtime_translations_and_buffer() {
     let b = compile(
         "log.warnOnce`once`; command(\"/two\", () => {}); print(L`${1} then ${2}%`); for (let i = 0; i < 205; i++) { log.info`entry ${i}`; }",
     );
-    sim.load_addon("Shared", &[("setup.lua".into(), "local _, ns = ...; ns.wow = nil".into()),("a.lua".into(), a), ("translation.lua".into(), "local _, ns = ...; assert(#ns.wow.buffer == 1); ns.wow.locales.enUS = {['{0} then {1}%'] = '{1}% before {0}'}".into()), ("b.lua".into(),b), ("verify.lua".into(), "local _, ns = ...; assert(#ns.wow.buffer == 200); assert(ns.wow.buffer[1].message == 'entry 5'); assert(ns.wow.buffer[200].message == 'entry 204'); assert(ns.wow.commands == 2); assert(rawget(_G, 'SLASH_SELU_Shared_1') == nil); assert(SLASH_SELU_Shared_1_1 == '/one'); assert(SLASH_SELU_Shared_2_1 == '/two')".into())]).unwrap();
+    sim.load_addon("Shared", &[("setup.lua".into(), "local _, ns = ...; ns[false] = nil".into()),("a.lua".into(), a), ("translation.lua".into(), "local _, ns = ...; assert(#ns[false].buffer == 1); ns[false].locales.enUS = {['{0} then {1}%'] = '{1}% before {0}'}".into()), ("b.lua".into(),b), ("verify.lua".into(), "local _, ns = ...; assert(#ns[false].buffer == 200); assert(ns[false].buffer[1].message == 'entry 5'); assert(ns[false].buffer[200].message == 'entry 204'); assert(ns[false].commands == 2); assert(rawget(_G, 'SLASH_SELU_Shared_1') == nil); assert(SLASH_SELU_Shared_1_1 == '/one'); assert(SLASH_SELU_Shared_2_1 == '/two')".into())]).unwrap();
     assert_eq!(sim.prints(), ["2% before 1"]);
 }
 #[test]
@@ -167,12 +167,12 @@ fn review_fallback_allocation() {
 fn review_literal_braces_and_cache() {
     let sim = Sim::new().unwrap();
     let src = "global label = () => L`literal {0} ${2}`;";
-    sim.load_addon("Braces", &[("a.lua".into(),compile(src)),("b.lua".into(), "local _, ns = ...; assert(label() == 'literal {0} 2'); ns.wow.locales.enUS = {['literal {{0}} {0}'] = 'translated {{0}} {0}'}; assert(label() == 'translated {0} 2'); local cached = ns.wow.formats['translated {{0}} {0}']; assert(type(cached) == 'table'); assert(label() == 'translated {0} 2'); assert(ns.wow.formats['translated {{0}} {0}'] == cached)".into())]).unwrap();
+    sim.load_addon("Braces", &[("a.lua".into(),compile(src)),("b.lua".into(), "local _, ns = ...; assert(label() == 'literal {0} 2'); ns[false].locales.enUS = {['literal {{0}} {0}'] = 'translated {{0}} {0}'}; assert(label() == 'translated {0} 2'); local cached = ns[false].formats['translated {{0}} {0}']; assert(type(cached) == 'table'); assert(label() == 'translated {0} 2'); assert(ns[false].formats['translated {{0}} {0}'] == cached)".into())]).unwrap();
 }
 #[test]
 fn review_log_exact_message() {
     let sim = Sim::new().unwrap();
-    sim.load_addon("Log", &[("a.lua".into(),compile("log.info`100% ${true}`;")),("verify.lua".into(),"local _, ns = ...; assert(#ns.wow.buffer == 1); assert(ns.wow.buffer[1].level == 'info'); assert(ns.wow.buffer[1].message == '100% true')".into())]).unwrap();
+    sim.load_addon("Log", &[("a.lua".into(),compile("log.info`100% ${true}`;")),("verify.lua".into(),"local _, ns = ...; assert(#ns[false].buffer == 1); assert(ns[false].buffer[1].level == 'info'); assert(ns[false].buffer[1].message == '100% true')".into())]).unwrap();
 }
 #[test]
 fn review_template_limit() {
@@ -181,4 +181,79 @@ fn review_template_limit() {
         .map(|tag| codes(&format!("{tag}`{}`;", "${1}".repeat(240))))
         .collect();
     assert_eq!(actual, [vec!["SELU0445"], vec!["SELU0445"]]);
+}
+#[test]
+fn modules_share_wow_runtime_in_toc_order() {
+    use std::process::Command;
+    let dir = std::env::temp_dir().join(format!("selu-d4-module-runtime-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"SharedWow\"\ntargets = [\"forever@1.0\"]\n",
+    )
+    .unwrap();
+    for (file, src) in [
+        (
+            "first.selu",
+            r#"const ADDON = "user"; const ns = "private"; export const first = L`First`; command("/first", (args) => { print(L`First`); print(args); }); log.info`first`; log.warnOnce`shared`; on PLAYER_LOGIN() { print(ADDON); print(ns); }"#,
+        ),
+        (
+            "main.selu",
+            r#"import { first } from "./first"; import {} from "./leaf"; const second = L`Second`; command("/second", (args) => { print(L`Second`); print(args); }); log.info`second`; log.warnOnce`shared`; on PLAYER_LOGIN() { print(first); }"#,
+        ),
+        ("leaf.selu", r#"log.debug`disabled`;"#),
+    ] {
+        std::fs::write(dir.join("src").join(file), src).unwrap();
+    }
+    let result = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("build")
+        .arg(&dir)
+        .arg("--manifest-dir")
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let dist = dir.join("dist/SharedWow");
+    let toc = std::fs::read_to_string(dist.join("SharedWow.toc")).unwrap();
+    let mut files: Vec<_> = toc
+        .lines()
+        .filter(|l| l.ends_with(".lua"))
+        .map(|n| (n.to_owned(), std::fs::read_to_string(dist.join(n)).unwrap()))
+        .collect();
+    let sim = Sim::new().unwrap();
+    // This assertion runs after all compiled modules with exactly the same namespace.
+    files.push(("verify.lua".into(), r#"local _, ns = ...; local w = ns[false]; assert(w.commands == 2); assert(#w.buffer == 3); assert(w.buffer[1].level == 'info' and w.buffer[1].message == 'first'); assert(w.buffer[2].level == 'warnOnce' and w.buffer[2].message == 'shared'); assert(w.buffer[3].level == 'info' and w.buffer[3].message == 'second'); assert(type(ns[true]) == 'function'); w.locales.enUS = {First = 'Premier', Second = 'Deuxieme'}"#.into()));
+    sim.load_addon("SharedWow", &files).unwrap();
+    sim.slash("/first one").unwrap();
+    sim.slash("/second two").unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(
+        sim.prints(),
+        [
+            "Premier", "one", "Deuxieme", "two", "user", "private", "First"
+        ]
+    );
+    for (file, lua) in &files[..files.len() - 1] {
+        assert_eq!(lua.matches(" = ...").count(), 1, "loader in {file}: {lua}");
+        assert!(
+            lua.starts_with("local __selu_addon, __selu_ns = ...\n__selu_ns = __selu_ns or {}"),
+            "{lua}"
+        );
+    }
+    // Exercise the public module entry directly: locale keys must survive it.
+    let p = selu_syntax::parse("key.selu", "export const text = L`Module ${3}`;").unwrap();
+    let m = manifest();
+    let c = selu_check::check_program(&p, &m);
+    assert!(!c.has_errors());
+    let lowered = selu_lower::lower_module(
+        &p,
+        &m,
+        &c.types,
+        selu_lower::ModuleBindings::new("key".into(), Default::default(), &p),
+    );
+    assert_eq!(lowered.locale_keys, ["Module {0}"]);
 }

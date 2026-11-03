@@ -114,7 +114,14 @@ pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lower
     }
     out.extend(l.block(&program.stmts));
     if let Some(prologue) = l.wow_prologue() {
-        out.splice(0..0, prologue);
+        out.splice(
+            0..0,
+            [raw(
+                "local __selu_addon, __selu_ns = ...\n__selu_ns = __selu_ns or {}",
+            )]
+            .into_iter()
+            .chain(prologue),
+        );
     }
     let printed = lua::print_block(&out);
     Lowered {
@@ -180,6 +187,9 @@ pub fn lower_module(
         out.push(raw(""));
     }
     out.extend(l.block(&program.stmts));
+    if let Some(prologue) = l.wow_prologue() {
+        out.splice(2..2, prologue);
+    }
     let printed = lua::print_block(&out);
     Lowered {
         locale_keys: l.wow.keys,

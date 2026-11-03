@@ -100,11 +100,9 @@ impl Lowerer<'_> {
         })
     }
 }
-const RUNTIME: &str = r##"local ADDON, ns = ...
-ns = ns or {}
-if not ns.wow then
+const RUNTIME: &str = r##"if not __selu_ns[false] then
   local w = { buffer = {}, levels = { info = true, warn = true, error = true, warnOnce = true }, once = {}, commands = 0, locales = {}, formats = {} }
-  ns.wow = w
+  __selu_ns[false] = w
   function w.enabled(level, key)
     return w.levels[level] and (level ~= "warnOnce" or not w.once[key])
   end
@@ -116,7 +114,7 @@ if not ns.wow then
   function w.command(...)
     local count = select("#", ...)
     w.commands = w.commands + 1
-    local key = "SELU_" .. (ADDON or "Addon") .. "_" .. w.commands .. "_"
+    local key = "SELU_" .. (__selu_addon or "Addon") .. "_" .. w.commands .. "_"
     for i = 1, count - 1 do _G["SLASH_" .. key .. i] = select(i, ...) end
     local callback = select(count, ...)
     SlashCmdList[key] = function(msg) callback(msg) end
@@ -161,4 +159,4 @@ if not ns.wow then
     return string.format(cached.format, unpack(args, 1, #cached.order))
   end
 end
-local __selu_wow = ns.wow"##;
+local __selu_wow = __selu_ns[false]"##;

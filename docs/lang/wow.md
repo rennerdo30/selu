@@ -15,14 +15,16 @@ shadowed. Supported logging tags are debug, info, warn, error and warnOnce.
 
 The single Lowerer field WowState holds usage and unique locale keys in source
 encounter order. `wow_prologue()` is self-contained and returns a runtime block
-only after lowering encounters a built-in. D1 can call it after lowering its
-module body, inserting the result before that body alongside the event prologue.
-The runtime obtains `local ADDON, ns = ...`; `ns.wow` is created only once.
+only after lowering encounters a built-in. Both lower and lower_module call it after lowering their body and insert its
+result before executable code. lower_module retains D1's one loader line and
+fallback namespace assignment; lower supplies those same reserved loader locals
+only when the file uses the WoW runtime. The runtime itself has no loader line.
+The shared lowering entry supplies `local __selu_addon, __selu_ns = ...`; `__selu_ns[false]` is created only once.
 Multiple files loaded with the same namespace share commands, levels, buffer,
 once set and translations. Standalone load_files falls back to a file-local table.
 
-`ns.wow.buffer` holds at most 200 `{level, message}` entries, oldest first.
-`ns.wow.levels` enables info/warn/error/warnOnce initially; debug is disabled.
+`__selu_ns[false].buffer` holds at most 200 `{level, message}` entries, oldest first.
+`__selu_ns[false].levels` enables info/warn/error/warnOnce initially; debug is disabled.
 Generated if guards surround interpolation evaluation and string.format, so a
 disabled level evaluates no arguments and builds no string. warnOnce uses the
 English template key (not interpolated values), shared across files. The once
@@ -43,7 +45,7 @@ element must accept string. Known primitive hook targets are rejected; untyped
 game values and object tables are allowed.
 
 L templates collect English keys using {0}, {1}, etc. in Lowered.locale_keys.
-`ns.wow.locales[GetLocale()][key]` contains translated sentences with those
+`__selu_ns[false].locales[GetLocale()][key]` contains translated sentences with those
 placeholders. Literal braces in English key text are doubled: `{{` and `}}`.
 Translations use the same escapes. For example L`literal {0} ${2}` has key
 `literal {{0}} {0}`; translation `translated {{0}} {0}` renders
@@ -51,7 +53,7 @@ Translations use the same escapes. For example L`literal {0} ${2}` has key
 Missing entries use the English format before creating any tables. A literal-only
 fallback returns the literal directly, including percent signs. Calls read as
 `__selu_wow.text(key, fallback, ...)`; the helper returns the finished string.
-Translations are parsed once per distinct translation string into `ns.wow.formats`
+Translations are parsed once per distinct translation string into `__selu_ns[false].formats`
 (format, literal text, argument order and maximum index). Changing a translation
 selects or creates the entry for its new text. Repeated/reordered arguments work.
 Only translated interpolations build temporary argument tables per call.
@@ -97,3 +99,27 @@ that a repeated translation retains the same parsed format entry.
 The slash-and-hooks example shares its real slash callback with PLAYER_LOGIN,
 shows a hooked frame, reads a hooked clock and logs both actions. Hand-computed
 output is Status panel ready, 3 tasks ready, then Clock: 0.
+
+## D1 integration
+
+Rebased onto master 0778afe. The loader uses reserved __selu_addon/__selu_ns
+locals, so user ADDON/ns variables cannot collide. The event registration
+closure occupies __selu_ns[true]; WoW state occupies __selu_ns[false], avoiding
+module path keys (strings) and retaining one log buffer, warn-once set, slash
+counter, locale table and parsed-format cache for the entire addon.
+The runtime closes over the first file's reserved addon identity and shared
+namespace. Each later file aliases the existing runtime with local __selu_wow.
+
+The public lower_module path initializes WowState and returns its locale_keys.
+Its runtime block is inserted after the existing two loader statements, before
+module declarations or user code. Files without import/export/event syntax use
+lower's equivalent WoW initialization. Plain files without WoW uses retain their
+original output. Standalone event-only lower output keeps its existing event
+runtime; project event modules retain D1's shared registration closure.
+
+The multi-module regression builds a real addon with imports, loads its files
+in TOC order with Sim::load_addon, checks ordered shared logs and warnOnce,
+dispatches both commands, shares translations, fires handlers, verifies user
+ADDON/ns bindings, and checks exactly one reserved loader per generated file.
+A direct lower_module call also checks collected locale keys. Before integration
+loading first.lua failed with an attempt to index missing __selu_wow.

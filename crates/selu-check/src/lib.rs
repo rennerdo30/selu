@@ -1545,12 +1545,9 @@ mod tests {
 
     #[test]
     fn constructs_still_being_built_are_reported_not_lowered() {
-        for src in [
-            "class A {}
-",
-        ] {
-            let c = codes(src);
-            assert!(c.contains(&"SELU0390".to_string()), "{src}: {c:?}");
-        }
+        let src = "class A {}
+";
+        let c = codes(src);
+        assert!(c.contains(&"SELU0390".to_string()), "{src}: {c:?}");
     }
 }
