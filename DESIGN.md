@@ -108,9 +108,8 @@ Most addon bugs today are found by logging in, reloading and guessing. Selu
 should let you find them on your desktop first.
 
 ```
-selu run --target forever         # run the addon in a simulated client
-selu test                         # run test scenarios
-selu studio                       # the standalone simulator app (below)
+selu debug --target forever       # build, then start the virtual WoW simulator
+selu test                         # run test scenarios headless, same simulator
 ```
 
 **Simulator.** The compiled Lua runs in a Lua 5.1 VM with a fake game client
@@ -153,12 +152,19 @@ test("bar moves after combat", () => {
 ### Selu Studio: the standalone simulator app (priority)
 
 The most important tool is a desktop app with its own WoW UI engine, not an
-editor plugin. Open an addon, pick a target, and it runs as if the game had
-loaded it.
+editor plugin. **`selu debug` is how you start it:** it builds the addon, opens
+a virtual WoW client in a window, loads the addon as the game would (TOC order,
+`ADDON_LOADED`, `PLAYER_LOGIN`, `PLAYER_ENTERING_WORLD`) and attaches the
+debugger. Rebuilding on save reloads the addon in place, like a `/reload`.
 
 ```
-selu studio ./MyAddon --target forever
+selu debug                        # current folder, default target
+selu debug ./MyAddon --target retail
+selu debug --break-on-load        # pause before the first line runs
 ```
+
+Plain Lua addons work the same way (`selu debug ./SomeLuaAddon`), without a
+build step.
 
 What it has:
 
