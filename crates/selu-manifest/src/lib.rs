@@ -78,6 +78,15 @@ fn yes() -> bool {
     true
 }
 
+/// A global value that is not a function, e.g. a frame like `UIParent` or
+/// a table like `SlashCmdList`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalEntry {
+    pub name: String,
+    pub evidence: Evidence,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventParam {
@@ -108,6 +117,8 @@ pub struct Manifest {
     pub functions: Vec<FunctionEntry>,
     #[serde(default)]
     pub events: Vec<EventEntry>,
+    #[serde(default)]
+    pub globals: Vec<GlobalEntry>,
     /// True for hand-made test fixtures, never for generated manifests.
     #[serde(default)]
     pub fixture: bool,
@@ -124,6 +135,19 @@ impl Manifest {
     }
     pub fn event(&self, name: &str) -> Option<&EventEntry> {
         self.events.iter().find(|e| e.name == name)
+    }
+    /// Whether `name` is a global the game defines on this target: a
+    /// function, a global value, or a namespace such as `C_Timer` (the root
+    /// of at least one `C_Timer.X` function).
+    pub fn has_global(&self, name: &str) -> bool {
+        self.function(name).is_some()
+            || self.globals.iter().any(|g| g.name == name)
+            || self.functions.iter().any(|f| {
+                f.available
+                    && f.name.len() > name.len()
+                    && f.name.starts_with(name)
+                    && f.name.as_bytes()[name.len()] == b'.'
+            })
     }
 }
 

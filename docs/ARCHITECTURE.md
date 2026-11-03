@@ -23,7 +23,7 @@ terminal with codespan-reporting.
 | `selu-diagnostics` | `Diagnostic`, `Span`, terminal rendering. No other Selu deps. |
 | `selu-syntax` | Hand-written lexer and recursive-descent parser for the Selu subset (DESIGN.md section 9). Semicolons are required; a missing one is `SELU0101` with a fix suggestion. |
 | `selu-manifest` | Serde types for a target manifest, JSON loading, `flavour@version` parsing and partial-version resolution to the newest matching manifest. Per-version differences (Lua dialect, availability, restriction flags, `returnsSecret`, evidence `documented`/`verified`) live in manifests, never in compiler code. |
-| `selu-check` | Minimal semantic pass: a global call or `on EVENT` the target lacks is an error naming the target (`SELU0301`/`SELU0302`). |
+| `selu-check` | Semantic pass: block scopes and name resolution (below), and a global call or `on EVENT` the target lacks is an error naming the target (`SELU0301`/`SELU0302`). `rules.rs` holds target-independent rules (Lua keywords as names, where assignment and `??` may appear). |
 | `selu-lower` | Emits readable Lua 5.1 (2-space indent, local names preserved, `a.B(x)` becomes `a:B(x)`; manifest namespace functions like `C_Foo.Bar(x)` stay plain calls), a generated-line -> source-span map, shared event-frame dispatch for `on EVENT`, and the `.toc` whose `## Interface:` comes from the manifest. |
 | `selu-sim` | `mlua` (Lua 5.1, vendored): boot a VM, load files in TOC order, simulated clock (`GetTime`), captured `print`, minimal `CreateFrame` (`RegisterEvent`/`UnregisterEvent`/`SetScript`/`Show`/`Hide`/`IsShown`), and `fire(event, ...)` from Rust. Unmodelled globals and frame methods log `not simulated: X` once and return a no-op. |
 | `selu-cli` | `selu build` (working), `selu targets` (lists known manifests), `selu test`/`debug`/`probe` (honest stubs, exit non-zero). |
@@ -41,11 +41,34 @@ terminal with codespan-reporting.
   `target forever@1.0 -> 1.0.0.1000`. An unknown build is an error listing
   the closest known builds; `@installed` is parsed but not implemented yet.
 
+## Scopes and names (decided while building the language core)
+
+- `let`/`const` are block-scoped as in TypeScript; an inner block may
+  shadow an outer name. Function parameters share the body's scope, so
+  `function f(a) { let a; }` is a redeclaration (`SELU0312`).
+- A name can't be used before its declaration in the same function
+  (`SELU0313`). Function declarations are **not** hoisted for direct calls:
+  `f(); function f() {}` at the same level is an error ("move `function f`
+  above this line"). From inside a function body that runs later, any name
+  of an enclosing block may be used, whatever the textual order. The
+  lowering then emits one `local a, b` at the top of that block and turns the
+  declarations into assignments, because Lua would otherwise read a global.
+- Reading an undeclared name is `SELU0310`. Declared means: a local, a
+  `global` of this file, or a game global from the target manifest
+  (functions, the manifest's `globals` list, and namespace roots such as
+  `C_Timer`). Non-function game globals (`UIParent`, `SlashCmdList`...) live
+  in the manifest's `globals` list, never in compiler code.
+- Writing an undeclared name is `SELU0314` ("writing a global needs
+  `global`"); writing a game global is `SELU0315`; `const` and function
+  names can't be assigned (`SELU0311`).
+- `global name = value;` is a statement allowed only at the top level of a
+  file (`SELU0316`), always with a starting value. `global` is a contextual
+  keyword, so it is still a valid variable name.
+
 ## Known simplifications in this base
 
-- `selu-check` collects local names without full scoping and only checks
-  plain global calls, `C_*` namespace calls, and event names. Method calls
-  on objects await a typed pass.
+- `selu-check` checks plain global calls, `C_*` namespace calls, and event
+  names against the target. Method calls on objects await the typed pass.
 - `??` keeps `false` and evaluates each side at most once. In a
   declaration, assignment or `return` it lowers to statements
   (`local x = a` then `if x == nil then x = b end`). Anywhere else only the

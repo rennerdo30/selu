@@ -31,6 +31,9 @@ impl Parser {
             .span
             .clone()
     }
+    fn peek_at(&self, n: usize) -> Option<&Tok> {
+        self.tokens.get(self.pos + n).map(|t| &t.tok)
+    }
     fn at(&self, t: &Tok) -> bool {
         self.peek() == t
     }
@@ -145,7 +148,7 @@ impl Parser {
             Tok::Const | Tok::Let => {
                 let is_const = self.at(&Tok::Const);
                 self.bump();
-                let (name, _) = self.ident("a variable name")?;
+                let (name, name_span) = self.ident("a variable name")?;
                 let ty = self.ty()?;
                 let init = if self.eat(&Tok::Eq) {
                     Some(Box::new(self.expr()?))
@@ -162,16 +165,22 @@ impl Parser {
                 StmtKind::VarDecl {
                     is_const,
                     name,
+                    name_span,
                     ty,
                     init,
                 }
             }
             Tok::Function => {
                 self.bump();
-                let (name, _) = self.ident("a function name")?;
+                let (name, name_span) = self.ident("a function name")?;
                 let params = self.params()?;
                 let (body, _) = self.block()?;
-                StmtKind::FuncDecl { name, params, body }
+                StmtKind::FuncDecl {
+                    name,
+                    name_span,
+                    params,
+                    body,
+                }
             }
             Tok::On => {
                 self.bump();
@@ -217,6 +226,23 @@ impl Parser {
                 }
             }
             Tok::LBrace => StmtKind::Block(self.block()?.0),
+            // `global` is a contextual keyword: only `global <name>` starts a
+            // global declaration, so `global` stays usable as a plain name.
+            Tok::Ident(ref w)
+                if w == "global" && matches!(self.peek_at(1), Some(Tok::Ident(_))) =>
+            {
+                self.bump();
+                let (name, name_span) = self.ident("a global name")?;
+                self.expect(&Tok::Eq, "`=`: a global needs a starting value")?;
+                let init = self.expr()?;
+                let upto = Span::new(&self.file, start.start, init.span.end);
+                self.semi(&upto)?;
+                StmtKind::Global {
+                    name,
+                    name_span,
+                    init: Box::new(init),
+                }
+            }
             _ => {
                 let e = self.expr()?;
                 let upto = Span::new(&self.file, start.start, e.span.end);

@@ -18,11 +18,13 @@ pub enum StmtKind {
     VarDecl {
         is_const: bool,
         name: String,
+        name_span: Span,
         ty: Option<String>,
         init: Option<Box<Expr>>,
     },
     FuncDecl {
         name: String,
+        name_span: Span,
         params: Vec<Param>,
         body: Vec<Stmt>,
     },
@@ -30,6 +32,13 @@ pub enum StmtKind {
         event: String,
         params: Vec<Param>,
         body: Vec<Stmt>,
+    },
+    /// `global name = value;`: declares and writes a Lua global. The only
+    /// way Selu code creates a global (SPEC-V1 2.2).
+    Global {
+        name: String,
+        name_span: Span,
+        init: Box<Expr>,
     },
     Return(Option<Box<Expr>>),
     If {

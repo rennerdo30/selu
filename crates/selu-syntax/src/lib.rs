@@ -4,6 +4,7 @@
 pub mod ast;
 pub mod lexer;
 pub mod parser;
+pub mod visit;
 
 pub use ast::*;
 pub use parser::parse;

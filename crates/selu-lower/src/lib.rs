@@ -5,7 +5,7 @@
 
 use selu_diagnostics::Span;
 use selu_manifest::Manifest;
-use selu_syntax::{Expr, ExprKind, Program, Stmt, StmtKind, is_lua_keyword};
+use selu_syntax::{Expr, ExprKind, Program, Stmt, StmtKind, is_lua_keyword, visit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -74,9 +74,7 @@ pub fn lower(program: &Program, manifest: &Manifest) -> Lowered {
         w.raw("end");
         w.raw("");
     }
-    for s in &program.stmts {
-        w.stmt(s, 0);
-    }
+    w.stmts(&program.stmts, 0);
     Lowered {
         lua: w.out,
         source_map: w.map,
@@ -108,28 +106,56 @@ impl Writer<'_> {
         self.out.push('\n');
         self.line += 1;
     }
+    /// A block. Names the block declares but uses earlier (only possible
+    /// inside a function body that runs later) are declared up front with
+    /// one `local a, b`, so the earlier code sees the same variable.
     fn stmts(&mut self, stmts: &[Stmt], indent: usize) {
+        let early = used_before_declaration(stmts);
+        if let Some(first) = stmts.first()
+            && !early.is_empty()
+        {
+            self.emit(indent, &format!("local {}", early.join(", ")), &first.span);
+        }
         for s in stmts {
-            self.stmt(s, indent);
+            let declared = match &s.kind {
+                StmtKind::VarDecl { name, .. } | StmtKind::FuncDecl { name, .. } => Some(name),
+                _ => None,
+            };
+            let forward = declared.is_some_and(|n| early.contains(n));
+            self.stmt(s, indent, forward);
         }
     }
-    fn stmt(&mut self, s: &Stmt, indent: usize) {
+    /// `forward`: the statement declares a name that was already declared
+    /// with `local` at the top of the block, so it assigns instead.
+    fn stmt(&mut self, s: &Stmt, indent: usize, forward: bool) {
+        let local = if forward { "" } else { "local " };
         match &s.kind {
+            StmtKind::VarDecl { init: None, .. } if forward => {}
             StmtKind::VarDecl { name, init, .. } => match init {
                 Some(e) if is_coalesce(e) => {
-                    self.coalesce_into(indent, &format!("local {name}"), name, e, &s.span);
+                    self.coalesce_into(indent, &format!("{local}{name}"), name, e, &s.span);
                 }
                 Some(e) => {
-                    let text = format!("local {name} = {}", self.expr(e));
+                    let text = format!("{local}{name} = {}", self.expr(e));
                     self.emit(indent, &text, &s.span);
                 }
                 None => self.emit(indent, &format!("local {name}"), &s.span),
             },
-            StmtKind::FuncDecl { name, params, body } => {
+            StmtKind::Global { name, init, .. } => {
+                if is_coalesce(init) {
+                    self.coalesce_into(indent, name, name, init, &s.span);
+                } else {
+                    let text = format!("{name} = {}", self.expr(init));
+                    self.emit(indent, &text, &s.span);
+                }
+            }
+            StmtKind::FuncDecl {
+                name, params, body, ..
+            } => {
                 let ps: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
                 self.emit(
                     indent,
-                    &format!("local function {name}({})", ps.join(", ")),
+                    &format!("{local}function {name}({})", ps.join(", ")),
                     &s.span,
                 );
                 self.stmts(body, indent + 1);
@@ -299,6 +325,27 @@ impl Writer<'_> {
             }
         }
     }
+}
+
+/// Names declared in `stmts` that an earlier statement of the same block
+/// refers to, in declaration order. The checker only allows that from inside
+/// a function body; a shadowed use in an inner block may be counted too,
+/// which costs one harmless extra forward declaration.
+fn used_before_declaration(stmts: &[Stmt]) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut early = Vec::new();
+    for s in stmts {
+        if let StmtKind::VarDecl { name, .. } | StmtKind::FuncDecl { name, .. } = &s.kind
+            && seen.contains(name)
+            && !early.contains(name)
+        {
+            early.push(name.clone());
+        }
+        visit::idents_in_stmt(s, &mut |n| {
+            seen.insert(n.to_string());
+        });
+    }
+    early
 }
 
 fn is_coalesce(e: &Expr) -> bool {

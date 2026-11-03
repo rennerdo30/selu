@@ -53,14 +53,32 @@ impl Rules {
 
     fn stmt(&mut self, s: &Stmt) {
         match &s.kind {
-            StmtKind::VarDecl { name, init, .. } => {
-                self.name(name, &s.span);
+            StmtKind::VarDecl {
+                name,
+                name_span,
+                init,
+                ..
+            } => {
+                self.name(name, name_span);
                 if let Some(e) = init {
                     self.top_value(e);
                 }
             }
-            StmtKind::FuncDecl { name, params, body } => {
-                self.name(name, &s.span);
+            StmtKind::Global {
+                name,
+                name_span,
+                init,
+            } => {
+                self.name(name, name_span);
+                self.top_value(init);
+            }
+            StmtKind::FuncDecl {
+                name,
+                name_span,
+                params,
+                body,
+            } => {
+                self.name(name, name_span);
                 for p in params {
                     self.name(&p.name, &p.span);
                 }
