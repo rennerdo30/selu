@@ -7,9 +7,8 @@ Package B starts at `c4d0580527550bdff44c1676053d5178d7b683a2`.
   indices must be integers; no runtime bounds or integrality checks are added.
   Use Map for sparse data. Null elements and null collection type arguments
   are errors. Empty arrays require a written array type on the declaration.
-- Literal elements are parenthesized in Lua to prevent a final API call from
-  expanding multiple returns into extra array elements. Object fields are
-  similarly single-valued. Structural object fields use the existing checker.
+- Only a call or vararg in the final array slot is parenthesized, to prevent
+  multiple-return expansion. Other values print without extra brackets. Structural object fields use the existing checker.
   Optional access tests nil explicitly, evaluates the receiver once, and
   preserves false. Length is read-only; strings count bytes.
 - push, insert, set, add, clear and sort return void. pop/removeAt return T?.
@@ -17,6 +16,8 @@ Package B starts at `c4d0580527550bdff44c1676053d5178d7b683a2`.
   WeakMap uses a fresh metatable with __mode = "k". Map and Set iteration order
   follows Lua pairs and is unspecified. Array iteration uses numeric for;
   the collection is evaluated once and its length is captured at entry.
+  If shrinking the array exposes a nil element, iteration stops before the body;
+  growth beyond the captured length is not visited.
 - slice takes one or two bounds, floors fractional bounds, clamps them to
   the collection length, interprets negative bounds from the end, and excludes
   the end bound. String operations use bytes and literal substring matching,
@@ -46,21 +47,55 @@ fixtures with parent approval; destructuring and other fixtures remain.
 
 ## Pending A and C
 
-Callback array methods forEach/map/filter/find/some/every/reduce and sort with a
-comparator remain SELU0390 pending package C. No replacement arrow implementation
-is built here. Contextual callback typing and callback allocation warnings remain
-part of that integration. Continue and break in for-of bodies currently reach
-package A's loop_stmt and remain SELU0390 on this base. A's loop-body helper must
-be integrated after A lands. for-of itself is implemented here.
+Callback methods now accept existing function values. Callbacks may ignore trailing
+arguments: element, 0-based index, array; reduce prepends the accumulator. Predicate
+results must be boolean; comparators return a number and are adapted to Lua's less
+predicate. reduce without an initial value starts with the first element and errors
+at runtime on an empty array. map rejects nullable results; map/filter allocate new
+tables and comparator sort allocates one adapter closure per call.
+
+Package C still supplies arrow/function-expression lowering and contextual typing
+for arrows without written parameter types, plus ordinary object function calls.
+B's early library dispatch excludes Object receivers. On this base the exact source
+`function f(x: string): string { return x; } const o = { slice: f }; print(o.slice("hi"));`
+still uses the existing colon-call path; its runtime result `hi` is pending C.
+Continue and break in for-of bodies currently reach package A's loop_stmt and remain
+SELU0390 on this base. A's loop-body helper must be integrated after A lands.
+
 Optional access to a missing field is a checker error. Unsupported collection or
 Math method names retain SELU0390, rather than falling through to Blizzard method
 lowering. No publishing, pushes, benchmarks or native launches are performed.
 
 ## Verification
 
-Eight data tests cover runtime behavior, diagnostics and the allocation check.
+Data tests cover runtime behavior, diagnostics and the allocation check.
 Both initial tests failed on the base. With data_expr deliberately disabled,
 seven tests failed; strings_and_math had independently failed on literal-receiver
 method dispatch before that bug was fixed. The deliberate break was restored.
 Full cargo test, cargo fmt --check and cargo clippy --all-targets -- -D warnings
 are the required final gates; exact results are in the implementation report.
+
+## Review corrections
+
+Written types dispatch through data_annotation, recursively rejecting nullable
+array elements in declarations, parameters, returns and nested types with SELU0350
+and the Map hint. Receiver types are checked once and reused on fallback paths.
+Missing-field diagnostics span the member expression and include spelling help.
+Optional length uses the same typed field lowering inside its nil guard.
+Empty pop/removeAt calls are parenthesized to retain a single nil return.
+Integer literal indices fold only below 2^53.
+
+Shared seq now snapshots names as well as impure values before a later operand's
+pre-statements; only literals remain stable. LExpr::is_pure is unchanged. The
+additional plain-call regression f(x, g() ?? 0) proves this independently of data.
+Store-specific name capture in data.rs protects push/set/index operands and
+receivers before later impure arguments are hoisted into temporary stores;
+pure pushes remain direct. The endsWith receiver-reassignment regression proves
+the same rule for argument stabilization. Earlier map key names are protected too. expr_stmt now emits only
+pre when the resulting expression is pure, omitting discarded local _ = nil.
+No general seq snapshot for later impure expressions was added.
+
+All review tests were red before their fixes. The statement-elision and callback
+signature checks were also deliberately disabled to show their assertions fail,
+then restored. Full gates and commit hashes are recorded in the implementation
+report. No loops.rs or package C implementation was changed.

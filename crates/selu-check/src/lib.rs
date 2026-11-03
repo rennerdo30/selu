@@ -221,7 +221,7 @@ impl Ctx<'_> {
         Some(if types::is_void(t) {
             Type::Void
         } else {
-            types::resolve(t, self.out)
+            self.data_annotation(t)
         })
     }
 
@@ -839,7 +839,7 @@ impl Ctx<'_> {
             }
             ExprKind::Member { object, name } => {
                 let t = self.value(object);
-                self.member(&t, name, object)
+                self.member(&t, name, e)
             }
             ExprKind::Conditional { .. }
             | ExprKind::CompoundAssign { .. }
@@ -1077,8 +1077,8 @@ impl Ctx<'_> {
                     }
                     Type::Untyped
                 } else {
-                    let t = self.value(object);
-                    self.function_member(&t, name, object)
+                    let t = self.data_receiver(object);
+                    self.function_member(&t, name, callee)
                 }
             }
             _ => self.value(callee),

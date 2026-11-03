@@ -163,3 +163,150 @@ fn weak_maps_optional_fields_and_errors() {
         assert!(codes(src).contains(&code.into()), "{src}");
     }
 }
+
+#[test]
+fn review_receiver_order() {
+    assert_eq!(
+        run(
+            "let xs = [1]; const old = xs; function value(): number? { xs = [9]; return 2; } xs.push(value() ?? 0); print(old.join(), xs.join());"
+        ),
+        ["1,2\t9"]
+    );
+    assert_eq!(
+        run("let xs = [1]; function i(): number? { xs = [9]; return 0; } print(xs[i() ?? 0]);"),
+        ["1"]
+    );
+}
+#[test]
+fn review_nullable_arrays() {
+    assert!(
+        codes("const xs: number?[] = []; xs.push(null); print(xs.length);")
+            .contains(&"SELU0350".into())
+    );
+    for src in [
+        "function f(xs: number?[]) {}",
+        "function f(): number?[] { return [1]; }",
+    ] {
+        assert!(codes(src).contains(&"SELU0350".into()));
+    }
+}
+#[test]
+fn review_optional_length() {
+    assert_eq!(
+        run("const xs = [1, 2]; const s = \"abc\"; print(xs?.length, s?.length);"),
+        ["2\t3"]
+    );
+}
+#[test]
+fn review_object_dispatch() {
+    let lua = common::compile(
+        "function f(x: string): string { return x; } const o = { slice: f }; print(o.slice(\"hi\"));",
+    );
+    assert!(!lua.contains("string.sub"), "{lua}");
+    assert!(!lua.contains("math.floor"), "{lua}");
+}
+#[test]
+fn review_shrinking_iteration() {
+    assert_eq!(
+        run("const xs = [1, 2, 3]; for (const x of xs) { print(x + 1); xs.pop(); }"),
+        ["2", "3"]
+    );
+}
+#[test]
+fn review_callbacks() {
+    assert_eq!(
+        run(r#"
+        const xs = [1, 2, 3];
+        function twice(x: number): number { return x * 2; }
+        const ys = xs.map(twice); print(ys.join());
+        function positive(x: number): boolean { return x > 1; }
+        const zs = xs.filter(positive); print(zs.join());
+        print(xs.find(positive), xs.some(positive), xs.every(positive));
+        function add(a: number, x: number): number { return a + x; }
+        print(xs.reduce(add, 0)); print(xs.reduce(add));
+        function show(x: number) { print(x); } xs.forEach(show);
+        function compare(a: number, b: number): number { return b - a; }
+        xs.sort(compare); print(xs.join());
+    "#),
+        [
+            "2,4,6",
+            "2,3",
+            "2\ttrue\tfalse",
+            "6",
+            "6",
+            "1",
+            "2",
+            "3",
+            "3,2,1"
+        ]
+    );
+}
+#[test]
+fn review_check_once() {
+    assert_eq!(codes("const xs = [1]; xs.slice().slice(0);"), ["SELU0356"]);
+}
+#[test]
+fn review_empty_removal() {
+    assert_eq!(
+        run("const xs: number[] = []; print(xs.pop()); print(xs.removeAt(0));"),
+        ["nil", "nil"]
+    );
+}
+#[test]
+fn review_readable_methods() {
+    let lua = common::compile("const xs = [1, 2]; xs.push(3); for (const x of xs) { print(x); }");
+    assert!(lua.contains("local xs = { 1, 2 }"), "{lua}");
+    assert!(lua.contains("xs[#xs + 1] = 3"), "{lua}");
+    assert!(!lua.contains("local _ = nil"), "{lua}");
+}
+#[test]
+fn review_large_literal_index() {
+    let lua = common::compile("const xs = [1]; print(xs[9007199254740992]);");
+    assert!(lua.contains("9007199254740992 + 1"), "{lua}");
+}
+#[test]
+fn review_field_diagnostic() {
+    let src = "const object = { good: 1 }; print(object.bad);";
+    let p = selu_syntax::parse("t.selu", src).unwrap();
+    let ds = selu_check::check(&p, &common::manifest());
+    let d = ds.iter().find(|d| d.code == "SELU0330").unwrap();
+    let sp = d.span.as_ref().unwrap();
+    assert!(src[sp.start..sp.end].contains("bad"));
+    assert!(d.help.is_some());
+}
+
+#[test]
+fn review_store_receiver_without_pre() {
+    assert_eq!(
+        run(
+            "let xs = [1]; const old = xs; function value(): number { xs = [9]; return 2; } xs.push(value()); print(old.join(), xs.join());"
+        ),
+        ["1,2\t9"]
+    );
+}
+
+#[test]
+fn review_callback_types() {
+    assert_eq!(
+        codes("const xs = [1]; function wrong(x: string): number { return 1; } xs.map(wrong);"),
+        ["SELU0355"]
+    );
+    assert_eq!(
+        codes("const xs = [1]; function wrong(x: number): number { return x; } xs.filter(wrong);"),
+        ["SELU0355"]
+    );
+    assert_eq!(
+        codes("const xs = [1]; function wrong(x: number): number? { return null; } xs.map(wrong);"),
+        ["SELU0350"]
+    );
+}
+
+#[test]
+fn review_receiver_before_stabilized_argument() {
+    assert_eq!(
+        run(
+            "let s = \"abc\"; function suffix(): string { s = \"z\"; return \"bc\"; } print(s.endsWith(suffix()));"
+        ),
+        ["true"]
+    );
+}

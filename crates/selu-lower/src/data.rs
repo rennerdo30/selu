@@ -12,7 +12,21 @@ impl Lowerer<'_> {
                 LExpr::Table(
                     self.seq(&refs, pre)
                         .into_iter()
-                        .map(|v| LField::Pos(LExpr::Paren(Box::new(v))))
+                        .enumerate()
+                        .map(|(i, v)| {
+                            LField::Pos(
+                                if i + 1 == items.len()
+                                    && matches!(
+                                        v,
+                                        LExpr::Call(..) | LExpr::Method(..) | LExpr::Vararg
+                                    )
+                                {
+                                    LExpr::Paren(Box::new(v))
+                                } else {
+                                    v
+                                },
+                            )
+                        })
                         .collect(),
                 )
             }
@@ -22,7 +36,7 @@ impl Lowerer<'_> {
                     fields
                         .iter()
                         .zip(self.seq(&refs, pre))
-                        .map(|(f, v)| LField::Named(f.key.clone(), LExpr::Paren(Box::new(v))))
+                        .map(|(f, v)| LField::Named(f.key.clone(), v))
                         .collect(),
                 )
             }
@@ -40,7 +54,7 @@ impl Lowerer<'_> {
                             vec![LStmt::new(
                                 LStmtKind::Assign(
                                     vec![name(&t)],
-                                    vec![LExpr::Field(Box::new(name(&t)), field.clone())],
+                                    vec![typed_field(name(&t), field, self.types.get(object.id))],
                                 ),
                                 &e.span,
                             )],
@@ -89,11 +103,13 @@ impl Lowerer<'_> {
             unreachable!()
         };
         let mut vals = self.seq(&[object, index], pre);
+        self.capture_store_receiver(&mut vals, &target.span, pre);
         let i = vals.pop().unwrap();
         let i = match &index.kind {
             ExprKind::Number(n) => n
                 .parse::<u64>()
                 .ok()
+                .filter(|n| *n < (1u64 << 53))
                 .and_then(|n| n.checked_add(1))
                 .map(|n| LExpr::Number(n.to_string()))
                 .unwrap_or_else(|| bin(BinOp::Add, i.clone(), LExpr::Number("1".into()))),
@@ -121,16 +137,7 @@ fn lib(lib: &str, f: &str, args: Vec<LExpr>) -> LExpr {
 impl Lowerer<'_> {
     pub(crate) fn data_field(&mut self, object: &Expr, f: &str, pre: &mut LBlock) -> LExpr {
         let v = self.expr(object, pre);
-        if f == "length"
-            && matches!(
-                self.types.get(object.id),
-                Some(Type::String | Type::Array(_))
-            )
-        {
-            len(v)
-        } else {
-            field(v, f)
-        }
+        typed_field(v, f, self.types.get(object.id))
     }
     pub(crate) fn data_call(
         &mut self,
@@ -151,12 +158,7 @@ impl Lowerer<'_> {
         if !math
             && !matches!(
                 ty,
-                Type::String
-                    | Type::Array(_)
-                    | Type::Map(..)
-                    | Type::WeakMap(..)
-                    | Type::Set(_)
-                    | Type::Object(_)
+                Type::String | Type::Array(_) | Type::Map(..) | Type::WeakMap(..) | Type::Set(_)
             )
         {
             return None;
@@ -182,14 +184,27 @@ impl Lowerer<'_> {
         }
         let mut refs = vec![&**object];
         refs.extend(args);
-        let vals = self.seq(&refs, pre);
+        let mut vals = self.seq(&refs, pre);
+        self.capture_store_receiver(&mut vals, span, pre);
         let mut stable = Vec::new();
         for v in vals {
-            let t = self.hold(v, span, pre);
-            stable.push(name(&t));
+            stable.push(if v.is_pure() {
+                v
+            } else {
+                let t = self.hold(v, span, pre);
+                name(&t)
+            });
         }
         let obj = stable.remove(0);
         let mut a = stable;
+        if matches!(ty, Type::Array(_))
+            && (matches!(
+                method.as_str(),
+                "forEach" | "map" | "filter" | "find" | "some" | "every" | "reduce"
+            ) || method == "sort" && !a.is_empty())
+        {
+            return Some(self.data_callback(method, obj, a, span, pre));
+        }
         if method == "slice" {
             for bound in &mut a {
                 let value = lib("math", "floor", vec![bound.clone()]);
@@ -232,7 +247,6 @@ impl Lowerer<'_> {
         }
         let mut emit = |kind| pre.push(LStmt::new(kind, span));
         let result = match &ty {
-            Type::Object(_) => lua::call(field(obj, method), a),
             Type::Map(..) | Type::WeakMap(..) | Type::Set(_) => match method.as_str() {
                 "get" => index(obj, a[0].clone()),
                 "has" => bin(BinOp::Ne, index(obj, a[0].clone()), LExpr::Nil),
@@ -289,17 +303,17 @@ impl Lowerer<'_> {
                     ));
                     LExpr::Nil
                 }
-                "pop" => lib("table", "remove", vec![obj]),
+                "pop" => LExpr::Paren(Box::new(lib("table", "remove", vec![obj]))),
                 "insert" => lib(
                     "table",
                     "insert",
                     vec![obj, bin(BinOp::Add, a[0].clone(), num(1)), a[1].clone()],
                 ),
-                "removeAt" => lib(
+                "removeAt" => LExpr::Paren(Box::new(lib(
                     "table",
                     "remove",
                     vec![obj, bin(BinOp::Add, a[0].clone(), num(1))],
-                ),
+                ))),
                 "sort" => lib("table", "sort", vec![obj]),
                 "join" => {
                     let separator = a.first().cloned().unwrap_or(LExpr::Str(",".into()));
@@ -574,6 +588,19 @@ impl Lowerer<'_> {
                         &s.span,
                     ),
                 );
+                body.insert(
+                    1,
+                    LStmt::new(
+                        LStmtKind::If(
+                            vec![(
+                                bin(BinOp::Eq, name(n), LExpr::Nil),
+                                vec![LStmt::new(LStmtKind::Break, &s.span)],
+                            )],
+                            None,
+                        ),
+                        &s.span,
+                    ),
+                );
                 LStmtKind::NumFor {
                     var: i,
                     start: num(1),
@@ -604,5 +631,189 @@ impl Lowerer<'_> {
         };
         pre.push(LStmt::new(kind, &s.span));
         out.push(LStmt::new(LStmtKind::Do(pre), &s.span));
+    }
+}
+
+fn typed_field(value: LExpr, f: &str, ty: Option<&Type>) -> LExpr {
+    if f == "length" && ty.is_some_and(|t| matches!(t.non_null(), Type::Array(_) | Type::String)) {
+        len(value)
+    } else {
+        field(value, f)
+    }
+}
+
+impl Lowerer<'_> {
+    fn data_callback(
+        &mut self,
+        method: &str,
+        obj: LExpr,
+        args: Vec<LExpr>,
+        span: &selu_diagnostics::Span,
+        pre: &mut LBlock,
+    ) -> LExpr {
+        // Both the receiver and function value stay fixed if a callback
+        // reassigns their source names while the operation is running.
+        let receiver = self.hold(obj, span, pre);
+        let callback = self.hold(args[0].clone(), span, pre);
+        let obj = name(&receiver);
+        let cb = name(&callback);
+        if method == "sort" {
+            let left = self.temp();
+            let right = self.temp();
+            let compare = LExpr::Function(lua::LFunction {
+                params: vec![left.clone(), right.clone()],
+                vararg: false,
+                body: vec![LStmt::new(
+                    LStmtKind::Return(vec![bin(
+                        BinOp::Lt,
+                        lua::call(cb, vec![name(&left), name(&right)]),
+                        num(0),
+                    )]),
+                    span,
+                )],
+            });
+            return lib("table", "sort", vec![obj, compare]);
+        }
+        let result = self.temp();
+        let i = self.temp();
+        let value = self.temp();
+        let initial = match method {
+            "map" | "filter" => LExpr::Table(vec![]),
+            "some" => LExpr::Bool(false),
+            "every" => LExpr::Bool(true),
+            "reduce" => args
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| index(obj.clone(), num(1))),
+            _ => LExpr::Nil,
+        };
+        if method != "forEach" {
+            pre.push(LStmt::new(
+                LStmtKind::Local(vec![result.clone()], vec![initial]),
+                span,
+            ));
+        }
+        let mut body = vec![
+            LStmt::new(
+                LStmtKind::Local(vec![value.clone()], vec![index(obj.clone(), name(&i))]),
+                span,
+            ),
+            LStmt::new(
+                LStmtKind::If(
+                    vec![(
+                        bin(BinOp::Eq, name(&value), LExpr::Nil),
+                        vec![LStmt::new(LStmtKind::Break, span)],
+                    )],
+                    None,
+                ),
+                span,
+            ),
+        ];
+        let mut cb_args = vec![name(&value), bin(BinOp::Sub, name(&i), num(1)), obj.clone()];
+        if method == "reduce" {
+            cb_args.insert(0, name(&result));
+        }
+        let call = lua::call(cb, cb_args);
+        let store = |v| LStmt::new(LStmtKind::Assign(vec![name(&result)], vec![v]), span);
+        let append = |v| {
+            LStmt::new(
+                LStmtKind::Assign(
+                    vec![index(
+                        name(&result),
+                        bin(BinOp::Add, len(name(&result)), num(1)),
+                    )],
+                    vec![v],
+                ),
+                span,
+            )
+        };
+        body.push(match method {
+            "forEach" => LStmt::new(LStmtKind::Call(call), span),
+            "map" => append(LExpr::Paren(Box::new(call))),
+            "reduce" => store(call),
+            "filter" => LStmt::new(
+                LStmtKind::If(vec![(call, vec![append(name(&value))])], None),
+                span,
+            ),
+            _ => {
+                let condition = if method == "every" {
+                    lua::not(call)
+                } else {
+                    call
+                };
+                let v = if method == "find" {
+                    name(&value)
+                } else {
+                    LExpr::Bool(method == "some")
+                };
+                LStmt::new(
+                    LStmtKind::If(
+                        vec![(
+                            condition,
+                            vec![store(v), LStmt::new(LStmtKind::Break, span)],
+                        )],
+                        None,
+                    ),
+                    span,
+                )
+            }
+        });
+        if method == "reduce" && args.len() == 1 {
+            pre.push(LStmt::new(
+                LStmtKind::If(
+                    vec![(
+                        bin(BinOp::Eq, index(obj.clone(), num(1)), LExpr::Nil),
+                        vec![LStmt::new(
+                            LStmtKind::Call(lua::call(
+                                name("error"),
+                                vec![LExpr::Str(
+                                    "reduce of an empty array needs an initial value".into(),
+                                )],
+                            )),
+                            span,
+                        )],
+                    )],
+                    None,
+                ),
+                span,
+            ));
+        }
+        pre.push(LStmt::new(
+            LStmtKind::NumFor {
+                var: i,
+                start: num(if method == "reduce" && args.len() == 1 {
+                    2
+                } else {
+                    1
+                }),
+                stop: len(obj),
+                step: None,
+                body,
+            },
+            span,
+        ));
+        if method == "forEach" {
+            LExpr::Nil
+        } else {
+            name(&result)
+        }
+    }
+}
+
+impl Lowerer<'_> {
+    fn capture_store_receiver(
+        &mut self,
+        values: &mut [LExpr],
+        span: &selu_diagnostics::Span,
+        pre: &mut LBlock,
+    ) {
+        // Stabilizing a later impure operand emits a statement. Snapshot
+        // earlier name operands first, including map keys and the receiver.
+        for i in 0..values.len() {
+            if matches!(values[i], LExpr::Name(_)) && values[i + 1..].iter().any(|v| !v.is_pure()) {
+                let t = self.hold(values[i].clone(), span, pre);
+                values[i] = name(&t);
+            }
+        }
     }
 }

@@ -68,7 +68,7 @@ impl Ctx<'_> {
                 if t == Type::Null {
                     Type::Null
                 } else {
-                    Type::optional(self.member(&t, name, object))
+                    Type::optional(self.member(&t, name, e))
                 }
             }
             ExprKind::Template { exprs, .. } => {
@@ -98,10 +98,7 @@ impl Ctx<'_> {
                 for a in args {
                     self.value(a);
                 }
-                let ts: Vec<_> = type_args
-                    .iter()
-                    .map(|t| types::resolve(t, self.out))
-                    .collect();
+                let ts: Vec<_> = type_args.iter().map(|t| self.data_annotation(t)).collect();
                 if !args.is_empty()
                     || !matches!(
                         (class.as_str(), ts.len()),
@@ -189,11 +186,14 @@ impl Ctx<'_> {
     pub(crate) fn data_member(&mut self, t: &Type, field: &str, e: &Expr) -> Option<Type> {
         match t {
             Type::Object(fields) => Some(fields.get(field).cloned().unwrap_or_else(|| {
-                self.out.push(err(
-                    "SELU0330",
-                    format!("this object has no field `{field}`"),
-                    &e.span,
-                ));
+                self.out.push(
+                    err(
+                        "SELU0330",
+                        format!("this object has no field `{field}`"),
+                        &e.span,
+                    )
+                    .with_help("check the field spelling or add it to the object type"),
+                );
                 Type::Error
             })),
             Type::Array(_) | Type::String if field == "length" => Some(Type::Number),
@@ -210,11 +210,7 @@ impl Ctx<'_> {
         let t = if math {
             Type::Number
         } else {
-            // Inspect declared receiver types without checking it twice on the fallback path.
-            match &object.kind {
-                ExprKind::Ident(n) => self.type_of(n)?,
-                _ => self.value(object),
-            }
+            self.data_receiver(object)
         };
         let (params, ret) = if math {
             match name.as_str() {
@@ -248,9 +244,7 @@ impl Ctx<'_> {
                     "sort" if args.is_empty() => (vec![], Type::Void),
                     "forEach" | "map" | "filter" | "find" | "some" | "every" | "reduce"
                     | "sort" => {
-                        return Some(
-                            self.unsupported("callback array methods pending package C", &e.span),
-                        );
+                        return Some(self.data_callback(e, name, item, args));
                     }
                     _ => return Some(self.unsupported("this array method", &e.span)),
                 },
@@ -281,7 +275,7 @@ impl Ctx<'_> {
         };
         if let Type::Array(item) = &t {
             let allowed = match name.as_str() {
-                "sort" => matches!(**item, Type::Number | Type::String),
+                "sort" => !args.is_empty() || matches!(**item, Type::Number | Type::String),
                 "join" => matches!(**item, Type::Number | Type::String | Type::Boolean),
                 _ => true,
             };
@@ -297,9 +291,6 @@ impl Ctx<'_> {
                     ),
                 );
             }
-        }
-        if !math {
-            self.value(object);
         }
         if matches!(name.as_str(), "slice") && (args.is_empty() || args.len() > 2) {
             self.out.push(
@@ -386,5 +377,149 @@ impl Ctx<'_> {
         }
         self.block(body, &[], vec![]);
         self.scopes.pop();
+    }
+}
+
+impl Ctx<'_> {
+    pub(crate) fn data_receiver(&mut self, e: &Expr) -> Type {
+        self.types
+            .get(e.id)
+            .cloned()
+            .unwrap_or_else(|| self.value(e))
+    }
+
+    pub(crate) fn data_annotation(&mut self, t: &selu_syntax::TypeExpr) -> Type {
+        fn validate(t: &selu_syntax::TypeExpr, out: &mut Vec<selu_diagnostics::Diagnostic>) {
+            use selu_syntax::TypeExprKind as K;
+            match &t.kind {
+                K::Array(inner) => {
+                    if types::resolve_quiet(inner).is_optional() {
+                        out.push(
+                            err("SELU0350", "array elements cannot be null", &inner.span)
+                                .with_help("use a Map for gaps"),
+                        );
+                    }
+                    validate(inner, out);
+                }
+                K::Optional(inner) => validate(inner, out),
+                K::Tuple(items) | K::Named { args: items, .. } => {
+                    for t in items {
+                        validate(t, out);
+                    }
+                }
+                K::Object(fields) => {
+                    for f in fields {
+                        validate(&f.ty, out);
+                    }
+                }
+                K::Function { params, ret } => {
+                    for t in params {
+                        validate(t, out);
+                    }
+                    validate(ret, out);
+                }
+            }
+        }
+        validate(t, self.out);
+        types::resolve(t, self.out)
+    }
+}
+
+impl Ctx<'_> {
+    fn data_callback(&mut self, e: &Expr, method: &str, item: &Type, args: &[Expr]) -> Type {
+        let reduce = method == "reduce";
+        if args.is_empty() || args.len() > if reduce { 2 } else { 1 } {
+            self.out.push(
+                err(
+                    "SELU0356",
+                    "this method needs a callback and reduce allows one initial value",
+                    &e.span,
+                )
+                .with_help("pass a function value"),
+            );
+        }
+        let ts: Vec<_> = args.iter().map(|a| self.value(a)).collect();
+        let acc = ts.get(1).cloned().unwrap_or_else(|| item.clone());
+        let input = if reduce {
+            vec![
+                acc.clone(),
+                item.clone(),
+                Type::Number,
+                Type::Array(Box::new(item.clone())),
+            ]
+        } else if method == "sort" {
+            vec![item.clone(), item.clone()]
+        } else {
+            vec![
+                item.clone(),
+                Type::Number,
+                Type::Array(Box::new(item.clone())),
+            ]
+        };
+        let want_ret = match method {
+            "filter" | "find" | "some" | "every" => Some(Type::Boolean),
+            "sort" => Some(Type::Number),
+            "reduce" => Some(acc.clone()),
+            _ => None,
+        };
+        let ret = match ts.first() {
+            Some(Type::Function { params, ret }) => {
+                // TypeScript permits callbacks to ignore trailing arguments.
+                let compatible = params.len() <= input.len()
+                    && input
+                        .iter()
+                        .zip(params)
+                        .all(|(given, accepts)| given.assignable_to(accepts))
+                    && want_ret.as_ref().is_none_or(|want| ret.assignable_to(want));
+                if !compatible {
+                    self.out.push(
+                        err(
+                            "SELU0355",
+                            "callback parameters or result do not match this array method",
+                            &args[0].span,
+                        )
+                        .with_help(format!(
+                            "the callback receives {}",
+                            input
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
+                    );
+                }
+                (**ret).clone()
+            }
+            Some(Type::Error) => Type::Error,
+            Some(Type::Untyped) => Type::Untyped,
+            Some(_) => {
+                self.out.push(
+                    err(
+                        "SELU0355",
+                        "this array method needs a function value",
+                        &args[0].span,
+                    )
+                    .with_help("pass a declared function or a function-typed value"),
+                );
+                Type::Error
+            }
+            None => Type::Error,
+        };
+        match method {
+            "map" => {
+                if ret.is_optional() || ret == Type::Void {
+                    self.out.push(
+                        err("SELU0350", "array elements cannot be null", &args[0].span)
+                            .with_help("use a Map for gaps"),
+                    );
+                }
+                Type::Array(Box::new(ret))
+            }
+            "filter" => Type::Array(Box::new(item.clone())),
+            "find" => Type::optional(item.clone()),
+            "some" | "every" => Type::Boolean,
+            "reduce" => acc,
+            _ => Type::Void,
+        }
     }
 }
