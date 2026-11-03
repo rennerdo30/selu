@@ -45,6 +45,12 @@ fn keyword_text(t: &Tok) -> Option<&'static str> {
         Tok::Break => "break",
         Tok::Continue => "continue",
         Tok::New => "new",
+        Tok::Class => "class",
+        Tok::Extends => "extends",
+        Tok::Import => "import",
+        Tok::Export => "export",
+        Tok::This => "this",
+        Tok::Super => "super",
         _ => return None,
     })
 }
@@ -481,6 +487,25 @@ impl Parser {
                 StmtKind::Continue
             }
             Tok::LBrace => StmtKind::Block(self.block()?),
+            Tok::Import => self.import(start)?,
+            Tok::Export => {
+                self.bump();
+                let inner = self.stmt()?;
+                match inner.kind {
+                    StmtKind::VarDecl { .. }
+                    | StmtKind::FuncDecl { .. }
+                    | StmtKind::Class(_)
+                    | StmtKind::Global { .. } => StmtKind::Export(Box::new(inner)),
+                    _ => {
+                        return Err(Diagnostic::error(
+                            "SELU0111",
+                            "`export` can only come before `function`, `const`, `let`, `class` or `global`",
+                        )
+                        .with_span(inner.span));
+                    }
+                }
+            }
+            Tok::Class => StmtKind::Class(self.class()?),
             // `global` is a contextual keyword: only `global <name>` starts a
             // global declaration, so `global` stays usable as a plain name.
             Tok::Ident(ref w)
@@ -506,6 +531,119 @@ impl Parser {
         Ok(Stmt {
             kind,
             span: self.span_from(start),
+        })
+    }
+
+    /// `import { a, b as c } from "./x";` / `import name from "./x";`
+    fn import(&mut self, start: usize) -> PResult<StmtKind> {
+        self.bump();
+        let mut names = Vec::new();
+        let mut default = None;
+        if self.eat(&Tok::LBrace) {
+            while !self.at(&Tok::RBrace) {
+                let (exported, exported_span) = self.field_name("a name to import")?;
+                let (local, span) = if self.at_ident("as") {
+                    self.bump();
+                    self.ident("the local name after `as`")?
+                } else {
+                    (exported.clone(), exported_span)
+                };
+                names.push((exported, local, span));
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RBrace, "`}`")?;
+        } else {
+            default = Some(self.ident("`{` or a name to import")?);
+        }
+        if !self.at_ident("from") {
+            return Err(self.unexpected("`from` and the file to import from"));
+        }
+        self.bump();
+        let (from, from_span) = match self.peek().clone() {
+            Tok::Str(s) => {
+                let span = self.peek_span();
+                self.bump();
+                (s, span)
+            }
+            _ => return Err(self.unexpected("the file as a string, for example `\"./other\"`")),
+        };
+        self.semi(start)?;
+        Ok(StmtKind::Import {
+            names,
+            default,
+            from,
+            from_span,
+        })
+    }
+
+    /// `class Name extends Base { members }`
+    fn class(&mut self) -> PResult<ClassDecl> {
+        self.bump();
+        let (name, name_span) = self.ident("a class name")?;
+        let extends = if self.eat(&Tok::Extends) {
+            Some(self.ident("the class to extend")?)
+        } else {
+            None
+        };
+        self.expect(&Tok::LBrace, "`{`")?;
+        let mut members = Vec::new();
+        while !self.at(&Tok::RBrace) && !self.at(&Tok::Eof) {
+            let start = self.peek_span().start;
+            // `static` is contextual: `static()` would be a method named static.
+            let is_static = self.at_ident("static")
+                && self.peek_at(1) != Some(&Tok::LParen)
+                && self.peek_at(1) != Some(&Tok::Colon);
+            if is_static {
+                self.bump();
+            }
+            let kind = if self.at_ident("constructor") && self.peek_at(1) == Some(&Tok::LParen) {
+                self.bump();
+                let params = self.params()?;
+                let body = self.block()?;
+                ClassMemberKind::Constructor { params, body }
+            } else {
+                let (name, name_span) = self.field_name("a field or method name")?;
+                if self.at(&Tok::LParen) {
+                    let params = self.params()?;
+                    let ret = self.annotation()?;
+                    let body = self.block()?;
+                    ClassMemberKind::Method {
+                        name,
+                        name_span,
+                        params,
+                        ret,
+                        body,
+                    }
+                } else {
+                    let ty = self.annotation()?;
+                    let init = if self.eat(&Tok::Eq) {
+                        Some(Box::new(self.expr()?))
+                    } else {
+                        None
+                    };
+                    self.semi(start)?;
+                    ClassMemberKind::Field {
+                        name,
+                        name_span,
+                        ty,
+                        init,
+                    }
+                }
+            };
+            members.push(ClassMember {
+                is_static,
+                kind,
+                span: self.span_from(start),
+            });
+        }
+        self.expect(&Tok::RBrace, "`}`")?;
+        Ok(ClassDecl {
+            name,
+            name_span,
+            extends,
+            members,
         })
     }
 
@@ -977,6 +1115,8 @@ impl Parser {
                     Tok::True => ExprKind::Bool(true),
                     Tok::False => ExprKind::Bool(false),
                     Tok::Null => ExprKind::Null,
+                    Tok::This => ExprKind::This,
+                    Tok::Super => ExprKind::Super,
                     Tok::Ident(n) => ExprKind::Ident(n),
                     other => {
                         return Err(Diagnostic::error(

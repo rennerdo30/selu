@@ -18,6 +18,8 @@ use selu_manifest::Manifest;
 use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind, TypeExpr};
 use std::collections::HashMap;
 
+mod classes;
+mod modules;
 mod rules;
 // One file per language area. The central `stmt`/`expr_inner` matches only
 // dispatch; each area's checks live in its own file (docs/WORK-PACKAGES.md).
@@ -248,7 +250,14 @@ impl Ctx<'_> {
         }
         let top = self.scopes.len() == 1;
         for s in stmts {
+            // `export function f` declares `f` like `function f`.
+            let s = match &s.kind {
+                StmtKind::Export(inner) => inner.as_ref(),
+                _ => s,
+            };
             match &s.kind {
+                StmtKind::Import { .. } => self.declare_imports(s),
+                StmtKind::Class(c) => self.declare_class(c),
                 StmtKind::VarDecl {
                     is_const,
                     name,
@@ -490,6 +499,9 @@ impl Ctx<'_> {
             | StmtKind::Continue => self.loop_stmt(s),
             StmtKind::ForOf { .. } => self.for_of(s),
             StmtKind::Destructure { .. } => self.destructure(s),
+            StmtKind::Import { .. } => self.import_stmt(s),
+            StmtKind::Export(inner) => self.export_stmt(s, inner),
+            StmtKind::Class(c) => self.class_decl(s, c),
             StmtKind::Expr(e) => {
                 // A statement may be a call returning nothing.
                 self.expr(e);
@@ -855,6 +867,7 @@ impl Ctx<'_> {
             | ExprKind::New { .. } => self.data_expr(e),
             ExprKind::Function { .. } => self.function_expr(e),
             ExprKind::TaggedTemplate { .. } => self.tagged_template(e),
+            ExprKind::This | ExprKind::Super => self.class_expr(e),
         }
     }
 
@@ -1056,6 +1069,11 @@ impl Ctx<'_> {
     }
 
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+        // Selu's own built-ins (`command`, `hook`, `log.warn`...), unless the
+        // code declares a name that shadows them.
+        if let Some(t) = self.builtin_call(e, callee, args) {
+            return t;
+        }
         if let ExprKind::Ident(name) = &callee.kind {
             self.mark_if_stable(name, callee.id);
         }
@@ -1474,5 +1492,22 @@ mod tests {
             codes("on UNIT_HEALTH(unit) { const n: number = unit; }\n"),
             ["SELU0336"]
         );
+    }
+
+    #[test]
+    fn constructs_still_being_built_are_reported_not_lowered() {
+        for src in [
+            "import { a } from \"./other\";
+",
+            "export function f() {}
+",
+            "class A {}
+",
+            "const t = L`hello`;
+",
+        ] {
+            let c = codes(src);
+            assert!(c.contains(&"SELU0390".to_string()), "{src}: {c:?}");
+        }
     }
 }

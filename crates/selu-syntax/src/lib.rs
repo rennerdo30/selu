@@ -298,4 +298,87 @@ mod new_syntax_tests {
             parse("t.selu", src).unwrap_or_else(|d| panic!("{src}: {}", d.render(src)));
         }
     }
+
+    #[test]
+    fn modules_and_classes() {
+        match stmt("import { a, b as c } from \"./other\";") {
+            StmtKind::Import {
+                names,
+                default,
+                from,
+                ..
+            } => {
+                assert_eq!(from, "./other");
+                assert!(default.is_none());
+                let n: Vec<_> = names
+                    .iter()
+                    .map(|(e, l, _)| (e.as_str(), l.as_str()))
+                    .collect();
+                assert_eq!(n, [("a", "a"), ("b", "c")]);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            stmt("import logo from \"../assets/logo.svg\";"),
+            StmtKind::Import {
+                default: Some(_),
+                ..
+            }
+        ));
+        for src in [
+            "export function f() {}",
+            "export const x = 1;",
+            "export class A {}",
+            "export global MyAddon_DB = 1;",
+        ] {
+            assert!(matches!(stmt(src), StmtKind::Export(_)), "{src}");
+        }
+        assert_eq!(
+            parse("t.selu", "export x = 1;").unwrap_err().code,
+            "SELU0111"
+        );
+        let src = "class Bar extends Base {
+  static count: number = 0;
+  value = 1;
+  constructor(v: number) { super(v); this.value = v; }
+  get(): number { return this.value + super.get(); }
+  static make() { return new Bar(1); }
+}";
+        match stmt(src) {
+            StmtKind::Class(c) => {
+                assert_eq!(c.name, "Bar");
+                assert_eq!(c.extends.as_ref().map(|e| e.0.as_str()), Some("Base"));
+                let kinds: Vec<_> = c
+                    .members
+                    .iter()
+                    .map(|m| match &m.kind {
+                        ClassMemberKind::Field { name, .. } => {
+                            format!("field {name} {}", m.is_static)
+                        }
+                        ClassMemberKind::Method { name, .. } => {
+                            format!("method {name} {}", m.is_static)
+                        }
+                        ClassMemberKind::Constructor { .. } => "constructor".to_string(),
+                    })
+                    .collect();
+                assert_eq!(
+                    kinds,
+                    [
+                        "field count true",
+                        "field value false",
+                        "constructor",
+                        "method get false",
+                        "method make true",
+                    ]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // `static`, `constructor`, `from` and `as` stay usable as names.
+        parse(
+            "t.selu",
+            "const static = 1; const from = 2; const as = 3; const constructor = 4;",
+        )
+        .unwrap();
+    }
 }

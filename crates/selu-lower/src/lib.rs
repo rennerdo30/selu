@@ -18,9 +18,11 @@ use std::collections::HashSet;
 
 pub mod lua;
 // One file per language area; see docs/WORK-PACKAGES.md.
+mod classes;
 mod data;
 mod functions;
 mod loops;
+mod modules;
 mod wow;
 
 use lua::{BinOp, LBlock, LExpr, LFunction, LStmt, LStmtKind, UnOp, bin, name, not};
@@ -249,6 +251,9 @@ impl Lowerer<'_> {
             | StmtKind::Continue => self.loop_stmt(s, out),
             StmtKind::ForOf { .. } => self.for_of(s, out),
             StmtKind::Destructure { .. } => self.destructure(s, forward, out),
+            StmtKind::Import { .. } => self.import_stmt(s, out),
+            StmtKind::Export(inner) => self.export_stmt(s, inner, forward, out),
+            StmtKind::Class(c) => self.class_decl(s, c, forward, out),
         }
     }
 
@@ -492,6 +497,7 @@ impl Lowerer<'_> {
             | ExprKind::New { .. } => self.data_expr(e, pre),
             ExprKind::Function { .. } => self.function_expr(e, pre),
             ExprKind::TaggedTemplate { .. } => self.tagged_template(e, pre),
+            ExprKind::This | ExprKind::Super => self.class_expr(e, pre),
         }
     }
 
@@ -569,6 +575,9 @@ impl Lowerer<'_> {
     }
 
     fn call(&mut self, callee: &Expr, args: &[Expr], pre: &mut LBlock) -> LExpr {
+        if let Some(v) = self.builtin_call(callee, args, pre) {
+            return v;
+        }
         if let Some(v) = self.data_call(callee, args, pre) {
             return v;
         }

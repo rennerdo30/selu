@@ -137,6 +137,56 @@ pub enum StmtKind {
     Continue,
     Block(Vec<Stmt>),
     Expr(Box<Expr>),
+    /// `import { a, b as c } from "./other";` or `import logo from "../x.svg";`
+    Import {
+        /// `{ a, b as c }`: (exported name, local name, span of the local name).
+        names: Vec<(String, String, Span)>,
+        /// `import logo from ...`: the local name and its span.
+        default: Option<(String, Span)>,
+        from: String,
+        from_span: Span,
+    },
+    /// `export` before a declaration (`function`, `const`, `let`, `class`,
+    /// `global`).
+    Export(Box<Stmt>),
+    Class(ClassDecl),
+}
+
+/// `class Name extends Base { ... }`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClassDecl {
+    pub name: String,
+    pub name_span: Span,
+    pub extends: Option<(String, Span)>,
+    pub members: Vec<ClassMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClassMember {
+    pub is_static: bool,
+    pub kind: ClassMemberKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ClassMemberKind {
+    /// `count: number = 0;` (a type, a starting value, or both).
+    Field {
+        name: String,
+        name_span: Span,
+        ty: Option<TypeExpr>,
+        init: Option<Box<Expr>>,
+    },
+    /// `name(params): T { ... }`
+    Method {
+        name: String,
+        name_span: Span,
+        params: Vec<Param>,
+        ret: Option<TypeExpr>,
+        body: Vec<Stmt>,
+    },
+    /// `constructor(params) { ... }`
+    Constructor { params: Vec<Param>, body: Vec<Stmt> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,6 +217,10 @@ pub enum ExprKind {
     Bool(bool),
     Null,
     Ident(String),
+    /// `this` inside a class method or constructor.
+    This,
+    /// `super` in `super(...)` and `super.method(...)`.
+    Super,
     /// A template string: `quasis` are the text parts around the `${}`
     /// expressions, so `quasis.len() == exprs.len() + 1`. A template without
     /// `${}` is a plain `Str`.

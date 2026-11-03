@@ -7,6 +7,8 @@ use mlua::{Function, Lua, MultiValue, Table, Value};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+mod wow_api;
+
 pub use mlua::Value as SimValue;
 pub type SimResult<T> = Result<T, mlua::Error>;
 
@@ -167,6 +169,7 @@ impl Sim {
             )?;
             globals.set_metatable(Some(mt));
         }
+        wow_api::install(&lua)?;
 
         Ok(Sim {
             lua,
@@ -180,6 +183,20 @@ impl Sim {
     pub fn load_files(&self, files: &[(String, String)]) -> SimResult<()> {
         for (name, source) in files {
             self.lua.load(source).set_name(name).exec()?;
+        }
+        Ok(())
+    }
+
+    /// Load an addon's files in TOC order the way the client does: every
+    /// file receives `...` = the addon's name and one table shared by all of
+    /// its files.
+    pub fn load_addon(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
+        let ns = self.lua.create_table()?;
+        for (name, source) in files {
+            self.lua
+                .load(source)
+                .set_name(name)
+                .call::<()>((addon, ns.clone()))?;
         }
         Ok(())
     }
@@ -278,6 +295,23 @@ mod tests {
             1,
             "{logs:?}"
         );
+    }
+
+    #[test]
+    fn addon_files_share_name_and_table() {
+        let sim = Sim::new().unwrap();
+        sim.load_addon(
+            "Demo",
+            &[
+                (
+                    "a.lua".into(),
+                    "local name, ns = ...; ns.x = 1; print(name)".into(),
+                ),
+                ("b.lua".into(), "local _, ns = ...; print(ns.x + 1)".into()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(sim.prints(), ["Demo", "2"]);
     }
 
     #[test]

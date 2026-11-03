@@ -18,6 +18,11 @@ problems as `selu-diagnostics` values: a stable code (`SELU0001`...), a
 primary span, a plain message, and optional help/fix text, rendered for the
 terminal with codespan-reporting.
 
+Code ranges: `01xx` syntax, `02xx` manifests and targets, `03xx` the
+language core (scopes, types, the per-area checks; `SELU0390` marks a
+construct that isn't built yet), `04xx` modules, classes and the WoW
+built-ins (ranges per package in `docs/WORK-PACKAGES.md`).
+
 ## Crates
 
 | Crate | Job |

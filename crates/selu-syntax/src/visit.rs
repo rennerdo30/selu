@@ -107,6 +107,26 @@ pub fn child_stmts_and_exprs<'a>(s: &'a Stmt, f: &mut impl FnMut(Child<'a>)) {
         }
         StmtKind::Block(b) => stmts(b, f),
         StmtKind::Expr(e) => f(Child::Expr(e)),
+        StmtKind::Import { .. } => {}
+        StmtKind::Export(inner) => f(Child::Stmt(inner)),
+        StmtKind::Class(c) => {
+            for m in &c.members {
+                match &m.kind {
+                    ClassMemberKind::Field { init, .. } => {
+                        if let Some(e) = init {
+                            f(Child::Expr(e));
+                        }
+                    }
+                    ClassMemberKind::Method {
+                        params: ps, body, ..
+                    }
+                    | ClassMemberKind::Constructor { params: ps, body } => {
+                        params(ps, f);
+                        stmts(body, f);
+                    }
+                }
+            }
+        }
         StmtKind::Break | StmtKind::Continue => {}
     }
 }
@@ -119,7 +139,9 @@ pub fn child_exprs_and_stmts<'a>(e: &'a Expr, f: &mut impl FnMut(Child<'a>)) {
         | ExprKind::Str(_)
         | ExprKind::Bool(_)
         | ExprKind::Null
-        | ExprKind::Ident(_) => {}
+        | ExprKind::Ident(_)
+        | ExprKind::This
+        | ExprKind::Super => {}
         ExprKind::Template { exprs, .. } => exprs.iter().for_each(ex),
         ExprKind::TaggedTemplate { tag, exprs, .. } => {
             ex(tag);
