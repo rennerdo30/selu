@@ -82,13 +82,13 @@ fn defaults_sessions_migrations_and_live_imports() {
     assert_eq!(sim.prints(), vec!["false", "7"]);
     let key = selu_lower::saved::global_name("Saved", "state", "settings");
     let saved = sim.logout_saved(&[&key]).unwrap();
-    std::fs::write(dir.join("src/state.selu"),"export saved settings version 2 = { enabled: true, nested: { count: 3 }, added: 9 }; migrate settings 1 -> 2 (old) { old.nested.count = 12; }").unwrap();
+    std::fs::write(dir.join("src/state.selu"),"export saved settings version 3 = { enabled: true, nested: { count: 3 }, added: 9 }; migrate settings 1 -> 2 (old) { old.nested.count = 12; } migrate settings 2 -> 3 (old) { old.nested.count += 1; }").unwrap();
     success(&dir);
     let next = Sim::login_saved("Saved", &files(&dir), &saved).unwrap();
     next.fire("PLAYER_LOGIN", vec![]).unwrap();
-    assert_eq!(next.prints(), vec!["false", "12"]);
+    assert_eq!(next.prints(), vec!["false", "13"]);
     next.eval(&format!(
-        "assert({key}.added == 9); assert({key}.__selu_version == 2)"
+        "assert({key}.added == 9); assert({key}.__selu_version == 3)"
     ))
     .unwrap();
     let toc = std::fs::read_to_string(dir.join("dist/Saved/Saved.toc")).unwrap();
@@ -147,7 +147,7 @@ fn early_access_includes_writes_members_and_imports_but_allows_shadowing() {
 #[test]
 fn failed_migration_rolls_back_and_retries_and_newer_data_is_untouched() {
     let dir = project(
-        "saved s version 2 = { x: 1 }; migrate s 1 -> 2 (old) { old.x = 2; print(old.missing.value); } on PLAYER_LOGIN() { print(s.x); }",
+        "saved s version 3 = { x: 1 }; migrate s 1 -> 2 (old) { old.x = 8; } migrate s 2 -> 3 (old) { old.x = 2; print(old.missing.value); } on PLAYER_LOGIN() { print(s.x); }",
     );
     success(&dir);
     let key = selu_lower::saved::global_name("Saved", "main", "s");
@@ -157,7 +157,7 @@ fn failed_migration_rolls_back_and_retries_and_newer_data_is_untouched() {
     sim.load_addon("Saved", &files(&dir)).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     sim.eval(&format!(
-        "assert({key}.x == 7); assert({key}.__selu_version == 1)"
+        "assert({key}.x == 8); assert({key}.__selu_version == 2)"
     ))
     .unwrap();
     let snapshot = sim.logout_saved(&[&key]).unwrap();
