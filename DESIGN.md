@@ -110,7 +110,7 @@ should let you find them on your desktop first.
 ```
 selu run --target forever         # run the addon in a simulated client
 selu test                         # run test scenarios
-selu debug                        # same, with breakpoints in .selu files
+selu studio                       # the standalone simulator app (below)
 ```
 
 **Simulator.** The compiled Lua runs in a Lua 5.1 VM with a fake game client
@@ -150,20 +150,67 @@ test("bar moves after combat", () => {
 - Tests use Jest-style `test` and `expect`, since that's what most JavaScript
   developers already know.
 
-**Debugger.** `selu debug` speaks the Debug Adapter Protocol, so VS Code (and
-any other DAP editor) can set breakpoints in `.selu` files, step, inspect
-variables and fire events while paused. Source maps connect the running Lua to
-the source line.
+### Selu Studio: the standalone simulator app (priority)
 
-**Frame preview (later).** A window that draws frames as boxes with their
-anchors, sizes and text, to debug layout without starting the game. It is not a
-renderer of Blizzard's art.
+The most important tool is a desktop app with its own WoW UI engine, not an
+editor plugin. Open an addon, pick a target, and it runs as if the game had
+loaded it.
 
-**Honest limits.** The simulator is a model of the client, only as good as the
-manifest and its default behaviours. It catches logic, API, combat and save
-bugs; it does not prove that something looks right or that the real client
-behaves exactly as modelled. The final check is still the game, where
-source-mapped errors point back to `.selu` lines.
+```
+selu studio ./MyAddon --target forever
+```
+
+What it has:
+
+- **Game screen.** Our own engine draws the addon's frames: anchors, sizes,
+  strata and levels, textures, font strings, alpha, scale, show/hide, mouse
+  hover and clicks, drag. Click a frame to select it.
+- **Frame inspector.** The selected frame's tree, its anchors drawn on screen,
+  its size, strata, scripts, and which line of source created it.
+- **World panel.** Set up the game state without scripts: player and target
+  (class, level, health, power, auras), combat on/off, group members, bags,
+  money, quest log, zone and position. Changes fire the matching events.
+- **Event timeline.** Every event, timer, hook and script call in order, with
+  its arguments. Scrub back to see the frame tree at an earlier moment.
+- **Debugger.** Breakpoints in `.selu` files (and plain `.lua`), step,
+  variables, call stack, a console that runs code inside the addon, and "fire
+  this event now" while paused.
+- **SavedVariables view.** See and edit saved data live; one button for
+  "/reload", which saves, reloads and runs migrations.
+- **Target switch.** Rerun the same addon against another target; missing
+  APIs, protected-call errors and secret values show up as clearly marked
+  errors, the way the real client would fail.
+- **Error panel.** The client-style error with a source-mapped stack and a link
+  to the line.
+
+Design decisions:
+
+- **It runs any addon, not only Selu output.** Plain Lua addons load too. That
+  makes it useful from the first version, and real addons (Renner's Toolkit
+  first) become the engine's test suite.
+- **Same engine for `selu test`.** The app and the headless tests share one
+  simulator core, so a failing test can be opened in the app at the failing
+  moment.
+- **No Blizzard art is shipped.** By default frames using Blizzard textures
+  draw as labelled placeholders. A later option may read textures and fonts
+  from the user's own installed client, locally, never bundled or uploaded.
+- **Built in Rust:** the Lua 5.1 VM, the frame and layout engine and the API
+  model in one core; the app's panels and screen drawn with a native GPU UI.
+
+### VS Code extension (second)
+
+Syntax highlighting, errors while typing (language server), and debugging over
+the Debug Adapter Protocol against the same simulator core: breakpoints in
+`.selu` files, stepping, variables, firing events while paused. Useful, but it
+comes after Studio.
+
+### Honest limits
+
+The simulator is our own model of the client, only as good as the manifest and
+its default behaviours. It catches logic, API, combat, layout and save bugs; it
+does not prove that something looks pixel-identical in the game or that the
+real client behaves exactly as modelled. The final check is still the game,
+where source-mapped errors point back to `.selu` lines.
 
 ## 8. Non-goals
 
