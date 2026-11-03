@@ -63,8 +63,9 @@ impl Lowerer<'_> {
                     ));
                 }
                 b.push(stmt(LStmtKind::Break, sp));
-                // Lua requires break to be the last statement of its block.
-                out.push(stmt(LStmtKind::Do(b), sp));
+                // The printer wraps the `break` in `do ... end` if anything
+                // follows it in the same block.
+                out.extend(b);
             }
             StmtKind::While { cond, body } => {
                 let mut pre = Vec::new();

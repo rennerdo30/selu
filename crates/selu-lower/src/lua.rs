@@ -249,8 +249,16 @@ impl Printer {
     }
 
     fn block(&mut self, b: &LBlock, indent: usize) {
-        for s in b {
-            self.stmt(s, indent);
+        for (i, s) in b.iter().enumerate() {
+            // Lua requires `break` and `return` to end their block; one
+            // that doesn't gets a `do ... end` of its own.
+            if i + 1 < b.len() && matches!(s.kind, LStmtKind::Break | LStmtKind::Return(_)) {
+                self.line(indent, "do", &s.span);
+                self.stmt(s, indent + 1);
+                self.line(indent, "end", &s.span);
+            } else {
+                self.stmt(s, indent);
+            }
         }
     }
 
@@ -345,7 +353,10 @@ impl Printer {
                     self.expr(start, 0, indent),
                     self.expr(stop, 0, indent)
                 );
-                if let Some(step) = step {
+                // A step of 1 is Lua's default.
+                if let Some(step) = step
+                    && *step != LExpr::Number("1".into())
+                {
                     text.push_str(&format!(", {}", self.expr(step, 0, indent)));
                 }
                 self.line(indent, &format!("{text} do"), sp);
@@ -587,6 +598,25 @@ mod tests {
             Box::new(LExpr::Unary(UnOp::Neg, Box::new(name("x")))),
         );
         assert_eq!(print_expr(&e), "-(-x)");
+    }
+
+    #[test]
+    fn break_and_return_end_their_block() {
+        let sp = Span::new("t.selu", 0, 0);
+        let s = |kind| LStmt::new(kind, &sp);
+        let call = || s(LStmtKind::Call(call(name("f"), vec![])));
+        let block = vec![
+            s(LStmtKind::Break),
+            call(),
+            s(LStmtKind::Return(vec![])),
+            call(),
+        ];
+        assert_eq!(
+            print_block(&block).text,
+            "do\n  break\nend\nf()\ndo\n  return\nend\nf()\n"
+        );
+        let last = vec![call(), s(LStmtKind::Break)];
+        assert_eq!(print_block(&last).text, "f()\nbreak\n");
     }
 
     #[test]
