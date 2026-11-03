@@ -59,8 +59,10 @@ pub enum Evidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FunctionEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Declaration>,
     pub name: String,
     #[serde(default = "yes")]
     pub available: bool,
@@ -98,6 +100,8 @@ pub struct EventParam {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Declaration>,
     pub name: String,
     #[serde(default)]
     pub params: Vec<EventParam>,
@@ -107,6 +111,14 @@ pub struct EventEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<Declaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enums: Vec<Declaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub widgets: Vec<Declaration>,
     pub flavour: String,
     pub build: Build,
     pub interface: u32,
@@ -364,4 +376,34 @@ mod tests {
         assert_eq!(e.code, "SELU0204");
         assert!(format!("{:?}", e.help).contains("1.0.0.1000"), "{e:?}");
     }
+}
+
+/// Only structural API metadata; documentation and source text are excluded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Declaration {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arguments: Vec<Declaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub returns: Vec<Declaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<Declaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<Declaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherits: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub attributes: std::collections::BTreeMap<String, serde_json::Value>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Source {
+    pub commit: String,
+    pub version: String,
+    pub interface_source: String,
 }

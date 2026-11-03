@@ -4,6 +4,7 @@ members = [
     "crates/selu-diagnostics",
     "crates/selu-syntax",
     "crates/selu-manifest",
+    "crates/selu-manifest-gen",
     "crates/selu-check",
     "crates/selu-lower",
     "crates/selu-sim",

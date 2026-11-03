@@ -1,0 +1,102 @@
+[interface]
+value = 120105
+note = "Client version 12.1.5 interface convention; origin/live build 70391"
+
+[[functions]]
+note = "E:/Development/RennersAddons/docs/WOW_LUA_API.md: native CreateFrame use; engine global absent from generated documentation"
+[functions.entry]
+name = "CreateFrame"
+params = ["frameType", "name", "parent", "template", "id"]
+evidence = "verified"
+[functions.entry.signature]
+name = "CreateFrame"
+[[functions.entry.signature.arguments]]
+name = "frameType"
+type = "cstring"
+[[functions.entry.signature.arguments]]
+name = "name"
+type = "cstring"
+[functions.entry.signature.arguments.attributes]
+Nilable = true
+[[functions.entry.signature.arguments]]
+name = "parent"
+type = "Frame"
+[functions.entry.signature.arguments.attributes]
+Nilable = true
+[[functions.entry.signature.arguments]]
+name = "template"
+type = "cstring"
+[functions.entry.signature.arguments.attributes]
+Nilable = true
+[[functions.entry.signature.arguments]]
+name = "id"
+type = "number"
+[functions.entry.signature.arguments.attributes]
+Nilable = true
+[[functions.entry.signature.returns]]
+name = "frame"
+type = "Frame"
+
+[[functions]]
+note = "Lua 5.1 standard global, available in client; fixture compatibility"
+[functions.entry]
+name = "print"
+params = ["..."]
+evidence = "verified"
+
+[[globals]]
+name = "UIParent"
+note = "docs/TOOLKIT-SURVEY.md: addon native global use"
+
+[[globals]]
+name = "GameTooltip"
+note = "docs/TOOLKIT-SURVEY.md: addon native global use"
+
+[[globals]]
+name = "SlashCmdList"
+note = "docs/TOOLKIT-SURVEY.md: addon native global use"
+
+[[widgets]]
+note = "docs/TOOLKIT-SURVEY.md: base widget geometry methods; native Frame derives Region"
+[widgets.entry]
+name = "Frame"
+type = "ScriptObject"
+inherits = ["Region"]
+[[widgets.entry.methods]]
+name = "RegisterEvent"
+type = "Function"
+[[widgets.entry.methods.arguments]]
+name = "event"
+type = "cstring"
+
+[[widgets]]
+note = "docs/TOOLKIT-SURVEY.md: native SetPoint use; engine Region anchoring API"
+[widgets.entry]
+name = "Region"
+type = "ScriptObject"
+[[widgets.entry.methods]]
+name = "SetPoint"
+type = "Function"
+[[widgets.entry.methods.arguments]]
+name = "point"
+type = "cstring"
+[[widgets.entry.methods.arguments]]
+name = "relativeTo"
+type = "Region"
+[widgets.entry.methods.arguments.attributes]
+Nilable = true
+[[widgets.entry.methods.arguments]]
+name = "relativePoint"
+type = "cstring"
+[widgets.entry.methods.arguments.attributes]
+Nilable = true
+[[widgets.entry.methods.arguments]]
+name = "x"
+type = "number"
+[widgets.entry.methods.arguments.attributes]
+Nilable = true
+[[widgets.entry.methods.arguments]]
+name = "y"
+type = "number"
+[widgets.entry.methods.arguments.attributes]
+Nilable = true

@@ -445,6 +445,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "selu-manifest-gen"
+version = "0.1.0"
+dependencies = [
+ "mlua",
+ "selu-manifest",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "selu-sim"
 version = "0.1.0"
 dependencies = [
