@@ -14,8 +14,16 @@
 
 ## Next
 
-1. Loops, then arrays/objects/templates, hoisted temporaries for `??`.
-2. Functions/arrow functions and module tables early (TOOLKIT-SURVEY).
+- The foundation for parallel work is done (owner asked, 2026-11-04): the
+  parser handles all of SPEC-V1 section 2 except classes and modules, the
+  lowering builds a Lua tree with temporaries, and each language area has
+  its own files. `docs/WORK-PACKAGES.md` holds the three briefs (A control
+  flow, B data, C functions) with acceptance items.
+- Owner's plan: three agents, effort medium, each in its own worktree on a
+  branch from current `master`; merge A first, then B and C; an independent
+  review per branch, then the final check here.
+- Published: `selu` 0.0.1 placeholder on crates.io; public repo
+  https://github.com/rennerdo30/selu (push `master` by explicit ref only).
 
 ## Traps
 

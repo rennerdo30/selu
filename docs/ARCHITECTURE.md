@@ -5,8 +5,10 @@ Selu is a Rust workspace (edition 2024) under `crates/`. Data flows one way:
 ```
 .selu source
   -> selu-syntax    lexer + recursive-descent parser -> AST (with spans)
-  -> selu-check     resolve calls/events against the target manifest
-  -> selu-lower     readable Lua 5.1 + source map + generated .toc
+  -> selu-check     scopes, types, language rules, target checks
+                    -> diagnostics + a type for every expression
+  -> selu-lower     Selu AST -> Lua syntax tree -> printed Lua 5.1,
+                    source map, generated .toc
   -> dist/<Name>/  the addon folder
   -> selu-sim       the same Lua, loaded in TOC order into a Lua 5.1 VM
 ```
@@ -21,10 +23,10 @@ terminal with codespan-reporting.
 | Crate | Job |
 |---|---|
 | `selu-diagnostics` | `Diagnostic`, `Span`, terminal rendering. No other Selu deps. |
-| `selu-syntax` | Hand-written lexer and recursive-descent parser for the Selu subset (DESIGN.md section 9). Semicolons are required; a missing one is `SELU0101` with a fix suggestion. |
+| `selu-syntax` | Hand-written lexer and recursive-descent parser for all of SPEC-V1 section 2 except classes and modules (DESIGN.md section 9). Semicolons are required; a missing one is `SELU0101` with a fix suggestion. Every expression has an `id`; `visit.rs` walks any node's children. |
 | `selu-manifest` | Serde types for a target manifest, JSON loading, `flavour@version` parsing and partial-version resolution to the newest matching manifest. Per-version differences (Lua dialect, availability, restriction flags, `returnsSecret`, evidence `documented`/`verified`) live in manifests, never in compiler code. |
-| `selu-check` | Semantic pass: block scopes and name resolution (below), and a global call or `on EVENT` the target lacks is an error naming the target (`SELU0301`/`SELU0302`). `rules.rs` holds target-independent rules (Lua keywords as names, where assignment and `??` may appear). |
-| `selu-lower` | Emits readable Lua 5.1 (2-space indent, local names preserved, `a.B(x)` becomes `a:B(x)`; manifest namespace functions like `C_Foo.Bar(x)` stay plain calls), a generated-line -> source-span map, shared event-frame dispatch for `on EVENT`, and the `.toc` whose `## Interface:` comes from the manifest. |
+| `selu-check` | Semantic pass: block scopes and name resolution (below), and a global call or `on EVENT` the target lacks is an error naming the target (`SELU0301`/`SELU0302`). `rules.rs` holds target-independent rules (Lua keywords and `__selu` names, where assignments may appear). One file per language area (`loops.rs`, `data.rs`, `functions.rs`, `wow.rs`; see `docs/WORK-PACKAGES.md`). |
+| `selu-lower` | Builds a Lua syntax tree (`lua.rs`) and prints readable Lua 5.1 (2-space indent, local names preserved, only needed brackets, `a.B(x)` becomes `a:B(x)`; manifest namespace functions like `C_Foo.Bar(x)` stay plain calls), a generated-line -> source-span map, shared event-frame dispatch for `on EVENT`, and the `.toc` whose `## Interface:` comes from the manifest. Same per-area files as the checker. |
 | `selu-sim` | `mlua` (Lua 5.1, vendored): boot a VM, load files in TOC order, simulated clock (`GetTime`), captured `print`, minimal `CreateFrame` (`RegisterEvent`/`UnregisterEvent`/`SetScript`/`Show`/`Hide`/`IsShown`), and `fire(event, ...)` from Rust. Unmodelled globals and frame methods log `not simulated: X` once and return a no-op. |
 | `selu-cli` | `selu build` (working), `selu targets` (lists known manifests), `selu test`/`debug`/`probe` (honest stubs, exit non-zero). |
 
@@ -84,6 +86,30 @@ terminal with codespan-reporting.
   Narrowings of a `let` don't reach into nested functions.
 - `===`/`!==` are syntax errors (`SELU0109`) with the fix `==`/`!=`.
 
+## Lowering: the Lua tree and temporaries
+
+- The lowering never builds Lua text. It builds `lua.rs` nodes and the
+  printer decides brackets from Lua's precedence (`a + b * c`, `(a + b) * c`,
+  `a - (b - c)`; `..` chains print flat because they only join strings),
+  writes `t["end"]` for keyword fields, and prints a short single-statement
+  `if` on one line.
+- Lowering an expression may need statements first (a temporary for
+  `f() ?? g()` inside a call). `Lowerer::expr(e, pre)` pushes them into
+  `pre`; `seq` lowers operands in order and stores earlier, impure values in
+  temporaries when a later operand needs statements, so evaluation stays
+  left to right; `finish` wraps a statement and its temporaries in
+  `do ... end` (declarations keep theirs in the block, since `do` would hide
+  the declared name). Temporaries are `__selu_t1`, `__selu_t2`... (user
+  names starting with `__selu` are `SELU0318`).
+- `&&`, `||` and `??` keep short-circuiting: inline `a and b` / `a or b`
+  when the right side needs no statements, else an `if` on a temporary.
+  `a ?? b` is inline `a == nil and b or a` only when `a` is a plain name or
+  literal and `b` a literal that is never false or nil. A `??` chain stored
+  in a variable uses the variable itself (`local x = a` then
+  `if x == nil then x = b end`), unless a later part reads that variable.
+- `else if` becomes `elseif` unless its condition needs statements; then it
+  stays a nested `if` inside `else`.
+
 ## Known simplifications in this base
 
 - **Untyped values:** manifests don't carry types yet, so results of game
@@ -95,12 +121,14 @@ terminal with codespan-reporting.
   no "not all paths return a value" check yet.
 - `selu-check` checks plain global calls, `C_*` namespace calls, and event
   names against the target. Method calls on objects await the typed pass.
-- `??` keeps `false` and evaluates each side at most once. In a
-  declaration, assignment or `return` it lowers to statements
-  (`local x = a` then `if x == nil then x = b end`). Anywhere else only the
-  exact inline form `(a == nil and b or a)` is allowed: `a` a plain name or
-  field path, `b` a number, string or `true`; other forms are SELU0308 until
-  the lowering can hoist temporaries.
+- Constructs whose package hasn't landed are `SELU0390` ("isn't supported
+  yet"); see `docs/WORK-PACKAGES.md`. Default and rest parameters parse but
+  are `SELU0390` until package C.
+- Lines inside a function expression map to the statement that holds it in
+  the source map.
+- Temporaries in a declaration's `pre` stay in scope until the end of the
+  block; a function with very many of them could reach Lua 5.1's limit of
+  200 locals. Not seen in practice yet.
 - Names Lua reserves (`end`, `local`, `then`...) are SELU0304; as field names
   they lower to `t["end"]`. Assignment is a statement only (SELU0305/0306).
 - The simulator's frame is a plain Lua table, not the future frame/layout

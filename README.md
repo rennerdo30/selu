@@ -55,21 +55,18 @@ on PLAYER_LOGIN() {
 }
 ```
 
-compiles to (unchanged compiler output; the extra parentheses go away once
-the printer knows operator precedence):
+compiles to (unchanged compiler output):
 
 ```lua
 local greeting = "Welcome back"
 local function title(name, level)
   local shown = level
   if shown == nil then shown = 1 end
-  if (shown >= 10) then
-    return (name .. " the Brave")
-  end
+  if shown >= 10 then return name .. " the Brave" end
   return name
 end
 __selu_on("PLAYER_LOGIN", function()
-  print((((greeting .. ", ") .. title("Renner", nil)) .. "!"))
+  print(greeting .. ", " .. title("Renner", nil) .. "!")
 end)
 ```
 
@@ -98,8 +95,8 @@ error[SELU0328]: a condition must be a `boolean` or a value that may be null, no
   returns
 - The rules that remove Lua's and JavaScript's traps: no truthy numbers or
   strings, `+` only for two numbers or two strings, strict `==` (`===` is an
-  error), `??` that keeps `false`, no undeclared reads, no accidental
-  globals
+  error), `??` that keeps `false` and works anywhere, no undeclared reads, no
+  accidental globals
 - Checks against a target manifest: unknown functions and events are errors
 - `selu build`: writes the addon folder with the `.toc` (interface number from
   the target) and a source map
