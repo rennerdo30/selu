@@ -466,3 +466,96 @@ fn review_reserved_module_paths() {
         assert_eq!(&src[span.start..span.end], format!("\"./{path}\""));
     }
 }
+#[test]
+fn classes_saved_instance_fields_methods_and_preludes() {
+    let source = "saved settings = { value: 7 }; class Reader { value = settings.value; read(): number { return settings.value; } } on PLAYER_LOGIN() { const reader = new Reader(); print(reader.value); print(reader.read()); }";
+    let lua = common::compile(source);
+    assert!(lua.contains("local __selu_setmetatable = setmetatable\nlocal __selu_saved__G = _G"));
+    let sim = Sim::new().unwrap();
+    sim.eval("Addon_settings = { value = 42 }").unwrap();
+    sim.load_addon("Standalone", &[("main.lua".into(), lua)])
+        .unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), vec!["42", "42"]);
+    let dir = project(
+        "import { Reader } from \"./model\"; on PLAYER_LOGIN() { const reader = new Reader(); print(reader.value); print(reader.read()); }",
+    );
+    std::fs::write(
+        dir.join("src/state.selu"),
+        "export saved settings = { value: 7 };",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/model.selu"),"import { settings } from \"./state\"; export class Reader { value = settings.value; read(): number { return settings.value; } }").unwrap();
+    success(&dir);
+    let sim = Sim::new().unwrap();
+    sim.eval("Saved_settings = { value = 42 }").unwrap();
+    sim.load_addon("Saved", &files(&dir)).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), vec!["42", "42"]);
+}
+#[test]
+fn classes_saved_static_field_is_an_early_read() {
+    let source = "saved settings = { value: 7 }; class Reader { static value = settings.value; }";
+    let p = selu_syntax::parse("t.selu", source).unwrap();
+    let ds = selu_check::check(&p, &common::manifest());
+    let d = ds.iter().find(|d| d.code == "SELU0460").unwrap();
+    let span = d.span.as_ref().unwrap();
+    assert_eq!(&source[span.start..span.end], "settings");
+}
+#[test]
+fn classes_saved_shapes_reject_class_instances_recursively() {
+    for defaults in [
+        "{ point: new Point() }",
+        "{ points: new Map<string, Point>() }",
+        "{ points: new Map<string, { point: Point }>() }",
+    ] {
+        let source = format!("class Point {{ x = 1; }} saved s = {defaults};");
+        let p = selu_syntax::parse("t.selu", &source).unwrap();
+        let ds = selu_check::check(&p, &common::manifest());
+        assert!(
+            ds.iter()
+                .any(|d| d.code == "SELU0469" && d.message.contains("class instances")),
+            "{source}: {ds:?}"
+        );
+    }
+}
+#[test]
+fn classes_saved_writes_reject_instances_and_accept_plain_copies() {
+    for operation in [
+        "s.point = p;",
+        "s.nested.point = p;",
+        "s.items.push(p);",
+        "s.items[0] = p;",
+        "s.points.set(\"key\", p);",
+    ] {
+        let src = format!(
+            "class Point {{ x = 1; }} saved s = {{ point: {{ x: 0 }}, nested: {{ point: {{ x: 0 }} }}, items: [{{ x: 0 }}], points: new Map<string, {{ x: number }}>() }}; on PLAYER_LOGIN() {{ const p = new Point(); {operation} }}"
+        );
+        let p = selu_syntax::parse("t.selu", &src).unwrap();
+        let ds = selu_check::check(&p, &common::manifest());
+        let d = ds
+            .iter()
+            .find(|d| d.code == "SELU0469" && d.message.contains("class instances"))
+            .unwrap_or_else(|| panic!("{operation}: {ds:?}"));
+        assert!(d.help.as_ref().unwrap().contains("{ x: p.x, y: p.y }"));
+    }
+    let dir = project(
+        "import { s } from \"./state\"; import { Point } from \"./model\"; on PLAYER_LOGIN() { const p = new Point(); s.points.set(\"key\", p); }",
+    );
+    std::fs::write(
+        dir.join("src/state.selu"),
+        "export saved s = { points: new Map<string, { x: number }>() };",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/model.selu"), "export class Point { x = 1; }").unwrap();
+    let output = build(&dir);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("class instances cannot be saved"));
+    let src = "class Point { x = 1; } saved s = { point: { x: 0 }, items: [{ x: 0 }], points: new Map<string, { x: number }>() }; on PLAYER_LOGIN() { const p = new Point(); s.point = { x: p.x }; s.items.push({ x: p.x }); s.points.set(\"key\", { x: p.x }); print(s.point.x); print(s.items.length); print(s.points.count()); }";
+    let dir = project(src);
+    success(&dir);
+    let sim = Sim::new().unwrap();
+    sim.load_addon("Saved", &files(&dir)).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), vec!["1", "2", "1"]);
+}

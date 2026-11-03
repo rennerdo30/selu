@@ -913,6 +913,7 @@ impl Ctx<'_> {
             ExprKind::Assign { target, value } => {
                 // The value runs first, then the store.
                 let t = self.value(value);
+                self.saved_write_value(target, &t, &value.span);
                 match &target.kind {
                     ExprKind::Ident(name) => self.write(name, &target.span, &t),
                     _ => self.data_write(target, &t),
@@ -1149,6 +1150,7 @@ impl Ctx<'_> {
             self.mark_if_stable(name, callee.id);
         }
         if let Some(t) = self.data_call(e, callee, args) {
+            self.saved_collection_write(callee, args);
             return t;
         }
         let callee_type = match &callee.kind {

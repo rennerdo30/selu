@@ -96,3 +96,11 @@ identity to `Sim::login_character` and `logout_character`, plus account and
 character global lists on logout. Account values survive a character switch;
 character values are restored only for that identity. Overlapping scope lists
 are rejected.
+
+Class instance field initializers and methods may read saved values because they
+execute later; static field initializers are checked as eager top-level reads.
+Class types are rejected recursively in saved shapes. Class-typed values also
+cannot be stored through saved-root field/index assignments or collection
+push/insert/set/add calls, including imported saved roots. Copy their data into
+a plain object instead, for example `{ x: p.x, y: p.y }`. Class metatables and
+methods cannot round-trip through SavedVariables.

@@ -32,6 +32,43 @@ impl Ctx<'_> {
             );
         }
     }
+    fn saved_root(&self, target: &selu_syntax::Expr) -> bool {
+        use selu_syntax::ExprKind;
+        match &target.kind {
+            ExprKind::Ident(name) => self.lookup(name).is_some_and(|(_, b)| {
+                b.kind == Kind::Saved
+                    || (b.kind == Kind::Import && self.module.saved_imports.contains(name))
+            }),
+            ExprKind::Member { object, .. }
+            | ExprKind::OptionalMember { object, .. }
+            | ExprKind::Index { object, .. } => self.saved_root(object),
+            _ => false,
+        }
+    }
+    fn class_saved_error(&mut self, span: &Span) {
+        self.out.push(err("SELU0469", "class instances cannot be saved because their metatables and methods cannot be persisted", span).with_help("copy the fields into a plain object, for example { x: p.x, y: p.y }"));
+    }
+    pub(crate) fn saved_write_value(&mut self, target: &selu_syntax::Expr, ty: &Type, span: &Span) {
+        if self.saved_root(target) && contains_class(ty) {
+            self.class_saved_error(span);
+        }
+    }
+    pub(crate) fn saved_collection_write(
+        &mut self,
+        callee: &selu_syntax::Expr,
+        args: &[selu_syntax::Expr],
+    ) {
+        if let selu_syntax::ExprKind::Member { object, name } = &callee.kind
+            && matches!(name.as_str(), "push" | "insert" | "set" | "add")
+            && self.saved_root(object)
+        {
+            for arg in args {
+                if self.types.get(arg.id).is_some_and(contains_class) {
+                    self.class_saved_error(&arg.span);
+                }
+            }
+        }
+    }
     pub(crate) fn saved_stmt(&mut self, s: &Stmt) {
         if self.scopes.len() != 1 {
             self.out.push(
@@ -81,7 +118,9 @@ impl Ctx<'_> {
                     }
                 }
                 let ty = self.value(defaults);
-                if !serializable(&ty) {
+                if contains_class(&ty) {
+                    self.class_saved_error(&defaults.span);
+                } else if !serializable(&ty) {
                     self.out.push(
                         err(
                             "SELU0469",
@@ -171,6 +210,17 @@ fn serializable(ty: &Type) -> bool {
             matches!(**k, Type::Number | Type::String | Type::Boolean) && serializable(v)
         }
         Type::Set(k) => matches!(**k, Type::Number | Type::String | Type::Boolean),
+        _ => false,
+    }
+}
+
+fn contains_class(ty: &Type) -> bool {
+    match ty {
+        Type::Class(..) | Type::ClassObject(_) => true,
+        Type::Optional(t) | Type::Array(t) | Type::Set(t) => contains_class(t),
+        Type::Object(fields) => fields.values().any(contains_class),
+        Type::Tuple(types) => types.iter().any(contains_class),
+        Type::Map(k, v) | Type::WeakMap(k, v) => contains_class(k) || contains_class(v),
         _ => false,
     }
 }

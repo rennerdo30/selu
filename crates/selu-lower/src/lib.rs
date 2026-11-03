@@ -119,6 +119,7 @@ pub fn lower_with_addon(
     };
     let mut out: LBlock = Vec::new();
     l.class_prelude(&program.stmts, &mut out);
+    out.extend(saved::captures(program));
     let has_handlers = program
         .stmts
         .iter()
@@ -127,7 +128,6 @@ pub fn lower_with_addon(
         out.push(raw(EVENT_PROLOGUE));
         out.push(raw(""));
     }
-    out.extend(saved::captures(program));
     out.extend(l.block(&program.stmts));
     let wow = l.wow_prologue();
     if wow.is_some() || saved::has_saved(program) {
@@ -193,7 +193,6 @@ pub fn lower_module(
         ),
         span: None,
     }];
-    l.class_prelude(&program.stmts, &mut out);
     out.push(LStmt {
         kind: LStmtKind::Assign(
             vec![name("__selu_ns")],
@@ -202,6 +201,8 @@ pub fn lower_module(
         span: None,
     });
     let runtime_index = out.len();
+    l.class_prelude(&program.stmts, &mut out);
+    out.extend(saved::captures(program));
     l.module_prologue(&mut out);
     let has_handlers = program
         .stmts
@@ -211,7 +212,6 @@ pub fn lower_module(
         out.push(raw(&module_event_prologue()));
         out.push(raw(""));
     }
-    out.extend(saved::captures(program));
     out.extend(l.block(&program.stmts));
     if let Some(prologue) = l.wow_prologue() {
         out.splice(runtime_index..runtime_index, prologue);
