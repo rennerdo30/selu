@@ -20,8 +20,9 @@ state, export a function. Lexical shadowing disables getter resolution in the
 shadowing scope. Getter calls participate in the existing expression sequencing
 rules, so a later argument that mutates state cannot change an earlier read.
 
-`export global name = value;` still emits a plain global assignment, and also
-publishes the value for named imports. Ordinary exports never create globals.
+`export global name = value;` emits a plain global assignment and publishes
+a getter for named imports, so changes made by Selu functions or external Lua
+are visible on every imported read. Ordinary exports never create globals.
 Single-file `check_program` and `lower` accept exports as local declarations;
 project callers use `check_module` and `lower_module` with dependency metadata.
 Modules without import/export syntax retain the original standalone output.
@@ -36,3 +37,30 @@ Source maps preserve each module's source name and are written under
 `dist/.selu/<addon>/<relative/path>.lua.map.json`. Lua output retains relative
 folders, avoiding collisions between equal basenames. Every reachable module
 is checked for a target before any generated module is written for that target.
+
+## Review corrections
+
+Import local names, including unused aliases, use the normal Lua-keyword and
+compiler-prefix name checks. Loader locals are `__selu_addon` and `__selu_ns`.
+Imports and exports are only valid at file scope (SELU0406, with a move-to-top-level
+hint). Missing exports receive generic help rather than an arbitrary suggestion.
+
+Every import path component must match the directory entry's case exactly.
+SELU0405 highlights the complete import path and names the actual source path
+in its diagnostic and fix. Case variants cannot create duplicate module identities
+or overwrite the same output on case-insensitive hosts.
+
+The module event prologue creates its handler table, frame and registration
+function only if `__selu_ns[true]` is absent, then stores the registration closure
+there. Every file uses that same closure. A boolean namespace key cannot collide
+with the string keys used for module paths; it is reserved for the event runtime.
+The closure owns the handler table and frame. D4 can use a separate reserved slot
+for its create-on-first-use runtime. Event-only modules use this prologue too.
+Project output loaded without addon arguments uses a fresh fallback namespace;
+`lower()` retains its original standalone event runtime without a namespace.
+
+D3 integration belongs in `walk_stmt` in `selu-lower/src/modules.rs`: class
+constructors and methods must remove their parameter bindings from the active
+live-import set before walking defaults and bodies, as function declarations do.
+Imported class names in written types belong in D3's checker name/type resolution;
+module signatures already pass each exported Type through to import bindings.
