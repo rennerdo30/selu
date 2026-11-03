@@ -329,6 +329,7 @@ pub fn resolve_quiet(t: &TypeExpr) -> Type {
 #[derive(Debug, Clone, Default)]
 pub struct TypeTable {
     types: HashMap<ExprId, Type>,
+    stable: std::collections::HashSet<ExprId>,
 }
 
 impl TypeTable {
@@ -340,6 +341,17 @@ impl TypeTable {
     }
     pub fn is_string(&self, id: ExprId) -> bool {
         self.get(id) == Some(&Type::String)
+    }
+    /// Marks a name use whose value can't change while the program runs: a
+    /// `const`, a function declaration, or a game global (Selu code can't
+    /// replace those, SELU0315).
+    pub fn mark_stable(&mut self, id: ExprId) {
+        self.stable.insert(id);
+    }
+    /// See [`TypeTable::mark_stable`]. The lowering reads such a name again
+    /// instead of copying it into a temporary to keep the evaluation order.
+    pub fn is_stable(&self, id: ExprId) -> bool {
+        self.stable.contains(&id)
     }
 }
 

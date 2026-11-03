@@ -808,7 +808,10 @@ impl Ctx<'_> {
             ExprKind::Str(_) => Type::String,
             ExprKind::Bool(_) => Type::Boolean,
             ExprKind::Null => Type::Null,
-            ExprKind::Ident(name) => self.read(name, &e.span),
+            ExprKind::Ident(name) => {
+                self.mark_if_stable(name, e.id);
+                self.read(name, &e.span)
+            }
             ExprKind::Call { callee, args } => self.call(e, callee, args),
             ExprKind::Unary { op, expr } => {
                 if op == "!" {
@@ -1040,7 +1043,22 @@ impl Ctx<'_> {
         }
     }
 
+    /// Records that this use of `name` can't change value (see
+    /// `TypeTable::mark_stable`).
+    fn mark_if_stable(&mut self, name: &str, id: selu_syntax::ExprId) {
+        let stable = match self.lookup(name) {
+            Some((_, b)) => matches!(b.kind, Kind::Const | Kind::Function),
+            None => self.manifest.has_global(name),
+        };
+        if stable {
+            self.types.mark_stable(id);
+        }
+    }
+
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+        if let ExprKind::Ident(name) = &callee.kind {
+            self.mark_if_stable(name, callee.id);
+        }
         if let Some(t) = self.data_call(e, callee, args) {
             return t;
         }

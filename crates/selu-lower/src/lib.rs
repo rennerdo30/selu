@@ -293,6 +293,26 @@ impl Lowerer<'_> {
         match &e.kind {
             ExprKind::Assign { target, value } => match &target.kind {
                 ExprKind::Ident(n) => self.assign_into(&name(n), false, value, span, out),
+                // `t.x = v`: as in TypeScript, the object is evaluated before
+                // the value. Lua reads a local `t` again at store time, so it
+                // is held first when the value could run code that changes it.
+                ExprKind::Member {
+                    object,
+                    name: field,
+                } => {
+                    let mut pre = Vec::new();
+                    let vals = self.seq(&[object, value], &mut pre);
+                    let [mut obj, v]: [LExpr; 2] = vals.try_into().expect("two operands");
+                    // Only a plain name is read again at store time; Lua
+                    // evaluates a longer object (`a.b`) before the value.
+                    let reread = matches!(&obj, LExpr::Name(n) if !n.starts_with("__selu_t"));
+                    if reread && may_run_code(&v) && !self.is_stable(&obj, object) {
+                        obj = name(&self.hold(obj, &object.span, &mut pre));
+                    }
+                    let t = LExpr::Field(Box::new(obj), field.clone());
+                    let stmt = LStmt::new(LStmtKind::Assign(vec![t], vec![v]), span);
+                    self.finish(pre, stmt, out);
+                }
                 _ => {
                     let mut pre = Vec::new();
                     let v = self.expr(value, &mut pre);
@@ -409,8 +429,8 @@ impl Lowerer<'_> {
             let mut own = Vec::new();
             let v = self.expr(e, &mut own);
             if !own.is_empty() {
-                for prev in vals.iter_mut() {
-                    if !is_constant(prev) {
+                for (prev, source) in vals.iter_mut().zip(exprs) {
+                    if !self.is_stable(prev, source) {
                         let t = self.hold(prev.clone(), &e.span, pre);
                         *prev = name(&t);
                     }
@@ -420,6 +440,12 @@ impl Lowerer<'_> {
             vals.push(v);
         }
         vals
+    }
+
+    /// A lowered value that later code can't change: a literal, or a name
+    /// the checker marked stable (`const`, function, game global).
+    pub(crate) fn is_stable(&self, v: &LExpr, source: &Expr) -> bool {
+        is_constant(v) || matches!(v, LExpr::Name(_)) && self.types.is_stable(source.id)
     }
 
     /// A temporary holding `value`, declared in `pre`.
@@ -582,6 +608,21 @@ impl Lowerer<'_> {
 }
 
 /// Only literals remain unchanged across another operand's pre-statements.
+/// Whether evaluating `e` may call a function (and so change variables).
+fn may_run_code(e: &LExpr) -> bool {
+    match e {
+        LExpr::Call(..) | LExpr::Method(..) => true,
+        LExpr::Field(o, _) | LExpr::Unary(_, o) | LExpr::Paren(o) => may_run_code(o),
+        LExpr::Index(a, b) | LExpr::Binary(_, a, b) => may_run_code(a) || may_run_code(b),
+        LExpr::Table(fields) => fields.iter().any(|f| match f {
+            lua::LField::Pos(v) | lua::LField::Named(_, v) => may_run_code(v),
+            lua::LField::Keyed(k, v) => may_run_code(k) || may_run_code(v),
+        }),
+        // Creating a closure runs nothing.
+        _ => false,
+    }
+}
+
 fn is_constant(e: &LExpr) -> bool {
     matches!(
         e,

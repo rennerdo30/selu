@@ -156,3 +156,40 @@ fn call_snapshots_name_before_argument_pre() {
         ["1\t2"]
     );
 }
+
+#[test]
+fn field_assignment_evaluates_the_object_first() {
+    // TypeScript evaluates `t` before the value; a value that replaces `t`
+    // must still store into the old table.
+    let out = run(r#"
+on PLAYER_LOGIN() {
+  let t = { x: 1 };
+  const old = t;
+  function swap(): number { t = { x: 0 }; return 5; }
+  t.x = swap();
+  print(old.x, t.x);
+}
+"#);
+    assert_eq!(out, ["5\t0"]);
+}
+
+#[test]
+fn stable_names_are_not_copied_into_temporaries() {
+    // `print`, `const`s and functions can't change, so keeping the order
+    // around a `??` temporary doesn't need copies of them. `#ys` still
+    // needs one: `f` could add elements to the array.
+    let lua = common::compile(
+        r#"
+const ys = [1, 2];
+function f(n: number?) { return n; }
+on PLAYER_LOGIN() {
+  print(ys.length, f(1) ?? 0);
+  print(ys, f(2) ?? 0);
+}
+"#,
+    );
+    assert!(!lua.contains("= print\n"), "{lua}");
+    assert!(lua.contains("= #ys\n"), "{lua}");
+    assert!(!lua.contains("= ys\n"), "{lua}");
+    assert!(lua.contains("print(ys, "), "{lua}");
+}
