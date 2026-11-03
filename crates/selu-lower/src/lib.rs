@@ -83,6 +83,7 @@ pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lower
         known: &known,
         types,
         temps: 0,
+        loops: Vec::new(),
     };
     let mut out: LBlock = Vec::new();
     let has_handlers = program
@@ -118,6 +119,7 @@ fn raw(text: &str) -> LStmt {
 }
 
 pub(crate) struct Lowerer<'a> {
+    loops: Vec<loops::LoopCtx>,
     known: &'a HashSet<String>,
     types: &'a TypeTable,
     temps: u32,
@@ -174,11 +176,14 @@ impl Lowerer<'_> {
     }
 
     pub(crate) fn function(&mut self, params: &[Param], body: &[Stmt]) -> LFunction {
-        LFunction {
+        let loops = std::mem::take(&mut self.loops);
+        let result = LFunction {
             params: params.iter().map(|p| p.name.clone()).collect(),
             vararg: false,
             body: self.block(body),
-        }
+        };
+        self.loops = loops;
+        result
     }
 
     /// `forward`: the statement declares a name that was already declared

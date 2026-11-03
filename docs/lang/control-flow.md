@@ -1,0 +1,67 @@
+# Control flow decisions (package A)
+
+Conditions use the existing boolean/optional truthiness rule, including
+branch narrowing. Loop condition preludes execute on every evaluation.
+A do-loop body is a Lua `do` block inside `repeat`, so body declarations
+cannot shadow the names read by `until`.
+
+Counted loops use Lua numeric for only for a mutable local initialized with
+a small integer literal, a literal bound, a matching directional comparison,
+and a nonzero constant integer update. Integers are limited conservatively
+to absolute values at most one billion. Strict comparisons adjust the bound
+by one. Any assignment to the binding anywhere in the body disables this
+optimization. Fractional, dynamic and other headers use while; dynamic
+bounds are evaluated each turn. No bound invariance is guessed across calls.
+
+Direct captures of counted-loop header bindings are rejected with SELU0343,
+for both numeric and fallback loops. This is the acceptance-item-8 error
+option: until per-turn environment copying is implemented, silently sharing
+a fallback binding would differ from TypeScript. Detection is conservative
+by spelling, so a same-named shadow inside a nested function can also be
+rejected. Copy to a body-local variable and capture that variable instead.
+This restriction covers function declarations and function expressions.
+
+## Helper for package B
+
+`Lowerer::loop_body(&mut self, body: &[Stmt], span: &Span) -> LBlock`
+(in selu-lower/src/loops.rs, pub(crate)) lowers a loop body and establishes
+its transfer context. Put the returned statements directly inside the actual
+Lua loop. A body with continue gets an inner `repeat ... until true`; a body
+with both continue and break also gets a local break flag and its outer-loop
+break check. Nested loops and functions do not contribute transfers to their
+parent. The checker counterpart uses `loops::LoopCtx` markers; package B
+must push a marker before checking its body and pop it afterwards.
+
+Function boundaries save, empty and restore the loop stack. Break and
+continue are terminating for early-exit narrowing, but never count as
+function returns.
+
+Ternaries join branch types; incompatible branches produce SELU0342.
+Thus `c ? false : 1` is an error (there is no boolean/number union).
+False/null-capable branches use a temporary and if; known truthy then values
+with no preludes use `c and a or b`. Only the selected branch executes.
+
+Compound assignments evaluate the receiver, index, old value and RHS in that
+order, once each. Array/tuple indices get the zero-to-one-based adjustment.
+The existing checker enforces mutability for names. Operators require
+numbers, except that += also joins two strings. Updates require numbers.
+SELU0340 diagnoses transfers without a loop, SELU0341 operand errors, and
+SELU0344 invalid assignment targets. Each includes a span and help.
+
+## Pending package B integration
+
+Index reads and ordinary indexed targets still depend on package B in this
+base. Parent approved leaving the following exact end-to-end test pending;
+receiver-once and old-value-before-RHS behavior is tested now with frames.
+Add after B merges:
+
+```rust
+#[test]
+fn compound_index_once() {
+    assert_eq!(run("let calls = 0; function index(): number { calls++; return 0; } on PLAYER_LOGIN() { let t = [3]; t[index()] += 1; print(t[0]); print(calls); }"), ["4", "1"]);
+}
+```
+
+No package A construct retains SELU0390. Data/index and function-expression
+support still produce the base packages' SELU0390 until B/C merge. Their
+integration and callback tests remain with the parent.

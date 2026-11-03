@@ -57,6 +57,7 @@ pub fn check_program(program: &Program, manifest: &Manifest) -> Checked {
         scopes: Vec::new(),
         fn_depth: 0,
         returns: Vec::new(),
+        loops: Vec::new(),
         types: TypeTable::default(),
     };
     ctx.block(&program.stmts, &[], Vec::new());
@@ -103,6 +104,7 @@ struct Scope {
 type Narrowings = Vec<(String, Type)>;
 
 struct Ctx<'a> {
+    loops: Vec<loops::LoopCtx>,
     manifest: &'a Manifest,
     out: &'a mut Vec<Diagnostic>,
     scopes: Vec<Scope>,
@@ -332,12 +334,14 @@ impl Ctx<'_> {
         written_ret: Option<Type>,
         body: &[Stmt],
     ) -> Type {
+        let loops = std::mem::take(&mut self.loops);
         self.fn_depth += 1;
         self.returns.push(Vec::new());
         let params: Vec<(Param, Type)> = params.iter().cloned().zip(param_types).collect();
         self.block(body, &params, Vec::new());
         let returns = self.returns.pop().unwrap_or_default();
         self.fn_depth -= 1;
+        self.loops = loops;
         if let Some(written) = written_ret {
             for (t, span) in &returns {
                 let ok = if *t == Type::Void {
@@ -1121,7 +1125,7 @@ fn pattern_names(p: &selu_syntax::Pattern) -> Vec<(&String, &Span)> {
 
 fn always_exits(stmts: &[Stmt]) -> bool {
     match stmts.last().map(|s| &s.kind) {
-        Some(StmtKind::Return(_)) => true,
+        Some(StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue) => true,
         Some(StmtKind::Block(b)) => always_exits(b),
         Some(StmtKind::If {
             then_branch,
@@ -1432,8 +1436,6 @@ mod tests {
     #[test]
     fn constructs_still_being_built_are_reported_not_lowered() {
         for src in [
-            "while (true) { break; }
-",
             "const xs = [1, 2];
 ",
             "const f = (a: number) => a;
@@ -1441,9 +1443,6 @@ mod tests {
             "const [a, b] = [1, 2];
 ",
             "function f(a = 1) { return a; }
-",
-            "let n = 1;
-n += 2;
 ",
             "const t = `a${1}`;
 ",
