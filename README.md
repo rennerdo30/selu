@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/selu-wordmark-light.svg">
+    <img alt="Selu" src="docs/logo/selu-wordmark.svg" width="420">
+  </picture>
+</p>
+
 # Selu
 
 **A TypeScript-style language for World of Warcraft addons.** Selu compiles
@@ -145,7 +152,7 @@ repository is a small test fixture until the generated manifests land.
 
 ## Licence
 
-[MIT](LICENSE).
+[MIT](LICENSE). The logo in `docs/logo/` is under the same licence.
 
 Selu is an independent project and is not affiliated with or endorsed by
 Blizzard Entertainment. World of Warcraft is a trademark of Blizzard

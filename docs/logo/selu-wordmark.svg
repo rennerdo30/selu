@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -10 620 180" width="620" height="180" role="img" aria-labelledby="title">
+  <title id="title">Selu</title>
+  <g transform="scale(0.3125)">
+  <defs>
+    <linearGradient id="gem" x1="96" y1="40" x2="420" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b2f8f"/>
+      <stop offset="0.55" stop-color="#211a5c"/>
+      <stop offset="1" stop-color="#120e36"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="190" y1="130" x2="320" y2="390" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff1c4"/>
+      <stop offset="0.45" stop-color="#f5c451"/>
+      <stop offset="1" stop-color="#c47a1c"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="256" y1="26" x2="256" y2="486" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f5c451" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#c47a1c" stop-opacity="0.35"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="256" cy="250" r="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8f7bff" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#8f7bff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="crescent">
+      <circle cx="389" cy="208" r="19" fill="#fff"/>
+      <circle cx="398" cy="200" r="16" fill="#000"/>
+    </mask>
+  </defs>
+
+  <!-- Gem: a pointy-top hexagon with rounded corners and faint facets. -->
+  <polygon points="256,40 443,148 443,364 256,472 69,364 69,148"
+           fill="url(#gem)" stroke="url(#gem)" stroke-width="28" stroke-linejoin="round"/>
+  <g stroke="#ffffff" stroke-opacity="0.07" stroke-width="2">
+    <line x1="256" y1="256" x2="256" y2="40"/>
+    <line x1="256" y1="256" x2="443" y2="148"/>
+    <line x1="256" y1="256" x2="443" y2="364"/>
+    <line x1="256" y1="256" x2="256" y2="472"/>
+    <line x1="256" y1="256" x2="69" y2="364"/>
+    <line x1="256" y1="256" x2="69" y2="148"/>
+  </g>
+  <polygon points="256,40 443,148 256,256 69,148" fill="#ffffff" fill-opacity="0.05"/>
+  <circle cx="256" cy="256" r="190" fill="url(#glow)"/>
+  <polygon points="256,66 420,161 420,351 256,446 92,351 92,161"
+           fill="none" stroke="url(#rim)" stroke-width="3" stroke-linejoin="round"/>
+
+  <!-- Sparkles. -->
+  <g fill="#fff1c4">
+    <path d="M150 150 l4 12 l12 4 l-12 4 l-4 12 l-4 -12 l-12 -4 l12 -4 z" opacity="0.8"/>
+    <path d="M362 382 l3 8 l8 3 l-8 3 l-3 8 l-3 -8 l-8 -3 l8 -3 z" opacity="0.55"/>
+    <path d="M128 268 l2 6 l6 2 l-6 2 l-2 6 l-2 -6 l-6 -2 l6 -2 z" opacity="0.5"/>
+  </g>
+
+  <!-- Orbit, back half (behind the S). -->
+  <ellipse cx="256" cy="258" rx="150" ry="52" transform="rotate(-28 256 258)"
+           fill="none" stroke="#bfd4ff" stroke-opacity="0.35" stroke-width="4"/>
+
+  <!-- The S: two arcs, like a pair of crescents. -->
+  <path d="M309.7 165 A62 62 0 1 0 256 258 A62 62 0 1 1 202.3 351"
+        fill="none" stroke="#0b0824" stroke-opacity="0.45" stroke-width="50" stroke-linecap="round"
+        transform="translate(4 6)"/>
+  <path d="M309.7 165 A62 62 0 1 0 256 258 A62 62 0 1 1 202.3 351"
+        fill="none" stroke="url(#gold)" stroke-width="44" stroke-linecap="round"/>
+  <path d="M298.9 160 A56 56 0 0 0 207.5 168"
+        fill="none" stroke="#fffbe8" stroke-opacity="0.55" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- Orbit, front half (over the S). -->
+  <path d="M388.4 187.6 A150 52 -28 0 1 123.6 328.4"
+        fill="none" stroke="#bfd4ff" stroke-opacity="0.85" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- The moon (Lua). -->
+  <circle cx="389" cy="208" r="27" fill="#bfd4ff" fill-opacity="0.18"/>
+  <rect x="360" y="180" width="60" height="60" fill="#eef4ff" mask="url(#crescent)"/>
+  </g>
+  <g transform="translate(190 -170)" fill="none" stroke="#221a57" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M56.65 212.5 A25 25 0 1 0 35 250 A25 25 0 1 1 13.35 287.5"/>
+    <path d="M106 250 H206 A50 50 0 1 0 194.3 282.1"/>
+    <path d="M252 168 V272 A28 28 0 0 0 280 300"/>
+    <path d="M318 200 V255 A45 45 0 0 0 408 255 M408 200 V300"/>
+  </g>
+</svg>
