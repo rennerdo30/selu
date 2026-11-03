@@ -24,7 +24,8 @@ impl Default for ModuleExport {
 pub type ModuleExports = BTreeMap<String, ModuleExport>;
 #[derive(Debug, Default, Clone)]
 pub struct ModuleBindings {
-    pub(crate) saved_imports: std::collections::HashSet<String>,
+    /// Saved import aliases, populated during the block import prepass.
+    pub saved_imports: std::collections::HashSet<String>,
     pub imports: BTreeMap<String, ModuleExports>,
     pub exports: ModuleExports,
 }
