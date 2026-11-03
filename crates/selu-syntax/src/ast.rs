@@ -31,6 +31,8 @@ pub enum TypeExprKind {
     Function {
         params: Vec<TypeExpr>,
         ret: Box<TypeExpr>,
+        /// The last parameter is a rest array rather than a fixed argument.
+        rest: bool,
     },
 }
 
@@ -57,8 +59,8 @@ pub struct Param {
 pub enum Pattern {
     /// `[a, , b]`: `None` skips a position.
     Array(Vec<Option<(String, Span)>>),
-    /// `{ a, b: renamed }`: (field, bound name, span of the name).
-    Object(Vec<(String, String, Span)>),
+    /// `{ a, b: renamed }`: (field, bound name, bound-name span, field span).
+    Object(Vec<(String, String, Span, Span)>),
 }
 
 /// What a `for...of` loop binds on each turn.

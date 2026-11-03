@@ -165,11 +165,7 @@ impl Lowerer<'_> {
             ));
         }
         for s in stmts {
-            let declared = match &s.kind {
-                StmtKind::VarDecl { name, .. } | StmtKind::FuncDecl { name, .. } => Some(name),
-                _ => None,
-            };
-            let forward = declared.is_some_and(|n| early.contains(n));
+            let forward = declaration_names(s).iter().any(|n| early.contains(n));
             self.stmt(s, forward, &mut out);
         }
         out
@@ -252,7 +248,7 @@ impl Lowerer<'_> {
             | StmtKind::ForOf { .. }
             | StmtKind::Break
             | StmtKind::Continue => self.loop_stmt(s, out),
-            StmtKind::Destructure { .. } => self.destructure(s, out),
+            StmtKind::Destructure { .. } => self.destructure(s, forward, out),
         }
     }
 
@@ -594,17 +590,34 @@ fn used_before_declaration(stmts: &[Stmt]) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut early = Vec::new();
     for s in stmts {
-        if let StmtKind::VarDecl { name, .. } | StmtKind::FuncDecl { name, .. } = &s.kind
-            && seen.contains(name)
-            && !early.contains(name)
-        {
-            early.push(name.clone());
-        }
         visit::idents_in_stmt(s, &mut |n| {
             seen.insert(n.to_string());
         });
+        let names = declaration_names(s);
+        if names.iter().any(|n| seen.contains(n)) {
+            for name in names {
+                if !early.contains(&name) {
+                    early.push(name);
+                }
+            }
+        }
     }
     early
+}
+
+fn declaration_names(s: &Stmt) -> Vec<String> {
+    match &s.kind {
+        StmtKind::VarDecl { name, .. } | StmtKind::FuncDecl { name, .. } => vec![name.clone()],
+        StmtKind::Destructure { pattern, .. } => match pattern {
+            selu_syntax::Pattern::Array(items) => {
+                items.iter().flatten().map(|(n, _)| n.clone()).collect()
+            }
+            selu_syntax::Pattern::Object(items) => {
+                items.iter().map(|(_, n, _, _)| n.clone()).collect()
+            }
+        },
+        _ => Vec::new(),
+    }
 }
 
 /// `a ?? b ?? c` (left-associative) as `[a, b, c]`.

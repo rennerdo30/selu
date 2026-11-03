@@ -31,13 +31,13 @@ impl Ctx<'_> {
         if p.rest
             && (!matches!(
                 p.ty.as_ref().map(types::resolve_quiet),
-                Some(Type::Array(_))
+                Some(Type::Array(t)) if !t.is_optional()
             ) || p.default.is_some())
         {
             self.out.push(
                 err(
                     "SELU0370",
-                    "A rest parameter needs an array type and cannot have a default.",
+                    "A rest parameter needs an array type with non-null elements and no default.",
                     &p.span,
                 )
                 .with_help("write `...rest: T[]` as the last parameter"),
@@ -262,14 +262,14 @@ impl Ctx<'_> {
                 }
             }
             Pattern::Object(items) => {
-                for (field, n, span) in items {
+                for (field, n, _, field_span) in items {
                     let ty = match &t {
                         Type::Object(fs) => fs.get(field).cloned().unwrap_or_else(|| {
                             self.out.push(
                                 err(
                                     "SELU0375",
                                     format!("This object has no field `{field}`."),
-                                    span,
+                                    field_span,
                                 )
                                 .with_help("use an existing field name"),
                             );
@@ -335,5 +335,18 @@ impl Ctx<'_> {
             return ty.clone();
         }
         self.member(t, name, object)
+    }
+}
+
+impl Ctx<'_> {
+    pub(crate) fn tuple_condition(&mut self, e: &Expr) {
+        self.out.push(
+            err(
+                "SELU0377",
+                "A tuple cannot be used as a condition.",
+                &e.span,
+            )
+            .with_fix("const [a, b] = f();"),
+        );
     }
 }

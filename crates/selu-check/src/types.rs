@@ -124,9 +124,13 @@ impl Type {
                             .or(rest.as_deref())
                             .is_some_and(|b| a.assignable_to(b))
                     })
-                    && to_rest
-                        .as_deref()
-                        .is_none_or(|a| rest.as_deref().is_some_and(|b| a.assignable_to(b)))
+                    && to_rest.as_deref().is_none_or(|a| {
+                        params
+                            .iter()
+                            .skip(to_params.len())
+                            .all(|b| a.assignable_to(b))
+                            && rest.as_deref().is_some_and(|b| a.assignable_to(b))
+                    })
                     && (ret.assignable_to(to_ret) || **to_ret == Type::Void)
             }
             _ => false,
@@ -220,16 +224,38 @@ pub fn resolve(t: &TypeExpr, out: &mut Vec<Diagnostic>) -> Type {
                 })
                 .collect(),
         ),
-        TypeExprKind::Function { params, ret } => Type::Function {
-            required: params.len(),
-            rest: None,
-            params: params.iter().map(|p| resolve(p, out)).collect(),
-            ret: Box::new(if is_void(ret) {
-                Type::Void
+        TypeExprKind::Function { params, ret, rest } => {
+            let mut fixed: Vec<Type> = params.iter().map(|p| resolve(p, out)).collect();
+            let rest = if *rest {
+                let last = fixed.pop().expect("a rest type has a parameter");
+                Some(Box::new(match last {
+                    Type::Array(t) if !t.is_optional() => *t,
+                    _ => {
+                        out.push(
+                            Diagnostic::error(
+                                "SELU0370",
+                                "A rest parameter needs an array type with non-null elements.",
+                            )
+                            .with_span(params.last().unwrap().span.clone())
+                            .with_help("write `...xs: T[]` with a non-null T"),
+                        );
+                        Type::Error
+                    }
+                }))
             } else {
-                resolve(ret, out)
-            }),
-        },
+                None
+            };
+            Type::Function {
+                required: fixed.len(),
+                rest,
+                params: fixed,
+                ret: Box::new(if is_void(ret) {
+                    Type::Void
+                } else {
+                    resolve(ret, out)
+                }),
+            }
+        }
         TypeExprKind::Named { name, args } => {
             let args: Vec<Type> = args.iter().map(|a| resolve(a, out)).collect();
             named(name, args, &t.span, out)

@@ -156,3 +156,93 @@ fn tuple_value_return_and_exact_result_count() {
         ["7", "b", "1", "2"]
     );
 }
+
+#[test]
+fn review_rest_assignment_positions() {
+    let src = "let g = (x: number, ...xs: string[]) => {}; function f(x: number, y: number = 1, ...xs: string[]) { print(y + 1); } g = f; g(1, \"bad\");";
+    assert!(codes(src).contains(&"SELU0336".into()));
+}
+#[test]
+fn review_recursive_arrow() {
+    assert_eq!(
+        run(
+            "const f: (n: number) => number = n => { if (n == 0) { return 42; } return f(n - 1); }; print(f(1));"
+        ),
+        ["42"]
+    );
+}
+#[test]
+fn review_forward_destructure() {
+    assert_eq!(
+        run("const get = () => a; const [a] = GetTime(); print(get());"),
+        ["0"]
+    );
+}
+#[test]
+fn review_tuple_conditions() {
+    let actual: Vec<bool> = [
+        "if (pair()) { print(1); }",
+        "const b = !pair();",
+        "const b = pair() && true;",
+        "const b = true || pair();",
+    ]
+    .iter()
+    .map(|use_| {
+        let src = format!("function pair(): [number, number] {{ return [1, 2]; }} {use_}");
+        codes(&src).contains(&"SELU0377".into())
+    })
+    .collect();
+    assert_eq!(actual, [true, true, true, true]);
+}
+#[test]
+fn review_empty_destructure() {
+    assert_eq!(
+        run_host(
+            "const [] = GetTime();",
+            "GetTime = function() print('once'); return 1 end"
+        ),
+        ["once"]
+    );
+}
+#[test]
+fn review_written_rest_type() {
+    assert!(codes("const f: (...xs: number[]) => void = (...xs: number[]) => {};").is_empty());
+}
+#[test]
+fn review_nullable_rest() {
+    assert!(codes("function f(...xs: number?[]) {} f(1, null, 2);").contains(&"SELU0370".into()));
+}
+#[test]
+fn review_tuple_result_count() {
+    let src = "function f(): [number, number] { return [1, GetTime()]; } global ReviewPair = f;";
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[
+        (
+            "host.lua".into(),
+            "GetTime = function() return 2, 3 end".into(),
+        ),
+        ("t.lua".into(), compile(src)),
+        (
+            "count.lua".into(),
+            "print(select('#', ReviewPair()))".into(),
+        ),
+    ])
+    .unwrap();
+    assert_eq!(sim.prints(), ["2"]);
+}
+#[test]
+fn review_missing_field_span() {
+    let src = "const p: { x: number } = UIParent; const { missing: renamed } = p;";
+    let p = selu_syntax::parse("t.selu", src).unwrap();
+    let ds = selu_check::check(&p, &common::manifest());
+    let d = ds.iter().find(|d| d.code == "SELU0375").unwrap();
+    let span = d.span.as_ref().unwrap();
+    assert_eq!(&src[span.start as usize..span.end as usize], "missing");
+}
+#[test]
+fn review_default_null_uses_default() {
+    assert_eq!(
+        run("function f(x: number? = 7) { print(x); } f(null);"),
+        ["7"]
+    );
+}

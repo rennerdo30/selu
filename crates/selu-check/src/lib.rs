@@ -727,6 +727,10 @@ impl Ctx<'_> {
     }
 
     fn check_condition_type(&mut self, e: &Expr, t: &Type) {
+        if matches!(t, Type::Tuple(_)) {
+            self.tuple_condition(e);
+            return;
+        }
         let fix = match t {
             Type::Number => "compare it: `count != 0` or `count > 0`",
             Type::String => "compare it: `text != \"\"`",
@@ -1136,7 +1140,7 @@ impl Ctx<'_> {
 fn pattern_names(p: &selu_syntax::Pattern) -> Vec<(&String, &Span)> {
     match p {
         selu_syntax::Pattern::Array(items) => items.iter().flatten().map(|(n, s)| (n, s)).collect(),
-        selu_syntax::Pattern::Object(items) => items.iter().map(|(_, n, s)| (n, s)).collect(),
+        selu_syntax::Pattern::Object(items) => items.iter().map(|(_, n, s, _)| (n, s)).collect(),
     }
 }
 

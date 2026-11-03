@@ -92,7 +92,7 @@ impl Lowerer<'_> {
         }
         vec![self.expr(e, pre)]
     }
-    pub(crate) fn destructure(&mut self, s: &Stmt, out: &mut LBlock) {
+    pub(crate) fn destructure(&mut self, s: &Stmt, forward: bool, out: &mut LBlock) {
         let StmtKind::Destructure { pattern, init, .. } = &s.kind else {
             unreachable!()
         };
@@ -104,7 +104,11 @@ impl Lowerer<'_> {
                 Some(selu_check::Type::Tuple(_) | selu_check::Type::Untyped)
             )
         {
-            let names = items
+            if items.is_empty() {
+                out.push(LStmt::new(LStmtKind::Call(v), &s.span));
+                return;
+            }
+            let names: Vec<String> = items
                 .iter()
                 .map(|x| {
                     x.as_ref()
@@ -112,7 +116,19 @@ impl Lowerer<'_> {
                         .unwrap_or_else(|| self.temp())
                 })
                 .collect();
-            out.push(LStmt::new(LStmtKind::Local(names, vec![v]), &s.span));
+            // Skipped slots still need distinct local scratch variables when assigning.
+            if forward {
+                let scratch: Vec<String> = names
+                    .iter()
+                    .zip(items)
+                    .filter(|(_, item)| item.is_none())
+                    .map(|(n, _)| n.clone())
+                    .collect();
+                if !scratch.is_empty() {
+                    out.push(LStmt::new(LStmtKind::Local(scratch, Vec::new()), &s.span));
+                }
+            }
+            self.destructure_bind(names, vec![v], forward, &s.span, out);
             return;
         }
         let t = self.temp();
@@ -124,30 +140,45 @@ impl Lowerer<'_> {
             Pattern::Array(items) => {
                 for (i, item) in items.iter().enumerate() {
                     if let Some((n, _)) = item {
-                        out.push(LStmt::new(
-                            LStmtKind::Local(
-                                vec![n.clone()],
-                                vec![LExpr::Index(
-                                    Box::new(name(&t)),
-                                    Box::new(LExpr::Number((i + 1).to_string())),
-                                )],
-                            ),
+                        self.destructure_bind(
+                            vec![n.clone()],
+                            vec![LExpr::Index(
+                                Box::new(name(&t)),
+                                Box::new(LExpr::Number((i + 1).to_string())),
+                            )],
+                            forward,
                             &s.span,
-                        ));
+                            out,
+                        );
                     }
                 }
             }
             Pattern::Object(items) => {
-                for (field, n, _) in items {
-                    out.push(LStmt::new(
-                        LStmtKind::Local(
-                            vec![n.clone()],
-                            vec![LExpr::Field(Box::new(name(&t)), field.clone())],
-                        ),
+                for (field, n, _, _) in items {
+                    self.destructure_bind(
+                        vec![n.clone()],
+                        vec![LExpr::Field(Box::new(name(&t)), field.clone())],
+                        forward,
                         &s.span,
-                    ));
+                        out,
+                    );
                 }
             }
         }
+    }
+    fn destructure_bind(
+        &mut self,
+        names: Vec<String>,
+        values: Vec<LExpr>,
+        forward: bool,
+        span: &selu_diagnostics::Span,
+        out: &mut LBlock,
+    ) {
+        let kind = if forward {
+            LStmtKind::Assign(names.iter().map(|n| name(n)).collect(), values)
+        } else {
+            LStmtKind::Local(names, values)
+        };
+        out.push(LStmt::new(kind, span));
     }
 }

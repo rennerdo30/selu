@@ -190,11 +190,15 @@ impl Parser {
                 // `(a: A, b: B) => R`
                 self.bump();
                 let mut params = Vec::new();
+                let mut rest = false;
                 while !self.at(&Tok::RParen) {
-                    self.eat(&Tok::DotDotDot);
+                    rest = self.eat(&Tok::DotDotDot);
                     self.ident("a parameter name")?;
                     self.expect(&Tok::Colon, "`:` and the parameter's type")?;
                     params.push(self.ty()?);
+                    if rest {
+                        break;
+                    }
                     if !self.eat(&Tok::Comma) {
                         break;
                     }
@@ -205,6 +209,7 @@ impl Parser {
                 TypeExprKind::Function {
                     params,
                     ret: Box::new(ret),
+                    rest,
                 }
             }
             Tok::LBracket => {
@@ -321,9 +326,9 @@ impl Parser {
                 let (name, span) = if self.eat(&Tok::Colon) {
                     self.ident("the name to bind")?
                 } else {
-                    (field.clone(), field_span)
+                    (field.clone(), field_span.clone())
                 };
-                items.push((field, name, span));
+                items.push((field, name, span, field_span));
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
@@ -985,5 +990,29 @@ impl Parser {
         };
         let span = self.span_from(start);
         Ok(self.mk(kind, span))
+    }
+}
+
+#[cfg(test)]
+mod function_type_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_written_rest_function_type() {
+        let src = "const f: (...xs: number[]) => void = (...xs: number[]) => {};";
+        let p = parse("t.selu", src).unwrap();
+        let StmtKind::VarDecl { ty: Some(ty), .. } = &p.stmts[0].kind else {
+            panic!("expected declaration")
+        };
+        assert!(
+            matches!(&ty.kind, TypeExprKind::Function { rest: true, params, .. } if params.len() == 1)
+        );
+        assert!(
+            parse(
+                "t.selu",
+                "const f: (...xs: number[], n: number) => void = g;"
+            )
+            .is_err()
+        );
     }
 }

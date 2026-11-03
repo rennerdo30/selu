@@ -64,7 +64,7 @@ impl Rules {
                 }
             }
             Pattern::Object(items) => {
-                for (_, name, span) in items {
+                for (_, name, span, _) in items {
                     self.name(name, span);
                 }
             }
