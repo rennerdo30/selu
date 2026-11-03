@@ -320,7 +320,57 @@ migrations checked by the compiler, and output designed to read like
 hand-written addon Lua. Studying TypeScriptToLua's output and its edge cases is
 an early task.
 
-## 10. Open questions
+## 10. Memory management
+
+Selu is garbage collected, like TypeScript, C# and Java: no `free`, no
+ownership rules, no manual memory. It has to be, because the output is Lua
+running on WoW's garbage collector. What WoW punishes is not leaks in the C
+sense but **garbage**: every table, closure and new string made in a handler
+that runs 60 times a second or on every combat-log line becomes collector work,
+and that shows up as stutter. Selu's job is to make the cheap path the easy one
+and to point out the expensive one.
+
+**What the compiler does by itself**
+
+- Event payloads, varargs and multiple returns compile to plain locals, never
+  to a temporary table.
+- Constant tables and closures that capture nothing are hoisted out of the
+  function and created once.
+- String building in a loop (`s += x`) becomes a buffer joined once.
+- Lua 5.1 hard limits (200 locals per function, 60 upvalues, the constant limit
+  of a function) are handled by splitting the generated code, never reported as
+  a Lua load error.
+
+**What it warns about** (in hot code: `OnUpdate`, tickers, combat-log and other
+high-rate events, which the manifest marks):
+
+- Creating a table, array, object literal or closure on every call.
+- `CreateFrame` anywhere except setup code. WoW frames can never be destroyed,
+  so a frame created per event is a permanent leak. The warning points at
+  `pool`.
+- String concatenation and `string.format` per call.
+
+**What it gives you**
+
+- `pool`: a built-in, typed object/frame pool (`const rows = pool(() =>
+  createRow());` then `rows.take()` / `rows.release(row)` or `rows.releaseAll()`),
+  so reusing frames is one line instead of a pattern.
+- `weak` maps (`new WeakMap()`), compiled to Lua weak tables, for caches keyed
+  by frames or units.
+
+**What the simulator shows** (Selu Studio memory panel)
+
+- Addon memory over time, garbage created per second, and the lines creating
+  most of it.
+- Frame count per addon, flagging growth that never comes back down.
+- A "leak check" button: run a scenario N times or reload N times and report
+  what keeps growing.
+
+These are measurements of the simulator's Lua VM. They compare well between
+versions of your addon, but they are not the exact numbers the game reports
+(`GetAddOnMemoryUsage`).
+
+## 11. Open questions
 
 - Implementation language for the compiler (Rust is the working assumption,
   which is why the `selu` crate name matters).
@@ -328,4 +378,16 @@ an early task.
   and how it is updated per client build.
 - Editor support: a language server is likely needed early, because most of the
   value is errors shown while typing.
+- Standard library and types: strings, arrays, maps, sets, numbers (Lua 5.1
+  has only doubles), and how `class` lowers to Lua tables and metatables.
+- Error handling: `try`/`catch` and `throw` lowered to `pcall`/`error`.
+- Async: `await after(1.5)` and `await event("BAG_UPDATE")` as easy
+  replacements for nested timer callbacks (coroutines underneath).
+- Building UI: how frames, templates and layout are written (plain API calls,
+  a declarative frame syntax, or both); XML is not planned.
+- Using existing Lua: calling LibStub/Ace3 and other libraries, and declaration
+  files that describe their types.
+- Localisation: string files, format arguments, and the missing-key check.
+- Packaging: output folder layout, `.toc` generation, zip and release
+  metadata.
 - Licence.
