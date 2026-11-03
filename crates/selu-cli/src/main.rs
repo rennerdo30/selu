@@ -23,7 +23,7 @@ struct Cli {
 enum Command {
     /// Compile a Selu project to `dist/<Name>/`.
     Build {
-        /// Project folder holding `selu.json` (default: current folder).
+        /// Project folder holding `selu.toml` (default: current folder).
         path: Option<PathBuf>,
         /// Override the project targets, e.g. `retail@12.0` (comma-separated).
         #[arg(long)]
@@ -58,7 +58,16 @@ enum Command {
 
 #[derive(Debug, Deserialize)]
 struct Project {
+    addon: AddonSection,
+}
+
+/// The `[addon]` table of `selu.toml`. Unknown keys are an error so a typo
+/// never silently does nothing.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddonSection {
     name: String,
+    #[serde(default)]
     targets: Vec<String>,
 }
 
@@ -148,15 +157,20 @@ fn build(
     target_override: Option<&str>,
     manifest_dir: Option<&Path>,
 ) -> Result<(), ExitCode> {
-    let config_path = project_dir.join("selu.json");
+    let config_path = project_dir.join("selu.toml");
     let config_text = std::fs::read_to_string(&config_path).map_err(|e| {
         eprintln!("selu: cannot read {}: {e}", config_path.display());
         ExitCode::FAILURE
     })?;
-    let project: Project = serde_json::from_str(&config_text).map_err(|e| {
-        eprintln!("selu: invalid {}: {e}", config_path.display());
+    let project: Project = toml::from_str(&config_text).map_err(|e| {
+        eprintln!(
+            "selu: invalid {}:
+{e}",
+            config_path.display()
+        );
         ExitCode::FAILURE
     })?;
+    let project = project.addon;
 
     let mut sources: Vec<PathBuf> = Vec::new();
     let src_dir = project_dir.join("src");
@@ -188,7 +202,7 @@ fn build(
         None => project.targets.clone(),
     };
     if target_strings.is_empty() {
-        eprintln!("selu: no targets (set `targets` in selu.json or pass --target)");
+        eprintln!("selu: no targets (set `targets` under [addon] in selu.toml or pass --target)");
         return Err(ExitCode::FAILURE);
     }
     let manifests = find_manifests(manifest_dir, project_dir)?;
@@ -206,10 +220,16 @@ fn build(
         } else {
             project_dir.join("dist").join(&project.name)
         };
-        std::fs::create_dir_all(&out_dir).map_err(|e| {
-            eprintln!("selu: cannot create {}: {e}", out_dir.display());
-            ExitCode::FAILURE
-        })?;
+        let map_dir = project_dir
+            .join("dist")
+            .join(".selu")
+            .join(out_dir.file_name().unwrap_or_default());
+        for dir in [&out_dir, &map_dir] {
+            std::fs::create_dir_all(dir).map_err(|e| {
+                eprintln!("selu: cannot create {}: {e}", dir.display());
+                ExitCode::FAILURE
+            })?;
+        }
 
         let mut lua_files: Vec<String> = Vec::new();
         for source_path in &sources {
@@ -240,8 +260,9 @@ fn build(
                 eprintln!("selu: cannot write {lua_name}: {e}");
                 ExitCode::FAILURE
             })?;
+            // Source maps stay outside the addon folder (SPEC-V1 section 6).
             std::fs::write(
-                out_dir.join(format!("{stem}.lua.map.json")),
+                map_dir.join(format!("{stem}.lua.map.json")),
                 lowered.source_map.to_json(),
             )
             .map_err(|e| {

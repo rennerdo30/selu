@@ -158,7 +158,7 @@ saved perCharacter progress = {
 - The values in the declaration are defaults. Missing keys are filled in on
   load; existing values are never overwritten.
 - **Migrations are checked:** every build writes the saved shapes to
-  `selu.saved.json` (commit it). If a shape changed, the build fails until the
+  `selu.saved.toml` (commit it). If a shape changed, the build fails until the
   version is raised and a migration exists:
 
   ```selu
@@ -199,8 +199,8 @@ badge.SetText(L`${missing} missing`);
 ```
 
 - `` L`...` `` marks a user-facing sentence. The English text is the key.
-- The build writes `locales/enUS.json` from every `L` string. Other languages
-  are files like `locales/deDE.json` with the same keys, `{0}`, `{1}` for the
+- The build writes `locales/enUS.toml` from every `L` string. Other languages
+  are files like `locales/deDE.toml` with the same keys, `{0}`, `{1}` for the
   arguments in any order.
 - A missing translation is a warning (an error with `--strict-locales`); a
   translation whose English text changed is marked stale; a wrong argument
@@ -372,8 +372,8 @@ garbage comes from.
 
 ## 5. Using existing Lua
 
-- Plain `.lua` files can live in a Selu project. List them in `selu.json`
-  (`"lua": ["libs/LibStub/LibStub.lua"]`); they go into the `.toc` before the
+- Plain `.lua` files can live in a Selu project. List them in `selu.toml`
+  (`lua = ["libs/LibStub/LibStub.lua"]`); they go into the `.toc` before the
   generated files, in the listed order.
 - Their types come from declaration files `*.d.selu`:
 
@@ -388,19 +388,25 @@ garbage comes from.
 
 ## 6. Projects, building, packaging
 
-```json
-{
-  "name": "MyAddon",
-  "title": "My Addon",
-  "version": "1.0.0",
-  "author": "Name",
-  "notes": "One line shown in the AddOns list.",
-  "targets": ["retail@12.0", "forever"],
-  "lua": [],
-  "assets": "assets/",
-  "locales": "locales/"
-}
+Every file a person edits is TOML: the project file `selu.toml`, translations
+and manifest overlays. JSON appears only in files the tools write for
+themselves (generated manifests, source maps, `--json` output).
+
+```toml
+# selu.toml
+[addon]
+name = "MyAddon"
+title = "My Addon"
+version = "1.0.0"
+author = "Name"
+notes = "One line shown in the AddOns list."
+targets = ["retail@12.0", "forever"]
+lua = []                 # plain Lua files, in load order (section 5)
 ```
+
+Unknown keys are an error, so a typo never silently does nothing. `assets/`
+and `locales/` are found by name; asset settings, tools and converters are
+further tables in the same file (6.1).
 
 - Source is `src/`; the entry is `src/main.selu`, and everything reachable from
   its imports is compiled.
@@ -445,9 +451,9 @@ WoW loads.
   rendered straight at a valid size; a bitmap that isn't valid is padded
   (never stretched) with a warning, and the stored texture coordinates hide
   the padding.
-- **Per-asset settings** go in `assets/assets.json` when the defaults aren't
-  right: render size, `@2x` variants, format, a solid background, mipmaps.
-- **Atlases:** `"atlas": "icons"` on a group of small images packs them into one
+- **Per-asset settings** go in `[assets."<file>"]` tables in `selu.toml` when the
+  defaults aren't right: render size, `@2x` variants, format, a solid background, mipmaps.
+- **Atlases:** `atlas = "icons"` on a group of small images packs them into one
   texture and generates the texture coordinates. `import { gear } from
   "../assets/icons.atlas";` then gives `<Icon atlas={gear} />`. Fewer texture
   files load faster and use less memory.
@@ -463,7 +469,7 @@ WoW loads.
 #### 6.1.1 Audio through ffmpeg
 
 - Audio conversion uses **ffmpeg**, so any format ffmpeg reads works. Selu
-  finds it in this order: `"tools": { "ffmpeg": "<path>" }` in `selu.json`, the
+  finds it in this order: `[tools] ffmpeg = "<path>"` in `selu.toml`, the
   `SELU_FFMPEG` environment variable, then `PATH`. Selu does not ship ffmpeg
   (its licence and size are the user's choice); if it's missing and a sound
   needs it, the build stops with a message saying which file needs it and how
@@ -471,13 +477,17 @@ WoW loads.
 - WAV and FLAC also convert without ffmpeg (a small built-in encoder), so a
   project that only uses those needs nothing installed.
 - Output is OGG Vorbis, which every target plays. Defaults: 44.1 kHz, quality
-  5, stereo kept. Per-sound settings in `assets/assets.json`:
+  5, stereo kept. Per-sound settings in `selu.toml`:
 
-  ```json
-  {
-    "sounds/ding.wav": { "channels": 1, "quality": 4 },
-    "sounds/alert.m4a": { "normalize": -16, "trimSilence": true, "maxSeconds": 3 }
-  }
+  ```toml
+  [assets."sounds/ding.wav"]
+  channels = 1
+  quality = 4
+
+  [assets."sounds/alert.m4a"]
+  normalize = -16       # loudness in LUFS
+  trimSilence = true
+  maxSeconds = 3
   ```
 
   `normalize` sets the loudness in LUFS (ffmpeg's `loudnorm`), `trimSilence`
@@ -493,25 +503,28 @@ WoW loads.
 Any other format can be handled by a command you configure, for example a PSD
 exporter or a different audio encoder:
 
-```json
-{
-  "converters": [
-    { "from": [".psd"], "to": ".png", "run": ["magick", "{in}", "{out}"] },
-    { "from": [".mid"], "to": ".wav", "run": ["fluidsynth", "-ni", "font.sf2", "{in}", "-F", "{out}"] }
-  ]
-}
+```toml
+[[converters]]
+from = [".psd"]
+to = ".png"
+run = ["magick", "{in}", "{out}"]
+
+[[converters]]
+from = [".mid"]
+to = ".wav"
+run = ["fluidsynth", "-ni", "font.sf2", "{in}", "-F", "{out}"]
 ```
 
 - A converter turns a file into a format Selu already handles; the result then
   goes through the normal pipeline (`.psd` -> `.png` -> TGA/BLP).
 - Converters run with a timeout, without a shell, and only on files inside the
-  project. Their version (`"version": [...]` command, optional) is part of the
+  project. Their version (an optional `version = [...]` command) is part of the
   cache key.
 
 ### 6.2 Export
 
 ```
-selu export                 # every target in selu.json
+selu export                 # every target in selu.toml
 selu export --target forever
 ```
 
@@ -534,18 +547,19 @@ selu export --target forever
    `.sha256` next to the zip.
 
 An addon that consists of several folders (for example a separate data addon)
-lists them in `selu.json` under `"addons"`; the zip then contains all of them.
+lists them in `selu.toml` under `addons`; the zip then contains all of them.
 
 ## 7. Manifests
 
 - One JSON file per build: `manifests/<flavour>/<build>.json`, with a
-  versioned schema.
+  versioned schema. These are generated and only read by tools, so they stay
+  JSON; nobody edits them by hand.
 - **Generated, not written:** from the client's own API documentation in
   Blizzard's UI source for that branch (functions, events, structures,
   documented restriction and secret flags), plus FrameXML globals and widget
   methods found in that source. Only names, signatures and flags go into the
   manifest; no Blizzard source is copied.
-- **Overlays** (`manifests/<flavour>/overlay.json`) add what the
+- **Overlays** (`manifests/<flavour>/overlay.toml`, edited by hand) add what the
   documentation lacks, each entry with a note saying where the knowledge comes
   from.
 - **Probe results** (`selu probe`) mark entries as verified in the game.

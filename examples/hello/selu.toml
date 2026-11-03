@@ -1,0 +1,3 @@
+[addon]
+name = "Hello"
+targets = ["forever@1.0"]

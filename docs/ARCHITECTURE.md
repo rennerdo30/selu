@@ -30,10 +30,10 @@ terminal with codespan-reporting.
 
 ## Manifests and project files
 
-- A project is a folder with `selu.json` (`name`, `targets`) and `.selu`
+- A project is a folder with `selu.toml` (`[addon]` with `name`, `targets`) and `.selu`
   files under `src/` (or the project root). `selu build` writes
   `dist/<Name>/` (one folder per flavour when several targets are built).
-- Manifests are JSON files found via `--manifest-dir`, `$SELU_MANIFEST_DIR`,
+- Manifests are generated JSON files (not hand-edited config; those are TOML) found via `--manifest-dir`, `$SELU_MANIFEST_DIR`,
   or the nearest `manifests/` folder walking up from the project.
   `manifests/fixtures/` holds one small hand-made **test fixture**
   (`fixture: true`); real manifests will be generated, never hand-written.
@@ -46,9 +46,15 @@ terminal with codespan-reporting.
 - `selu-check` collects local names without full scoping and only checks
   plain global calls, `C_*` namespace calls, and event names. Method calls
   on objects await a typed pass.
-- `a ?? b` lowers to `(a ~= nil and a or b)`, so a left side of `false`
-  also falls through (a strict null-coalesce would keep `false`).
+- `??` keeps `false` and evaluates each side at most once. In a
+  declaration, assignment or `return` it lowers to statements
+  (`local x = a` then `if x == nil then x = b end`). Anywhere else only the
+  exact inline form `(a == nil and b or a)` is allowed: `a` a plain name or
+  field path, `b` a number, string or `true`; other forms are SELU0308 until
+  the lowering can hoist temporaries.
+- Names Lua reserves (`end`, `local`, `then`...) are SELU0304; as field names
+  they lower to `t["end"]`. Assignment is a statement only (SELU0305/0306).
 - The simulator's frame is a plain Lua table, not the future frame/layout
   engine; unknown globals resolve to a callable no-op after one log line.
-- Source maps are a JSON sidecar (`<name>.lua.map.json`) in Selu's own
-  span format, not yet the standard source-map VLQ encoding.
+- Source maps are a JSON sidecar in Selu's own span format, written to
+  `dist/.selu/<Name>/<name>.lua.map.json` (never into the addon folder), not yet the standard source-map VLQ encoding.

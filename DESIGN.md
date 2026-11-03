@@ -51,12 +51,11 @@ selu build --target retail,classic-era     # several targets at once
 Normally you don't type it at all: the project file pins it, and `--target`
 only overrides it for one run.
 
-```json
-// selu.json
-{
-  "name": "MyAddon",
-  "targets": ["retail@12.0.1", "classic-era"]
-}
+```toml
+# selu.toml
+[addon]
+name = "MyAddon"
+targets = ["retail@12.0.1", "classic-era"]
 ```
 
 The interface number in the generated `.toc` (`## Interface: 120001`) comes

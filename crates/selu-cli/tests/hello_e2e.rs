@@ -42,6 +42,11 @@ fn hello_builds_runs_and_prints_on_login() {
     let dist = example.join("dist/Hello");
     let toc = std::fs::read_to_string(dist.join("Hello.toc")).unwrap();
     assert!(toc.contains("## Interface: 100000"), "{toc}");
+    assert!(
+        !dist.join("main.lua.map.json").exists(),
+        "source maps must stay out of the addon folder"
+    );
+    assert!(example.join("dist/.selu/Hello/main.lua.map.json").exists());
 
     // Load in TOC order: the non-`##` lines of the .toc.
     let mut files = Vec::new();
@@ -107,8 +112,11 @@ fn missing_api_on_target_fails_the_build() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
-        dir.join("selu.json"),
-        r#"{ "name": "Bad", "targets": ["forever@1.0"] }"#,
+        dir.join("selu.toml"),
+        "[addon]
+name = \"Bad\"
+targets = [\"forever@1.0\"]
+",
     )
     .unwrap();
     std::fs::write(dir.join("src/main.selu"), "NoSuchGlobal(1);\n").unwrap();
