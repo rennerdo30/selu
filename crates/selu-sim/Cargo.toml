@@ -1,0 +1,7 @@
+[package]
+name = "selu-sim"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mlua = { version = "0.10", features = ["lua51", "vendored"] }
