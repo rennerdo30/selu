@@ -1,0 +1,7 @@
+function greeting() {
+  return "Hello from Selu!";
+}
+
+on PLAYER_LOGIN() {
+  print(greeting());
+}

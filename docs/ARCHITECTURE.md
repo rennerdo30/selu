@@ -1,0 +1,54 @@
+# Architecture
+
+Selu is a Rust workspace (edition 2024) under `crates/`. Data flows one way:
+
+```
+.selu source
+  -> selu-syntax    lexer + recursive-descent parser -> AST (with spans)
+  -> selu-check     resolve calls/events against the target manifest
+  -> selu-lower     readable Lua 5.1 + source map + generated .toc
+  -> dist/<Name>/  the addon folder
+  -> selu-sim       the same Lua, loaded in TOC order into a Lua 5.1 VM
+```
+
+`selu-cli` (the `selu` binary) drives the pipeline. All crates report
+problems as `selu-diagnostics` values: a stable code (`SELU0001`...), a
+primary span, a plain message, and optional help/fix text, rendered for the
+terminal with codespan-reporting.
+
+## Crates
+
+| Crate | Job |
+|---|---|
+| `selu-diagnostics` | `Diagnostic`, `Span`, terminal rendering. No other Selu deps. |
+| `selu-syntax` | Hand-written lexer and recursive-descent parser for the Selu subset (DESIGN.md section 9). Semicolons are required; a missing one is `SELU0101` with a fix suggestion. |
+| `selu-manifest` | Serde types for a target manifest, JSON loading, `flavour@version` parsing and partial-version resolution to the newest matching manifest. Per-version differences (Lua dialect, availability, restriction flags, `returnsSecret`, evidence `documented`/`verified`) live in manifests, never in compiler code. |
+| `selu-check` | Minimal semantic pass: a global call or `on EVENT` the target lacks is an error naming the target (`SELU0301`/`SELU0302`). |
+| `selu-lower` | Emits readable Lua 5.1 (2-space indent, local names preserved, `a.B(x)` becomes `a:B(x)`; manifest namespace functions like `C_Foo.Bar(x)` stay plain calls), a generated-line -> source-span map, shared event-frame dispatch for `on EVENT`, and the `.toc` whose `## Interface:` comes from the manifest. |
+| `selu-sim` | `mlua` (Lua 5.1, vendored): boot a VM, load files in TOC order, simulated clock (`GetTime`), captured `print`, minimal `CreateFrame` (`RegisterEvent`/`UnregisterEvent`/`SetScript`/`Show`/`Hide`/`IsShown`), and `fire(event, ...)` from Rust. Unmodelled globals and frame methods log `not simulated: X` once and return a no-op. |
+| `selu-cli` | `selu build` (working), `selu targets` (lists known manifests), `selu test`/`debug`/`probe` (honest stubs, exit non-zero). |
+
+## Manifests and project files
+
+- A project is a folder with `selu.json` (`name`, `targets`) and `.selu`
+  files under `src/` (or the project root). `selu build` writes
+  `dist/<Name>/` (one folder per flavour when several targets are built).
+- Manifests are JSON files found via `--manifest-dir`, `$SELU_MANIFEST_DIR`,
+  or the nearest `manifests/` folder walking up from the project.
+  `manifests/fixtures/` holds one small hand-made **test fixture**
+  (`fixture: true`); real manifests will be generated, never hand-written.
+- A build prints the resolution it used, e.g.
+  `target forever@1.0 -> 1.0.0.1000`. An unknown build is an error listing
+  the closest known builds; `@installed` is parsed but not implemented yet.
+
+## Known simplifications in this base
+
+- `selu-check` collects local names without full scoping and only checks
+  plain global calls, `C_*` namespace calls, and event names. Method calls
+  on objects await a typed pass.
+- `a ?? b` lowers to `(a ~= nil and a or b)`, so a left side of `false`
+  also falls through (a strict null-coalesce would keep `false`).
+- The simulator's frame is a plain Lua table, not the future frame/layout
+  engine; unknown globals resolve to a callable no-op after one log line.
+- Source maps are a JSON sidecar (`<name>.lua.map.json`) in Selu's own
+  span format, not yet the standard source-map VLQ encoding.
