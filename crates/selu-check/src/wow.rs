@@ -34,6 +34,16 @@ impl Ctx<'_> {
         if !valid {
             return self.unsupported("this template tag", &tag.span);
         }
+        if exprs.len() > 64 {
+            self.out.push(
+                err(
+                    "SELU0445",
+                    "A template supports at most 64 interpolations.",
+                    &e.span,
+                )
+                .with_help("split the work into smaller labels or log entries"),
+            );
+        }
         for x in exprs {
             let t = self.value(x);
             if !matches!(t, Type::String | Type::Number | Type::Boolean | Type::Error) {
@@ -70,7 +80,7 @@ impl Ctx<'_> {
                     "This built-in has the wrong number of arguments.",
                     &e.span,
                 )
-                .with_help("supply the target and a callback"),
+                .with_help(if n == "command" { r#"use command("/addon", (args) => { ... })"# } else { r#"use hook("GetTime", () => { ... }) or hookScript(frame, "OnShow", (self) => { ... })"# }),
             );
             return Some(Type::Error);
         }
@@ -83,16 +93,28 @@ impl Ctx<'_> {
                         "SELU0441",
                         "A slash alias must be a literal beginning with / and contain no spaces.",
                         &x.span,
-                    ));
+                    ).with_help(r#"use a literal alias such as "/addon""#));
                 }
                 self.value(x);
             } else if i + 1 == last {
                 if self.value(x) != Type::String {
-                    self.out
-                        .push(err("SELU0441", "A hook name must be a string.", &x.span));
+                    self.out.push(
+                        err("SELU0441", "A hook name must be a string.", &x.span)
+                            .with_help(r#"use "GetTime" for hook or "OnShow" for hookScript"#),
+                    );
                 }
             } else {
-                self.value(x);
+                let ty = self.value(x);
+                if !matches!(ty, Type::Untyped | Type::Error | Type::Object(_)) {
+                    self.out.push(
+                        err(
+                            "SELU0446",
+                            "A hook target must be a game object or an object table.",
+                            &x.span,
+                        )
+                        .with_help(r#"use hook(GameTooltip, "SetUnit", (self) => { ... })"#),
+                    );
+                }
             }
         }
         let expected = Type::Function {
@@ -111,19 +133,26 @@ impl Ctx<'_> {
         };
         let t = self.value_expected(&args[last], Some(&expected));
         if !matches!(t, Type::Function { .. } | Type::Error) {
-            self.out.push(err(
-                "SELU0442",
-                "The callback must be a function.",
-                &args[last].span,
-            ));
+            self.out.push(
+                err(
+                    "SELU0442",
+                    "The callback must be a function.",
+                    &args[last].span,
+                )
+                .with_help("use (args: string) => { ... } for command, or () => { ... } for hook"),
+            );
         }
         if n == "command"
             && let Type::Function {
-                params, required, ..
+                params,
+                required,
+                rest,
+                ..
             } = &t
             && (*required > 1
                 || params
                     .first()
+                    .or(rest.as_deref())
                     .is_some_and(|p| !Type::String.assignable_to(p)))
         {
             self.out.push(

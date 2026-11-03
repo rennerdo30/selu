@@ -14,11 +14,14 @@ function hooksecurefunc(target, name, hook)
   end
 end
 function __selu_sim_slash(line)
+  line = line:match("^%s*(.-)%s*$")
   local alias, args = line:match("^(%S+)%s*(.*)$")
+  if not alias then error("unknown slash command: " .. line) end
+  args = args:match("^%s*(.-)%s*$")
   for key, handler in pairs(SlashCmdList) do
     local i = 1
     while rawget(_G, "SLASH_" .. key .. i) do
-      if _G["SLASH_" .. key .. i]:lower() == alias:lower() then handler(args); return end
+      if _G["SLASH_" .. key .. i]:lower() == alias:lower() then handler(args, {}); return end
       i = i + 1
     end
   end

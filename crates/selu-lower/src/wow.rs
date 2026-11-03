@@ -18,7 +18,7 @@ impl Lowerer<'_> {
         let tag = tag.dotted_name().unwrap();
         let mut key = String::new();
         for (i, q) in quasis.iter().enumerate() {
-            key.push_str(q);
+            key.push_str(&q.replace('{', "{{").replace('}', "}}"));
             if i < exprs.len() {
                 key.push_str(&format!("{{{i}}}"));
             }
@@ -41,13 +41,15 @@ impl Lowerer<'_> {
             if !self.wow.keys.contains(&key) {
                 self.wow.keys.push(key.clone());
             }
-            let mut args = vec![LExpr::Str(key), LExpr::Str(fmt)];
+            let fallback = if exprs.is_empty() {
+                quasis[0].clone()
+            } else {
+                fmt
+            };
+            let mut args = vec![LExpr::Str(key), LExpr::Str(fallback)];
             args.extend(vals);
             pre.extend(body);
-            lua::call(
-                name("string.format"),
-                vec![lua::call(name("__selu_wow.format"), args)],
-            )
+            lua::call(name("__selu_wow.text"), args)
         } else {
             let level = tag.strip_prefix("log.").unwrap();
             let mut args = vec![LExpr::Str(fmt)];
@@ -101,7 +103,7 @@ impl Lowerer<'_> {
 const RUNTIME: &str = r##"local ADDON, ns = ...
 ns = ns or {}
 if not ns.wow then
-  local w = { buffer = {}, levels = { info = true, warn = true, error = true, warnOnce = true }, once = {}, commands = 0, locales = {} }
+  local w = { buffer = {}, levels = { info = true, warn = true, error = true, warnOnce = true }, once = {}, commands = 0, locales = {}, formats = {} }
   ns.wow = w
   function w.enabled(level, key)
     return w.levels[level] and (level ~= "warnOnce" or not w.once[key])
@@ -114,25 +116,49 @@ if not ns.wow then
   function w.command(...)
     local count = select("#", ...)
     w.commands = w.commands + 1
-    local key = "SELU_" .. (ADDON or "Addon") .. "_" .. w.commands
+    local key = "SELU_" .. (ADDON or "Addon") .. "_" .. w.commands .. "_"
     for i = 1, count - 1 do _G["SLASH_" .. key .. i] = select(i, ...) end
-    SlashCmdList[key] = select(count, ...)
+    local callback = select(count, ...)
+    SlashCmdList[key] = function(msg) callback(msg) end
   end
-  function w.format(key, fallback, ...)
-    local values, count = {...}, select("#", ...)
+  local function parse(text)
+    local parts, plain, order = {}, {}, {}
+    local i, maximum = 1, -1
+    while i <= #text do
+      local ch, pair = text:sub(i, i), text:sub(i, i + 1)
+      if pair == "{{" or pair == "}}" then
+        parts[#parts + 1], plain[#plain + 1] = ch, ch
+        i = i + 2
+      elseif ch == "{" then
+        local first, last, index = text:find("{(%d+)}", i)
+        assert(first == i, "invalid locale placeholder")
+        index = tonumber(index)
+        maximum = math.max(maximum, index)
+        order[#order + 1], parts[#parts + 1] = index + 1, "%s"
+        i = last + 1
+      else
+        assert(ch ~= "}", "escape literal locale braces with {{ or }}")
+        parts[#parts + 1], plain[#plain + 1] = ch == "%" and "%%" or ch, ch
+        i = i + 1
+      end
+    end
+    return { format = table.concat(parts), literal = table.concat(plain), order = order, maximum = maximum }
+  end
+  function w.text(key, fallback, ...)
     local locale = w.locales[GetLocale()]
     local text = locale and locale[key]
-    if not text then return fallback, ... end
-    local order = {}
-    local format = text:gsub("%%", "%%%%"):gsub("{(%d+)}", function(i)
-      i = tonumber(i)
-      assert(i < count, "invalid locale argument")
-      order[#order + 1] = i + 1
-      return "%s"
-    end)
-    local args = {}
-    for i = 1, #order do args[i] = values[order[i]] end
-    return format, unpack(args, 1, #order)
+    local count = select("#", ...)
+    if not text then
+      if count == 0 then return fallback end
+      return string.format(fallback, ...)
+    end
+    local cached = w.formats[text]
+    if not cached then cached = parse(text); w.formats[text] = cached end
+    assert(cached.maximum < count, "invalid locale argument")
+    if count == 0 then return cached.literal end
+    local values, args = {...}, {}
+    for i = 1, #cached.order do args[i] = values[cached.order[i]] end
+    return string.format(cached.format, unpack(args, 1, #cached.order))
   end
 end
 local __selu_wow = ns.wow"##;
