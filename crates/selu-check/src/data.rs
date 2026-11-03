@@ -470,6 +470,9 @@ impl Ctx<'_> {
             _ => None,
         };
         let expected = Type::Function {
+            multiple_results: false,
+            unspecified_callback: false,
+            api: Default::default(),
             params: input.clone(),
             required: input.len(),
             rest: None,
@@ -481,12 +484,27 @@ impl Ctx<'_> {
         for arg in args.iter().skip(2) {
             self.value(arg);
         }
+        if let Some(callback) = callback.as_ref()
+            && !callback.result_convention_matches(&expected)
+        {
+            self.out.push(crate::api::mismatch_help(
+                err(
+                    "SELU0485",
+                    "Callback result convention does not match.",
+                    &args[0].span,
+                ),
+                callback,
+                &expected,
+            ));
+            return Type::Error;
+        }
         let ret = match callback.as_ref() {
             Some(Type::Function {
                 params,
                 ret,
                 required,
                 rest,
+                ..
             }) => {
                 // TypeScript permits callbacks to ignore trailing arguments.
                 let compatible = *required <= input.len()

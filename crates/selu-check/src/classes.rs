@@ -184,6 +184,9 @@ impl Ctx<'_> {
                         base: None,
                         methods: Default::default(),
                         constructor: Type::Function {
+                            multiple_results: false,
+                            unspecified_callback: false,
+                            api: Default::default(),
                             params: Vec::new(),
                             ret: Box::new(instance),
                             required: 0,
@@ -289,6 +292,9 @@ impl Ctx<'_> {
         }
         let instance = Type::Class(key.clone(), bases, BTreeMap::new());
         let empty = Type::Function {
+            multiple_results: false,
+            unspecified_callback: false,
+            api: Default::default(),
             params: vec![],
             ret: Box::new(instance.clone()),
             required: 0,

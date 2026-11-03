@@ -1,0 +1,3 @@
+Panel shown
+160\t60\t160\t60
+Selu frames

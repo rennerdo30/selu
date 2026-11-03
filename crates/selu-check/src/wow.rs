@@ -105,7 +105,10 @@ impl Ctx<'_> {
                 }
             } else {
                 let ty = self.value(x);
-                if !matches!(ty, Type::Untyped | Type::Error | Type::Object(_)) {
+                if !matches!(
+                    ty,
+                    Type::Untyped | Type::Error | Type::Object(_) | Type::Widget(..)
+                ) {
                     self.out.push(
                         err(
                             "SELU0446",
@@ -118,6 +121,9 @@ impl Ctx<'_> {
             }
         }
         let expected = Type::Function {
+            multiple_results: false,
+            unspecified_callback: false,
+            api: Default::default(),
             params: if n == "command" {
                 vec![Type::String]
             } else {

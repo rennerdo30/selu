@@ -445,6 +445,8 @@ pub struct WidgetOverlay {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlobalOverlay {
+    #[serde(rename = "type", default)]
+    pub ty: Option<String>,
     pub name: String,
     pub note: String,
     pub evidence: Evidence,
@@ -499,6 +501,7 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
         m.globals.retain(|v| v.name != g.name);
         m.globals.push(selu_manifest::GlobalEntry {
             name: g.name,
+            ty: g.ty,
             evidence: g.evidence,
         });
     }

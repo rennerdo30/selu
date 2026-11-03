@@ -50,11 +50,13 @@ evidence = "source"
 
 [[globals]]
 name = "UIParent"
+type = "Frame"
 evidence = "source"
 note = "docs/TOOLKIT-SURVEY.md: addon native global use"
 
 [[globals]]
 name = "GameTooltip"
+type = "GameTooltip"
 evidence = "source"
 note = "docs/TOOLKIT-SURVEY.md: addon native global use"
 
@@ -169,3 +171,11 @@ note = "Canonical client StatusBar connects to generated declaration groups; wid
 name = "StatusBar"
 type = "ScriptObject"
 inherits = ["SimpleStatusBarAPI", "Frame"]
+
+[[widgets]]
+evidence = "source"
+note = "Pinned branch Interface/AddOns/Blizzard_GameTooltip/Mainline/GameTooltip.xml:249 declares GameTooltip with GameTooltipTemplate and UIParent; FrameAPITooltip supplies documented tooltip methods."
+[widgets.entry]
+name = "GameTooltip"
+type = "ScriptObject"
+inherits = ["FrameAPITooltip", "Frame"]

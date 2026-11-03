@@ -106,6 +106,8 @@ fn yes() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalEntry {
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
     pub name: String,
     pub evidence: Evidence,
 }

@@ -1,0 +1,14 @@
+const panel = CreateFrame("Frame", null, UIParent);
+panel.SetSize(160, 60);
+panel.SetPoint("CENTER", UIParent, "CENTER", 0, 0);
+const texture = panel.CreateTexture();
+texture.SetSize(160, 60);
+const label = panel.CreateFontString();
+label.SetText("Selu frames");
+hookScript(panel, "OnShow", () => { print("Panel shown"); });
+panel.Hide();
+on PLAYER_LOGIN() {
+  panel.Show();
+  print(panel.GetWidth(), panel.GetHeight(), texture.GetWidth(), texture.GetHeight());
+  print(label.GetText());
+}

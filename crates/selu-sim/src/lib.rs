@@ -7,6 +7,7 @@ use mlua::{Function, Lua, MultiValue, Table, Value};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+mod regions;
 pub mod saved;
 mod wow_api;
 
@@ -43,6 +44,7 @@ pub struct Sim {
 impl Sim {
     pub fn new() -> SimResult<Sim> {
         let lua = Lua::new();
+        regions::install(&lua)?;
         let prints: Shared<Vec<String>> = Arc::new(Mutex::new(Vec::new()));
         let logs: Shared<Vec<String>> = Arc::new(Mutex::new(Vec::new()));
         let warned: Shared<HashSet<String>> = Arc::new(Mutex::new(HashSet::new()));
@@ -82,6 +84,7 @@ impl Sim {
                     frame.set("__events", lua.create_table()?)?;
                     frame.set("__scripts", lua.create_table()?)?;
                     frame.set("__shown", true)?;
+                    regions::attach(lua, &frame)?;
                     frame.set(
                         "RegisterEvent",
                         lua.create_function(|_, (this, event): (Table, String)| {

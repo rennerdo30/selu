@@ -138,3 +138,11 @@ Generate twice and compare bytes. Do not fetch or change the source clone.
 PTR/beta manifests are local on-demand artifacts; none are committed here.
 The scan covers every addon Lua variant in a pin, without asserting TOC loading
 or live availability for each variant.
+
+## T1 typed globals
+
+Global entries may carry an optional `type` string. It is omitted for names-only
+entries and defaults to no type when loading older manifests. Global overlays
+accept that same optional key. Retail and Forever type UIParent as Frame and
+GameTooltip as GameTooltip, with source-evidence widget aliases; no live probe
+is implied. The checker mapping and multiple-result rules are in lang/api.md.

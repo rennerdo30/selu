@@ -6,11 +6,27 @@ use selu_syntax::{ExprId, TypeExpr, TypeExprKind};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+#[derive(Debug, Clone)]
+pub struct ApiSignature {
+    pub name: String,
+    pub parameters: Vec<String>,
+    pub target: String,
+}
+#[derive(Debug, Clone, Default)]
+pub struct ApiOrigin(pub Option<ApiSignature>);
+impl PartialEq for ApiOrigin {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     /// Nominal identity, base identities, and the checked instance member shape.
     Class(String, Vec<String>, BTreeMap<String, Type>),
     ClassObject(String),
+    Widget(String, Vec<String>),
+    ApiOpaque(String, Vec<Type>),
     Number,
     String,
     Boolean,
@@ -29,6 +45,9 @@ pub enum Type {
     /// `WeakMap<K, V>`: a `Map` whose table has weak keys (`__mode = "k"`).
     WeakMap(Box<Type>, Box<Type>),
     Function {
+        multiple_results: bool,
+        unspecified_callback: bool,
+        api: ApiOrigin,
         params: Vec<Type>,
         ret: Box<Type>,
         required: usize,
@@ -39,8 +58,8 @@ pub enum Type {
     /// `a && b` or `a || b` with a `T?` operand: fine as a condition, but its
     /// value isn't a boolean in Lua, so it can't be stored or passed.
     Cond,
-    /// A value whose type nobody wrote down yet: results of game API calls
-    /// (manifests don't carry types yet) and parameters without a type.
+    /// A value whose type nobody wrote down yet: names-only API values and
+    /// parameters without a type.
     /// Internal only; it is never checked. See ARCHITECTURE.md.
     Untyped,
     /// An expression that already produced an error; suppresses follow-ups.
@@ -48,6 +67,23 @@ pub enum Type {
 }
 
 impl Type {
+    pub(crate) fn result_convention_matches(&self, other: &Type) -> bool {
+        match (self, other) {
+            (
+                Type::Function {
+                    multiple_results: a,
+                    ..
+                },
+                Type::Function {
+                    multiple_results: b,
+                    unspecified_callback,
+                    ..
+                },
+            ) => *unspecified_callback || a == b,
+            _ => true,
+        }
+    }
+
     pub fn optional(t: Type) -> Type {
         match t {
             Type::Optional(_) | Type::Untyped | Type::Error => t,
@@ -82,6 +118,17 @@ impl Type {
 
     /// Whether a value of type `self` may be stored where `to` is expected.
     pub fn assignable_to(&self, to: &Type) -> bool {
+        if matches!(self, Type::Function { .. })
+            && matches!(
+                to,
+                Type::Function {
+                    unspecified_callback: true,
+                    ..
+                }
+            )
+        {
+            return true;
+        }
         if self.is_open() || to.is_open() || self == to {
             return true;
         }
@@ -96,6 +143,13 @@ impl Type {
                         None => w.is_optional(),
                     }
             }),
+            (Type::ApiOpaque(_, members), target) if !members.is_empty() => {
+                members.iter().all(|t| t.assignable_to(target))
+            }
+            (source, Type::ApiOpaque(_, members)) if !members.is_empty() => {
+                members.iter().any(|t| source.assignable_to(t))
+            }
+            (Type::Widget(a, bases), Type::Widget(b, _)) => a == b || bases.contains(b),
             (Type::Null, Type::Optional(_)) => true,
             (Type::Optional(a), Type::Optional(b)) => a.assignable_to(b),
             (t, Type::Optional(inner)) => t.assignable_to(inner),
@@ -121,15 +175,18 @@ impl Type {
                     ret,
                     required,
                     rest,
+                    ..
                 },
                 Type::Function {
                     params: to_params,
                     ret: to_ret,
                     required: to_required,
                     rest: to_rest,
+                    ..
                 },
             ) => {
-                required <= to_required
+                self.result_convention_matches(to)
+                    && required <= to_required
                     && (rest.is_some() || (to_rest.is_none() && params.len() >= to_params.len()))
                     && to_params.iter().enumerate().all(|(i, a)| {
                         params
@@ -172,7 +229,10 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Class(n, _, _) | Type::ClassObject(n) => {
+            Type::Class(n, _, _)
+            | Type::ClassObject(n)
+            | Type::Widget(n, _)
+            | Type::ApiOpaque(n, _) => {
                 write!(f, "{}", n.split('@').next().unwrap_or(n))
             }
             Type::Number => write!(f, "number"),
@@ -197,6 +257,7 @@ impl fmt::Display for Type {
                 ret,
                 required,
                 rest,
+                ..
             } => {
                 let mut ps: Vec<String> = params
                     .iter()
@@ -278,6 +339,9 @@ pub fn resolve_classes(
                 None
             };
             Type::Function {
+                multiple_results: false,
+                unspecified_callback: false,
+                api: Default::default(),
                 required: fixed.len(),
                 rest,
                 params: fixed,
@@ -371,9 +435,16 @@ pub struct TypeTable {
     types: HashMap<ExprId, Type>,
     stable: std::collections::HashSet<ExprId>,
     method_calls: std::collections::HashSet<ExprId>,
+    single_values: std::collections::HashSet<ExprId>,
 }
 
 impl TypeTable {
+    pub fn mark_single_value(&mut self, id: ExprId) {
+        self.single_values.insert(id);
+    }
+    pub fn is_single_value(&self, id: ExprId) -> bool {
+        self.single_values.contains(&id)
+    }
     /// Marks a callee that refers to a declared instance method, including inherited methods.
     pub fn mark_method_call(&mut self, id: ExprId) {
         self.method_calls.insert(id);

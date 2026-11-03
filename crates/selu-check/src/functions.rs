@@ -16,6 +16,9 @@ impl Ctx<'_> {
             })
         });
         Type::Function {
+            multiple_results: false,
+            unspecified_callback: false,
+            api: Default::default(),
             params: params
                 .iter()
                 .zip(ts)
@@ -205,6 +208,9 @@ impl Ctx<'_> {
             })
         });
         Type::Function {
+            multiple_results: false,
+            unspecified_callback: false,
+            api: Default::default(),
             params: self.checked_parameter_types(
                 &ps,
                 ps.iter()
@@ -317,6 +323,24 @@ impl Ctx<'_> {
 
 impl Ctx<'_> {
     pub(crate) fn check_tuple_value(&mut self, e: &Expr, t: Type) -> Type {
+        if matches!(e.kind, ExprKind::Call { .. }) {
+            self.types.mark_single_value(e.id);
+        }
+        if let ExprKind::Call { callee, .. } = &e.kind
+            && matches!(
+                self.types.get(callee.id),
+                Some(Type::Function {
+                    multiple_results: true,
+                    ..
+                })
+            )
+            && let Type::Tuple(ts) = &t
+        {
+            let first = ts.first().cloned().unwrap_or(Type::Null);
+            self.types.set(e.id, first.clone());
+            return first;
+        }
+
         if matches!(e.kind, ExprKind::Call { .. }) && matches!(t, Type::Tuple(_)) {
             self.out.push(
                 err(
@@ -349,6 +373,10 @@ pub(crate) fn body_param_types(params: &[Param], fixed: &[Type], rest: Option<&T
 
 impl Ctx<'_> {
     pub(crate) fn function_member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
+        if matches!(t, Type::Widget(..)) {
+            self.types.mark_method_call(object.id);
+        }
+
         if let Type::Object(fs) = t
             && let Some(ty) = fs.get(name)
         {

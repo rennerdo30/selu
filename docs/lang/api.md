@@ -1,0 +1,72 @@
+# Typed game API
+
+Manifest entries with signatures are checked; names-only entries remain untyped.
+Explicit overlay signatures are usable even when their provenance is source
+rather than generated documentation. Diagnostics SELU0480/0481 report arity and
+parameter type errors and name the target. SELU0482/0483 report unknown widget
+methods/types with spelling suggestions; SELU0484 reports excess event parameters
+and SELU0486 rejects an incompatible written payload annotation.
+Aliases and imported function values retain the multiple-results convention in
+their function type. Selu tuple functions retain SELU0377 and require destructuring.
+
+An API call in a value context selects its first result; destructuring reads all
+positions without allocating a tuple table. A call contributes exactly one value
+in arguments, array literals and scalar returns, including the last position.
+The lowering parenthesizes those calls. Names-only calls also receive Lua result
+adjustment in scalar contexts. Function identity is never inferred from spelling.
+Empty results read as null; Nilable makes an individual result optional, and
+MayReturnNothing makes every position optional. False remains false.
+
+Primitive mapping: string/cstring/WOWGUID and unit tokens are strings; bool is
+boolean; documented numeric aliases such as uiUnit, WOWMONEY, fileID, Seconds
+and BigUInteger are numbers. luaIndex is a 1-based number; no conversion is performed.
+Structures become object shapes, callbacks become functions, and table InnerType
+metadata describes arrays. Enum.X.Y has type number; enum parameters accept numbers.
+Widget types are nominal, carrying their transitive inherited identities.
+CreateFrame with a literal type selects that widget; a dynamic type returns Frame.
+Factories use their documented return widget. Inherited methods keep Lua colon
+calls. Typed global entries select widget types without hard-coded global names.
+
+The optional type on manifest global entries is additive: old fixture entries
+remain untyped. Retail and Forever overlays type UIParent and GameTooltip and
+connect GameTooltip to FrameAPITooltip and Frame. These entries have source
+evidence, not live verification. Regeneration uses the original pinned commits.
+
+The simulator models region parent identity, size, stored anchor points and text.
+Texture and font-string factories return distinct child objects. This is offline
+behavioral proof; actual client rendering and live API policy acceptance remain
+with the owner.
+
+## Scalar unions and opaque engine values
+
+One metadata table in api.rs supplies the accepted scalar members for named
+scalar unions. Arguments may be any member. Returned union values fit a target
+only when every possible member fits that target. An opaque engine type without
+members remains nominal. Untyped values interoperate in either direction.
+
+| API type | Members | Source |
+|---|---|---|
+| SpellIdentifier | number, string | Pinned generated SpellDocumentation.lua, GetSpellInfo argument documentation (ID, name or link) |
+| uiAddon | number, string | Pinned AddOnsDocumentation.lua argument tables and Blizzard addon name/index calling convention |
+
+String-like aliases include FramePoint, DrawLayer, unit token variants,
+textureAtlas, textureKit and stringView; numeric aliases include uiUnit, luaIndex,
+fileID, Seconds and SingleColorValue. These map to scalar types before opaque
+fallback. Generated tables retain structure identity before any fallback.
+Documented ScriptObject method groups named XAPI also resolve factory results X.
+The report accompanying this change lists every remaining opaque name and its
+occurrence count for each committed manifest.
+
+Multiple-result functions cannot be assigned to single-result function types,
+including callback parameters and collection callbacks (SELU0485). Wrap the call,
+for example `(unit) => UnitName(unit)`, to expose exactly one result. A plain
+unannotated alias keeps its original result convention. This compatibility rule
+is shared with collection callback checking. API origin metadata contains names
+and target solely for diagnostics; it compares equal regardless of content and
+has no role in assignability, joins or lowering.
+
+LuaFunctionReference is an unspecified callback signature: any function value is
+accepted, parameter context is untyped, and its arity/result are unrestricted.
+Non-functions are rejected; Nilable still permits null to clear SetScript.
+Follow-up outside T1: a data table keyed by script name could give OnShow `(self)`
+and OnEvent `(self, event, ...)` their own contextual signatures.

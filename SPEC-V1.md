@@ -74,7 +74,9 @@ Three rules decide every open question:
 
 - `function` declarations, arrow functions, default and rest parameters
   (`...args: number[]`), destructuring of objects, arrays and tuples.
-- **Multiple returns** from WoW APIs are tuples:
+- **Multiple results** from WoW APIs select the first value in a scalar
+  context; destructuring selects all values. Selu tuple functions remain
+  distinct and require destructuring (SELU0377). For example:
   `const [name, , , level] = GetItemInfo(id);` compiles to
   `local name, _, _, level = GetItemInfo(id)` — no table is created.
 - Object literals compile to Lua tables; `interface` adds only types.

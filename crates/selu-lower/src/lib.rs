@@ -611,7 +611,24 @@ impl Lowerer<'_> {
                 object,
                 name: field,
             } => self.data_field(object, field, pre),
-            ExprKind::Call { callee, args } => self.call(callee, args, pre),
+            ExprKind::Call { callee, args } => {
+                let v = self.call(callee, args, pre);
+                if self.types.is_single_value(e.id)
+                    && (matches!(
+                        self.types.get(callee.id),
+                        Some(
+                            selu_check::Type::Function {
+                                multiple_results: true,
+                                ..
+                            } | selu_check::Type::Untyped
+                        )
+                    ) || self.types.get(callee.id).is_none())
+                {
+                    LExpr::Paren(Box::new(v))
+                } else {
+                    v
+                }
+            }
             ExprKind::Assign { .. } => {
                 unreachable!("the checker allows assignments only as statements")
             }
@@ -729,6 +746,9 @@ impl Lowerer<'_> {
                 all.extend(args);
                 let mut vals = self.seq(&all, pre);
                 let obj = vals.remove(0);
+                if self.types.is_method_call(callee.id) {
+                    return LExpr::Method(Box::new(obj), method.clone(), vals);
+                }
                 if is_namespace
                     || (matches!(self.types.get(object.id), Some(selu_check::Type::Class(..)))
                         && !self.types.is_method_call(callee.id))

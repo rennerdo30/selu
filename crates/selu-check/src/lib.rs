@@ -18,6 +18,7 @@ use selu_manifest::Manifest;
 use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind, TypeExpr};
 use std::collections::HashMap;
 
+mod api;
 mod classes;
 mod modules;
 pub mod saved;
@@ -404,7 +405,7 @@ impl Ctx<'_> {
                     t.assignable_to(&written)
                 };
                 if !ok {
-                    self.out.push(classes::mismatch_help(
+                    self.out.push(api::mismatch_help(
                         err(
                             "SELU0337",
                             format!(
@@ -460,6 +461,7 @@ impl Ctx<'_> {
                     ret,
                     required,
                     rest,
+                    ..
                 }) = declared
                 {
                     let written = (*ret != Type::Untyped).then_some(*ret);
@@ -474,6 +476,9 @@ impl Ctx<'_> {
                     self.finish_decl(
                         name,
                         Type::Function {
+                            multiple_results: false,
+                            unspecified_callback: false,
+                            api: Default::default(),
                             params: self.checked_parameter_types(params, param_types),
                             ret: Box::new(ret),
                             required,
@@ -504,9 +509,12 @@ impl Ctx<'_> {
                 // Parameter types come from the event in the manifest.
                 let mut param_types = self.param_types(params);
                 if let Some(entry) = entry {
-                    for (t, p) in param_types.iter_mut().zip(&entry.params) {
+                    let payload = self.api_event_types(&entry, params, &s.span);
+                    for (i, (t, p)) in param_types.iter_mut().zip(payload).enumerate() {
                         if *t == Type::Untyped {
-                            *t = types::manifest_type(&p.ty);
+                            *t = p;
+                        } else if !p.assignable_to(t) {
+                            self.out.push(err("SELU0486",format!("event parameter `{}` on {} has type {p}, incompatible with {t}",params[i].name,self.target()),&params[i].span));
                         }
                     }
                 }
@@ -602,7 +610,7 @@ impl Ctx<'_> {
         match written {
             Some(w) => {
                 if !t.assignable_to(&w) {
-                    self.out.push(classes::mismatch_help(
+                    self.out.push(api::mismatch_help(
                         err(
                             "SELU0336",
                             format!("`{name}` is {}, but this value is {}", a(&w), a(&t)),
@@ -650,7 +658,7 @@ impl Ctx<'_> {
                 self.check_ready(name, &b, span);
                 self.type_of(name).unwrap_or(Type::Error)
             }
-            None if self.manifest.has_global(name) => Type::Untyped,
+            None if self.manifest.has_global(name) => self.api_global(name),
             None => {
                 self.out.push(
                     err("SELU0310", format!("`{name}` is not declared"), span)
@@ -739,7 +747,7 @@ impl Ctx<'_> {
             Kind::Let | Kind::Param | Kind::Global | Kind::Import => {}
         }
         if !value.assignable_to(&b.ty) {
-            self.out.push(classes::mismatch_help(
+            self.out.push(api::mismatch_help(
                 err(
                     "SELU0336",
                     format!("`{name}` is {}, but this value is {}", a(&b.ty), a(value)),
@@ -805,6 +813,8 @@ impl Ctx<'_> {
     }
 
     fn check_condition_type(&mut self, e: &Expr, t: &Type) {
+        let projected = self.check_tuple_value(e, t.clone());
+        let t = &projected;
         if matches!(t, Type::Tuple(_)) {
             self.tuple_condition(e);
             return;
@@ -950,6 +960,9 @@ impl Ctx<'_> {
     }
 
     fn member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
+        if let Some(t) = self.api_member(t, name, object) {
+            return t;
+        }
         if let Some(t) = self.class_member(t, name, object) {
             return t;
         }
@@ -985,6 +998,7 @@ impl Ctx<'_> {
         match op {
             "&&" | "||" => {
                 let l = self.expr(left);
+                let l = self.check_tuple_value(left, l);
                 self.check_condition_type(left, &l);
                 // The right side runs only when the left one is true (`&&`)
                 // or false (`||`), so it sees that narrowing.
@@ -992,6 +1006,7 @@ impl Ctx<'_> {
                 self.scopes.push(Scope::default());
                 self.narrow_here(if op == "&&" { t } else { f });
                 let r = self.expr(right);
+                let r = self.check_tuple_value(right, r);
                 self.scopes.pop();
                 self.check_condition_type(right, &r);
                 match (&l, &r) {
@@ -1141,6 +1156,9 @@ impl Ctx<'_> {
     }
 
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+        if let Some(t) = self.api_call(e, callee, args) {
+            return t;
+        }
         // Selu's own built-ins (`command`, `hook`, `log.warn`...), unless the
         // code declares a name that shadows them.
         if let Some(t) = self.builtin_call(e, callee, args) {
@@ -1194,12 +1212,18 @@ impl Ctx<'_> {
         };
         self.types.set(callee.id, callee_type.clone());
         let arg_types = self.function_arguments(args, &callee_type);
+        if self.api_check_call(e, args, &arg_types, &callee_type)
+            && let Type::Function { ret, .. } = callee_type
+        {
+            return *ret;
+        }
         match callee_type {
             Type::Function {
                 params,
                 ret,
                 required,
                 rest,
+                ..
             } => {
                 let name = callee
                     .dotted_name()
@@ -1221,7 +1245,7 @@ impl Ctx<'_> {
                         continue;
                     };
                     if !t.assignable_to(p) {
-                        self.out.push(classes::mismatch_help(
+                        self.out.push(api::mismatch_help(
                             err(
                                 "SELU0335",
                                 format!(
