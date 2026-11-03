@@ -1,0 +1,13 @@
+# Reserves the name `selu` on crates.io (owner, 2026-11-04). The real
+# compiler replaces this crate as 0.1.0. Kept out of the main workspace.
+[package]
+name = "selu"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "Selu: a TypeScript-style language that compiles to World of Warcraft addon Lua (in development; this is a placeholder)"
+readme = "README.md"
+keywords = ["wow", "addon", "lua", "compiler", "language"]
+categories = ["compilers", "development-tools"]
+
+[workspace]

@@ -640,7 +640,13 @@ says whether everything passed.
    output, memory and CPU against the hand-written version, and fix what the
    comparison shows.
 
-## 12. Still to decide (owner)
+## 12. Owner decisions on publishing
 
-- **Licence** for the compiler and tools. MIT would match Renner's Toolkit.
-- Whether and when to claim the `selu` names on crates.io and npm.
+- **Licence:** MIT, like Renner's Toolkit (owner, 2026-11-04).
+- **crates.io:** the name `selu` is claimed with a placeholder `0.0.1`
+  (`placeholder/selu/`, outside the workspace); the real compiler is
+  published as `0.1.0` later (owner, 2026-11-04). Every publication still
+  needs the owner's yes.
+- **npm:** not needed by the plan (the VS Code extension goes to the VS Code
+  Marketplace); claiming the name there is optional and still open.
+- **GitHub:** `rennerdo30/selu`, private for now (2026-11-04).

@@ -9,10 +9,12 @@ members = [
     "crates/selu-sim",
     "crates/selu-cli",
 ]
+exclude = ["placeholder"]
 
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
+license = "MIT"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

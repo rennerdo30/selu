@@ -1,6 +1,7 @@
 [package]
 name = "selu-syntax"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 
 [dependencies]
