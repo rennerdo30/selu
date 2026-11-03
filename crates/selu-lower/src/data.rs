@@ -86,6 +86,11 @@ impl Lowerer<'_> {
                     args,
                 )
             }
+            ExprKind::New { class, args, .. }
+                if !matches!(class.as_str(), "Map" | "Set" | "WeakMap") =>
+            {
+                self.class_new(class, args, pre)
+            }
             ExprKind::New { class, .. } if class == "WeakMap" => lua::call(
                 name("setmetatable"),
                 vec![

@@ -95,6 +95,9 @@ impl Ctx<'_> {
                 type_args,
                 args,
             } => {
+                if !matches!(class.as_str(), "Map" | "Set" | "WeakMap") {
+                    return self.class_new(e, class, type_args, args);
+                }
                 for a in args {
                     self.value(a);
                 }
@@ -423,7 +426,7 @@ impl Ctx<'_> {
             }
         }
         validate(t, self.out);
-        types::resolve(t, self.out)
+        self.class_resolve(t)
     }
 }
 

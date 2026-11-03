@@ -101,6 +101,7 @@ pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lower
         types,
         temps: 0,
         wow: wow::WowState::default(),
+        class_receiver: "self".into(),
         loops: Vec::new(),
     };
     let mut out: LBlock = Vec::new();
@@ -217,6 +218,7 @@ fn raw(text: &str) -> LStmt {
 pub(crate) struct Lowerer<'a> {
     module: ModuleBindings,
     wow: wow::WowState,
+    class_receiver: String,
     loops: Vec<loops::LoopCtx>,
     known: &'a HashSet<String>,
     types: &'a TypeTable,
@@ -677,6 +679,9 @@ impl Lowerer<'_> {
         if let Some(v) = self.data_call(callee, args, pre) {
             return v;
         }
+        if let Some(v) = self.class_super_call(callee, args, pre) {
+            return v;
+        }
         let mut all: Vec<&Expr> = Vec::new();
         match &callee.kind {
             // Method call: `a.B(x)` -> `a:B(x)`, unless the whole dotted name
@@ -694,6 +699,10 @@ impl Lowerer<'_> {
                 let mut vals = self.seq(&all, pre);
                 let obj = vals.remove(0);
                 if is_namespace
+                    || matches!(
+                        self.types.get(object.id),
+                        Some(selu_check::Type::ClassObject(_))
+                    )
                     || matches!(self.types.get(object.id), Some(selu_check::Type::Object(fields)) if matches!(fields.get(method), Some(selu_check::Type::Function { .. })))
                 {
                     lua::call(LExpr::Field(Box::new(obj), method.clone()), vals)
@@ -758,6 +767,9 @@ fn used_before_declaration(stmts: &[Stmt]) -> Vec<String> {
         visit::idents_in_stmt(s, &mut |n| {
             seen.insert(n.to_string());
         });
+        classes::class_uses(s, &mut |n| {
+            seen.insert(n.to_string());
+        });
         let names = declaration_names(s);
         if names.iter().any(|n| seen.contains(n)) {
             for name in names {
@@ -774,6 +786,7 @@ fn declaration_names(s: &Stmt) -> Vec<String> {
     match &s.kind {
         StmtKind::Export(inner) => declaration_names(inner),
         StmtKind::VarDecl { name, .. } | StmtKind::FuncDecl { name, .. } => vec![name.clone()],
+        StmtKind::Class(c) => vec![c.name.clone()],
         StmtKind::Destructure { pattern, .. } => match pattern {
             selu_syntax::Pattern::Array(items) => {
                 items.iter().flatten().map(|(n, _)| n.clone()).collect()

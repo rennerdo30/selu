@@ -8,6 +8,8 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
+    Class(String, Vec<String>),
+    ClassObject(String),
     Number,
     String,
     Boolean,
@@ -83,6 +85,9 @@ impl Type {
             return true;
         }
         match (self, to) {
+            (Type::Class(have, bases), Type::Class(name, _)) => {
+                have == name || bases.contains(name)
+            }
             (Type::Null, Type::Optional(_)) => true,
             (Type::Optional(a), Type::Optional(b)) => a.assignable_to(b),
             (t, Type::Optional(inner)) => t.assignable_to(inner),
@@ -159,6 +164,9 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Type::Class(n, _) | Type::ClassObject(n) => {
+                write!(f, "{}", n.split('@').next().unwrap_or(n))
+            }
             Type::Number => write!(f, "number"),
             Type::String => write!(f, "string"),
             Type::Boolean => write!(f, "boolean"),
@@ -208,15 +216,28 @@ impl fmt::Display for Type {
 /// Resolves a written type. Unknown names are reported (SELU0320) and
 /// become `Error`, so one typo gives one message.
 pub fn resolve(t: &TypeExpr, out: &mut Vec<Diagnostic>) -> Type {
+    resolve_classes(t, out, &HashMap::new())
+}
+
+pub fn resolve_classes(
+    t: &TypeExpr,
+    out: &mut Vec<Diagnostic>,
+    classes: &HashMap<String, Type>,
+) -> Type {
     match &t.kind {
-        TypeExprKind::Optional(inner) => Type::optional(resolve(inner, out)),
-        TypeExprKind::Array(inner) => Type::Array(Box::new(resolve(inner, out))),
-        TypeExprKind::Tuple(items) => Type::Tuple(items.iter().map(|i| resolve(i, out)).collect()),
+        TypeExprKind::Optional(inner) => Type::optional(resolve_classes(inner, out, classes)),
+        TypeExprKind::Array(inner) => Type::Array(Box::new(resolve_classes(inner, out, classes))),
+        TypeExprKind::Tuple(items) => Type::Tuple(
+            items
+                .iter()
+                .map(|i| resolve_classes(i, out, classes))
+                .collect(),
+        ),
         TypeExprKind::Object(fields) => Type::Object(
             fields
                 .iter()
                 .map(|f| {
-                    let t = resolve(&f.ty, out);
+                    let t = resolve_classes(&f.ty, out, classes);
                     (
                         f.name.clone(),
                         if f.optional { Type::optional(t) } else { t },
@@ -225,7 +246,10 @@ pub fn resolve(t: &TypeExpr, out: &mut Vec<Diagnostic>) -> Type {
                 .collect(),
         ),
         TypeExprKind::Function { params, ret, rest } => {
-            let mut fixed: Vec<Type> = params.iter().map(|p| resolve(p, out)).collect();
+            let mut fixed: Vec<Type> = params
+                .iter()
+                .map(|p| resolve_classes(p, out, classes))
+                .collect();
             let rest = if *rest {
                 let last = fixed.pop().expect("a rest type has a parameter");
                 Some(Box::new(match last {
@@ -252,12 +276,20 @@ pub fn resolve(t: &TypeExpr, out: &mut Vec<Diagnostic>) -> Type {
                 ret: Box::new(if is_void(ret) {
                     Type::Void
                 } else {
-                    resolve(ret, out)
+                    resolve_classes(ret, out, classes)
                 }),
             }
         }
         TypeExprKind::Named { name, args } => {
-            let args: Vec<Type> = args.iter().map(|a| resolve(a, out)).collect();
+            let args: Vec<Type> = args
+                .iter()
+                .map(|a| resolve_classes(a, out, classes))
+                .collect();
+            if args.is_empty()
+                && let Some(t) = classes.get(name)
+            {
+                return t.clone();
+            }
             named(name, args, &t.span, out)
         }
     }

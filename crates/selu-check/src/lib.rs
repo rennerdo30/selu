@@ -63,6 +63,7 @@ pub fn check_program(program: &Program, manifest: &Manifest) -> Checked {
         returns: Vec::new(),
         loops: Vec::new(),
         function_expected: Vec::new(),
+        classes: Default::default(),
         types: TypeTable::default(),
     };
     ctx.block(&program.stmts, &[], Vec::new());
@@ -141,6 +142,7 @@ type Narrowings = Vec<(String, Type)>;
 
 struct Ctx<'a> {
     module: ModuleBindings,
+    classes: classes::ClassContext,
     loops: Vec<loops::LoopCtx>,
     manifest: &'a Manifest,
     out: &'a mut Vec<Diagnostic>,
@@ -282,6 +284,7 @@ impl Ctx<'_> {
         for (p, ty) in params {
             self.declare(&p.name, &p.span, Kind::Param, ty.clone());
         }
+        self.predeclare_class_names(stmts);
         let top = self.scopes.len() == 1;
         for s in stmts {
             // `export function f` declares `f` like `function f`.
@@ -919,6 +922,9 @@ impl Ctx<'_> {
     }
 
     fn member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
+        if let Some(t) = self.class_member(t, name, object) {
+            return t;
+        }
         if let Some(t) = self.data_member(t, name, object) {
             return t;
         }
@@ -1543,11 +1549,4 @@ mod tests {
         assert_eq!(&source[span.start..span.end], "\"./other\"");
     }
 
-    #[test]
-    fn constructs_still_being_built_are_reported_not_lowered() {
-        let src = "class A {}
-";
-        let c = codes(src);
-        assert!(c.contains(&"SELU0390".to_string()), "{src}: {c:?}");
-    }
 }

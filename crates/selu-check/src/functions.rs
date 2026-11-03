@@ -173,7 +173,27 @@ impl Ctx<'_> {
                 span: v.span.clone(),
             }],
         };
+        let saved_this = if matches!(
+            e.kind,
+            ExprKind::Function {
+                is_arrow: false,
+                ..
+            }
+        ) {
+            self.classes.receiver.take()
+        } else {
+            None
+        };
         let result = self.function_body(&ps, ts.clone(), written, &body);
+        if matches!(
+            e.kind,
+            ExprKind::Function {
+                is_arrow: false,
+                ..
+            }
+        ) {
+            self.classes.receiver = saved_this;
+        }
         let required = ps
             .iter()
             .rposition(|p| !p.rest && p.default.is_none())
