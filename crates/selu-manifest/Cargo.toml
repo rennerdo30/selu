@@ -1,0 +1,9 @@
+[package]
+name = "selu-manifest"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+selu-diagnostics = { path = "../selu-diagnostics" }
+serde.workspace = true
+serde_json.workspace = true

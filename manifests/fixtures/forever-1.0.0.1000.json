@@ -1,0 +1,18 @@
+{
+  "flavour": "forever",
+  "build": { "major": 1, "minor": 0, "patch": 0, "build": 1000 },
+  "interface": 100000,
+  "luaDialects": ["lua51"],
+  "fixture": true,
+  "functions": [
+    { "name": "print", "params": ["..."], "evidence": "verified" },
+    { "name": "CreateFrame", "params": ["frameType", "name", "parent", "template"], "evidence": "verified" },
+    { "name": "UnitHealth", "params": ["unit"], "returnsSecret": true, "evidence": "documented" },
+    { "name": "UnitHealthMax", "params": ["unit"], "returnsSecret": true, "evidence": "documented" },
+    { "name": "GetTime", "params": [], "evidence": "verified" }
+  ],
+  "events": [
+    { "name": "PLAYER_LOGIN", "params": [], "evidence": "verified" },
+    { "name": "UNIT_HEALTH", "params": [{ "name": "unit", "type": "string" }], "evidence": "documented" }
+  ]
+}

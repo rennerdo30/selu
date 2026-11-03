@@ -1,0 +1,8 @@
+[package]
+name = "selu-diagnostics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+codespan-reporting = "0.11"
+serde.workspace = true
