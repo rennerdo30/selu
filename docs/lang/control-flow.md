@@ -43,8 +43,9 @@ with no preludes use `c and a or b`. Only the selected branch executes.
 
 Compound assignments evaluate the receiver, index, old value and RHS in that
 order, once each. Array/tuple indices get the zero-to-one-based adjustment.
-The existing checker enforces mutability for names. Operators require
-numbers, except that += also joins two strings. Updates require numbers.
+The existing checker enforces mutability for names. Compound operators reuse the binary checker and binary lowering directly,
+including both operand types for += string concatenation and SELU0324 for
+ambiguous untyped operands. Other arithmetic requires numbers. Updates require numbers.
 SELU0340 diagnoses transfers without a loop, SELU0341 operand errors, and
 SELU0344 invalid assignment targets. Each includes a span and help.
 
@@ -65,3 +66,29 @@ fn compound_index_once() {
 No package A construct retains SELU0390. Data/index and function-expression
 support still produce the base packages' SELU0390 until B/C merge. Their
 integration and callback tests remain with the parent.
+
+## Independent review fixes
+
+Fallback for bodies have their own `do ... end` before the update. This keeps
+body declarations out of the update's scope and makes a body-ending return
+legal Lua 5.1. Continue wrappers stay inside this body scope.
+
+For-of still reports SELU0390 until B implements it; it must never reach the
+control-flow checker's unreachable arm.
+
+The capture restriction remains blanket for numeric and fallback counted
+loops. Event handlers count as closures too, and SELU0343 points at the
+first captured identifier. The conservative spelling-based shadowing
+restriction described above remains in effect.
+
+Updates receive the condition-true narrowings in a separate scope. A fact is
+removed if any body subtree writes that name, contains a call, or contains
+continue. This intentionally includes nested functions and loops and does
+not attempt path-sensitive proofs: even an unrelated call or a continue
+with unchanged facts can cause otherwise valid optional updates to be
+rejected. It cannot accept an update on the assumption that a nullable
+binding remained non-null across these uncertain paths.
+
+Plain-local updates with pure RHS expressions print directly as `i = i + 1`.
+Receivers, indices, effectful right operands and expression preludes retain
+snapshots to preserve evaluation order and the old value.

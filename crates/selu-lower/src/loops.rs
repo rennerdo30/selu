@@ -122,7 +122,8 @@ impl Lowerer<'_> {
                         sp,
                     ));
                 }
-                b.extend(self.loop_body(body, sp));
+                let body = self.loop_body(body, sp);
+                b.push(stmt(LStmtKind::Do(body), sp));
                 if let Some(u) = update {
                     self.expr_stmt(u, sp, &mut b);
                 }
@@ -170,26 +171,34 @@ impl Lowerer<'_> {
             }
             _ => self.target(target, &mut pre),
         };
-        // Read the old value before evaluating the RHS (which may mutate it).
-        let old = self.hold(t.clone(), span, &mut pre);
-        let v = value
-            .map(|v| self.expr(v, &mut pre))
-            .unwrap_or(LExpr::Number("1".into()));
-        let op = match op {
-            "+" if self.types.is_string(target.id) => BinOp::Concat,
-            "+" => BinOp::Add,
-            "-" => BinOp::Sub,
-            "*" => BinOp::Mul,
-            "/" => BinOp::Div,
-            "%" => BinOp::Mod,
+        // Plain locals and pure right operands need no snapshot. Otherwise
+        // read the old value before the RHS can call code or run a prelude.
+        let old = if matches!(t, LExpr::Name(_)) && value.is_none_or(pure) {
+            t.clone()
+        } else {
+            let old = self.hold(t.clone(), span, &mut pre);
+            name(&old)
+        };
+        // Reuse binary lowering's operator selection using already evaluated
+        // operands. Keep their original ids so both operand types are used.
+        let mut left = target.clone();
+        left.kind = match old {
+            LExpr::Name(n) => ExprKind::Ident(n),
             _ => unreachable!(),
         };
+        let mut right = value.unwrap_or(target).clone();
+        match value {
+            None => right.kind = ExprKind::Number("1".into()),
+            Some(v) if pure(v) => {}
+            Some(v) => {
+                let v = self.expr(v, &mut pre);
+                right.kind = ExprKind::Ident(self.hold(v, span, &mut pre));
+            }
+        }
+        let result = self.binary(e, op, &left, &right, &mut pre);
         self.finish(
             pre,
-            stmt(
-                LStmtKind::Assign(vec![t], vec![bin(op, name(&old), v)]),
-                span,
-            ),
+            stmt(LStmtKind::Assign(vec![t], vec![result]), span),
             out,
         );
     }
@@ -352,4 +361,19 @@ fn writes_expr(e: &Expr, var: &str, writes: &mut bool) {
         visit::Child::Stmt(s) => writes_stmt(s, var, writes),
         visit::Child::Expr(e) => writes_expr(e, var, writes),
     });
+}
+
+fn pure(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Ident(_)
+        | ExprKind::Number(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Null => true,
+        ExprKind::Unary { expr, .. } => pure(expr),
+        ExprKind::Binary { op, left, right } if op != "??" && op != "&&" && op != "||" => {
+            pure(left) && pure(right)
+        }
+        _ => false,
+    }
 }

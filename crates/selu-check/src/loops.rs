@@ -7,6 +7,9 @@ pub(crate) struct LoopCtx;
 impl Ctx<'_> {
     pub(crate) fn loop_stmt(&mut self, s: &Stmt) {
         match &s.kind {
+            StmtKind::ForOf { .. } => {
+                self.unsupported("this loop statement", &s.span);
+            }
             StmtKind::Break | StmtKind::Continue => {
                 if self.loops.is_empty() {
                     self.out.push(
@@ -46,9 +49,18 @@ impl Ctx<'_> {
                     .map(|c| self.condition(c).0)
                     .unwrap_or_default();
                 self.loops.push(LoopCtx);
-                self.block(body, &[], yes);
+                self.block(body, &[], yes.clone());
                 if let Some(u) = update {
+                    // A body's writes, calls or transfers may invalidate facts
+                    // on paths reaching the update. Do not guess across them.
+                    let yes = yes
+                        .into_iter()
+                        .filter(|(name, _)| !body.iter().any(|s| invalidates_stmt(s, name)))
+                        .collect();
+                    self.scopes.push(Scope::default());
+                    self.narrow_here(yes);
                     self.expr(u);
+                    self.scopes.pop();
                 }
                 self.loops.pop();
                 if let Some(init) = init
@@ -122,23 +134,8 @@ impl Ctx<'_> {
                 })
             }
             ExprKind::CompoundAssign { op, target, value } => {
-                let left = self.value(target);
-                let right = self.value(value);
-                let valid = left.is_open()
-                    || right.is_open()
-                    || (left == right
-                        && (left == Type::Number || (op == "+" && left == Type::String)));
-                if !valid {
-                    self.out.push(
-                        err(
-                            "SELU0341",
-                            "this assignment needs two numbers, or two strings for `+=`",
-                            &e.span,
-                        )
-                        .with_help("use operands of the same supported type"),
-                    );
-                }
-                self.control_write(target, &left);
+                let result = self.binary(e, op, target, value);
+                self.control_write(target, &result);
                 Type::Void
             }
             ExprKind::Update { target, .. } => {
@@ -179,15 +176,16 @@ impl Ctx<'_> {
 // Until package C can cooperate in per-turn environment copying, reject
 // captures rather than silently giving fallback loops Lua's shared binding.
 fn reject_capture(s: &Stmt, name: &str, out: &mut Vec<selu_diagnostics::Diagnostic>) {
-    if let StmtKind::FuncDecl { .. } = &s.kind {
-        let mut captures = false;
-        visit::idents_in_stmt(s, &mut |n| captures |= n == name);
-        if captures {
+    if matches!(
+        s.kind,
+        StmtKind::FuncDecl { .. } | StmtKind::OnHandler { .. }
+    ) {
+        if let Some(span) = captured_stmt(s, name) {
             out.push(
                 err(
                     "SELU0343",
                     "capturing a counted loop binding is not supported yet",
-                    &s.span,
+                    &span,
                 )
                 .with_help("copy the value into a body-local variable and capture that variable"),
             );
@@ -201,14 +199,12 @@ fn reject_capture(s: &Stmt, name: &str, out: &mut Vec<selu_diagnostics::Diagnost
 }
 fn reject_expr_capture(e: &Expr, name: &str, out: &mut Vec<selu_diagnostics::Diagnostic>) {
     if matches!(e.kind, ExprKind::Function { .. }) {
-        let mut captures = false;
-        visit::idents_in_expr(e, &mut |n| captures |= n == name);
-        if captures {
+        if let Some(span) = captured_expr(e, name) {
             out.push(
                 err(
                     "SELU0343",
                     "capturing a counted loop binding is not supported yet",
-                    &e.span,
+                    &span,
                 )
                 .with_help("copy the value into a body-local variable and capture that variable"),
             );
@@ -219,4 +215,66 @@ fn reject_expr_capture(e: &Expr, name: &str, out: &mut Vec<selu_diagnostics::Dia
         visit::Child::Stmt(s) => reject_capture(s, name, out),
         visit::Child::Expr(e) => reject_expr_capture(e, name, out),
     });
+}
+
+fn captured_stmt(s: &Stmt, name: &str) -> Option<selu_diagnostics::Span> {
+    let mut found = None;
+    visit::child_stmts_and_exprs(s, &mut |c| {
+        if found.is_none() {
+            found = match c {
+                visit::Child::Stmt(s) => captured_stmt(s, name),
+                visit::Child::Expr(e) => captured_expr(e, name),
+            };
+        }
+    });
+    found
+}
+fn captured_expr(e: &Expr, name: &str) -> Option<selu_diagnostics::Span> {
+    if matches!(&e.kind, ExprKind::Ident(n) if n == name) {
+        return Some(e.span.clone());
+    }
+    let mut found = None;
+    visit::child_exprs_and_stmts(e, &mut |c| {
+        if found.is_none() {
+            found = match c {
+                visit::Child::Stmt(s) => captured_stmt(s, name),
+                visit::Child::Expr(e) => captured_expr(e, name),
+            };
+        }
+    });
+    found
+}
+fn invalidates_stmt(s: &Stmt, name: &str) -> bool {
+    if matches!(s.kind, StmtKind::Continue) {
+        return true;
+    }
+    let mut invalid = false;
+    visit::child_stmts_and_exprs(s, &mut |c| {
+        invalid |= match c {
+            visit::Child::Stmt(s) => invalidates_stmt(s, name),
+            visit::Child::Expr(e) => invalidates_expr(e, name),
+        }
+    });
+    invalid
+}
+fn invalidates_expr(e: &Expr, name: &str) -> bool {
+    match &e.kind {
+        ExprKind::Call { .. } => return true,
+        ExprKind::Assign { target, .. }
+        | ExprKind::CompoundAssign { target, .. }
+        | ExprKind::Update { target, .. }
+            if matches!(&target.kind, ExprKind::Ident(n) if n == name) =>
+        {
+            return true;
+        }
+        _ => {}
+    }
+    let mut invalid = false;
+    visit::child_exprs_and_stmts(e, &mut |c| {
+        invalid |= match c {
+            visit::Child::Stmt(s) => invalidates_stmt(s, name),
+            visit::Child::Expr(e) => invalidates_expr(e, name),
+        }
+    });
+    invalid
 }

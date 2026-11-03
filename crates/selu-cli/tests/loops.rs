@@ -88,3 +88,103 @@ fn lazy_ternary_and_optional_narrowing() {
         ["false", "true", "8", "1"]
     );
 }
+
+#[test]
+fn fallback_return_body() {
+    let src = "function first(limit: number): number { for (let i = 0; i < limit; i++) { return i; } return -1; } on PLAYER_LOGIN() { print(first(2)); }";
+    assert_eq!(run(src), ["0"]);
+    println!(
+        "{}",
+        compile(
+            "function first(limit: number): number { for (let i = 0; i < limit; i++) { return i; } return -1; }"
+        )
+    );
+}
+#[test]
+fn fallback_shadow_body() {
+    assert_eq!(
+        run(
+            "on PLAYER_LOGIN() { let limit = 3; let turns = 0; for (let i = 0; i < limit; i++) { turns++; let i = 10; if (turns > 4) { break; } } print(turns); }"
+        ),
+        ["3"]
+    );
+}
+#[test]
+fn fallback_return_and_shadow_with_continue() {
+    assert_eq!(
+        run(
+            "function first(limit: number): number { for (let i = 0; i < limit; i++) { if (i == 0) { continue; } return i; } return -1; } on PLAYER_LOGIN() { print(first(3)); let limit = 3; let turns = 0; for (let i = 0; i < limit; i++) { turns++; if (turns == 1) { continue; } let i = 10; print(i); if (turns > 4) { break; } } print(turns); }"
+        ),
+        ["1", "10", "10", "3"]
+    );
+}
+#[test]
+fn for_of_is_diagnostic() {
+    assert!(
+        codes("let xs = CreateFrame(\"Frame\"); for (const x of xs) {}")
+            .contains(&"SELU0390".into())
+    );
+}
+#[test]
+fn compound_string_untyped_field() {
+    assert_eq!(
+        run(
+            "on PLAYER_LOGIN() { let frame = CreateFrame(\"Frame\"); frame.text = \"a\"; frame.text += \"x\"; print(frame.text); }"
+        ),
+        ["ax"]
+    );
+}
+#[test]
+fn compound_binary_diagnostics() {
+    assert!(codes("let b = true; b += CreateFrame(\"Frame\");").contains(&"SELU0323".into()));
+    assert!(
+        codes("let frame = CreateFrame(\"Frame\"); frame.x += frame.y;")
+            .contains(&"SELU0324".into())
+    );
+}
+#[test]
+fn event_capture_is_rejected() {
+    assert!(
+        codes("let limit = 3; for (let i = 0; i < limit; i++) { on PLAYER_LOGIN() { print(i); } }")
+            .contains(&"SELU0343".into())
+    );
+}
+#[test]
+fn update_condition_narrowing() {
+    assert_eq!(
+        run("on PLAYER_LOGIN() { for (let n: number? = 0; n != null && n < 2; n++) {} print(2); }"),
+        ["2"]
+    );
+}
+#[test]
+fn plain_updates_are_readable() {
+    let lua = compile("let i = 0; i++; i += 1;");
+    assert_eq!(lua.matches("i = i + 1").count(), 2, "{lua}");
+}
+#[test]
+fn fractional_and_negative_steps() {
+    assert_eq!(
+        run(
+            "on PLAYER_LOGIN() { for (let i = 0; i < 1; i += 0.5) { print(i); } for (let j = 2; j >= 0; j += -1) { print(j); } }"
+        ),
+        ["0", "0.5", "2", "1", "0"]
+    );
+}
+#[test]
+fn null_then_ternary() {
+    assert_eq!(
+        run("on PLAYER_LOGIN() { print(true ? null : 1); print(false ? null : 1); }"),
+        ["nil", "1"]
+    );
+}
+#[test]
+fn update_narrowing_invalidated_by_body() {
+    assert!(
+        codes("for (let n: number? = 0; n != null && n < 2; n++) { n = null; }")
+            .contains(&"SELU0341".into())
+    );
+    assert!(
+        codes("for (let n: number? = 0; n != null && n < 2; n++) { continue; }")
+            .contains(&"SELU0341".into())
+    );
+}
