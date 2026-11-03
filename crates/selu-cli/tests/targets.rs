@@ -75,7 +75,11 @@ fn both_layouts_fold_or_register_only_available_events() {
                 m,
             )
             .lua;
-            assert_eq!(lua.contains("C_EventUtils.IsEventValid"), shared, "{lua}");
+            assert_eq!(
+                lua.contains("local __selu_event_pcall = pcall"),
+                shared,
+                "{lua}"
+            );
             if !shared {
                 assert!(
                     !lua.contains("if false") && !lua.contains("if true"),
@@ -85,7 +89,7 @@ fn both_layouts_fold_or_register_only_available_events() {
             }
             let sim = selu_sim::Sim::new().unwrap();
             sim.eval(&format!(
-                "C_EventUtils = {{ IsEventValid = function() return {} end }}; {}",
+                "local create=CreateFrame; CreateFrame=function(...) local f=create(...); local register=f.RegisterEvent; f.RegisterEvent=function(self,event) if event=='UNIT_HEALTH' and not {} then error('unknown event') end; return register(self,event) end; return f end; C_EventUtils=nil; {}",
                 i == 0,
                 if i == 1 {
                     "GetTime = nil; setmetatable(_G, nil)"
@@ -252,4 +256,231 @@ fn namespace_guard_does_not_imply_every_member_exists() {
     let (c, _) = selu_check::check_module_targets(&p, &ts[0], Default::default(), &ts);
     assert_eq!(c.diagnostics.len(), 1);
     assert_eq!(c.diagnostics[0].code, "SELU0500");
+}
+fn real_targets() -> Vec<selu_manifest::Manifest> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+    selu_manifest::load_manifest_dir(&root)
+        .unwrap()
+        .into_iter()
+        .filter(|m| !m.fixture && ["retail", "forever"].contains(&m.flavour.as_str()))
+        .collect()
+}
+fn review_check(src: &str) -> selu_check::Checked {
+    let ts = real_targets();
+    let p = selu_syntax::parse("review.selu", src).unwrap();
+    selu_check::check_module_targets(&p, &ts[0], Default::default(), &ts).0
+}
+#[test]
+fn review_function_reference() {
+    let c = review_check("const f = C_PaperDollInfo.CanCursorCanGoInSlot; f(1);");
+    assert_eq!(c.diagnostics.len(), 1, "{:?}", c.diagnostics);
+    assert_eq!(c.diagnostics[0].code, "SELU0500");
+}
+#[test]
+fn review_namespace_alias() {
+    let c = review_check("const ns = C_PaperDollInfo; ns.CanCursorCanGoInSlot(1);");
+    assert_eq!(c.diagnostics.len(), 1, "{:?}", c.diagnostics);
+    assert_eq!(c.diagnostics[0].code, "SELU0502");
+    for src in [
+        "print(C_PaperDollInfo);",
+        "function f() { return C_PaperDollInfo; }",
+        "export const ns = C_PaperDollInfo;",
+    ] {
+        assert_eq!(review_check(src).diagnostics[0].code, "SELU0502");
+    }
+    assert!(
+        review_check("if (has(C_PaperDollInfo)) { print(\"yes\"); }")
+            .diagnostics
+            .is_empty()
+    );
+}
+#[test]
+fn review_enum_availability() {
+    let c = review_check("print(Enum.RecentAlliesFriendTag.Professions);");
+    assert_eq!(c.diagnostics.len(), 1, "{:?}", c.diagnostics);
+    assert_eq!(c.diagnostics[0].code, "SELU0500");
+    assert!(review_check("if (has(Enum.RecentAlliesFriendTag)) { print(Enum.RecentAlliesFriendTag.Professions); }").diagnostics.is_empty());
+    assert!(
+        review_check("print(Enum.InventoryType.IndexHeadType);")
+            .diagnostics
+            .is_empty()
+    );
+}
+#[test]
+fn review_unavailable_fallback() {
+    let mut ts = targets();
+    let mut f = ts[0]
+        .functions
+        .iter()
+        .find(|f| f.name == "GetTime")
+        .unwrap()
+        .clone();
+    f.available = false;
+    ts[1].functions.push(f);
+    let effective = selu_check::targets::with_fallbacks(&ts[1], &ts);
+    assert!(effective.function("GetTime").is_some());
+    assert!(!selu_check::targets::exists(&ts[1], "GetTime"));
+    let p = selu_syntax::parse("t.selu", "if (has(GetTime)) { GetTime(); }").unwrap();
+    assert!(
+        selu_check::check_module_targets(&p, &ts[1], Default::default(), &ts)
+            .0
+            .diagnostics
+            .is_empty()
+    );
+}
+fn review_lua(src: &str) -> String {
+    let ts = targets();
+    let p = selu_syntax::parse("t.selu", src).unwrap();
+    let c = selu_check::check_module_targets(&p, &ts[1], Default::default(), &ts).0;
+    assert!(c.diagnostics.is_empty(), "{:?}", c.diagnostics);
+    selu_lower::lower(&p, &ts[1], &c.types).lua
+}
+#[test]
+fn review_compound_folding() {
+    assert_eq!(
+        review_lua(
+            "function side(): boolean { print(\"side\"); return true; } if (has(GetTime) && side()) { print(\"yes\"); } else { print(\"no\"); }"
+        ),
+        "local function side()\n  print(\"side\")\n  return true\nend\ndo\n  print(\"no\")\nend\n"
+    );
+}
+#[test]
+fn review_else_if_folding() {
+    assert_eq!(
+        review_lua(
+            "const flag = true; if (flag) { print(\"first\"); } else if (has(GetTime)) { print(\"dead\"); } else { print(\"last\"); }"
+        ),
+        "local flag = true\nif flag then\n  print(\"first\")\nelse\n  print(\"last\")\nend\n"
+    );
+}
+#[test]
+fn review_event_no_eventutils() {
+    let ts = targets();
+    let p = selu_syntax::parse(
+        "t.selu",
+        "if (has(UNIT_HEALTH)) { on UNIT_HEALTH() { print(\"health\"); } }",
+    )
+    .unwrap();
+    let c = selu_check::check_module_targets(&p, &ts[0], Default::default(), &ts).0;
+    let lua =
+        selu_lower::lower_module_layout(&p, &ts[0], &c.types, Default::default(), true, &ts[0]).lua;
+    assert!(!lua.contains("C_EventUtils"), "{lua}");
+    assert!(lua.contains("pcall"), "{lua}");
+    for available in [true, false] {
+        let sim = selu_sim::Sim::new().unwrap();
+        sim.eval(&format!("local create = CreateFrame; CreateFrame = function(...) local f = create(...); local register=f.RegisterEvent; f.RegisterEvent=function(self,event) if event == 'UNIT_HEALTH' and not {} then error('unknown event') end; return register(self,event) end; return f end; C_EventUtils=nil; setmetatable(_G,nil)",available)).unwrap();
+        sim.load_addon("Test", &[("t.lua".into(), lua.clone())])
+            .unwrap();
+        sim.fire("UNIT_HEALTH", vec![]).unwrap();
+        assert_eq!(
+            sim.prints(),
+            if available { vec!["health"] } else { vec![] }
+        );
+    }
+}
+fn review_cli(
+    name: &str,
+    config: &str,
+    files: &[(&str, &str)],
+    manifests: Option<&std::path::Path>,
+) -> (bool, String) {
+    use std::{
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
+    let dir = std::env::temp_dir().join(format!("selu-review-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("selu.toml"), config).unwrap();
+    for (file, src) in files {
+        std::fs::write(dir.join("src").join(file), src).unwrap();
+    }
+    let log = std::fs::File::create(dir.join("run.log")).unwrap();
+    let default = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+    let mut p = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("build")
+        .arg(&dir)
+        .arg("--manifest-dir")
+        .arg(manifests.unwrap_or(&default))
+        .stdout(Stdio::from(log.try_clone().unwrap()))
+        .stderr(Stdio::from(log))
+        .spawn()
+        .unwrap();
+    let pid = p.id();
+    eprintln!("review CLI PID {pid}");
+    let start = Instant::now();
+    let status = loop {
+        if let Some(s) = p.try_wait().unwrap() {
+            break s;
+        }
+        if start.elapsed() > Duration::from_secs(60) {
+            p.kill().unwrap();
+            p.wait().unwrap();
+            panic!("PID {pid} timed out");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    (
+        status.success(),
+        std::fs::read_to_string(dir.join("run.log")).unwrap(),
+    )
+}
+#[test]
+fn review_exported_reference() {
+    let (ok, log) = review_cli(
+        "reference",
+        "[addon]\nname='Test'\ntargets=['retail','forever']\n",
+        &[
+            (
+                "api.selu",
+                "export const f = C_PaperDollInfo.CanCursorCanGoInSlot;",
+            ),
+            ("main.selu", "import { f } from \"./api\"; f(1);"),
+        ],
+        None,
+    );
+    assert!(!ok, "{log}");
+    assert!(log.contains("SELU0500"), "{log}");
+}
+#[test]
+fn review_mixed_dialects() {
+    let dir = std::env::temp_dir().join(format!("selu-review-dialects-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut ts = targets();
+    ts[1].lua_dialects = vec!["lua52".into()];
+    for m in ts {
+        std::fs::write(
+            dir.join(format!("{}.json", m.flavour)),
+            serde_json::to_string(&m).unwrap(),
+        )
+        .unwrap();
+    }
+    let (ok, log) = review_cli(
+        "dialects",
+        "[addon]\nname='Test'\ntargets=['forever','other']\n[build]\nlayout='shared'\n",
+        &[("main.selu", "print(\"hello\");")],
+        Some(&dir),
+    );
+    assert!(!ok, "{log}");
+    assert!(log.contains("same Lua dialect"), "{log}");
+}
+#[test]
+fn review_effects_before_capability() {
+    let src = "function side(): boolean { print(\"side\"); return true; } if (side() && has(GetTime)) { print(\"yes\"); } else { print(\"no\"); }";
+    let lua = review_lua(src);
+    assert_eq!(
+        lua,
+        "local function side()\n  print(\"side\")\n  return true\nend\nside()\ndo\n  print(\"no\")\nend\n"
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    assert_eq!(sim.prints(), ["side", "no"]);
+}
+#[test]
+fn review_partial_compound_folding() {
+    assert_eq!(
+        review_lua(
+            "function side(): boolean { return true; } if (!has(GetTime) && side()) { print(\"yes\"); }"
+        ),
+        "local function side()\n  return true\nend\nif side() then print(\"yes\") end\n"
+    );
 }

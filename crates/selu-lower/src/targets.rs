@@ -15,7 +15,7 @@ impl Lowerer<'_> {
     pub(crate) fn target_prelude(&self, program: &selu_syntax::Program, out: &mut LBlock) {
         fn expr(l: &Lowerer<'_>, e: &Expr) -> bool {
             if let ExprKind::Call { callee, args } = &e.kind
-                && matches!(l.has_call(callee,args), Some(LExpr::Call(ref f,_)) if **f == name("__selu_is_event_valid"))
+                && matches!(l.has_call(callee,args), Some(LExpr::Call(ref f,_)) if **f == name("__selu_has_event"))
             {
                 return true;
             }
@@ -35,16 +35,59 @@ impl Lowerer<'_> {
             }
         }
         if self.target.shared && program.stmts.iter().any(|s| stmt(self, s)) {
-            out.push(LStmt {
-                kind: LStmtKind::Local(
-                    vec!["__selu_is_event_valid".into()],
-                    vec![LExpr::Field(
-                        Box::new(name("C_EventUtils")),
-                        "IsEventValid".into(),
-                    )],
-                ),
+            let local = |n: &str, v| LStmt {
+                kind: LStmtKind::Local(vec![n.into()], vec![v]),
                 span: None,
-            });
+            };
+            out.push(local(
+                "__selu_event_probe",
+                lua::call(name("CreateFrame"), vec![LExpr::Str("Frame".into())]),
+            ));
+            out.push(local("__selu_event_pcall", name("pcall")));
+            let frame = name("__selu_event_probe");
+            let event = name("event");
+            let body = vec![
+                local(
+                    "ok",
+                    lua::call(
+                        name("__selu_event_pcall"),
+                        vec![
+                            LExpr::Field(Box::new(frame.clone()), "RegisterEvent".into()),
+                            frame.clone(),
+                            event.clone(),
+                        ],
+                    ),
+                ),
+                LStmt {
+                    kind: LStmtKind::If(
+                        vec![(
+                            name("ok"),
+                            vec![LStmt {
+                                kind: LStmtKind::Call(LExpr::Method(
+                                    Box::new(frame),
+                                    "UnregisterEvent".into(),
+                                    vec![event],
+                                )),
+                                span: None,
+                            }],
+                        )],
+                        None,
+                    ),
+                    span: None,
+                },
+                LStmt {
+                    kind: LStmtKind::Return(vec![name("ok")]),
+                    span: None,
+                },
+            ];
+            out.push(local(
+                "__selu_has_event",
+                LExpr::Function(lua::LFunction {
+                    params: vec!["event".into()],
+                    vararg: false,
+                    body,
+                }),
+            ));
         }
     }
 
@@ -63,10 +106,7 @@ impl Lowerer<'_> {
             )));
         }
         if self.target.universe.event(&n).is_some() {
-            return Some(lua::call(
-                name("__selu_is_event_valid"),
-                vec![LExpr::Str(n)],
-            ));
+            return Some(lua::call(name("__selu_has_event"), vec![LExpr::Str(n)]));
         }
         let mut parts = n.split('.');
         let mut value = name(parts.next()?);
@@ -77,13 +117,23 @@ impl Lowerer<'_> {
         }
         Some(test)
     }
-    fn folded_has(&self, e: &Expr) -> Option<bool> {
+    pub(crate) fn folded_has(&self, e: &Expr) -> Option<bool> {
         match &e.kind {
             ExprKind::Call { callee, args } => match self.has_call(callee, args)? {
                 LExpr::Bool(b) => Some(b),
                 _ => None,
             },
             ExprKind::Unary { op, expr } if op == "!" => self.folded_has(expr).map(|b| !b),
+            ExprKind::Binary { op, left, right } if op == "&&" || op == "||" => {
+                let l = self.folded_has(left);
+                let r = self.folded_has(right);
+                match (op.as_str(), l, r) {
+                    ("&&", Some(false), _) | ("&&", _, Some(false)) => Some(false),
+                    ("||", Some(true), _) | ("||", _, Some(true)) => Some(true),
+                    ("&&", Some(true), r) | ("||", Some(false), r) => r,
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -98,6 +148,23 @@ impl Lowerer<'_> {
         let Some(b) = self.folded_has(cond) else {
             return false;
         };
+        let mut pre = Vec::new();
+        let value = self.expr(cond, &mut pre);
+        let value = simplify(value);
+        out.extend(pre);
+        if !matches!(value, LExpr::Bool(_)) {
+            match value {
+                LExpr::Binary(_, left, right)
+                    if matches!(*right, LExpr::Bool(_))
+                        && matches!(*left, LExpr::Call(..) | LExpr::Method(..)) =>
+                {
+                    out.push(LStmt::new(LStmtKind::Call(*left), span))
+                }
+                v => {
+                    self.hold(v, span, out);
+                }
+            }
+        }
         let body = self.block(if b { yes } else { no.unwrap_or_default() });
         if !body.is_empty() {
             out.push(LStmt::new(LStmtKind::Do(body), span));
@@ -147,4 +214,22 @@ fn expr_event(e: &Expr) -> bool {
         selu_syntax::visit::Child::Expr(e) => found |= expr_event(e),
     });
     found
+}
+
+pub(crate) fn simplify(e: LExpr) -> LExpr {
+    match e {
+        LExpr::Binary(op, a, b) if matches!(op, BinOp::And | BinOp::Or) => {
+            let a = simplify(*a);
+            match (&a, op) {
+                (LExpr::Bool(false), BinOp::And) | (LExpr::Bool(true), BinOp::Or) => a,
+                (LExpr::Bool(true), BinOp::And) | (LExpr::Bool(false), BinOp::Or) => simplify(*b),
+                _ => bin(op, a, simplify(*b)),
+            }
+        }
+        LExpr::Unary(lua::UnOp::Not, a) => match simplify(*a) {
+            LExpr::Bool(b) => LExpr::Bool(!b),
+            v => LExpr::Unary(lua::UnOp::Not, Box::new(v)),
+        },
+        v => v,
+    }
 }

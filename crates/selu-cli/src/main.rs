@@ -217,6 +217,20 @@ fn build(
                 .map_err(|d| fail(&d, ""))
         })
         .collect::<Result<_, _>>()?;
+    if shared
+        && selected.iter().any(|m| {
+            m.lua_dialects
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                != selected[0]
+                    .lua_dialects
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+        })
+    {
+        eprintln!("SELU0503: shared layout requires the same Lua dialect on every target");
+        return Err(ExitCode::FAILURE);
+    }
     let multi = target_strings.len() > 1;
 
     let mut saved_shapes = std::collections::BTreeMap::new();

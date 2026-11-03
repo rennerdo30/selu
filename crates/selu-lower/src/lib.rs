@@ -434,7 +434,7 @@ impl Lowerer<'_> {
             return;
         }
         let mut pre = Vec::new();
-        let c = self.expr(cond, &mut pre);
+        let c = targets::simplify(self.expr(cond, &mut pre));
         let mut arms = vec![(c, self.block(then_branch))];
         let mut otherwise = None;
         let mut rest = else_branch;
@@ -449,7 +449,21 @@ impl Lowerer<'_> {
                 } = &only.kind
             {
                 let mut cond_pre = Vec::new();
-                let c = self.expr(cond, &mut cond_pre);
+                let c = targets::simplify(self.expr(cond, &mut cond_pre));
+                if let LExpr::Bool(b) = c
+                    && cond_pre.is_empty()
+                {
+                    if b {
+                        otherwise = Some(self.block(then_branch));
+                        break;
+                    }
+                    rest = else_branch.as_deref();
+                    continue;
+                }
+                if self.folded_has(cond).is_some() {
+                    otherwise = Some(self.block(stmts));
+                    break;
+                }
                 if cond_pre.is_empty() {
                     arms.push((c, self.block(then_branch)));
                     rest = else_branch.as_deref();

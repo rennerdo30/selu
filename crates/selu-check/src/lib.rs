@@ -974,7 +974,9 @@ impl Ctx<'_> {
                 Type::Void
             }
             ExprKind::Member { object, name } => {
-                let t = self.value(object);
+                let t = self
+                    .target_receiver(object)
+                    .unwrap_or_else(|| self.value(object));
                 self.member(&t, name, e)
             }
             ExprKind::Conditional { .. }
