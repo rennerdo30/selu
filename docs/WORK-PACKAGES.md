@@ -477,6 +477,149 @@ members list for the new crate. Nothing in `selu-check`, `selu-lower` or
 D2 and M1 in any order. Wiring the typed manifests into the checker (game
 API values stop being untyped) is the next round, after D3 has merged.
 
+## Round 4: typed game API, `has(...)` and targets, readability
+
+Round 4 runs T1, T2 and R side by side (owner, 2026-11-04). "How every
+package works" applies unchanged, including the example rule. All earlier
+packages are merged; the code each round-4 package builds on is in place.
+
+| Package | Owned files | Tests | Decisions | Codes |
+|---|---|---|---|---|
+| T1 typed game API | `selu-check/src/api.rs` (new), `examples/frames/` | `selu-cli/tests/api.rs` | `docs/lang/api.md` | `SELU0480`-`0499` |
+| T2 `has(...)` and targets | `selu-check/src/targets.rs`, `selu-lower/src/targets.rs` (new), `examples/multi-target/` | `selu-cli/tests/targets.rs` | `docs/lang/targets.md` | `SELU0500`-`0519` |
+| R readability | the lowering files `selu-lower/src/*.rs` for the items below | `selu-cli/tests/readability.rs`, `examples/*/expected.lua` | `docs/lang/output.md` | none |
+
+### Decision: multiple results (owner, 2026-11-04; second opinion from Sol)
+
+Game API functions return Lua *multiple results*, not tuples.
+`const name = UnitName("player");` takes the first result, typed as the
+first return; `const [name, realm] = UnitName("player");` takes all of
+them. Selu's own tuple functions (`function f(): [A, B]`) keep the stricter
+rule from `docs/lang/functions.md` (SELU0377). The difference is part of the
+function type ("multiple results" versus "tuple"), never a special case for
+Blizzard names, so it survives aliases, imports and callbacks. A call never
+expands implicitly: in the last position of an argument list or array
+literal it still contributes exactly one value (the lowering writes
+`print((UnitName("player")))`); passing all results needs destructuring.
+`MayReturnNothing` makes every result optional; zero results and a nil
+result both read as `null`. SPEC-V1 2.4's wording ("tuples") is updated
+accordingly by T1.
+
+### T1: typed game API
+
+Acceptance:
+
+1. Calls to manifest functions with a signature are checked: argument count
+   (from nilable and defaulted arguments) and types, with SELU errors naming
+   the parameter and the target. Their results are typed per the decision
+   above (`Nilable` returns are `T?`). Functions with evidence `source`
+   (names only) stay untyped.
+2. Type mapping from `docs/manifests.md`: `cstring`/`string` to `string`,
+   `bool` to `boolean`, numeric aliases to `number`, structures to object
+   types, callbacks to function types, enums: `Enum.X.Y` is a `number`
+   constant, and parameters typed as an enum accept numbers. `luaIndex` is
+   a `number` whose documentation says it is 1-based (record in `api.md`;
+   no conversion).
+3. Widgets: `CreateFrame("Button", ...)` returns the widget type for the
+   literal frame type (an unknown literal is an error with "did you mean";
+   a non-literal type gives `Frame`), with all inherited methods.
+   `CreateTexture`, `CreateFontString` and other documented factory methods
+   return their widget types. Method calls on widgets are checked (unknown
+   method with "did you mean", arity, argument types) and keep the `:` call.
+   Game globals with a documented widget type (`UIParent`, `GameTooltip`)
+   use it.
+4. Event handlers: parameters get the payload types; more parameters than
+   the payload is an error.
+5. One diagnostic per mistake: `C_Foo.Bar()` on a missing namespace gives
+   only SELU0301, not also SELU0310.
+6. Tests run against the real `retail` and `forever` manifests (calls,
+   methods, events, an enum, a structure, multiple results in every position
+   from the decision) and keep the fixture tests working.
+7. Example `examples/frames/`: a small addon building a frame with a texture
+   and a font string, setting points and text, hooking `OnShow`, printing
+   at `PLAYER_LOGIN`.
+
+Shared edits allowed: one dispatch each from `Ctx::call`, `Ctx::member` and
+`Ctx::read` (for globals) into `api.rs`; the `OnHandler` parameter typing in
+`selu-check/src/lib.rs`; a widget type variant and a "multiple results" flag
+on function types in `selu-check/src/types.rs`; the lowering's call path
+for the single-value parentheses; read-only accessors in
+`crates/selu-manifest`; SPEC-V1 2.4's wording.
+
+### T2: `has(...)` and several targets
+
+DESIGN.md section 3 ("Different rules per version"), SPEC-V1 section 6.
+Acceptance:
+
+1. **Strictest target:** with several targets in `selu.toml`, every call is
+   checked against every target; an error names the targets that lack the
+   API.
+2. **`has(X)`** for a manifest function, namespace, global or event is a
+   `boolean`. Inside `if (has(X)) { ... }` (and the `else` of
+   `if (!has(X))`, and after `if (!has(X)) return;`) uses of `X` are allowed
+   even where some targets lack it; outside they are errors with the fix
+   "guard it with `has(...)`".
+3. **Per-target builds** (the default, one folder per target as today):
+   `has(X)` is folded at compile time and the dead branch is removed.
+4. **Shared build:** `[build] layout = "shared"` in `selu.toml` makes one
+   addon folder for all targets: one `.toc` whose `## Interface:` lists every
+   target's interface number comma-separated (as the owner's addon does),
+   and `has(X)` becomes a runtime check (`C_Foo ~= nil and C_Foo.Bar ~= nil`,
+   or the event's availability). Document it in `targets.md`; unknown keys in
+   `[build]` are errors.
+5. Example `examples/multi-target/` with a `has(...)` branch, built for
+   `retail` and `forever`; its `expected.txt` holds the simulator output for
+   one of them (say which in the README).
+
+Shared edits allowed: `has` as a built-in through the existing
+`builtin_call` dispatch (one line in `wow.rs` on both sides, logic in
+`targets.rs`); narrowing hooks for `has` in the checker's condition
+handling (one dispatch line); checking against several manifests in the
+checker's entry points; `crates/selu-cli/src/main.rs` and `generate_toc` for
+the build layout.
+
+### R: readability
+
+Rule three. Every item gets a test on the exact generated Lua (full-string
+comparisons for small programs). The behaviour and every `expected.txt`
+stay unchanged.
+
+1. **Reference Lua for every example:** `examples/<name>/expected.lua` holds
+   the generated Lua (one file per module, named like the output), and
+   `crates/selu-cli/tests/examples.rs` compares it. A regeneration switch
+   for tests (an environment variable) writes them anew; document it.
+2. Long table literals break over several lines (one field per line when the
+   one-line form passes 100 columns).
+3. `filter`/`map`/`forEach`/`some`/`every`/`find`/`reduce` with an inline
+   arrow inline the arrow's body into the loop, with no copies of receiver
+   and callback into extra temporaries.
+4. `m.set(k, (m.get(k) ?? 0) + n)` and similar map updates: at most one
+   temporary.
+5. `x += a.b * c` and `t.f += v` on stable receivers: no `do` block or
+   temporaries (`x = x + a.b * c`).
+6. No needless brackets: `return (f()), x` where Lua already truncates.
+7. `log`/`L` text without placeholders is a plain string (no
+   `string.format`); no `tostring` around values already typed `string`.
+8. Named reserved keys in the addon table instead of `[true]`/`[false]`:
+   `__selu_events`, `__selu_wow` (module names starting with `__selu` are
+   already rejected).
+9. One file prelude: the runtime captures of saved data (`__selu_saved_*`)
+   and classes (`__selu_setmetatable`) come from one mechanism that emits
+   each capture once per file, right after the loader line.
+10. The event-frame prologue: shorter and only once per addon (D1 shares it;
+    check the per-file guard reads clearly).
+
+Shared edits allowed: any lowering file (`crates/selu-lower/src/*.rs`) for
+these items, the examples harness, and `docs/lang/output.md`. Nothing in
+`selu-check` or `selu-syntax`. Packages T1 and T2 run in parallel: T1
+touches the call path for single-value parentheses, and T2 the `has`
+lowering in `targets.rs`. Stay out of those.
+
+### Merge order (round 4)
+
+R first if it finishes first (it only touches output), then T1, then T2 (T2
+builds on T1's typed manifests for the strictest-target errors).
+
 ## Merge order and reviews (round 1)
 
 A merges first (B's `for...of` uses its `continue` helper), then B and C in
