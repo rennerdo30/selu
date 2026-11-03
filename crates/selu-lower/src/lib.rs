@@ -440,7 +440,7 @@ impl Lowerer<'_> {
                     // Only a plain name is read again at store time; Lua
                     // evaluates a longer object (`a.b`) before the value.
                     let reread = matches!(&obj, LExpr::Name(n) if !n.starts_with("__selu_t"));
-                    if reread && may_run_code(&v) && !self.is_stable(&obj, object) {
+                    if reread && self.may_run_code(value) && !self.is_stable(&obj, object) {
                         obj = name(&self.hold(obj, &object.span, &mut pre));
                     }
                     let t = LExpr::Field(Box::new(obj), field.clone());
@@ -751,22 +751,6 @@ impl Lowerer<'_> {
                 lua::call(f, vals)
             }
         }
-    }
-}
-
-/// Only literals remain unchanged across another operand's pre-statements.
-/// Whether evaluating `e` may call a function (and so change variables).
-fn may_run_code(e: &LExpr) -> bool {
-    match e {
-        LExpr::Call(..) | LExpr::Method(..) => true,
-        LExpr::Field(o, _) | LExpr::Unary(_, o) | LExpr::Paren(o) => may_run_code(o),
-        LExpr::Index(a, b) | LExpr::Binary(_, a, b) => may_run_code(a) || may_run_code(b),
-        LExpr::Table(fields) => fields.iter().any(|f| match f {
-            lua::LField::Pos(v) | lua::LField::Named(_, v) => may_run_code(v),
-            lua::LField::Keyed(k, v) => may_run_code(k) || may_run_code(v),
-        }),
-        // Creating a closure runs nothing.
-        _ => false,
     }
 }
 

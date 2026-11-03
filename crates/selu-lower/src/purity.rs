@@ -106,6 +106,48 @@ impl Origins {
     }
 }
 impl Lowerer<'_> {
+    /// One source-level effect decision for field stores, compound updates and
+    /// map updates. Lowered names can hide a property's origin, so consult the
+    /// original expression rather than reclassifying the printed Lua tree.
+    pub(crate) fn may_run_code(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Ident(_)
+            | ExprKind::This
+            | ExprKind::Number(_)
+            | ExprKind::Str(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Null
+            | ExprKind::Function { .. } => false,
+            ExprKind::Member { object, .. } | ExprKind::OptionalMember { object, .. } => {
+                !self.plain_table(object) || self.may_run_code(object)
+            }
+            ExprKind::Index { object, index } => {
+                !self.plain_table(object) || self.may_run_code(object) || self.may_run_code(index)
+            }
+            ExprKind::Unary { expr, .. } => self.may_run_code(expr),
+            ExprKind::Binary { left, right, .. } => {
+                self.may_run_code(left) || self.may_run_code(right)
+            }
+            ExprKind::Conditional {
+                cond,
+                then,
+                otherwise,
+            } => self.may_run_code(cond) || self.may_run_code(then) || self.may_run_code(otherwise),
+            ExprKind::Array(items) => items.iter().any(|e| self.may_run_code(e)),
+            ExprKind::Object(fields) => fields.iter().any(|f| self.may_run_code(&f.value)),
+            ExprKind::Call { callee, args, .. }
+                if matches!(&callee.kind, ExprKind::Member { object, name }
+                    if name == "get" && self.plain_table(object)
+                    && !self.may_run_code(object)
+                    && matches!(self.types.get(object.id), Some(selu_check::Type::Map(..) | selu_check::Type::WeakMap(..)))) =>
+            {
+                args.iter().any(|e| self.may_run_code(e))
+            }
+            // Unknown calls, constructors and built-ins retain snapshots.
+            _ => true,
+        }
+    }
+
     pub(crate) fn plain_table(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::This => true,

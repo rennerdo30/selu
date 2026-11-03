@@ -192,7 +192,7 @@ impl Lowerer<'_> {
         if matches!(ty, Type::Map(..) | Type::WeakMap(..)) {
             if method == "get"
                 && self.plain_table(object)
-                && args.iter().all(|e| read_only(e, self))
+                && args.iter().all(|e| !self.may_run_code(e))
                 && self.types.is_stable(object.id)
             {
                 let obj = self.expr(object, pre);
@@ -202,7 +202,7 @@ impl Lowerer<'_> {
             if method == "set"
                 && self.plain_table(object)
                 && self.types.is_stable(object.id)
-                && args.iter().all(|e| read_only(e, self))
+                && args.iter().all(|e| !self.may_run_code(e))
             {
                 let obj = self.expr(object, pre);
                 let key = self.expr(&args[0], pre);
@@ -957,22 +957,5 @@ fn no_transfer(s: &LStmt) -> bool {
         | LStmtKind::NumFor { body: b, .. }
         | LStmtKind::GenFor { body: b, .. } => b.iter().all(no_transfer),
         _ => true,
-    }
-}
-fn read_only(e: &Expr, l: &Lowerer<'_>) -> bool {
-    match &e.kind {
-        ExprKind::This
-        | ExprKind::Ident(_)
-        | ExprKind::Number(_)
-        | ExprKind::Str(_)
-        | ExprKind::Bool(_)
-        | ExprKind::Null => true,
-        ExprKind::Member { object, .. } => l.plain_table(object) && read_only(object, l),
-        ExprKind::Binary { left, right, .. } => read_only(left, l) && read_only(right, l),
-        ExprKind::Call { callee, args, .. } => {
-            matches!(&callee.kind, ExprKind::Member { object, name } if name == "get" && matches!(l.types.get(object.id), Some(Type::Map(..) | Type::WeakMap(..))) && l.plain_table(object) && read_only(object, l))
-                && args.iter().all(|e| read_only(e, l))
-        }
-        _ => false,
     }
 }

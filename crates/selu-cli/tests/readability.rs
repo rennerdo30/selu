@@ -276,3 +276,36 @@ fn review_class_and_literal_origins() {
     assert!(lua.contains("x = x + obj.n"));
     reference_lua("review-origins", lua);
 }
+
+#[test]
+fn review_field_store_getter_receiver() {
+    let src = r#"let t = { x: 0 };
+const old = t;
+global mutate = () => { t = { x: 9 }; return 2; };
+const obj = UIParent;
+t.x = obj.n;
+print(old.x);"#;
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("UIParent = setmetatable({}, { __index = function() return mutate() end })")
+        .unwrap();
+    sim.load_files(&[("store.lua".into(), compile(src))])
+        .unwrap();
+    assert_eq!(sim.prints(), ["2"]);
+    reference("review-field-store", src);
+}
+#[test]
+fn review_index_store_getter_receiver() {
+    let src = r#"let t = { x: 0 };
+const old = t;
+global mutate = () => { t = { x: 9 }; return 2; };
+const obj: number[] = UIParent;
+t.x = obj[0];
+print(old.x);"#;
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("UIParent = setmetatable({}, { __index = function() return mutate() end })")
+        .unwrap();
+    sim.load_files(&[("store.lua".into(), compile(src))])
+        .unwrap();
+    assert_eq!(sim.prints(), ["2"]);
+    reference("review-index-store", src);
+}

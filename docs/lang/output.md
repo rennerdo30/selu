@@ -33,7 +33,12 @@ temporary. Every later property operand must have the same origin proof before
 receiver/key snapshots can be removed. Otherwise a getter could reassign the key
 between its evaluation and the Lua store. Compound assignments snapshot the old
 value before any possibly effectful right operand. Lua reads a local receiver
-again at store time; receiver captures cannot go merely because it is a name.
+again at store time; receiver captures cannot go merely because it is a name. One source-level
+`may_run_code` implementation in `purity.rs` controls ordinary field stores,
+compound assignments and map updates. Both property and indexed reads consult
+the receiver-origin proof; the lowered Lua tree is not used to infer origin.
+This keeps `t.x = obj.n` storing into the original table even if a getter in
+`obj.n` reassigns `t`.
 
 Inline callback bodies with a single-value terminal return, or no return for forEach, become
 loop statements. Parameter locals preserve shadowing, assignment and per-turn
