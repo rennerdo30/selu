@@ -1,0 +1,9 @@
+[package]
+name = "selu-check"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+selu-diagnostics = { path = "../selu-diagnostics" }
+selu-syntax = { path = "../selu-syntax" }
+selu-manifest = { path = "../selu-manifest" }
