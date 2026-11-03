@@ -156,7 +156,7 @@ impl Ctx<'_> {
             );
             return Type::Error;
         }
-        self.value(e)
+        self.value_expected(e, expected)
     }
 
     pub(crate) fn data_write(&mut self, target: &Expr, value: &Type) {
@@ -414,7 +414,7 @@ impl Ctx<'_> {
                         validate(&f.ty, out);
                     }
                 }
-                K::Function { params, ret } => {
+                K::Function { params, ret, .. } => {
                     for t in params {
                         validate(t, out);
                     }
@@ -440,8 +440,10 @@ impl Ctx<'_> {
                 .with_help("pass a function value"),
             );
         }
-        let ts: Vec<_> = args.iter().map(|a| self.value(a)).collect();
-        let acc = ts.get(1).cloned().unwrap_or_else(|| item.clone());
+        let acc = args
+            .get(1)
+            .map(|a| self.value(a))
+            .unwrap_or_else(|| item.clone());
         let input = if reduce {
             vec![
                 acc.clone(),
@@ -464,14 +466,33 @@ impl Ctx<'_> {
             "reduce" => Some(acc.clone()),
             _ => None,
         };
-        let ret = match ts.first() {
-            Some(Type::Function { params, ret }) => {
+        let expected = Type::Function {
+            params: input.clone(),
+            required: input.len(),
+            rest: None,
+            ret: Box::new(want_ret.clone().unwrap_or(Type::Void)),
+        };
+        let callback = args
+            .first()
+            .map(|a| self.value_expected(a, Some(&expected)));
+        for arg in args.iter().skip(2) {
+            self.value(arg);
+        }
+        let ret = match callback.as_ref() {
+            Some(Type::Function {
+                params,
+                ret,
+                required,
+                rest,
+            }) => {
                 // TypeScript permits callbacks to ignore trailing arguments.
-                let compatible = params.len() <= input.len()
-                    && input
-                        .iter()
-                        .zip(params)
-                        .all(|(given, accepts)| given.assignable_to(accepts))
+                let compatible = *required <= input.len()
+                    && input.iter().enumerate().all(|(i, given)| {
+                        params
+                            .get(i)
+                            .or(rest.as_deref())
+                            .is_none_or(|accepts| given.assignable_to(accepts))
+                    })
                     && want_ret.as_ref().is_none_or(|want| ret.assignable_to(want));
                 if !compatible {
                     self.out.push(

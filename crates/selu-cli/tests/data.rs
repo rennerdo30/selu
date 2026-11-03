@@ -154,7 +154,6 @@ fn weak_maps_optional_fields_and_errors() {
         ("const a = [1]; a.length = 0;", "SELU0355"),
         ("const a = [1]; a.push(false);", "SELU0355"),
         ("const a = [1]; a.push();", "SELU0356"),
-        ("const a = [1]; a.map(x => x);", "SELU0390"),
     ] {
         assert!(codes(src).contains(&code.into()), "{src}");
     }
@@ -395,5 +394,113 @@ fn for_of_closures_capture_each_turn() {
         values.sort(); print(values.join());
     "#),
         ["2", "4", "6", "a:1,b:2"]
+    );
+}
+
+#[test]
+fn callback_arrows_get_context() {
+    assert_eq!(
+        run(r#"
+        const xs = [1, 2, 3]; let sum = 0;
+        xs.forEach(x => { sum += x; }); print(sum);
+        const ys = xs.map(x => x * 2); print(ys.join());
+        const zs = xs.filter(x => x > 1); print(zs.join());
+        print(xs.find(x => x > 1), xs.some(x => x > 1), xs.every(x => x > 1));
+        print(xs.reduce((a, x) => a + x, 0));
+        xs.sort((a, b) => b - a); print(xs.join());
+        const scale = 3; const captured = xs.map(x => x * scale); print(captured.join());
+    "#),
+        ["6", "2,4,6", "2,3", "2\ttrue\tfalse", "6", "3,2,1", "9,6,3"]
+    );
+}
+
+#[test]
+fn contextual_initializer_and_array_destructuring() {
+    assert_eq!(
+        run(
+            "const xs: number[] = []; const f: (x: number) => number = x => x + x; xs.push(f(3)); print(xs[0]); const [a, , c] = [1, 2, 3]; print(a, c);"
+        ),
+        ["6", "1\t3"]
+    );
+}
+
+#[test]
+fn object_slice_is_an_ordinary_function_call() {
+    assert_eq!(
+        run(
+            "function f(x: string): string { return x; } const o = { slice: f }; print(o.slice(\"hi\"));"
+        ),
+        ["hi"]
+    );
+}
+
+macro_rules! arrow_context_test {
+    ($name:ident, $source:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            assert_eq!(run(concat!("const xs = [1, 2, 3]; ", $source)), $expected);
+        }
+    };
+}
+arrow_context_test!(
+    arrow_for_each_context,
+    "xs.forEach(x => { print(x + x); });",
+    ["2", "4", "6"]
+);
+arrow_context_test!(
+    arrow_map_context,
+    "const ys = xs.map(x => x + x); print(ys.join());",
+    ["2,4,6"]
+);
+arrow_context_test!(
+    arrow_filter_context,
+    "const ys = xs.filter(x => x + x > 2); print(ys.join());",
+    ["2,3"]
+);
+arrow_context_test!(arrow_find_context, "print(xs.find(x => x + x > 2));", ["2"]);
+arrow_context_test!(
+    arrow_some_context,
+    "print(xs.some(x => x + x > 2));",
+    ["true"]
+);
+arrow_context_test!(
+    arrow_every_context,
+    "print(xs.every(x => x + x > 2));",
+    ["false"]
+);
+arrow_context_test!(
+    arrow_reduce_context,
+    "print(xs.reduce((a, x) => a + x, 0));",
+    ["6"]
+);
+arrow_context_test!(
+    arrow_sort_context,
+    "xs.sort((a, b) => b + b - a - a); print(xs.join());",
+    ["3,2,1"]
+);
+
+#[test]
+fn callback_minimum_arity_and_rest() {
+    assert_eq!(
+        run(r#"
+        const xs = [3, 1, 2];
+        function optional(x: number, i: number = 0, a: number[] = [4], unused: number = 9): number { return x + i; }
+        const ys = xs.map(optional); print(ys.join());
+        function compare(a: number, ...bs: number[]): number { return a - bs[0]; }
+        xs.sort(compare); print(xs.join());
+    "#),
+        ["3,2,4", "1,2,3"]
+    );
+    assert_eq!(
+        codes(
+            "const xs = [1]; function wrong(a: number, ...bs: string[]): number { return a; } xs.sort(wrong);"
+        ),
+        ["SELU0355"]
+    );
+    assert_eq!(
+        codes(
+            "const xs = [1]; function wrong(a: number, b: number, c: number[], d: number): number { return a; } xs.map(wrong);"
+        ),
+        ["SELU0355"]
     );
 }

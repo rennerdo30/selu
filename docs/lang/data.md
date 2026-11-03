@@ -41,11 +41,11 @@ object fields and length; call delegates collection/string/Math operations.
 Lowerer lib.rs: stmt sends ForOf directly here; expr and target route field
 access through data_field; call has a separate early data-call return, ahead of
 package C's method-call branch. Untyped Blizzard receivers and manifest namespace
-calls keep their existing paths. No loops.rs file is modified.
-The stale unsupported-construct test drops exactly the array-literal and template
-fixtures with parent approval; destructuring and other fixtures remain.
+calls keep their existing paths. The checker loops.rs obsolete ForOf arm is removed;
+the lowerer loops.rs is unchanged. The obsolete unsupported-construct test has been
+removed: arrays, templates and destructuring are now all implemented.
 
-## Pending A and C
+## A and C integration
 
 Callback methods now accept existing function values. Callbacks may ignore trailing
 arguments: element, 0-based index, array; reduce prepends the accumulator. Predicate
@@ -54,11 +54,17 @@ predicate. reduce without an initial value starts with the first element and err
 at runtime on an empty array. map rejects nullable results; map/filter allocate new
 tables and comparator sort allocates one adapter closure per call.
 
-Package C still supplies arrow/function-expression lowering and contextual typing
-for arrows without written parameter types, plus ordinary object function calls.
-B's early library dispatch excludes Object receivers. On this base the exact source
+Package C is integrated after rebasing onto c02753d. data_initializer handles
+contextual array initialization then delegates to C's value_expected, preserving
+function initializer context in the same path. Each callback signature is passed
+to value_expected, so arrows get element/index/array types (and the accumulator
+for reduce). Minimum required arity controls omitted default parameters; every
+supplied argument is checked against fixed or rest parameter types. Callbacks may
+ignore trailing arguments. map uses a void contextual result to preserve return
+inference; predicates, reduce and comparators receive their required result type.
+B's early library dispatch excludes Object receivers. C's dot-call path now makes
 `function f(x: string): string { return x; } const o = { slice: f }; print(o.slice("hi"));`
-still uses the existing colon-call path; its runtime result `hi` is pending C.
+print hi. No A or C functionality remains pending in this package.
 Package A integration is complete after rebasing onto 47e3874: the checker pushes
 and pops A's LoopCtx, and lowering uses A's loop_body helper. Break, continue and
 both in one body work for arrays, maps and sets. Functions retain A's empty-loop
@@ -121,3 +127,24 @@ and cargo test all passed (114 tests). Rebase conflict resolution preserved A's
 loop stack fields and function take/restore pairs plus B's dispatch hooks. The two
 previously approved obsolete array/template unsupported fixtures were removed
 after the full suite exposed their retention during conflict resolution.
+
+## Final A and C rebase
+
+Base c02753d includes both packages. All rebased shared dispatch hooks preserve
+A's loop-stack initialization and function take/restore pairs. The lowerer keeps
+B's data-call early return ahead of C's Object dot-call branch, and preserves C's
+forward-aware destructure call. The checker call fallback uses the cached receiver
+type with C's function_member and the whole callee span. C's four-field object
+patterns are retained in shared code; data.rs has no Object-pattern match to change.
+Written function-type traversal now handles the rest-bearing syntax shape.
+
+Eight separate untyped-arrow tests failed before callback context was supplied.
+The written-function initializer failed before data_initializer delegated to
+value_expected. Deliberately disabling array support made the exact array-hole
+destructuring regression fail; disabling the Object dot-call branch made the
+exact o.slice test return a table rather than hi. Reverting minimum-arity handling
+to fixed-parameter length made the optional-parameter callback regression fail.
+Every deliberate break was restored. The obsolete pending-arrow SELU0390 fixture
+is replaced by runtime coverage. All 150 tests, cargo fmt --check and strict clippy
+passed. Only unknown/unsupported library method names still emit SELU0390 in B;
+all specified data constructs are implemented.
