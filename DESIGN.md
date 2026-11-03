@@ -120,24 +120,25 @@ or an interactive console:
 
 ```selu
 test("badge hides at full health", () => {
-  sim.unit("player", { health: 100, maxHealth: 100 })
-  sim.fire("UNIT_HEALTH", "player")
-  expect(badge.isShown()).toBe(false)
-})
+  sim.unit("player", { health: 100, maxHealth: 100 });
+  sim.fire("UNIT_HEALTH", "player");
+  expect(badge.isShown()).toBe(false);
+});
 
 test("unreadable health shows nothing", () => {
-  sim.secret("UnitHealth")          // the client hides the value
-  sim.fire("UNIT_HEALTH", "player")
-  expect(badge.isShown()).toBe(false)
-})
+  sim.secret("UnitHealth");          // the client hides the value
+  sim.fire("UNIT_HEALTH", "player");
+  expect(badge.isShown()).toBe(false);
+});
 
 test("bar moves after combat", () => {
-  sim.combat(true)
-  sim.fire("PLAYER_LEVEL_UP", 20)
-  expect(bar.point()).toBe(original)
-  sim.combat(false)
-  expect(bar.point()).toEqual(["TOP", UIParent, "TOP", 0, -40])
-})
+  const original = bar.point();
+  sim.combat(true);
+  sim.fire("PLAYER_LEVEL_UP", 20);
+  expect(bar.point()).toEqual(original);
+  sim.combat(false);
+  expect(bar.point()).toEqual(["TOP", UIParent, "TOP", 0, -40]);
+});
 ```
 
 - Time is simulated, so timers and tickers run instantly and the same way
@@ -182,6 +183,8 @@ TypeScript, you already know most of Selu.**
 - Types are inferred. You only write them on function parameters, and even
   there they are optional when the compiler can work them out (event handlers
   get theirs from the game).
+- Semicolons are required: every statement ends with `;`, like C#, Java and
+  Rust. A missing `;` is a compile error with a quick fix, never a guess.
 - One "no value": `T?`, handled with `??`, `?.` and `if`. No `null` plus
   `undefined`.
 - Arrays start at 0, like every language you know. The compiler handles Lua's
@@ -195,27 +198,27 @@ TypeScript, you already know most of Selu.**
 saved settings = {
   enabled: true,
   threshold: 0.35,
-}
+};
 
 function missingHealth(unit: Unit) {
-  const hp = UnitHealth(unit) ?? return     // may be unreadable: that's the ??
-  const max = UnitHealthMax(unit) ?? return
-  return max - hp
+  const hp = UnitHealth(unit) ?? return;     // may be unreadable: that's the ??
+  const max = UnitHealthMax(unit) ?? return;
+  return max - hp;
 }
 
 on UNIT_HEALTH(unit) {
-  if (!settings.enabled) return
+  if (!settings.enabled) return;
 
-  const missing = missingHealth(unit) ?? 0
+  const missing = missingHealth(unit) ?? 0;
   if (missing > 0) {
-    badge.setText(L`${missing} missing`)
+    badge.setText(L`${missing} missing`);
   } else {
-    badge.hide()
+    badge.hide();
   }
 }
 
 on PLAYER_LEVEL_UP(level) {
-  bar.setPoint("TOP", UIParent, "TOP", 0, -40)  // waits for combat to end if needed
+  bar.setPoint("TOP", UIParent, "TOP", 0, -40);  // waits for combat to end if needed
 }
 ```
 
