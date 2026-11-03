@@ -1,0 +1,18 @@
+const panel = CreateFrame("Frame");
+hookScript(panel, "OnShow", (self) => {
+  print(L`Status panel ready`);
+});
+hook("GetTime", () => {
+  log.info`Clock checked`;
+});
+function showStatus(args: string) {
+  log.info`Status requested: ${args}`;
+  print(L`${3} tasks ready`);
+}
+command("/status", "/st", showStatus);
+panel.Hide();
+on PLAYER_LOGIN() {
+  panel.Show();
+  showStatus("login");
+  print(`Clock: ${GetTime()}`);
+}

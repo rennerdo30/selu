@@ -15,6 +15,7 @@ copy into `World of Warcraft/_<flavour>_/Interface/AddOns`.
 | [`hello`](hello/src/main.selu) | the smallest addon: one event handler |
 | [`loot-summary`](loot-summary/src/main.selu) | arrays of objects, `Map`, `for...of`, template strings, `??`, `filter`/`map` with arrow functions, `Math` |
 | [`cooldowns`](cooldowns/src/main.selu) | functions returning several values and destructuring, `? :`, `continue`, `+=`/`++`, closures with their own state, `sort` with a compare function |
+| [`slash-and-hooks`](slash-and-hooks/src/main.selu) | slash command registration, shared status callback, additive hooks, logging and localised labels |
 
 Every example with an `expected.txt` is also a test: `cargo test` builds it
 with the real `selu` binary, loads it into the simulator in `.toc` order,
