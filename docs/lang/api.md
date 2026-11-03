@@ -3,7 +3,7 @@
 Manifest entries with signatures are checked; names-only entries remain untyped.
 Explicit overlay signatures are usable even when their provenance is source
 rather than generated documentation. Diagnostics SELU0480/0481 report arity and
-parameter type errors and name the target. SELU0482/0483 report unknown widget
+parameter type mismatches and name the target. SELU0482/0483 report unknown widget
 methods/types with spelling suggestions; SELU0484 reports excess event parameters
 and SELU0486 rejects an incompatible written payload annotation.
 Aliases and imported function values retain the multiple-results convention in
@@ -75,3 +75,31 @@ accepted, parameter context is untyped, and its arity/result are unrestricted.
 Non-functions are rejected; Nilable still permits null to clear SetScript.
 Follow-up outside T1: a data table keyed by script name could give OnShow `(self)`
 and OnEvent `(self, event, ...)` their own contextual signatures.
+
+## Incomplete client metadata: advisory API checking
+
+A false error blocks porting real addons; a missing check does not. API signatures
+and widget method groups omit templates, mixins, overloads and optional parameters.
+SELU0480/0481 therefore warn by default. `[build] strict_api = true` in selu.toml
+promotes these signature mismatches to errors. Selu functions, classes and typed
+values retain strict checking. Missing API availability and multiple-result
+contracts retain their existing rules.
+
+Widget values are open: addon fields can always be written, and unknown members
+are untyped. Only a member within edit distance 1 or 2 of an inherited known
+method warns (SELU0482). Unknown CreateFrame literals warn (SELU0483) and produce
+open Frame, including in strict mode. Number arguments satisfy API string
+parameters because the client converts them; return types and Selu string rules
+are unchanged.
+
+The generated manifests carry explicit sourced method overloads. Overlays add
+canonical frame names and complete region/texture/animation ancestry from the
+pinned client's method groups and UI call sites. SeluAliasOf records equivalent
+widget identities, including SimpleFrame/Frame. CreateFrame specialisation and
+overload signatures live in identity-neutral semantic function information,
+separate from diagnostic origin, and survive aliases/imports.
+
+Single-value parentheses are printed only where Lua could expand a final call:
+last arguments, final positional table fields and final return operands. Operators,
+keyed fields, earlier list operands and single-target stores already truncate.
+The simulator retains CreateFrame's parent and exposes it through GetParent.

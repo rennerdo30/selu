@@ -56,6 +56,7 @@ fn primitive(name: &str) -> Option<Type> {
             multiple_results: false,
             unspecified_callback: true,
             api: Default::default(),
+            api_semantics: Default::default(),
             params: Vec::new(),
             required: 0,
             rest: Some(Box::new(Type::Untyped)),
@@ -140,6 +141,14 @@ fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
     Type::Function {
         multiple_results: d.ty.as_deref() != Some("CallbackType"),
         unspecified_callback: false,
+        api_semantics: crate::types::ApiSemantics {
+            frame_factory: false,
+            overloads: d
+                .overloads
+                .iter()
+                .map(|o| signature(m, o, depth + 1))
+                .collect(),
+        },
         api: crate::types::ApiOrigin(Some(crate::types::ApiSignature {
             name: d
                 .namespace
@@ -177,6 +186,11 @@ fn signature_for(m: &Manifest, name: &str, d: &Declaration) -> Type {
     {
         origin.name = name.into();
     }
+    if name == "CreateFrame"
+        && let Type::Function { api_semantics, .. } = &mut ty
+    {
+        api_semantics.frame_factory = true;
+    }
     ty
 }
 fn widget_decl<'a>(m: &'a Manifest, name: &str) -> Option<&'a Declaration> {
@@ -186,6 +200,12 @@ fn widget_decl<'a>(m: &'a Manifest, name: &str) -> Option<&'a Declaration> {
         .or_else(|| m.widgets.iter().find(|w| w.name == format!("{name}API")))
 }
 fn widget(m: &Manifest, name: &str) -> Type {
+    if let Some(alias) = widget_decl(m, name)
+        .and_then(|w| w.attributes.get("SeluAliasOf"))
+        .and_then(|v| v.as_str())
+    {
+        return widget(m, alias);
+    }
     fn bases(m: &Manifest, name: &str, out: &mut Vec<String>) {
         if let Some(w) = widget_decl(m, name) {
             for b in &w.inherits {
@@ -267,23 +287,36 @@ impl Ctx<'_> {
         if let Some(d) = method(self.manifest, widget, name, &mut Vec::new()) {
             return Some(signature(self.manifest, d, 0));
         }
-        self.out.push(err(
-            "SELU0482",
-            format!(
-                "widget `{widget}` has no method `{name}` on {}; did you mean `{}`?",
-                self.target(),
-                closest(
-                    name,
-                    self.manifest
-                        .widgets
-                        .iter()
-                        .flat_map(|w| w.methods.iter().map(|m| m.name.as_str()))
+        let mut candidates = Vec::new();
+        fn collect(m: &Manifest, n: &str, out: &mut Vec<String>, seen: &mut Vec<String>) {
+            if seen.iter().any(|s| s == n) {
+                return;
+            }
+            seen.push(n.into());
+            if let Some(w) = widget_decl(m, n) {
+                out.extend(w.methods.iter().map(|m| m.name.clone()));
+                for b in &w.inherits {
+                    collect(m, b, out, seen);
+                }
+            }
+        }
+        collect(self.manifest, widget, &mut candidates, &mut Vec::new());
+        let suggestion = closest(name, candidates.iter().map(String::as_str));
+        if !candidates.is_empty() && (1..=2).contains(&edit_distance(name, &suggestion)) {
+            self.out.push(
+                selu_diagnostics::Diagnostic::warning(
+                    "SELU0482",
+                    format!(
+                        "unknown widget member `{name}` on {}; did you mean `{suggestion}`?",
+                        self.target()
+                    ),
                 )
-            ),
-            &object.span,
-        ));
-        Some(Type::Error)
+                .with_span(object.span.clone()),
+            );
+        }
+        Some(Type::Untyped)
     }
+
     pub(crate) fn api_call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Option<Type> {
         let full = callee.dotted_name()?;
         let root = full.split('.').next()?;
@@ -302,35 +335,49 @@ impl Ctx<'_> {
         let ty = signature_for(self.manifest, &full, &d);
         self.types.set(callee.id, ty.clone());
         let ts = self.function_arguments(args, &ty);
-        let Type::Function { ret, .. } = ty else {
+        self.api_check_call(e, args, &ts, &ty);
+        let Type::Function { ret, .. } = &ty else {
             unreachable!()
         };
-        let check_ty = signature_for(self.manifest, &full, &d);
-        self.api_check_call(e, args, &ts, &check_ty);
-        if full == "CreateFrame" {
-            let widget_name = match args.first().map(|e| &e.kind) {
-                Some(ExprKind::Str(s)) => s.as_str(),
-                _ => "Frame",
-            };
-            if !self.manifest.widgets.iter().any(|w| w.name == widget_name) {
-                self.out.push(err(
+        Some(self.api_result(e, args, &ty, (**ret).clone()))
+    }
+    pub(crate) fn api_result(&mut self, e: &Expr, args: &[Expr], ty: &Type, ret: Type) -> Type {
+        if !matches!(ty,Type::Function { api_semantics, .. } if api_semantics.frame_factory) {
+            return ret;
+        }
+        let name = match args.first().map(|e| &e.kind) {
+            Some(ExprKind::Str(s)) => s.as_str(),
+            _ => "Frame",
+        };
+        if widget_decl(self.manifest, name).is_none() {
+            self.out.push(
+                selu_diagnostics::Diagnostic::warning(
                     "SELU0483",
                     format!(
-                        "unknown widget `{widget_name}` on {}; did you mean `{}`?",
+                        "unknown frame type `{name}` on {}; using open Frame; did you mean `{}`?",
                         self.target(),
-                        closest(
-                            widget_name,
-                            self.manifest.widgets.iter().map(|w| w.name.as_str())
-                        )
+                        closest(name, self.manifest.widgets.iter().map(|w| w.name.as_str()))
                     ),
-                    &e.span,
-                ));
-                return Some(Type::Error);
-            }
-            return Some(Type::Tuple(vec![widget(self.manifest, widget_name)]));
+                )
+                .with_span(e.span.clone()),
+            );
+            return Type::Tuple(vec![widget(self.manifest, "Frame")]);
         }
-        Some(*ret)
+        Type::Tuple(vec![widget(self.manifest, name)])
     }
+    fn api_diagnostic(
+        &self,
+        code: &str,
+        message: String,
+        span: &selu_diagnostics::Span,
+    ) -> selu_diagnostics::Diagnostic {
+        if self.options.strict_api {
+            err(code, message, span)
+        } else {
+            selu_diagnostics::Diagnostic::warning(code, message).with_span(span.clone())
+        }
+    }
+
     pub(crate) fn api_check_call(
         &mut self,
         e: &Expr,
@@ -338,6 +385,39 @@ impl Ctx<'_> {
         ts: &[Type],
         ty: &Type,
     ) -> bool {
+        let candidates = std::iter::once(ty).chain(match ty {
+            Type::Function { api_semantics, .. } => api_semantics.overloads.iter(),
+            _ => [].iter(),
+        });
+        let score = |ty: &Type| {
+            if let Type::Function {
+                params,
+                required,
+                rest,
+                ..
+            } = ty
+            {
+                let arity = required.saturating_sub(args.len())
+                    + if rest.is_none() {
+                        args.len().saturating_sub(params.len())
+                    } else {
+                        0
+                    };
+                arity
+                    + ts.iter()
+                        .enumerate()
+                        .filter(|(i, t)| {
+                            params
+                                .get(*i)
+                                .or(rest.as_deref())
+                                .is_some_and(|p| !api_assignable(t, p))
+                        })
+                        .count()
+            } else {
+                usize::MAX
+            }
+        };
+        let ty = candidates.min_by_key(|t| score(t)).unwrap_or(ty);
         let Type::Function {
             params,
             required,
@@ -352,7 +432,7 @@ impl Ctx<'_> {
             return false;
         };
         if args.len() < *required || (rest.is_none() && args.len() > params.len()) {
-            self.out.push(err(
+            self.out.push(self.api_diagnostic(
                 "SELU0480",
                 format!(
                     "`{}` on {} takes {required}..{} arguments, got {}",
@@ -366,21 +446,27 @@ impl Ctx<'_> {
         }
         for (i, (t, arg)) in ts.iter().zip(args).enumerate() {
             if let Some(p) = params.get(i).or(rest.as_deref())
-                && !t.assignable_to(p)
+                && !api_assignable(t, p)
             {
                 let parameter = origin
                     .parameters
                     .get(i)
                     .map(String::as_str)
                     .unwrap_or("...");
-                self.out.push(err(
+                let diagnostic = self.api_diagnostic(
                     "SELU0481",
                     format!(
                         "parameter `{parameter}` of `{}` on {} expects {p}, got {t}",
                         origin.name, origin.target
                     ),
                     &arg.span,
-                ));
+                );
+                let diagnostic = if let Some(fix) = result_wrapper_fix(t, &p.non_null()) {
+                    diagnostic.with_fix(fix)
+                } else {
+                    diagnostic
+                };
+                self.out.push(diagnostic);
             }
         }
         true
@@ -389,7 +475,7 @@ impl Ctx<'_> {
         &mut self,
         entry: &selu_manifest::EventEntry,
         params: &[selu_syntax::Param],
-        span: &selu_diagnostics::Span,
+        _span: &selu_diagnostics::Span,
     ) -> Vec<Type> {
         let payload = entry
             .signature
@@ -416,8 +502,8 @@ impl Ctx<'_> {
                     self.target(),
                     payload.len(),
                     params.len()
-                ),
-                span,
+                ) + &format!("; unexpected parameter `{}`", params[payload.len()].name),
+                &params[payload.len()].span,
             ));
         }
         payload
@@ -429,6 +515,38 @@ pub(crate) fn mismatch_help(
     have: &Type,
     want: &Type,
 ) -> selu_diagnostics::Diagnostic {
+    if let Some(fix) = result_wrapper_fix(have, want) {
+        let mut diagnostic = selu_diagnostics::Diagnostic::error(
+            "SELU0485",
+            "A function with multiple results cannot be used as a single-result function.",
+        )
+        .with_fix(fix);
+        if let Some(span) = &d.span {
+            diagnostic = diagnostic.with_span(span.clone());
+        }
+        return diagnostic;
+    }
+    crate::classes::mismatch_help(d, have, want)
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let mut row: Vec<usize> = (0..=b.chars().count()).collect();
+    for (i, x) in a.chars().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.chars().enumerate() {
+            let old = row[j + 1];
+            row[j + 1] = (row[j] + 1).min(old + 1).min(prev + usize::from(x != y));
+            prev = old;
+        }
+    }
+    *row.last().unwrap()
+}
+fn api_assignable(have: &Type, want: &Type) -> bool {
+    have.assignable_to(want) || matches!((have, want.non_null()), (Type::Number, Type::String))
+}
+
+fn result_wrapper_fix(have: &Type, want: &Type) -> Option<String> {
     if matches!(
         (have, want),
         (
@@ -447,20 +565,12 @@ pub(crate) fn mismatch_help(
             Type::Function { api, .. } => api
                 .0
                 .as_ref()
-                .map(|origin| (origin.name.clone(), origin.parameters.join(", ")))
+                .map(|o| (o.name.clone(), o.parameters.join(", ")))
                 .unwrap_or_else(|| ("f".into(), "arg".into())),
             _ => unreachable!(),
         };
-        let mut diagnostic = selu_diagnostics::Diagnostic::error(
-            "SELU0485",
-            "A function with multiple results cannot be used as a single-result function.",
-        )
-        .with_fix(format!("wrap it: `({parameters}) => {name}({parameters})`"));
-        if let Some(span) = &d.span {
-            diagnostic = diagnostic.with_span(span.clone());
-        }
-        let d = diagnostic;
-        return d;
+        Some(format!("wrap it: `({parameters}) => {name}({parameters})`"))
+    } else {
+        None
     }
-    crate::classes::mismatch_help(d, have, want)
 }

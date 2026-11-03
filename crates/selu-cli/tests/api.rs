@@ -20,7 +20,7 @@ fn codes(src: &str, flavour: &str) -> Vec<String> {
 fn documented_argument_types() {
     for flavour in ["retail", "forever"] {
         assert_eq!(
-            codes("const f = CreateFrame(42);", flavour),
+            codes("const f = CreateFrame(true);", flavour),
             vec!["SELU0481"]
         );
     }
@@ -268,8 +268,8 @@ fn api_origin_is_diagnostic_only_and_survives_aliases() {
             let p = selu_syntax::parse("origin.selu", src).unwrap();
             selu_check::check(&p, m)
         };
-        let direct = diagnose("CreateFrame(42);");
-        let alias = diagnose("const create = CreateFrame; create(42);");
+        let direct = diagnose("CreateFrame(true);");
+        let alias = diagnose("const create = CreateFrame; create(true);");
         assert_eq!(
             direct
                 .iter()
@@ -418,3 +418,293 @@ undefined_api_type_case!(
     undefined_club_id_accepts_string,
     r#"const club = C_Club.GetClubInfo("12345");"#
 );
+
+fn review_manifest(flavour: &str) -> &'static selu_manifest::Manifest {
+    static ALL: std::sync::OnceLock<Vec<selu_manifest::Manifest>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        selu_manifest::load_manifest_dir(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
+        )
+        .unwrap()
+    })
+    .iter()
+    .find(|m| m.flavour == flavour && !m.fixture)
+    .unwrap()
+}
+fn review_checked(src: &str, flavour: &str) -> selu_check::Checked {
+    selu_check::check_program(
+        &selu_syntax::parse("review.selu", src).unwrap(),
+        review_manifest(flavour),
+    )
+}
+#[test]
+fn review_api_mismatches_are_warnings() {
+    for flavour in ["retail", "forever"] {
+        let c = review_checked(r#"C_Timer.After("soon", () => {});"#, flavour);
+        assert_eq!(c.diagnostics.len(), 1);
+        assert_eq!(c.diagnostics[0].code, "SELU0481");
+        assert_eq!(
+            c.diagnostics[0].severity,
+            selu_diagnostics::Severity::Warning
+        );
+        assert!(!c.has_errors());
+    }
+}
+#[test]
+fn review_widgets_are_open_and_unknown_frames_fall_back() {
+    let c = review_checked(
+        r#"const f = CreateFrame("Frame", null, UIParent, "BackdropTemplate"); f.customFlag = true; f.SetBackdrop({}); f.SetSze(20, 30); const unknown = CreateFrame("UnrecordedFrame"); unknown.custom = 1;"#,
+        "retail",
+    );
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    assert_eq!(
+        c.diagnostics
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect::<Vec<_>>(),
+        ["SELU0482", "SELU0483"]
+    );
+}
+#[test]
+fn review_frame_types_and_factory_aliases() {
+    for flavour in [
+        "retail",
+        "forever",
+        "classic",
+        "classic-era",
+        "classic-anniversary",
+        "classic-titan",
+    ] {
+        for name in [
+            "CheckButton",
+            "Cooldown",
+            "MessageFrame",
+            "ScrollingMessageFrame",
+            "PlayerModel",
+            "Model",
+            "DressUpModel",
+            "SimpleHTML",
+            "ColorSelect",
+            "EditBox",
+            "Slider",
+            "StatusBar",
+            "ScrollFrame",
+            "GameTooltip",
+        ] {
+            let p = selu_syntax::parse(
+                "review.selu",
+                &format!("export const f = CreateFrame(\"{name}\");"),
+            )
+            .unwrap();
+            let (c, ex) =
+                selu_check::check_module(&p, review_manifest(flavour), Default::default());
+            assert!(
+                c.diagnostics.is_empty(),
+                "{flavour} {name}: {:?}",
+                c.diagnostics
+            );
+            assert!(
+                matches!(&ex["f"].ty,selu_check::Type::Widget(n,_) if n==name),
+                "{:?}",
+                ex["f"].ty
+            );
+        }
+        let p = selu_syntax::parse(
+            "review.selu",
+            r#"const create = CreateFrame; export const button = create("Button");"#,
+        )
+        .unwrap();
+        let (c, ex) = selu_check::check_module(&p, review_manifest(flavour), Default::default());
+        assert!(c.diagnostics.is_empty());
+        assert!(matches!(&ex["button"].ty,selu_check::Type::Widget(n,_) if n=="Button"));
+    }
+}
+#[test]
+fn review_region_tooltip_overloads_and_numeric_text() {
+    for flavour in [
+        "retail",
+        "forever",
+        "classic",
+        "classic-era",
+        "classic-anniversary",
+        "classic-titan",
+    ] {
+        let c = review_checked(
+            r#"
+const f = CreateFrame("Frame");
+f.SetParent(UIParent);
+f.SetPoint("CENTER"); f.SetPoint("TOPLEFT", 10, -10); f.SetPoint("CENTER", UIParent);
+f.SetPoint("CENTER", "UIParent", "CENTER", 0, 0); f.SetAllPoints();
+f.CreateTexture().SetTexture(123); f.CreateTexture().SetColorTexture(1, 0, 0, 1);
+f.CreateTexture().GetParent(); f.CreateAnimationGroup().Play();
+const tip = CreateFrame("GameTooltip"); tip.SetOwner(UIParent, "ANCHOR_NONE"); tip.SetUnit("player"); tip.AddLine("hi"); tip.AddDoubleLine("left", "right"); tip.SetHyperlink("item:6948");
+tip.SetText("hello"); tip.SetText("hello", 1); tip.SetText("hello", 1, 1); tip.SetText("hello", 1, 1, 1);
+f.CreateFontString().SetText(42);
+"#,
+            flavour,
+        );
+        assert!(c.diagnostics.is_empty(), "{flavour}: {:?}", c.diagnostics);
+    }
+}
+#[test]
+fn review_callback_advice_and_excess_event_span() {
+    let c = review_checked("C_Timer.After(1, GetServerTime);", "retail");
+    assert_eq!(c.diagnostics.len(), 1);
+    let d = &c.diagnostics[0];
+    assert!(d.message.contains("callback") && d.message.contains("retail@"));
+    assert!(d.fix.as_deref().unwrap_or("").contains("GetServerTime"));
+    let src = "on PLAYER_LOGIN(extra) {}";
+    let c = review_checked(src, "retail");
+    assert_eq!(
+        c.diagnostics[0].span.as_ref().unwrap().start,
+        src.find("extra").unwrap()
+    );
+    assert!(c.diagnostics[0].message.contains("extra"));
+}
+#[test]
+fn review_parent_and_parentheses() {
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("local p = CreateFrame('Frame'); local child = CreateFrame('Frame', nil, p); print(child:GetParent() == p)").unwrap();
+    assert_eq!(sim.prints(), ["true"]);
+}
+#[test]
+fn review_parentheses_only_in_expanding_positions() {
+    let lua = compile(
+        r#"print(UnitName("player"), "end"); const o = { name: UnitName("player") }; print(UnitName("player") + "!");"#,
+        "retail",
+    );
+    assert!(
+        lua.contains("print(UnitName(\"player\"), \"end\")"),
+        "{lua}"
+    );
+    assert!(lua.contains("name = UnitName(\"player\")"), "{lua}");
+    assert!(lua.contains("UnitName(\"player\") .. \"!\""), "{lua}");
+}
+
+#[test]
+fn review_strict_api_option_and_selu_types() {
+    let p = selu_syntax::parse("strict.selu", r#"C_Timer.After("soon", () => {});"#).unwrap();
+    let c = selu_check::check_program_with_options(
+        &p,
+        review_manifest("retail"),
+        selu_check::CheckOptions { strict_api: true },
+    );
+    assert_eq!(c.diagnostics.len(), 1);
+    assert_eq!(c.diagnostics[0].severity, selu_diagnostics::Severity::Error);
+    assert_eq!(c.diagnostics[0].code, "SELU0481");
+    let c = review_checked(
+        r#"function text(x: string) {} text(42); class C { method(x: string) {} } const c = new C(); c.method(42);"#,
+        "retail",
+    );
+    assert_eq!(
+        c.diagnostics
+            .iter()
+            .map(|d| (&d.code, d.severity))
+            .collect::<Vec<_>>(),
+        [
+            (&"SELU0335".to_string(), selu_diagnostics::Severity::Error),
+            (&"SELU0335".to_string(), selu_diagnostics::Severity::Error)
+        ]
+    );
+}
+#[test]
+fn review_strict_api_project_option() {
+    use std::{
+        io::Read,
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
+    let root = std::env::temp_dir().join(format!(
+        "selu-t1-api-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/main.selu"),
+        r#"C_Timer.After("soon", () => {});"#,
+    )
+    .unwrap();
+    for strict in [false, true] {
+        std::fs::write(root.join("selu.toml"),format!("[addon]\nname = \"ApiPolicy\"\ntargets = [\"retail\"]\n[build]\nstrict_api = {strict}\n")).unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_selu"))
+            .arg("build")
+            .arg(&root)
+            .arg("--manifest-dir")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        eprintln!("strict_api CLI PID {}", child.id());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            if Instant::now() > deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("CLI timeout");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        assert_eq!(status.success(), !strict, "{stderr}");
+        assert!(
+            stderr.contains(if strict {
+                "error[SELU0481]"
+            } else {
+                "warning[SELU0481]"
+            }),
+            "{stderr}"
+        );
+    }
+    let owned = root.canonicalize().unwrap();
+    assert!(owned.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    std::fs::remove_dir_all(owned).unwrap();
+}
+
+#[test]
+fn review_numeric_text_is_converted_by_the_simulator() {
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("local f = CreateFrame('Frame'):CreateFontString(); f:SetText(42); print(type(f:GetText()), f:GetText()); f:SetText(nil); print(f:GetText())").unwrap();
+    assert_eq!(sim.prints(), ["string\t42", "nil"]);
+}
+
+#[test]
+fn review_region_factory_return_identities() {
+    for flavour in [
+        "retail",
+        "forever",
+        "classic",
+        "classic-era",
+        "classic-anniversary",
+        "classic-titan",
+    ] {
+        let p=selu_syntax::parse("factories.selu",r#"const f = CreateFrame("Frame"); export const line = f.CreateLine(); export const mask = f.CreateMaskTexture(); export const group = f.CreateAnimationGroup();"#).unwrap();
+        let (c, ex) = selu_check::check_module(&p, review_manifest(flavour), Default::default());
+        assert!(c.diagnostics.is_empty(), "{:?}", c.diagnostics);
+        for (binding, name) in [
+            ("line", "Line"),
+            ("mask", "MaskTexture"),
+            ("group", "AnimationGroup"),
+        ] {
+            assert!(
+                matches!(&ex[binding].ty,selu_check::Type::Widget(n,_) if n==name),
+                "{flavour} {binding}: {:?}",
+                ex[binding].ty
+            );
+        }
+    }
+}

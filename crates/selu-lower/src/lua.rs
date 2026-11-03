@@ -282,7 +282,11 @@ impl Printer {
                 if !values.is_empty() {
                     text.push_str(" = ");
                     self.column = text.len() + indent * 2;
-                    text.push_str(&self.list(values, indent));
+                    text.push_str(&if names.len() <= values.len() {
+                        self.scalar_list(values, indent)
+                    } else {
+                        self.list(values, indent)
+                    });
                     self.column = 0;
                 }
                 self.line(indent, &text, sp);
@@ -290,7 +294,11 @@ impl Printer {
             LStmtKind::Assign(targets, values) => {
                 let t = self.list(targets, indent);
                 self.column = t.len() + 3 + indent * 2;
-                let v = self.list(values, indent);
+                let v = if targets.len() <= values.len() {
+                    self.scalar_list(values, indent)
+                } else {
+                    self.list(values, indent)
+                };
                 self.column = 0;
                 self.line(indent, &format!("{t} = {v}"), sp);
             }
@@ -411,14 +419,48 @@ impl Printer {
         }
     }
 
+    fn scalar_expr(&mut self, e: &LExpr, indent: usize) -> String {
+        match e {
+            LExpr::Paren(inner)
+                if matches!(
+                    inner.as_ref(),
+                    LExpr::Call(..) | LExpr::Method(..) | LExpr::Vararg
+                ) =>
+            {
+                self.expr(inner, 0, indent)
+            }
+            _ => self.expr(e, 0, indent),
+        }
+    }
+    fn scalar_list(&mut self, es: &[LExpr], indent: usize) -> String {
+        es.iter()
+            .map(|e| self.scalar_expr(e, indent))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
     fn list(&mut self, es: &[LExpr], indent: usize) -> String {
-        let parts: Vec<String> = es.iter().map(|e| self.expr(e, 0, indent)).collect();
+        let parts: Vec<String> = es
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                if i + 1 < es.len() {
+                    self.scalar_expr(e, indent)
+                } else {
+                    self.expr(e, 0, indent)
+                }
+            })
+            .collect();
         parts.join(", ")
     }
 
     /// A prefix expression (the object of a call, field or index) must be a
     /// name, a call, a field, an index or parenthesised.
     fn prefix(&mut self, e: &LExpr, indent: usize) -> String {
+        if let LExpr::Paren(inner) = e
+            && matches!(inner.as_ref(), LExpr::Call(..) | LExpr::Method(..))
+        {
+            return self.prefix(inner, indent);
+        }
         let text = self.expr(e, 0, indent);
         match e {
             LExpr::Name(_)
@@ -458,6 +500,15 @@ impl Printer {
                     self.prefix(obj, indent),
                     self.list(args, indent)
                 )
+            }
+            LExpr::Paren(inner)
+                if min > 0
+                    && matches!(
+                        inner.as_ref(),
+                        LExpr::Call(..) | LExpr::Method(..) | LExpr::Vararg
+                    ) =>
+            {
+                self.expr(inner, min, indent)
             }
             LExpr::Paren(inner) => format!("({})", self.expr(inner, 0, indent)),
             LExpr::Unary(op, inner) => {
@@ -519,16 +570,16 @@ impl Printer {
                     .map(|f| match f {
                         LField::Pos(v) => self.expr(v, 0, indent),
                         LField::Named(k, v) if is_lua_name(k) && !is_lua_keyword(k) => {
-                            format!("{k} = {}", self.expr(v, 0, indent))
+                            format!("{k} = {}", self.scalar_expr(v, indent))
                         }
                         LField::Named(k, v) => {
-                            format!("[{}] = {}", lua_string(k), self.expr(v, 0, indent))
+                            format!("[{}] = {}", lua_string(k), self.scalar_expr(v, indent))
                         }
                         LField::Keyed(k, v) => {
                             format!(
                                 "[{}] = {}",
-                                self.expr(k, 0, indent),
-                                self.expr(v, 0, indent)
+                                self.scalar_expr(k, indent),
+                                self.scalar_expr(v, indent)
                             )
                         }
                     })

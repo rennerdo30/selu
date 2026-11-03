@@ -59,10 +59,19 @@ enum Command {
 #[derive(Debug, Deserialize)]
 struct Project {
     addon: AddonSection,
+    #[serde(default)]
+    build: BuildSection,
 }
 
 /// The `[addon]` table of `selu.toml`. Unknown keys are an error so a typo
 /// never silently does nothing.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuildSection {
+    #[serde(default)]
+    strict_api: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AddonSection {
@@ -170,6 +179,9 @@ fn build(
         );
         ExitCode::FAILURE
     })?;
+    let check_options = selu_check::CheckOptions {
+        strict_api: project.build.strict_api,
+    };
     let project = project.addon;
 
     let src_dir = project_dir.join("src");
@@ -239,7 +251,12 @@ fn build(
                 imports.imports.insert(from.clone(), signatures.clone());
                 lower_imports.insert(from.clone(), (key.clone(), signatures));
             }
-            let (checked, signature) = selu_check::check_module(&module.program, manifest, imports);
+            let (checked, signature) = selu_check::check_module_with_options(
+                &module.program,
+                manifest,
+                imports,
+                check_options,
+            );
             for d in &checked.diagnostics {
                 eprint!("{}", d.render(&module.source));
             }

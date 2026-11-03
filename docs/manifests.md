@@ -146,3 +146,10 @@ entries and defaults to no type when loading older manifests. Global overlays
 accept that same optional key. Retail and Forever type UIParent as Frame and
 GameTooltip as GameTooltip, with source-evidence widget aliases; no live probe
 is implied. The checker mapping and multiple-result rules are in lang/api.md.
+
+T1 reviewed widget overlays also support `[[methods]]` with `widget`, `entry`,
+`evidence`, `note` and optional `live_probe`. They replace one named method on an
+existing widget, preserving its other methods. `Declaration.overloads` is an
+additive list of complete argument/return declarations; omitted lists default
+empty. Every overlay keeps a pinned source citation. `SeluAliasOf` in widget
+attributes records an equivalent canonical identity.

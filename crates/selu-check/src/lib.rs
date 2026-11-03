@@ -56,10 +56,22 @@ pub fn check(program: &Program, manifest: &Manifest) -> Vec<Diagnostic> {
 }
 
 pub fn check_program(program: &Program, manifest: &Manifest) -> Checked {
+    check_program_with_options(program, manifest, CheckOptions::default())
+}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CheckOptions {
+    pub strict_api: bool,
+}
+pub fn check_program_with_options(
+    program: &Program,
+    manifest: &Manifest,
+    options: CheckOptions,
+) -> Checked {
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         module: ModuleBindings::default(),
         manifest,
+        options,
         out: &mut out,
         scopes: Vec::new(),
         fn_depth: 0,
@@ -83,11 +95,20 @@ pub fn check_module(
     manifest: &Manifest,
     imports: ModuleBindings,
 ) -> (Checked, ModuleExports) {
+    check_module_with_options(program, manifest, imports, CheckOptions::default())
+}
+pub fn check_module_with_options(
+    program: &Program,
+    manifest: &Manifest,
+    imports: ModuleBindings,
+    options: CheckOptions,
+) -> (Checked, ModuleExports) {
     let classes = classes::ClassContext::from_imports(&imports);
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         module: imports,
         manifest,
+        options,
         out: &mut out,
         scopes: Vec::new(),
         fn_depth: 0,
@@ -150,6 +171,7 @@ struct Scope {
 type Narrowings = Vec<(String, Type)>;
 
 struct Ctx<'a> {
+    options: CheckOptions,
     module: ModuleBindings,
     classes: classes::ClassContext,
     loops: Vec<loops::LoopCtx>,
@@ -479,6 +501,7 @@ impl Ctx<'_> {
                             multiple_results: false,
                             unspecified_callback: false,
                             api: Default::default(),
+                            api_semantics: Default::default(),
                             params: self.checked_parameter_types(params, param_types),
                             ret: Box::new(ret),
                             required,
@@ -1213,9 +1236,9 @@ impl Ctx<'_> {
         self.types.set(callee.id, callee_type.clone());
         let arg_types = self.function_arguments(args, &callee_type);
         if self.api_check_call(e, args, &arg_types, &callee_type)
-            && let Type::Function { ret, .. } = callee_type
+            && let Type::Function { ret, .. } = &callee_type
         {
-            return *ret;
+            return self.api_result(e, args, &callee_type, (**ret).clone());
         }
         match callee_type {
             Type::Function {

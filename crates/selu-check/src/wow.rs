@@ -124,6 +124,7 @@ impl Ctx<'_> {
             multiple_results: false,
             unspecified_callback: false,
             api: Default::default(),
+            api_semantics: Default::default(),
             params: if n == "command" {
                 vec![Type::String]
             } else {

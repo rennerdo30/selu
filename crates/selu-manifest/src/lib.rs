@@ -407,6 +407,8 @@ mod tests {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Declaration {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overloads: Vec<Declaration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<Evidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

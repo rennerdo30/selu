@@ -274,6 +274,7 @@ fn project(t: &Table, predicates: &BTreeSet<String>) -> mlua::Result<Declaration
         });
     }
     Ok(Declaration {
+        overloads: Vec::new(),
         evidence: None,
         predicates: children(t, "Predicates", predicates)?,
         values,
@@ -413,6 +414,8 @@ pub struct Overlay {
     pub widgets: Vec<WidgetOverlay>,
     #[serde(default)]
     pub globals: Vec<GlobalOverlay>,
+    #[serde(default)]
+    pub methods: Vec<MethodOverlay>,
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -436,6 +439,16 @@ pub struct FunctionOverlay {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WidgetOverlay {
+    pub entry: Declaration,
+    pub note: String,
+    pub evidence: Evidence,
+    #[serde(default)]
+    pub live_probe: Option<String>,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MethodOverlay {
+    pub widget: String,
     pub entry: Declaration,
     pub note: String,
     pub evidence: Evidence,
@@ -494,6 +507,19 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
         evidence(w.evidence, &w.live_probe)?;
         m.widgets.retain(|v| v.name != w.entry.name);
         m.widgets.push(w.entry);
+    }
+    for mut method in overlay.methods {
+        method.entry.evidence = Some(method.evidence);
+        note(&method.note)?;
+        evidence(method.evidence, &method.live_probe)?;
+        let widget = m
+            .widgets
+            .iter_mut()
+            .find(|w| w.name == method.widget)
+            .ok_or("method overlay widget does not exist")?;
+        widget.methods.retain(|f| f.name != method.entry.name);
+        widget.methods.push(method.entry);
+        widget.methods.sort_by(|a, b| a.name.cmp(&b.name));
     }
     for g in overlay.globals {
         note(&g.note)?;

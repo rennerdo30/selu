@@ -20,6 +20,17 @@ impl PartialEq for ApiOrigin {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ApiSemantics {
+    pub frame_factory: bool,
+    pub overloads: Vec<Type>,
+}
+impl PartialEq for ApiSemantics {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     /// Nominal identity, base identities, and the checked instance member shape.
@@ -48,6 +59,7 @@ pub enum Type {
         multiple_results: bool,
         unspecified_callback: bool,
         api: ApiOrigin,
+        api_semantics: ApiSemantics,
         params: Vec<Type>,
         ret: Box<Type>,
         required: usize,
@@ -342,6 +354,7 @@ pub fn resolve_classes(
                 multiple_results: false,
                 unspecified_callback: false,
                 api: Default::default(),
+                api_semantics: Default::default(),
                 required: fixed.len(),
                 rest,
                 params: fixed,

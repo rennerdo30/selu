@@ -49,16 +49,6 @@ params = ["..."]
 evidence = "source"
 
 [[globals]]
-name = "UIParent"
-evidence = "source"
-note = "docs/TOOLKIT-SURVEY.md: addon native global use"
-
-[[globals]]
-name = "GameTooltip"
-evidence = "source"
-note = "docs/TOOLKIT-SURVEY.md: addon native global use"
-
-[[globals]]
 name = "SlashCmdList"
 evidence = "source"
 note = "docs/TOOLKIT-SURVEY.md: addon native global use"
@@ -76,96 +66,211 @@ note = "Generated documentation references this engine namespace root"
 
 [[widgets]]
 evidence = "source"
-note = "Canonical client Frame connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "Frame"
-type = "ScriptObject"
-inherits = ["SimpleFrameAPI", "ScriptRegion"]
-
-[[widgets]]
-evidence = "source"
-note = "Canonical client ScriptRegion connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "ScriptRegion"
-type = "ScriptObject"
-inherits = ["SimpleScriptRegionAPI", "SimpleScriptRegionResizingAPI", "SimpleFrameScriptObjectAPI"]
-
-[[widgets]]
-evidence = "source"
-note = "Canonical client Region connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "Region"
-type = "ScriptObject"
-inherits = ["ScriptRegion"]
-
-[[widgets]]
-evidence = "source"
-note = "Canonical client SimpleFontString connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "SimpleFontString"
-type = "ScriptObject"
-inherits = ["SimpleFontStringAPI", "ScriptRegion"]
-
-[[widgets]]
-evidence = "source"
-note = "Canonical client FontString connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "FontString"
-type = "ScriptObject"
-inherits = ["SimpleFontString"]
-
-[[widgets]]
-evidence = "source"
-note = "Canonical client SimpleTexture connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "SimpleTexture"
-type = "ScriptObject"
-inherits = ["SimpleTextureAPI", "ScriptRegion"]
-
-[[widgets]]
-evidence = "source"
-note = "Canonical client Texture connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "Texture"
-type = "ScriptObject"
-inherits = ["SimpleTexture"]
-
-[[widgets]]
-evidence = "source"
 note = "Canonical client Button connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
 [widgets.entry]
 name = "Button"
 type = "ScriptObject"
 inherits = ["SimpleButtonAPI", "Frame"]
 
-[[widgets]]
-evidence = "source"
-note = "Canonical client EditBox connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "EditBox"
-type = "ScriptObject"
-inherits = ["SimpleEditBoxAPI", "Frame"]
+
+# T1 reviewed widget data
 
 [[widgets]]
 evidence = "source"
-note = "Canonical client Slider connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "Slider"
-type = "ScriptObject"
-inherits = ["SimpleSliderAPI", "Frame"]
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleFrameAPI, ScriptRegion, SimpleAnimatableObjectAPI, SimpleObjectAPI"
+entry = { name = "Frame", type = "ScriptObject", inherits = ["SimpleFrameAPI", "ScriptRegion", "SimpleAnimatableObjectAPI", "SimpleObjectAPI"] }
 
 [[widgets]]
 evidence = "source"
-note = "Canonical client ScrollFrame connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "ScrollFrame"
-type = "ScriptObject"
-inherits = ["SimpleScrollFrameAPI", "Frame"]
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleScriptRegionAPI, SimpleScriptRegionResizingAPI, SimpleFrameScriptObjectAPI, SimpleRegionAPI, SimpleObjectAPI"
+entry = { name = "ScriptRegion", type = "ScriptObject", inherits = ["SimpleScriptRegionAPI", "SimpleScriptRegionResizingAPI", "SimpleFrameScriptObjectAPI", "SimpleRegionAPI", "SimpleObjectAPI"] }
 
 [[widgets]]
 evidence = "source"
-note = "Canonical client StatusBar connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
-[widgets.entry]
-name = "StatusBar"
-type = "ScriptObject"
-inherits = ["SimpleStatusBarAPI", "Frame"]
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups ScriptRegion, SimpleAnimatableObjectAPI"
+entry = { name = "Region", type = "ScriptObject", inherits = ["ScriptRegion", "SimpleAnimatableObjectAPI"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleTextureAPI, SimpleTextureBaseAPI, Region"
+entry = { name = "Texture", type = "ScriptObject", inherits = ["SimpleTextureAPI", "SimpleTextureBaseAPI", "Region"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleFontStringAPI, SimpleFontAPI, Region"
+entry = { name = "FontString", type = "ScriptObject", inherits = ["SimpleFontStringAPI", "SimpleFontAPI", "Region"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleLineAPI, Texture"
+entry = { name = "Line", type = "ScriptObject", inherits = ["SimpleLineAPI", "Texture"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleMaskTextureAPI, Texture"
+entry = { name = "MaskTexture", type = "ScriptObject", inherits = ["SimpleMaskTextureAPI", "Texture"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleAnimGroupAPI, SimpleObjectAPI"
+entry = { name = "AnimationGroup", type = "ScriptObject", inherits = ["SimpleAnimGroupAPI", "SimpleObjectAPI"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleCheckboxAPI, Button; client widget declared/created at Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.xml:152"
+entry = { name = "CheckButton", type = "ScriptObject", inherits = ["SimpleCheckboxAPI", "Button"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups FrameAPICooldown, Frame; client widget declared/created at Interface/AddOns/Blizzard_ActionBar/Classic/ActionButtonTemplate.xml:116"
+entry = { name = "Cooldown", type = "ScriptObject", inherits = ["FrameAPICooldown", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleMessageFrameAPI, Frame; client widget declared/created at Interface/AddOns/Blizzard_UIErrorsFrame/Classic/UIErrorsFrame.xml:3"
+entry = { name = "MessageFrame", type = "ScriptObject", inherits = ["SimpleMessageFrameAPI", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleMessageFrameAPI, Frame; client widget declared/created at Interface/AddOns/Blizzard_ChatFrameBase/Classic/ChatFrame.xml:3"
+entry = { name = "ScrollingMessageFrame", type = "ScriptObject", inherits = ["SimpleMessageFrameAPI", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleModelAPI, FrameAPICharacterModelBase, Frame; client widget declared/created at Interface/AddOns/Blizzard_CharacterFrame/Cata/PetPaperDollFrame.xml:119"
+entry = { name = "PlayerModel", type = "ScriptObject", inherits = ["SimpleModelAPI", "FrameAPICharacterModelBase", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleModelAPI, Frame; client widget declared/created at Interface/AddOns/Blizzard_GlueXML/Mists/CharacterCreate.xml:427"
+entry = { name = "Model", type = "ScriptObject", inherits = ["SimpleModelAPI", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups FrameAPIDressUpModel, PlayerModel; client widget declared/created at Interface/AddOns/Blizzard_CharacterFrame/Classic/DressUpFrames.xml:52"
+entry = { name = "DressUpModel", type = "ScriptObject", inherits = ["FrameAPIDressUpModel", "PlayerModel"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleHTMLAPI, Frame; client widget declared/created at Interface/AddOns/Blizzard_AccountSaveUI/Blizzard_AccountSaveUI.xml:28"
+entry = { name = "SimpleHTML", type = "ScriptObject", inherits = ["SimpleHTMLAPI", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleColorSelectAPI, Frame; client widget declared/created at Interface/AddOns/Blizzard_FrameXML/Classic/ColorPickerFrame.xml:3"
+entry = { name = "ColorSelect", type = "ScriptObject", inherits = ["SimpleColorSelectAPI", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleEditBoxAPI, Frame; client widget declared/created at Interface/AddOns/Blizzard_AccountSaveUI/Blizzard_AccountSaveUI.xml:41"
+entry = { name = "EditBox", type = "ScriptObject", inherits = ["SimpleEditBoxAPI", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleSliderAPI, Frame; client widget declared/created at Interface/AddOns/Blizzard_AccessibilityTemplates/UserScaledSliderTemplates.xml:14"
+entry = { name = "Slider", type = "ScriptObject", inherits = ["SimpleSliderAPI", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleStatusBarAPI, Frame; client widget declared/created at Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.xml:15"
+entry = { name = "StatusBar", type = "ScriptObject", inherits = ["SimpleStatusBarAPI", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups SimpleScrollFrameAPI, Frame; client widget declared/created at Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.xml:2457"
+entry = { name = "ScrollFrame", type = "ScriptObject", inherits = ["SimpleScrollFrameAPI", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard_APIDocumentationGenerated method groups FrameAPITooltip, Frame; client widget declared/created at Interface/AddOns/Blizzard_CatalogShop/Blizzard_CatalogShop.xml:4"
+entry = { name = "GameTooltip", type = "ScriptObject", inherits = ["FrameAPITooltip", "Frame"] }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: generated factory return SimpleFrame and canonical widget Frame share the documented SimpleFrameAPI method group."
+entry = { name = "SimpleFrame", type = "ScriptObject", inherits = ["Frame"], attributes = { SeluAliasOf = "Frame" } }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: generated factory return SimpleTexture and canonical widget Texture share the documented SimpleTextureAPI method group."
+entry = { name = "SimpleTexture", type = "ScriptObject", inherits = ["Texture"], attributes = { SeluAliasOf = "Texture" } }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: generated factory return SimpleFontString and canonical widget FontString share the documented SimpleFontStringAPI method group."
+entry = { name = "SimpleFontString", type = "ScriptObject", inherits = ["FontString"], attributes = { SeluAliasOf = "FontString" } }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: generated factory return SimpleLine and canonical widget Line share the documented SimpleLineAPI method group."
+entry = { name = "SimpleLine", type = "ScriptObject", inherits = ["Line"], attributes = { SeluAliasOf = "Line" } }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: generated factory return SimpleMaskTexture and canonical widget MaskTexture share the documented SimpleMaskTextureAPI method group."
+entry = { name = "SimpleMaskTexture", type = "ScriptObject", inherits = ["MaskTexture"], attributes = { SeluAliasOf = "MaskTexture" } }
+
+[[widgets]]
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: generated factory return SimpleAnimGroup and canonical widget AnimationGroup share the documented SimpleAnimGroupAPI method group."
+entry = { name = "SimpleAnimGroup", type = "ScriptObject", inherits = ["AnimationGroup"], attributes = { SeluAliasOf = "AnimationGroup" } }
+
+[[globals]]
+name = "UIParent"
+type = "Frame"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard UI uses UIParent as a Frame; UIParent frame parent references in Blizzard UI."
+
+[[globals]]
+name = "GameTooltip"
+type = "GameTooltip"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Blizzard UI uses GameTooltip as a GameTooltip; Interface/AddOns/Blizzard_CatalogShop/Blizzard_CatalogShop.xml:4"
+
+[[methods]]
+widget = "SimpleScriptRegionResizingAPI"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Interface/AddOns/Blizzard_AccountSaveUI/Blizzard_AccountSaveUI.lua:65 uses optional/overloaded widget anchor forms; owner review 2026-11-04 lists accepted forms.; explicit overload call sites: one argument: Interface/AddOns/Blizzard_ActionBar/Shared/ActionBar.lua:32; three numeric arguments: Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.lua:119; two arguments: Interface/AddOns/Blizzard_PVPUI/Mainline/Blizzard_PVPUI.lua:2939; five with string relative frame: Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.lua:1109"
+entry = { name = "SetPoint", type = "Function", arguments = [{ name = "point", type = "FramePoint", attributes = { Nilable = false } }, { name = "relativeTo", type = "ScriptRegion", attributes = { Nilable = false } }, { name = "relativePoint", type = "FramePoint", attributes = { Nilable = false } }, { name = "offsetX", type = "uiUnit", attributes = { Nilable = false } }, { name = "offsetY", type = "uiUnit", attributes = { Nilable = false } }], attributes = { Environment = "All", IsProtectedFunction = true }, overloads = [{ name = "SetPoint", type = "Function", arguments = [{ name = "point", type = "FramePoint" }] }, { name = "SetPoint", type = "Function", arguments = [{ name = "point", type = "FramePoint" }, { name = "offsetX", type = "uiUnit" }, { name = "offsetY", type = "uiUnit" }] }, { name = "SetPoint", type = "Function", arguments = [{ name = "point", type = "FramePoint" }, { name = "relativeTo", type = "Frame" }] }, { name = "SetPoint", type = "Function", arguments = [{ name = "point", type = "FramePoint" }, { name = "relativeTo", type = "cstring" }, { name = "relativePoint", type = "FramePoint" }, { name = "offsetX", type = "uiUnit" }, { name = "offsetY", type = "uiUnit" }] }] }
+
+[[methods]]
+widget = "SimpleScriptRegionResizingAPI"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Interface/AddOns/Blizzard_ActionBar/Classic/StatusTrackingManagerOverrides.lua:53 uses optional/overloaded widget anchor forms; owner review 2026-11-04 lists accepted forms.; SetAllPoints zero: Interface/AddOns/Blizzard_ActionBar/Shared/ActionButtonSpellAlerts.lua:29"
+entry = { name = "SetAllPoints", type = "Function", arguments = [{ name = "relativeTo", type = "ScriptRegion", attributes = { Nilable = false } }, { name = "doResize", type = "bool", attributes = { Default = true, Nilable = false } }], attributes = { Environment = "All", IsProtectedFunction = true }, overloads = [{ name = "SetAllPoints", type = "Function", arguments = [] }] }
+
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.lua:2350; tooltip methods/optional trailing colours used by Blizzard UI; owner review 2026-11-04."
+entry = { name = "SetOwner", type = "Function", arguments = [{ name = "owner", type = "Frame" }, { name = "anchor", type = "cstring" }, { name = "offsetX", type = "number", attributes = { Nilable = true } }, { name = "offsetY", type = "number", attributes = { Nilable = true } }] }
+
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Interface/AddOns/Blizzard_UnitFrame/Classic/UnitFrame.lua:453; tooltip methods/optional trailing colours used by Blizzard UI; owner review 2026-11-04."
+entry = { name = "SetUnit", type = "Function", arguments = [{ name = "unit", type = "UnitToken" }] }
+
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.lua:2351; tooltip methods/optional trailing colours used by Blizzard UI; owner review 2026-11-04."
+entry = { name = "AddLine", type = "Function", arguments = [{ name = "text", type = "cstring" }, { name = "r", type = "number", attributes = { Nilable = true } }, { name = "g", type = "number", attributes = { Nilable = true } }, { name = "b", type = "number", attributes = { Nilable = true } }, { name = "wrap", type = "bool", attributes = { Nilable = true } }] }
+
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.lua:2426; tooltip methods/optional trailing colours used by Blizzard UI; owner review 2026-11-04."
+entry = { name = "AddDoubleLine", type = "Function", arguments = [{ name = "left", type = "cstring" }, { name = "right", type = "cstring" }, { name = "lr", type = "number", attributes = { Nilable = true } }, { name = "lg", type = "number", attributes = { Nilable = true } }, { name = "lb", type = "number", attributes = { Nilable = true } }, { name = "rr", type = "number", attributes = { Nilable = true } }, { name = "rg", type = "number", attributes = { Nilable = true } }, { name = "rb", type = "number", attributes = { Nilable = true } }] }
+
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Interface/AddOns/Blizzard_AuctionHouseUI/Classic/Blizzard_AuctionHouseSharedTemplates.lua:53; tooltip methods/optional trailing colours used by Blizzard UI; owner review 2026-11-04."
+entry = { name = "SetHyperlink", type = "Function", arguments = [{ name = "link", type = "cstring" }] }
+
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "Pinned 68e0a2ec559d9761dfc4e7f864c3944f9d758a49: Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.xml:184; tooltip methods/optional trailing colours used by Blizzard UI; owner review 2026-11-04."
+entry = { name = "SetText", type = "Function", arguments = [{ name = "text", type = "cstring", attributes = { Nilable = false } }, { name = "colorR", type = "number", attributes = { Nilable = false } }, { name = "colorG", type = "number", attributes = { Nilable = false } }, { name = "colorB", type = "number", attributes = { Nilable = false } }, { name = "alpha", type = "number", attributes = { Default = 1, Nilable = false } }, { name = "wrap", type = "bool", attributes = { Default = false, Nilable = false } }], attributes = { Environment = "All" }, overloads = [{ name = "SetText", type = "Function", arguments = [{ name = "text", type = "cstring" }, { name = "r", type = "number", attributes = { Nilable = true } }, { name = "g", type = "number", attributes = { Nilable = true } }, { name = "b", type = "number", attributes = { Nilable = true } }] }] }

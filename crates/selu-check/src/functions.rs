@@ -19,6 +19,7 @@ impl Ctx<'_> {
             multiple_results: false,
             unspecified_callback: false,
             api: Default::default(),
+            api_semantics: Default::default(),
             params: params
                 .iter()
                 .zip(ts)
@@ -211,6 +212,7 @@ impl Ctx<'_> {
             multiple_results: false,
             unspecified_callback: false,
             api: Default::default(),
+            api_semantics: Default::default(),
             params: self.checked_parameter_types(
                 &ps,
                 ps.iter()

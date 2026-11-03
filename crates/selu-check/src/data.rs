@@ -163,17 +163,24 @@ impl Ctx<'_> {
     }
 
     pub(crate) fn data_write(&mut self, target: &Expr, value: &Type) {
-        if let ExprKind::Member { object, name } = &target.kind
-            && name == "length"
-            && matches!(self.value(object), Type::Array(_) | Type::String)
-        {
-            self.out.push(
-                err("SELU0355", "length is read-only", &target.span)
-                    .with_help("use array methods to change its length"),
-            );
-            return;
-        }
-        let ty = self.expr(target);
+        let ty = if let ExprKind::Member { object, name } = &target.kind {
+            let t = self.value(object);
+            if matches!(t, Type::Widget(..)) {
+                return;
+            }
+            if name == "length" && matches!(t, Type::Array(_) | Type::String) {
+                self.out.push(
+                    err("SELU0355", "length is read-only", &target.span)
+                        .with_help("use array methods to change its length"),
+                );
+                return;
+            }
+            let ty = self.member(&t, name, object);
+            self.types.set(target.id, ty.clone());
+            ty
+        } else {
+            self.expr(target)
+        };
         if !value.assignable_to(&ty) {
             self.out.push(
                 err(
@@ -473,6 +480,7 @@ impl Ctx<'_> {
             multiple_results: false,
             unspecified_callback: false,
             api: Default::default(),
+            api_semantics: Default::default(),
             params: input.clone(),
             required: input.len(),
             rest: None,

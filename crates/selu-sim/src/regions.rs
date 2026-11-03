@@ -10,7 +10,9 @@ function methods:SetSize(width, height) self.__width = width; self.__height = he
 function methods:GetWidth() return self.__width or 0 end
 function methods:GetHeight() return self.__height or 0 end
 function methods:GetParent() return self.__parent end
-function methods:SetText(text) self.__text = text end
+function methods:SetText(text)
+  if text == nil then self.__text = nil else self.__text = tostring(text) end
+end
 function methods:GetText() return self.__text end
 function methods:SetPoint(point, relative, relativePoint, x, y)
   local points = self.__points
