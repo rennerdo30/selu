@@ -56,6 +56,7 @@ impl SourceMap {
 
 #[derive(Debug, Clone)]
 pub struct Lowered {
+    pub locale_keys: Vec<String>,
     pub lua: String,
     pub source_map: SourceMap,
 }
@@ -99,6 +100,7 @@ pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lower
         known: &known,
         types,
         temps: 0,
+        wow: wow::WowState::default(),
         loops: Vec::new(),
     };
     let mut out: LBlock = Vec::new();
@@ -111,8 +113,12 @@ pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lower
         out.push(raw(""));
     }
     out.extend(l.block(&program.stmts));
+    if let Some(prologue) = l.wow_prologue() {
+        out.splice(0..0, prologue);
+    }
     let printed = lua::print_block(&out);
     Lowered {
+        locale_keys: l.wow.keys,
         lua: printed.text,
         source_map: SourceMap {
             entries: printed
@@ -147,6 +153,7 @@ pub fn lower_module(
         known: &known,
         types,
         temps: 0,
+        wow: wow::WowState::default(),
         loops: Vec::new(),
     };
     let mut out: LBlock = vec![LStmt {
@@ -175,6 +182,7 @@ pub fn lower_module(
     out.extend(l.block(&program.stmts));
     let printed = lua::print_block(&out);
     Lowered {
+        locale_keys: l.wow.keys,
         lua: printed.text,
         source_map: SourceMap {
             entries: printed
@@ -198,6 +206,7 @@ fn raw(text: &str) -> LStmt {
 
 pub(crate) struct Lowerer<'a> {
     module: ModuleBindings,
+    wow: wow::WowState,
     loops: Vec<loops::LoopCtx>,
     known: &'a HashSet<String>,
     types: &'a TypeTable,

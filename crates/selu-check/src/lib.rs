@@ -1033,6 +1033,7 @@ impl Ctx<'_> {
                 Type::Boolean
             }
             "+" => {
+                self.wow_join(e, left, right);
                 let l = self.value(left);
                 let r = self.value(right);
                 match (&l, &r) {
@@ -1546,8 +1547,6 @@ mod tests {
     fn constructs_still_being_built_are_reported_not_lowered() {
         for src in [
             "class A {}
-",
-            "const t = L`hello`;
 ",
         ] {
             let c = codes(src);

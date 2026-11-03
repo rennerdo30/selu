@@ -1,20 +1,140 @@
-//! WoW features (package D4 in docs/WORK-PACKAGES.md): the built-ins
-//! `command`, `hook`, `hookScript` and `log`, and tagged templates (`L`,
-//! `log.warn`).
-
-use crate::{Ctx, Type};
-use selu_syntax::Expr;
-
+use crate::{Ctx, Type, err};
+use selu_syntax::{Expr, ExprKind};
 impl Ctx<'_> {
-    pub(crate) fn tagged_template(&mut self, e: &Expr) -> Type {
-        self.unsupported("a tagged template", &e.span)
+    fn wow_name(&self, tag: &Expr) -> Option<String> {
+        let n = tag.dotted_name()?;
+        if self.lookup(n.split('.').next()?).is_some() {
+            None
+        } else {
+            Some(n)
+        }
     }
-
-    /// A call to one of Selu's built-ins. `None` when `callee` isn't one
-    /// (including when the code declares a name that shadows it); the
-    /// normal call checking then runs.
+    pub(crate) fn wow_join(&mut self, e: &Expr, left: &Expr, right: &Expr) {
+        let is_l = |v: &Expr| matches!(&v.kind, ExprKind::TaggedTemplate { tag, .. } if self.wow_name(tag).as_deref() == Some("L"));
+        if is_l(left) && is_l(right) {
+            self.out.push(
+                selu_diagnostics::Diagnostic::warning(
+                    "SELU0444",
+                    "Localise the whole sentence together.",
+                )
+                .with_span(e.span.clone())
+                .with_help("use one L template"),
+            );
+        }
+    }
+    pub(crate) fn tagged_template(&mut self, e: &Expr) -> Type {
+        let ExprKind::TaggedTemplate { tag, exprs, .. } = &e.kind else {
+            unreachable!()
+        };
+        let n = self.wow_name(tag);
+        let valid = matches!(
+            n.as_deref(),
+            Some("L" | "log.debug" | "log.info" | "log.warn" | "log.error" | "log.warnOnce")
+        );
+        if !valid {
+            return self.unsupported("this template tag", &tag.span);
+        }
+        for x in exprs {
+            let t = self.value(x);
+            if !matches!(t, Type::String | Type::Number | Type::Boolean | Type::Error) {
+                self.out.push(
+                    err(
+                        "SELU0443",
+                        "Template arguments need a non-null string, number or boolean.",
+                        &x.span,
+                    )
+                    .with_help("use ?? or narrow the value first"),
+                );
+            }
+        }
+        if n.as_deref() == Some("L") {
+            Type::String
+        } else {
+            Type::Void
+        }
+    }
     pub(crate) fn builtin_call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Option<Type> {
-        let _ = (e, callee, args);
-        None
+        let n = self.wow_name(callee)?;
+        if !matches!(n.as_str(), "command" | "hook" | "hookScript") {
+            return None;
+        }
+        let count_ok = if n == "command" {
+            args.len() >= 2
+        } else {
+            args.len() == 3 || n == "hook" && args.len() == 2
+        };
+        if !count_ok {
+            self.out.push(
+                err(
+                    "SELU0440",
+                    "This built-in has the wrong number of arguments.",
+                    &e.span,
+                )
+                .with_help("supply the target and a callback"),
+            );
+            return Some(Type::Error);
+        }
+        let last = args.len() - 1;
+        for (i, x) in args[..last].iter().enumerate() {
+            if n == "command" {
+                if !matches!(&x.kind, ExprKind::Str(s) if s.starts_with('/') && s.len()>1 && !s.chars().any(char::is_whitespace))
+                {
+                    self.out.push(err(
+                        "SELU0441",
+                        "A slash alias must be a literal beginning with / and contain no spaces.",
+                        &x.span,
+                    ));
+                }
+                self.value(x);
+            } else if i + 1 == last {
+                if self.value(x) != Type::String {
+                    self.out
+                        .push(err("SELU0441", "A hook name must be a string.", &x.span));
+                }
+            } else {
+                self.value(x);
+            }
+        }
+        let expected = Type::Function {
+            params: if n == "command" {
+                vec![Type::String]
+            } else {
+                vec![]
+            },
+            required: 0,
+            rest: if n == "command" {
+                None
+            } else {
+                Some(Box::new(Type::Untyped))
+            },
+            ret: Box::new(Type::Void),
+        };
+        let t = self.value_expected(&args[last], Some(&expected));
+        if !matches!(t, Type::Function { .. } | Type::Error) {
+            self.out.push(err(
+                "SELU0442",
+                "The callback must be a function.",
+                &args[last].span,
+            ));
+        }
+        if n == "command"
+            && let Type::Function {
+                params, required, ..
+            } = &t
+            && (*required > 1
+                || params
+                    .first()
+                    .is_some_and(|p| !Type::String.assignable_to(p)))
+        {
+            self.out.push(
+                err(
+                    "SELU0442",
+                    "A command callback must accept one string argument.",
+                    &args[last].span,
+                )
+                .with_help("use (args: string) => { ... }"),
+            );
+        }
+        Some(Type::Void)
     }
 }

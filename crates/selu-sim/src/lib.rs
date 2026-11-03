@@ -113,7 +113,15 @@ impl Sim {
                     frame.set(
                         "Show",
                         lua.create_function(|_, this: Table| {
+                            let shown = this.get::<bool>("__shown")?;
                             this.set("__shown", true)?;
+                            if !shown
+                                && let Some(f) = this
+                                    .get::<Table>("__scripts")?
+                                    .get::<Option<Function>>("OnShow")?
+                            {
+                                f.call::<()>(this.clone())?;
+                            }
                             Ok(())
                         })?,
                     )?;
@@ -127,6 +135,25 @@ impl Sim {
                     frame.set(
                         "IsShown",
                         lua.create_function(|_, this: Table| this.get::<bool>("__shown"))?,
+                    )?;
+                    frame.set(
+                        "HookScript",
+                        lua.create_function(
+                            |lua, (this, name, hook): (Table, String, Function)| {
+                                let scripts = this.get::<Table>("__scripts")?;
+                                let old = scripts.get::<Option<Function>>(name.clone())?;
+                                scripts.set(
+                                    name,
+                                    lua.create_function(move |_, args: MultiValue| {
+                                        if let Some(old) = &old {
+                                            old.call::<()>(args.clone())?;
+                                        }
+                                        hook.call::<()>(args)
+                                    })?,
+                                )?;
+                                Ok(())
+                            },
+                        )?,
                     )?;
                     // Unknown frame methods: log once, return a no-op.
                     let mt = lua.create_table()?;
@@ -199,6 +226,13 @@ impl Sim {
                 .call::<()>((addon, ns.clone()))?;
         }
         Ok(())
+    }
+
+    pub fn slash(&self, line: &str) -> SimResult<()> {
+        self.lua
+            .globals()
+            .get::<Function>("__selu_sim_slash")?
+            .call(line)
     }
 
     pub fn eval(&self, source: &str) -> SimResult<()> {
