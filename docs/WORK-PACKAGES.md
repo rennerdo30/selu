@@ -351,6 +351,132 @@ on frames in `selu-sim/src/lib.rs`'s `CreateFrame` (the method list), and
 D1, D3 and D4 in any order; each branch gets an independent review, then
 the parent rebases the later ones. D2 starts after D1 is merged.
 
+## Round 3: saved data, manifests
+
+Round 3 runs D2 and M1 side by side (owner, 2026-11-04: "sure do that").
+"How every package works" applies unchanged, including the example rule,
+except for the files and code ranges below. D3 (classes) and D4 (built-ins)
+from round 2 are still being merged; stay out of their files
+(`classes.rs`, `wow.rs`, `selu-sim/src/wow_api.rs`).
+
+| Package | Owned files | Tests | Decisions | Codes |
+|---|---|---|---|---|
+| D2 saved data | `selu-check/src/saved.rs`, `selu-lower/src/saved.rs` (new), `selu-sim/src/saved.rs` (new), `examples/saved-settings/` | `selu-cli/tests/saved.rs` | `docs/lang/saved.md` | `SELU0460`-`0479` |
+| M1 manifests | `crates/selu-manifest/`, a new crate `crates/selu-manifest-gen/` (the generator binary), `manifests/retail/`, `manifests/forever/` | in those crates | `docs/manifests.md` | `SELU02xx` (manifest range) |
+
+### D2: `saved` with checked migrations
+
+SPEC-V1 3.2. Acceptance:
+
+1. Syntax (you own these parser and AST additions): `saved name = { ... };`,
+   `saved perCharacter name = { ... };`, `saved name version 2 = { ... };`,
+   `migrate name 1 -> 2 (old) { ... }`. Top level of a file only.
+2. Each `saved` declares one SavedVariables (or SavedVariablesPerCharacter)
+   global with an object type from its defaults; the `.toc` gets the
+   `## SavedVariables:` / `## SavedVariablesPerCharacter:` lines. The global's
+   Lua name is unique per addon (document the rule; it must not collide
+   with other addons' globals).
+3. On `ADDON_LOADED` for this addon: run the pending migrations in order,
+   then fill missing keys from the defaults (recursively for nested objects;
+   existing values, including `false`, are never overwritten; arrays and
+   maps in defaults are copied, not shared). A migration that throws stops
+   the chain, leaves the data at the last good version and retries at the
+   next login. Data from a newer version is left untouched and a warning is
+   logged. Document which event the addon's code may first read the data
+   in.
+4. Reading a saved value where it can't be loaded yet (top-level statements
+   of a file) is a compile error with a clear message; reads inside
+   functions and event handlers are fine.
+5. **Checked migrations:** every build writes the saved shapes to
+   `selu.saved.toml` in the project root (TOML, deterministic, meant to be
+   committed). If a shape changed and the version wasn't raised, or the
+   version was raised without a `migrate` from the previous version, the
+   build fails with a message that shows the migration to write (old and new
+   fields). Adding a field with a default needs no new version (defaults fill
+   it); removing or retyping a field does.
+6. The simulator models SavedVariables: `ADDON_LOADED` with the addon name
+   (fired by a helper that loads the addon), values saved at logout and
+   loaded at the next login (`Sim` helpers to log out, inspect and log in
+   again with the saved values), so tests can run a whole migration across
+   two "sessions".
+7. Example `examples/saved-settings/`: settings with defaults and one
+   migration, printing at `PLAYER_LOGIN`.
+
+Shared edits allowed: parser and AST for `saved`/`migrate` (add the
+statement kinds, the parser arms and the `visit.rs` children); one dispatch
+line each in the checker's and lowering's statement matches and in the
+checker's block predeclaration; the build pipeline in
+`crates/selu-cli/src/main.rs` (reading and writing `selu.saved.toml`, `.toc`
+lines); `generate_toc` in `selu-lower/src/lib.rs`; in `selu-sim/src/lib.rs`
+only the hooks your `saved.rs` needs to load an addon with saved data and
+fire `ADDON_LOADED`.
+
+### M1: generated manifests
+
+SPEC-V1 section 7, DESIGN.md section 2. Data source: the local clone
+`E:/Development/wow-ui-source` (branches `live` = retail, `forever`,
+`classic_era`, `classic`, `classic_anniversary` and more), folder
+`Interface/AddOns/Blizzard_APIDocumentationGenerated` (Lua tables: systems
+with `Functions`, `Events`, `Tables`; `FrameAPI*` files for widget methods).
+**That repository belongs to the owner's addon work: never check out,
+switch, fetch, reset or modify it.** Read with `git -C E:/Development/wow-ui-source
+show <branch>:<path>` or `git ls-tree`/`git archive` only.
+
+Acceptance:
+
+1. A generator binary (`crates/selu-manifest-gen`) takes a flavour, a
+   source branch or commit and an output path, and writes one manifest per
+   build: `manifests/<flavour>/<build>.json`. The build and version come
+   from the branch's commit (`12.1.5 (70391)`), recorded with the source
+   commit hash in the manifest. Read the documentation tables by running
+   them in a sandboxed Lua 5.1 (the workspace has `mlua`), never by
+   pattern-matching source text.
+2. The manifest schema (in `crates/selu-manifest`) grows to carry: functions
+   (global and namespaced) with typed parameters (name, type, nilable,
+   default), returns (several, nilable), `MayReturnNothing`, secret and
+   restriction flags as documented; events with typed payloads; structures
+   (tables) as object types; enums with their values; widget types with
+   their methods and inheritance; and the type names Blizzard uses kept
+   faithfully (`luaIndex` stays distinct from `number`: Selu arrays are
+   0-based, the checker will treat 1-based API indices specially later).
+   Document the mapping to Selu types in `docs/manifests.md`. Existing
+   fields and the current loader stay backward compatible: the checker on
+   `master` must keep working unchanged with the new manifests (it reads
+   names only today).
+3. **Names, signatures and flags only:** no documentation text, comments or
+   source are copied into manifests (SPEC-V1 7). Check the output for it.
+4. The interface number per flavour comes from the source (a Blizzard
+   addon's `## Interface:` line in that branch) or from an overlay; record
+   which. Note: the owner's addon docs say WoW: Forever needs interface
+   `16001` (`E:/Development/RennersAddons/docs/WOW_LUA_API.md`, read-only).
+5. Overlays: `manifests/<flavour>/overlay.toml`, hand-edited, merged on top
+   of generated data; every entry has a `note` saying where the knowledge
+   comes from. Unknown keys are an error. Start with what the generator
+   can't know (for example the interface number if needed).
+6. Output is deterministic: sorted, stable formatting, byte-identical when
+   run twice; a test proves it.
+7. Generate and commit manifests for `retail` (branch `live`) and `forever`.
+   `selu targets` lists them, `selu build --target retail` and `--target
+   forever` build every example, and the hand-made fixture keeps driving
+   the existing tests.
+8. Tests: the generator on small hand-written documentation tables (not
+   copied from Blizzard), schema round trips, overlay merging and errors,
+   determinism, and one smoke test that loads each committed manifest and
+   finds a few well-known entries (`C_Timer.After` or its real location,
+   `CreateFrame`, `PLAYER_LOGIN`, a widget method like `SetPoint`).
+9. Example: none needed (no language feature); instead `docs/manifests.md`
+   explains how to regenerate a manifest for a new client build.
+
+Shared edits allowed: `crates/selu-cli/src/main.rs` only where `selu
+targets` needs to show new manifest fields; the workspace `Cargo.toml`
+members list for the new crate. Nothing in `selu-check`, `selu-lower` or
+`selu-syntax`.
+
+### Merge order (round 3)
+
+D2 and M1 in any order. Wiring the typed manifests into the checker (game
+API values stop being untyped) is the next round, after D3 has merged.
+
 ## Merge order and reviews (round 1)
 
 A merges first (B's `for...of` uses its `continue` helper), then B and C in
