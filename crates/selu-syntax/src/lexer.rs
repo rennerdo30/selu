@@ -106,13 +106,28 @@ pub fn lex(file: &str, src: &str) -> Result<Vec<Token>, Diagnostic> {
                             return Err(err("SELU0103", "unterminated string".into(), start, i));
                         }
                         Some(b'\\') => {
-                            let n = bytes.get(i + 1).copied().unwrap_or(b' ');
-                            s.push(match n {
-                                b'n' => '\n',
-                                b't' => '\t',
-                                b'r' => '\r',
-                                other => other as char,
-                            });
+                            let escaped = match bytes.get(i + 1) {
+                                Some(b'n') => '\n',
+                                Some(b't') => '\t',
+                                Some(b'r') => '\r',
+                                Some(b'0') => '\0',
+                                Some(b'\\') => '\\',
+                                Some(b'"') => '"',
+                                Some(b'\'') => '\'',
+                                _ => {
+                                    let len = src[i + 1..].chars().next().map_or(0, char::len_utf8);
+                                    return Err(err(
+                                        "SELU0108",
+                                        format!("unknown escape `{}`", &src[i..i + 1 + len]),
+                                        i,
+                                        i + 1 + len,
+                                    )
+                                    .with_help(
+                                        r#"known escapes are \n \t \r \0 \\ \" \'; write a backslash as \\"#,
+                                    ));
+                                }
+                            };
+                            s.push(escaped);
                             i += 2;
                         }
                         Some(&b) if b == quote => {
@@ -165,7 +180,7 @@ pub fn lex(file: &str, src: &str) -> Result<Vec<Token>, Diagnostic> {
                     span: span(start, i),
                 });
             }
-            c if c.is_alphabetic() || c == '_' => {
+            c if c.is_ascii_alphabetic() || c == '_' => {
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                 }
@@ -368,12 +383,27 @@ pub fn lex(file: &str, src: &str) -> Result<Vec<Token>, Diagnostic> {
                     });
                 }
             }
-            other => {
+            _ => {
+                // Decode the real character: `bytes[i] as char` is wrong outside
+                // ASCII, and a span must end on a char boundary.
+                let ch = src[i..].chars().next().unwrap_or('?');
+                let end = i + ch.len_utf8();
+                if ch.is_alphabetic() {
+                    return Err(err(
+                        "SELU0107",
+                        format!("names can only use ASCII letters, digits and `_`, not `{ch}`"),
+                        start,
+                        end,
+                    )
+                    .with_help(
+                        "Lua 5.1 only accepts ASCII names; strings can contain any character",
+                    ));
+                }
                 return Err(err(
                     "SELU0104",
-                    format!("unexpected character `{other}`"),
+                    format!("unexpected character `{ch}`"),
                     start,
-                    start + 1,
+                    end,
                 ));
             }
         }

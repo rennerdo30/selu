@@ -5,7 +5,7 @@
 
 use selu_diagnostics::Span;
 use selu_manifest::Manifest;
-use selu_syntax::{Expr, ExprKind, Program, Stmt, StmtKind};
+use selu_syntax::{Expr, ExprKind, Program, Stmt, StmtKind, is_lua_keyword};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -115,13 +115,16 @@ impl Writer<'_> {
     }
     fn stmt(&mut self, s: &Stmt, indent: usize) {
         match &s.kind {
-            StmtKind::VarDecl { name, init, .. } => {
-                let text = match init {
-                    Some(e) => format!("local {name} = {}", self.expr(e)),
-                    None => format!("local {name}"),
-                };
-                self.emit(indent, &text, &s.span);
-            }
+            StmtKind::VarDecl { name, init, .. } => match init {
+                Some(e) if is_coalesce(e) => {
+                    self.coalesce_into(indent, &format!("local {name}"), name, e, &s.span);
+                }
+                Some(e) => {
+                    let text = format!("local {name} = {}", self.expr(e));
+                    self.emit(indent, &text, &s.span);
+                }
+                None => self.emit(indent, &format!("local {name}"), &s.span),
+            },
             StmtKind::FuncDecl { name, params, body } => {
                 let ps: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
                 self.emit(
@@ -145,6 +148,12 @@ impl Writer<'_> {
                 );
                 self.stmts(body, indent + 1);
                 self.emit(indent, "end)", &s.span);
+            }
+            StmtKind::Return(Some(e)) if is_coalesce(e) => {
+                self.emit(indent, "do", &s.span);
+                self.coalesce_into(indent + 1, "local __selu_v", "__selu_v", e, &s.span);
+                self.emit(indent + 1, "return __selu_v", &s.span);
+                self.emit(indent, "end", &s.span);
             }
             StmtKind::Return(e) => {
                 let text = match e {
@@ -195,10 +204,43 @@ impl Writer<'_> {
                 self.stmts(b, indent + 1);
                 self.emit(indent, "end", &s.span);
             }
-            StmtKind::Expr(e) => {
-                let text = self.expr(e);
-                self.emit(indent, &text, &s.span);
-            }
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Assign { target, value } if is_coalesce(value) => {
+                    let target = self.expr(target);
+                    self.emit(indent, "do", &s.span);
+                    self.coalesce_into(indent + 1, "local __selu_v", "__selu_v", value, &s.span);
+                    self.emit(indent + 1, &format!("{target} = __selu_v"), &s.span);
+                    self.emit(indent, "end", &s.span);
+                }
+                _ => {
+                    let text = self.expr(e);
+                    self.emit(indent, &text, &s.span);
+                }
+            },
+        }
+    }
+
+    /// `a ?? b ?? c` assigned to `var`: evaluate each side once and only when
+    /// needed, and keep `false` (unlike `a or b`):
+    ///
+    /// ```lua
+    /// local x = a
+    /// if x == nil then x = b end
+    /// if x == nil then x = c end
+    /// ```
+    fn coalesce_into(&mut self, indent: usize, decl: &str, var: &str, e: &Expr, span: &Span) {
+        let mut chain = Vec::new();
+        flatten_coalesce(e, &mut chain);
+        let (first, rest) = chain.split_first().expect("a chain has at least one part");
+        let first = self.expr(first);
+        self.emit(indent, &format!("{decl} = {first}"), span);
+        for part in rest {
+            let value = self.expr(part);
+            self.emit(
+                indent,
+                &format!("if {var} == nil then {var} = {value} end"),
+                span,
+            );
         }
     }
 
@@ -219,14 +261,20 @@ impl Writer<'_> {
                     "&&" => format!("({l} and {r})"),
                     "||" => format!("({l} or {r})"),
                     "!=" => format!("({l} ~= {r})"),
-                    // Note: `false` on the left also falls through here,
-                    // unlike a strict null-coalesce. Tracked in ARCHITECTURE.md.
-                    "??" => format!("({l} ~= nil and {l} or {r})"),
+                    // Inline form: the checker (SELU0308) only allows it when
+                    // `l` has no side effects and `r` is never false or nil, so
+                    // evaluating `l` twice and using and/or is exact, including
+                    // for `l == false`. Other forms use `coalesce_into`.
+                    "??" => format!("({l} == nil and {r} or {l})"),
                     _ => format!("({l} {op} {r})"),
                 }
             }
             ExprKind::Assign { target, value } => {
                 format!("{} = {}", self.expr(target), self.expr(value))
+            }
+            // `t.end` is fine in Selu but not in Lua: use `t["end"]`.
+            ExprKind::Member { object, name } if is_lua_keyword(name) => {
+                format!("{}[{}]", self.expr(object), lua_string(name))
             }
             ExprKind::Member { object, name } => format!("{}.{name}", self.expr(object)),
             ExprKind::Call { callee, args } => {
@@ -253,6 +301,21 @@ impl Writer<'_> {
     }
 }
 
+fn is_coalesce(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Binary { op, .. } if op == "??")
+}
+
+/// `a ?? b ?? c` (left-associative) as `[a, b, c]`.
+fn flatten_coalesce<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+    match &e.kind {
+        ExprKind::Binary { op, left, right } if op == "??" => {
+            flatten_coalesce(left, out);
+            out.push(right);
+        }
+        _ => out.push(e),
+    }
+}
+
 fn lua_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -263,6 +326,11 @@ fn lua_string(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            // Other control characters as Lua 5.1 decimal escapes; padding
+            // to three digits keeps a following digit from joining the escape.
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\{:03}", c as u32));
+            }
             c => out.push(c),
         }
     }

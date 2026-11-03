@@ -7,10 +7,12 @@ use selu_manifest::Manifest;
 use selu_syntax::{Expr, ExprKind, Program, Stmt, StmtKind};
 use std::collections::HashSet;
 
+mod rules;
+
 pub fn check(program: &Program, manifest: &Manifest) -> Vec<Diagnostic> {
     let mut locals = HashSet::new();
     collect_locals(&program.stmts, &mut locals);
-    let mut out = Vec::new();
+    let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         manifest,
         locals: &locals,

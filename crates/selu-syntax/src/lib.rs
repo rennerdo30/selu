@@ -8,6 +8,17 @@ pub mod parser;
 pub use ast::*;
 pub use parser::parse;
 
+/// Lua 5.1 reserved words. Selu source may spell them as names, but the
+/// generated Lua can't use them as identifiers.
+pub const LUA_KEYWORDS: &[&str] = &[
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in", "local",
+    "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+];
+
+pub fn is_lua_keyword(name: &str) -> bool {
+    LUA_KEYWORDS.contains(&name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +95,36 @@ on PLAYER_LOGIN() {
     fn unterminated_string_is_an_error() {
         let e = parse("t.selu", "const s = \"oops;\n").unwrap_err();
         assert_eq!(e.code, "SELU0103");
+    }
+
+    #[test]
+    fn non_ascii_name_is_an_error_not_a_hang() {
+        // This used to loop forever: the identifier arm accepted the first
+        // byte of a multi-byte character but never advanced past it.
+        let e = parse("t.selu", "const größe = 1;\n").unwrap_err();
+        assert_eq!(e.code, "SELU0107");
+        let rendered = e.render("const größe = 1;\n");
+        assert!(rendered.contains('ö'), "{rendered}");
+        // Any character, any position: still an error, never a panic.
+        assert_eq!(parse("t.selu", "§").unwrap_err().code, "SELU0104");
+    }
+
+    #[test]
+    fn strings_keep_unicode_and_reject_unknown_escapes() {
+        let p = parse("t.selu", r#"const s = "größe \"q\" \\ \0";"#).unwrap();
+        match &p.stmts[0].kind {
+            StmtKind::VarDecl { init: Some(e), .. } => {
+                assert_eq!(e.kind, ExprKind::Str("größe \"q\" \\ \0".into()));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            parse("t.selu", r#"const s = "\q";"#).unwrap_err().code,
+            "SELU0108"
+        );
+        assert_eq!(
+            parse("t.selu", r#"const s = "\ö";"#).unwrap_err().code,
+            "SELU0108"
+        );
     }
 }
