@@ -26,6 +26,8 @@ pub enum StmtKind {
         name: String,
         name_span: Span,
         params: Vec<Param>,
+        /// The written return type, if any.
+        ret: Option<String>,
         body: Vec<Stmt>,
     },
     OnHandler {
@@ -88,9 +90,14 @@ pub enum ExprKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Expr {
+    /// Unique within one parsed file; later passes key facts about an
+    /// expression (its type) by this id.
+    pub id: ExprId,
     pub kind: ExprKind,
     pub span: Span,
 }
+
+pub type ExprId = u32;
 
 impl Expr {
     /// `a.b.c` as `a.b.c`, when the whole chain is plain identifiers.

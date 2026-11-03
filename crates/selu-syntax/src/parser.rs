@@ -8,6 +8,7 @@ pub fn parse(file: &str, src: &str) -> Result<Program, Diagnostic> {
         tokens,
         pos: 0,
         file: file.to_string(),
+        next_id: 0,
     };
     let mut stmts = Vec::new();
     while !p.at(&Tok::Eof) {
@@ -20,9 +21,14 @@ struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     file: String,
+    next_id: ExprId,
 }
 
 impl Parser {
+    fn next_id(&mut self) -> ExprId {
+        self.next_id += 1;
+        self.next_id
+    }
     fn peek(&self) -> &Tok {
         &self.tokens[self.pos.min(self.tokens.len() - 1)].tok
     }
@@ -174,11 +180,13 @@ impl Parser {
                 self.bump();
                 let (name, name_span) = self.ident("a function name")?;
                 let params = self.params()?;
+                let ret = self.ty()?;
                 let (body, _) = self.block()?;
                 StmtKind::FuncDecl {
                     name,
                     name_span,
                     params,
+                    ret,
                     body,
                 }
             }
@@ -268,6 +276,7 @@ impl Parser {
             let value = self.assign()?;
             let span = Span::new(&self.file, left.span.start, value.span.end);
             return Ok(Expr {
+                id: self.next_id(),
                 kind: ExprKind::Assign {
                     target: Box::new(left),
                     value: Box::new(value),
@@ -290,6 +299,7 @@ impl Parser {
             let right = next(self)?;
             let span = Span::new(&self.file, left.span.start, right.span.end);
             left = Expr {
+                id: self.next_id(),
                 kind: ExprKind::Binary {
                     op: op.to_string(),
                     left: Box::new(left),
@@ -348,6 +358,7 @@ impl Parser {
                 let e = self.unary()?;
                 let span = Span::new(&self.file, start.start, e.span.end);
                 Ok(Expr {
+                    id: self.next_id(),
                     kind: ExprKind::Unary {
                         op: op.into(),
                         expr: Box::new(e),
@@ -365,6 +376,7 @@ impl Parser {
                 let (name, name_span) = self.ident("a member name")?;
                 let span = Span::new(&self.file, e.span.start, name_span.end);
                 e = Expr {
+                    id: self.next_id(),
                     kind: ExprKind::Member {
                         object: Box::new(e),
                         name,
@@ -383,6 +395,7 @@ impl Parser {
                 let close = self.expect(&Tok::RParen, "`)`")?;
                 let span = Span::new(&self.file, e.span.start, close.span.end);
                 e = Expr {
+                    id: self.next_id(),
                     kind: ExprKind::Call {
                         callee: Box::new(e),
                         args,
@@ -417,6 +430,10 @@ impl Parser {
                 .with_span(span));
             }
         };
-        Ok(Expr { kind, span })
+        Ok(Expr {
+            id: self.next_id(),
+            kind,
+            span,
+        })
     }
 }

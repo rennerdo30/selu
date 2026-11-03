@@ -243,14 +243,14 @@ fn build(
                 .unwrap_or_else(|| "main.selu".into());
             let program =
                 selu_syntax::parse(&display_name, &source).map_err(|d| fail(&d, &source))?;
-            let diags = selu_check::check(&program, manifest);
-            if !diags.is_empty() {
-                for d in &diags {
-                    eprint!("{}", d.render(&source));
-                }
+            let checked = selu_check::check_program(&program, manifest);
+            for d in &checked.diagnostics {
+                eprint!("{}", d.render(&source));
+            }
+            if checked.has_errors() {
                 return Err(ExitCode::FAILURE);
             }
-            let lowered = selu_lower::lower(&program, manifest);
+            let lowered = selu_lower::lower(&program, manifest, &checked.types);
             let stem = source_path
                 .file_stem()
                 .map(|n| n.to_string_lossy().into_owned())

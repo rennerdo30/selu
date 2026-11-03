@@ -1,12 +1,17 @@
-//! Semantic pass: names are resolved through real block scopes (SPEC-V1
-//! 2.2), and every global call and `on EVENT` handler must exist on the
-//! chosen target (DESIGN.md sections 2-3).
+//! Semantic pass: names are resolved through real block scopes, every
+//! expression gets a type, and the rules of SPEC-V1 2.2 are enforced. Every
+//! global call and `on EVENT` handler must exist on the chosen target
+//! (DESIGN.md sections 2-3).
 //!
 //! Scoping follows TypeScript's `let`/`const`: a name belongs to the block
 //! that declares it, inner blocks may shadow it, and it can't be used before
 //! its declaration in the same function. A function body may refer to a
 //! name declared later in an enclosing block; the lowering forward-declares
 //! such names so the Lua sees the same variable.
+//!
+//! Types are inferred from values; only parameters are written. `T?` values
+//! are narrowed by `x != null`, `x == null`, a bare `x` in a condition, `!`,
+//! `&&`, `||` and early returns.
 
 use selu_diagnostics::{Diagnostic, Span};
 use selu_manifest::Manifest;
@@ -14,17 +19,46 @@ use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind};
 use std::collections::HashMap;
 
 mod rules;
+pub mod types;
 
+pub use types::{Type, TypeTable};
+
+/// Diagnostics plus the type of every expression, for the lowering.
+#[derive(Debug, Default)]
+pub struct Checked {
+    pub diagnostics: Vec<Diagnostic>,
+    pub types: TypeTable,
+}
+
+impl Checked {
+    pub fn has_errors(&self) -> bool {
+        self.diagnostics
+            .iter()
+            .any(|d| d.severity == selu_diagnostics::Severity::Error)
+    }
+}
+
+/// Only the diagnostics; see [`check_program`] for the types too.
 pub fn check(program: &Program, manifest: &Manifest) -> Vec<Diagnostic> {
+    check_program(program, manifest).diagnostics
+}
+
+pub fn check_program(program: &Program, manifest: &Manifest) -> Checked {
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         manifest,
         out: &mut out,
         scopes: Vec::new(),
         fn_depth: 0,
+        returns: Vec::new(),
+        types: TypeTable::default(),
     };
-    ctx.block(&program.stmts, &[]);
-    out
+    ctx.block(&program.stmts, &[], Vec::new());
+    let types = ctx.types;
+    Checked {
+        diagnostics: out,
+        types,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,17 +73,51 @@ enum Kind {
 #[derive(Debug, Clone)]
 struct Binding {
     kind: Kind,
+    ty: Type,
     /// Function nesting depth of the declaring scope.
     fn_depth: usize,
     /// False until the declaration statement has run.
     ready: bool,
 }
 
+/// A narrower type for a name inside part of a scope (`x` is a `number`, not
+/// a `number?`, after `if (x == null) return;`).
+#[derive(Debug, Clone)]
+struct Narrow {
+    ty: Type,
+    fn_depth: usize,
+}
+
+#[derive(Default)]
+struct Scope {
+    names: HashMap<String, Binding>,
+    narrowed: HashMap<String, Narrow>,
+}
+
+type Narrowings = Vec<(String, Type)>;
+
 struct Ctx<'a> {
     manifest: &'a Manifest,
     out: &'a mut Vec<Diagnostic>,
-    scopes: Vec<HashMap<String, Binding>>,
+    scopes: Vec<Scope>,
     fn_depth: usize,
+    /// Per function being checked: the type and span of every `return`.
+    returns: Vec<Vec<(Type, Span)>>,
+    types: TypeTable,
+}
+
+fn err(code: &str, msg: impl Into<String>, span: &Span) -> Diagnostic {
+    Diagnostic::error(code, msg).with_span(span.clone())
+}
+
+/// "a number", "a string?" for messages.
+fn a(t: &Type) -> String {
+    match t {
+        Type::Null => "`null`".into(),
+        Type::Void => "nothing".into(),
+        Type::Function { .. } => "a function".into(),
+        t => format!("a `{t}`"),
+    }
 }
 
 impl Ctx<'_> {
@@ -72,50 +140,101 @@ impl Ctx<'_> {
         );
     }
 
-    fn lookup(&self, name: &str) -> Option<&Binding> {
-        self.scopes.iter().rev().find_map(|s| s.get(name))
+    // ---- scopes -------------------------------------------------------
+
+    /// The binding for `name` and the index of its scope.
+    fn lookup(&self, name: &str) -> Option<(usize, &Binding)> {
+        self.scopes
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, s)| s.names.get(name).map(|b| (i, b)))
+    }
+
+    /// The type of `name` at this point: a narrowing that applies here, or
+    /// the declared type. A narrowing made in another function only applies
+    /// to a `const`, since a `let` may change before that function runs.
+    fn type_of(&self, name: &str) -> Option<Type> {
+        let (at, b) = self.lookup(name)?;
+        for scope in self.scopes[at..].iter().rev() {
+            if let Some(n) = scope.narrowed.get(name)
+                && (n.fn_depth == self.fn_depth || b.kind == Kind::Const)
+            {
+                return Some(n.ty.clone());
+            }
+        }
+        Some(b.ty.clone())
+    }
+
+    fn narrow_here(&mut self, narrowings: Narrowings) {
+        let fn_depth = self.fn_depth;
+        let scope = self.scopes.last_mut().expect("a scope is open");
+        for (name, ty) in narrowings {
+            scope.narrowed.insert(name, Narrow { ty, fn_depth });
+        }
     }
 
     /// Declares `name` in the innermost scope; only parameters start ready.
-    fn declare(&mut self, name: &str, span: &Span, kind: Kind) {
+    fn declare(&mut self, name: &str, span: &Span, kind: Kind, ty: Type) {
         let fn_depth = self.fn_depth;
         let scope = self.scopes.last_mut().expect("a scope is open");
-        if scope.contains_key(name) {
+        if scope.names.contains_key(name) {
             self.out.push(
-                Diagnostic::error(
-                    "SELU0312",
-                    format!("`{name}` is already declared in this block"),
-                )
-                .with_span(span.clone())
-                .with_help(format!(
-                    "rename one of them, or assign with `{name} = ...;` instead of declaring it again"
-                )),
+                err("SELU0312", format!("`{name}` is already declared in this block"), span)
+                    .with_help(format!(
+                        "rename one of them, or assign with `{name} = ...;` instead of declaring it again"
+                    )),
             );
             return;
         }
-        scope.insert(
+        scope.names.insert(
             name.to_string(),
             Binding {
                 kind,
+                ty,
                 fn_depth,
                 ready: kind == Kind::Param,
             },
         );
     }
 
-    fn mark_ready(&mut self, name: &str) {
-        if let Some(b) = self.scopes.last_mut().and_then(|s| s.get_mut(name)) {
+    /// Marks the declaration in the innermost scope as run, with its type.
+    fn finish_decl(&mut self, name: &str, ty: Type) {
+        if let Some(b) = self.scopes.last_mut().and_then(|s| s.names.get_mut(name)) {
             b.ready = true;
+            b.ty = ty;
         }
+    }
+
+    fn annotation(&mut self, text: &Option<String>, span: &Span) -> Option<Type> {
+        let text = text.as_ref()?;
+        match types::parse_annotation(text) {
+            Some(t) => Some(t),
+            None => {
+                self.out.push(
+                    err("SELU0320", format!("unknown type `{text}`"), span)
+                        .with_help("the types so far are `number`, `string`, `boolean` and `T?` for \"a T or null\""),
+                );
+                Some(Type::Error)
+            }
+        }
+    }
+
+    fn param_types(&mut self, params: &[Param]) -> Vec<Type> {
+        params
+            .iter()
+            .map(|p| self.annotation(&p.ty, &p.span).unwrap_or(Type::Untyped))
+            .collect()
     }
 
     /// A block: opens a scope, declares everything the block declares (so a
     /// use before the declaration finds the right binding, not an outer
     /// one), then checks the statements in order.
-    fn block(&mut self, stmts: &[Stmt], params: &[Param]) {
-        self.scopes.push(HashMap::new());
-        for p in params {
-            self.declare(&p.name, &p.span, Kind::Param);
+    fn block(&mut self, stmts: &[Stmt], params: &[(Param, Type)], narrowings: Narrowings) {
+        self.scopes.push(Scope::default());
+        self.narrow_here(narrowings);
+        for (p, ty) in params {
+            self.declare(&p.name, &p.span, Kind::Param, ty.clone());
         }
         let top = self.scopes.len() == 1;
         for s in stmts {
@@ -124,14 +243,31 @@ impl Ctx<'_> {
                     is_const,
                     name,
                     name_span,
+                    ty,
                     ..
                 } => {
+                    // Until the declaration runs, a function body that uses
+                    // the name sees its written type, or an unchecked one.
                     let kind = if *is_const { Kind::Const } else { Kind::Let };
-                    self.declare(name, name_span, kind);
+                    let t = ty.as_deref().and_then(types::parse_annotation);
+                    self.declare(name, name_span, kind, t.unwrap_or(Type::Untyped));
                 }
                 StmtKind::FuncDecl {
-                    name, name_span, ..
-                } => self.declare(name, name_span, Kind::Function),
+                    name,
+                    name_span,
+                    params,
+                    ret,
+                    ..
+                } => {
+                    // The return type is known only after the body; until then
+                    // calls see an unchecked result.
+                    let ret = self.annotation(ret, name_span).unwrap_or(Type::Untyped);
+                    let ty = Type::Function {
+                        params: self.param_types(params),
+                        ret: Box::new(ret),
+                    };
+                    self.declare(name, name_span, Kind::Function, ty);
+                }
                 StmtKind::Global {
                     name, name_span, ..
                 } => self.declare_global(name, name_span, &s.span, top),
@@ -147,111 +283,284 @@ impl Ctx<'_> {
     fn declare_global(&mut self, name: &str, name_span: &Span, stmt_span: &Span, top: bool) {
         if !top {
             self.out.push(
-                Diagnostic::error(
+                err(
                     "SELU0316",
                     "`global` can only be used at the top level of a file",
+                    stmt_span,
                 )
-                .with_span(stmt_span.clone())
                 .with_help(format!(
                     "move `global {name} = ...;` to the top level, and assign it here with `{name} = ...;`"
                 )),
             );
         } else if self.manifest.has_global(name) {
             self.out.push(
-                Diagnostic::error(
+                err(
                     "SELU0312",
                     format!(
                         "`{name}` is already a global of the game on target {}",
                         self.target()
                     ),
+                    name_span,
                 )
-                .with_span(name_span.clone())
                 .with_help("pick a name with your addon's prefix, for example `MyAddon_Settings`"),
             );
         } else {
-            self.declare(name, name_span, Kind::Global);
+            self.declare(name, name_span, Kind::Global, Type::Untyped);
         }
     }
 
-    fn function_body(&mut self, params: &[Param], body: &[Stmt]) {
+    /// Checks a function body and returns its return type: the written one,
+    /// or the one inferred from its `return` statements.
+    fn function_body(
+        &mut self,
+        params: &[Param],
+        param_types: Vec<Type>,
+        written_ret: Option<Type>,
+        body: &[Stmt],
+    ) -> Type {
         self.fn_depth += 1;
-        self.block(body, params);
+        self.returns.push(Vec::new());
+        let params: Vec<(Param, Type)> = params.iter().cloned().zip(param_types).collect();
+        self.block(body, &params, Vec::new());
+        let returns = self.returns.pop().unwrap_or_default();
         self.fn_depth -= 1;
+        if let Some(written) = written_ret {
+            for (t, span) in &returns {
+                let ok = if *t == Type::Void {
+                    written == Type::Void || written.is_optional() || written.is_open()
+                } else {
+                    t.assignable_to(&written)
+                };
+                if !ok {
+                    self.out.push(err(
+                        "SELU0337",
+                        format!(
+                            "this returns {}, but the function says it returns {}",
+                            a(t),
+                            a(&written)
+                        ),
+                        span,
+                    ));
+                }
+            }
+            return written;
+        }
+        infer_return(&returns, self.out)
     }
+
+    // ---- statements ---------------------------------------------------
 
     fn stmt(&mut self, s: &Stmt) {
         match &s.kind {
-            StmtKind::VarDecl { name, init, .. } => {
-                if let Some(e) = init {
-                    self.expr(e);
-                }
-                self.mark_ready(name);
+            StmtKind::VarDecl {
+                is_const,
+                name,
+                name_span,
+                ty,
+                init,
+            } => {
+                let written = self.annotation(ty, name_span);
+                let ty = self.declared_type(*is_const, name, name_span, written, init.as_deref());
+                self.finish_decl(name, ty);
             }
-            StmtKind::Global { name, init, .. } => {
-                self.expr(init);
-                self.mark_ready(name);
+            StmtKind::Global {
+                name,
+                name_span,
+                init,
+            } => {
+                let t = self.value(init);
+                let t = self.inferred(name, name_span, t);
+                self.finish_decl(name, t);
             }
             StmtKind::FuncDecl {
                 name, params, body, ..
             } => {
                 // Ready before the body, so a function can call itself.
-                self.mark_ready(name);
-                self.function_body(params, body);
+                let declared = self.type_of(name);
+                self.finish_decl(name, declared.clone().unwrap_or(Type::Error));
+                if let Some(Type::Function {
+                    params: param_types,
+                    ret,
+                }) = declared
+                {
+                    let written = (*ret != Type::Untyped).then_some(*ret);
+                    let ret = self.function_body(params, param_types.clone(), written, body);
+                    self.finish_decl(
+                        name,
+                        Type::Function {
+                            params: param_types,
+                            ret: Box::new(ret),
+                        },
+                    );
+                }
             }
             StmtKind::OnHandler {
                 event,
                 params,
                 body,
             } => {
-                if self.manifest.event(event).is_none() {
+                let entry = self.manifest.event(event).cloned();
+                if entry.is_none() {
                     self.out.push(
-                        Diagnostic::error(
+                        err(
                             "SELU0302",
                             format!(
                                 "event `{event}` does not exist on target {}; the handler would never run",
                                 self.target()
                             ),
+                            &s.span,
                         )
-                        .with_span(s.span.clone())
                         .with_help("check the event spelling, or pick a target that has it"),
                     );
                 }
-                self.function_body(params, body);
+                // Parameter types come from the event in the manifest.
+                let mut param_types = self.param_types(params);
+                if let Some(entry) = entry {
+                    for (t, p) in param_types.iter_mut().zip(&entry.params) {
+                        if *t == Type::Untyped {
+                            *t = types::parse_annotation(&p.ty).unwrap_or(Type::Untyped);
+                        }
+                    }
+                }
+                self.function_body(params, param_types, Some(Type::Untyped), body);
             }
-            StmtKind::Return(Some(e)) => self.expr(e),
-            StmtKind::Return(None) => {}
+            StmtKind::Return(e) => {
+                let t = match e {
+                    Some(e) => self.value(e),
+                    None => Type::Void,
+                };
+                if let Some(r) = self.returns.last_mut() {
+                    r.push((t, s.span.clone()));
+                } else {
+                    self.out.push(err(
+                        "SELU0317",
+                        "`return` can only be used inside a function or handler",
+                        &s.span,
+                    ));
+                }
+            }
             StmtKind::If {
                 cond,
                 then_branch,
                 else_branch,
             } => {
-                self.expr(cond);
-                self.block(then_branch, &[]);
+                let (then_n, else_n) = self.condition(cond);
+                self.block(then_branch, &[], then_n.clone());
                 if let Some(e) = else_branch {
-                    self.block(e, &[]);
+                    self.block(e, &[], else_n.clone());
+                }
+                // `if (x == null) return;`: after the `if`, x is not null.
+                if always_exits(then_branch) {
+                    self.narrow_here(else_n);
+                } else if else_branch.as_deref().is_some_and(always_exits) {
+                    self.narrow_here(then_n);
                 }
             }
-            StmtKind::Block(b) => self.block(b, &[]),
-            StmtKind::Expr(e) => self.expr(e),
+            StmtKind::Block(b) => self.block(b, &[], Vec::new()),
+            StmtKind::Expr(e) => {
+                // A statement may be a call returning nothing.
+                self.expr(e);
+            }
         }
     }
 
-    /// A read of `name`.
-    fn read(&mut self, name: &str, span: &Span) {
-        match self.lookup(name).cloned() {
-            Some(b) => self.check_ready(name, &b, span),
-            None if self.manifest.has_global(name) => {}
-            None => self.out.push(
-                Diagnostic::error("SELU0310", format!("`{name}` is not declared"))
-                    .with_span(span.clone())
-                    .with_label(format!(
-                        "no variable, function or game global `{name}` on {}",
-                        self.target()
-                    ))
+    /// The type of a declared variable, from its written type and value.
+    fn declared_type(
+        &mut self,
+        is_const: bool,
+        name: &str,
+        name_span: &Span,
+        written: Option<Type>,
+        init: Option<&Expr>,
+    ) -> Type {
+        let Some(init) = init else {
+            return match written {
+                Some(t) if t.is_optional() && !is_const => t,
+                Some(t) if !is_const && !t.is_open() => {
+                    self.out.push(
+                        err("SELU0322", format!("`{name}` has no starting value"), name_span)
+                            .with_help(format!(
+                                "give it one (`let {name}: {t} = ...;`), or allow null: `let {name}: {t}? = null;`"
+                            )),
+                    );
+                    t
+                }
+                Some(t) if !is_const => t,
+                _ => {
+                    let keyword = if is_const { "const" } else { "let" };
+                    self.out.push(
+                        err(
+                            "SELU0321",
+                            format!("`{name}` needs a starting value"),
+                            name_span,
+                        )
+                        .with_help(format!("write `{keyword} {name} = ...;`")),
+                    );
+                    written.unwrap_or(Type::Error)
+                }
+            };
+        };
+        let t = self.value(init);
+        match written {
+            Some(w) => {
+                if !t.assignable_to(&w) {
+                    self.out.push(err(
+                        "SELU0336",
+                        format!("`{name}` is {}, but this value is {}", a(&w), a(&t)),
+                        &init.span,
+                    ));
+                }
+                w
+            }
+            None => self.inferred(name, name_span, t),
+        }
+    }
+
+    /// The type a declaration without a written type gets from its value.
+    fn inferred(&mut self, name: &str, name_span: &Span, t: Type) -> Type {
+        match t {
+            Type::Null => {
+                self.out.push(
+                    err(
+                        "SELU0321",
+                        format!(
+                            "`{name}` needs a type: `null` alone doesn't say what it will hold"
+                        ),
+                        name_span,
+                    )
                     .with_help(format!(
-                        "declare it first, for example `const {name} = ...;`, or check the spelling"
+                        "write the type, for example `let {name}: number? = null;`"
                     )),
-            ),
+                );
+                Type::Error
+            }
+            Type::Void => Type::Error,
+            t => t,
+        }
+    }
+
+    // ---- names --------------------------------------------------------
+
+    fn read(&mut self, name: &str, span: &Span) -> Type {
+        match self.lookup(name).map(|(_, b)| b.clone()) {
+            Some(b) => {
+                self.check_ready(name, &b, span);
+                self.type_of(name).unwrap_or(Type::Error)
+            }
+            None if self.manifest.has_global(name) => Type::Untyped,
+            None => {
+                self.out.push(
+                    err("SELU0310", format!("`{name}` is not declared"), span)
+                        .with_label(format!(
+                            "no variable, function or game global `{name}` on {}",
+                            self.target()
+                        ))
+                        .with_help(format!(
+                            "declare it first, for example `const {name} = ...;`, or check the spelling"
+                        )),
+                );
+                Type::Error
+            }
         }
     }
 
@@ -272,118 +581,551 @@ impl Ctx<'_> {
                 format!("move the declaration of `{name}` above this line"),
             )
         };
+        self.out.push(err("SELU0313", msg, span).with_help(help));
+    }
+
+    /// `name = value;` where the value has type `value`.
+    fn write(&mut self, name: &str, span: &Span, value: &Type) {
+        let Some((at, b)) = self.lookup(name).map(|(i, b)| (i, b.clone())) else {
+            if self.manifest.has_global(name) {
+                self.out.push(
+                    err("SELU0315", format!("`{name}` belongs to the game and can't be replaced"), span)
+                        .with_help("replacing a game global breaks other addons and Blizzard's UI; to run code when it is called, use `hook(...)`"),
+                );
+            } else {
+                self.out.push(
+                    err("SELU0314", format!("`{name}` is not declared; writing a global needs `global`"), span)
+                        .with_help(format!(
+                            "declare a local with `let {name} = ...;`, or a global at the top of the file with `global {name} = ...;`"
+                        )),
+                );
+            }
+            return;
+        };
+        self.check_ready(name, &b, span);
+        match b.kind {
+            Kind::Const => {
+                self.out.push(
+                    err(
+                        "SELU0311",
+                        format!("`{name}` is a `const` and can't be assigned again"),
+                        span,
+                    )
+                    .with_help(format!(
+                        "declare `{name}` with `let` if its value needs to change"
+                    ))
+                    .with_fix(format!("change `const {name}` to `let {name}`")),
+                );
+                return;
+            }
+            Kind::Function => {
+                self.out.push(
+                    err(
+                        "SELU0311",
+                        format!("`{name}` is a function and can't be assigned"),
+                        span,
+                    )
+                    .with_help(format!("use a `let` variable if `{name}` needs to change")),
+                );
+                return;
+            }
+            Kind::Let | Kind::Param | Kind::Global => {}
+        }
+        if !value.assignable_to(&b.ty) {
+            self.out.push(err(
+                "SELU0336",
+                format!("`{name}` is {}, but this value is {}", a(&b.ty), a(value)),
+                span,
+            ));
+            return;
+        }
+        // Narrowing after the assignment: a non-null value narrows here; a
+        // value that may be null undoes narrowings up to the declaration,
+        // since this branch may or may not have run.
+        let fn_depth = self.fn_depth;
+        if b.ty.is_optional() && !value.is_optional() && !value.is_open() {
+            self.narrow_here(vec![(name.to_string(), value.clone())]);
+        } else {
+            for scope in &mut self.scopes[at..] {
+                scope.narrowed.insert(
+                    name.to_string(),
+                    Narrow {
+                        ty: b.ty.clone(),
+                        fn_depth,
+                    },
+                );
+            }
+        }
+    }
+
+    // ---- expressions --------------------------------------------------
+
+    /// An expression whose value is used (stored, passed, returned, an
+    /// operand): it must be a real value.
+    fn value(&mut self, e: &Expr) -> Type {
+        let t = self.expr(e);
+        match t {
+            Type::Cond => {
+                self.out.push(
+                    err("SELU0327", "this `&&`/`||` mixes in a value that may be null, so its result isn't a boolean", &e.span)
+                        .with_help("use it directly in an `if`, or compare first: `x != null && ...`"),
+                );
+                Type::Error
+            }
+            Type::Void => {
+                self.out.push(err(
+                    "SELU0332",
+                    "this call returns nothing, so it has no value to use",
+                    &e.span,
+                ));
+                Type::Error
+            }
+            t => t,
+        }
+    }
+
+    /// An expression used as a condition (SPEC-V1 2.2: a `boolean` or a
+    /// `T?`), and the narrowings that hold when it is true and when false.
+    fn condition(&mut self, e: &Expr) -> (Narrowings, Narrowings) {
+        let t = self.expr(e);
+        self.check_condition_type(e, &t);
+        self.narrowings(e)
+    }
+
+    fn check_condition_type(&mut self, e: &Expr, t: &Type) {
+        let fix = match t {
+            Type::Number => "compare it: `count != 0` or `count > 0`",
+            Type::String => "compare it: `text != \"\"`",
+            Type::Void => "this call returns nothing; call it on its own line",
+            Type::Function { .. } => "did you mean to call it?",
+            _ => return,
+        };
         self.out.push(
-            Diagnostic::error("SELU0313", msg)
-                .with_span(span.clone())
-                .with_help(help),
+            err(
+                "SELU0328",
+                format!("a condition must be a `boolean` or a value that may be null, not {}", a(t)),
+                &e.span,
+            )
+            .with_help("Lua treats 0 and \"\" as true and JavaScript as false, so Selu asks you to say which you mean")
+            .with_fix(fix),
         );
     }
 
-    /// The target of `name = value;`.
-    fn write(&mut self, name: &str, span: &Span) {
-        match self.lookup(name).cloned() {
-            Some(b) => {
-                self.check_ready(name, &b, span);
-                match b.kind {
-                    Kind::Const => self.out.push(
-                        Diagnostic::error(
-                            "SELU0311",
-                            format!("`{name}` is a `const` and can't be assigned again"),
-                        )
-                        .with_span(span.clone())
-                        .with_help(format!(
-                            "declare `{name}` with `let` if its value needs to change"
-                        ))
-                        .with_fix(format!("change `const {name}` to `let {name}`")),
-                    ),
-                    Kind::Function => self.out.push(
-                        Diagnostic::error(
-                            "SELU0311",
-                            format!("`{name}` is a function and can't be assigned"),
-                        )
-                        .with_span(span.clone())
-                        .with_help(format!("use a `let` variable if `{name}` needs to change")),
-                    ),
-                    Kind::Let | Kind::Param | Kind::Global => {}
+    /// What a true or false condition says about optional names.
+    fn narrowings(&self, e: &Expr) -> (Narrowings, Narrowings) {
+        let optional_name = |x: &Expr| -> Option<(String, Type)> {
+            let ExprKind::Ident(n) = &x.kind else {
+                return None;
+            };
+            match self.type_of(n)? {
+                Type::Optional(inner) => Some((n.clone(), *inner)),
+                _ => None,
+            }
+        };
+        match &e.kind {
+            ExprKind::Ident(_) => match optional_name(e) {
+                Some(n) => (vec![n], vec![]),
+                None => (vec![], vec![]),
+            },
+            ExprKind::Unary { op, expr } if op == "!" => {
+                let (t, f) = self.narrowings(expr);
+                (f, t)
+            }
+            ExprKind::Binary { op, left, right } if op == "==" || op == "!=" => {
+                let name = match (&left.kind, &right.kind) {
+                    (_, ExprKind::Null) => optional_name(left),
+                    (ExprKind::Null, _) => optional_name(right),
+                    _ => None,
+                };
+                let narrowed: Narrowings = name.into_iter().collect();
+                if op == "!=" {
+                    (narrowed, vec![])
+                } else {
+                    (vec![], narrowed)
                 }
             }
-            None if self.manifest.has_global(name) => self.out.push(
-                Diagnostic::error(
-                    "SELU0315",
-                    format!("`{name}` belongs to the game and can't be replaced"),
-                )
-                .with_span(span.clone())
-                .with_help("replacing a game global breaks other addons and Blizzard's UI; to run code when it is called, use `hook(...)`"),
-            ),
-            None => self.out.push(
-                Diagnostic::error(
-                    "SELU0314",
-                    format!("`{name}` is not declared; writing a global needs `global`"),
-                )
-                .with_span(span.clone())
-                .with_help(format!(
-                    "declare a local with `let {name} = ...;`, or a global at the top of the file with `global {name} = ...;`"
-                )),
-            ),
+            ExprKind::Binary { op, left, right } if op == "&&" => {
+                let (mut t, _) = self.narrowings(left);
+                t.extend(self.narrowings(right).0);
+                (t, vec![])
+            }
+            ExprKind::Binary { op, left, right } if op == "||" => {
+                let (_, mut f) = self.narrowings(left);
+                f.extend(self.narrowings(right).1);
+                (vec![], f)
+            }
+            _ => (vec![], vec![]),
         }
     }
 
-    fn expr(&mut self, e: &Expr) {
+    fn expr(&mut self, e: &Expr) -> Type {
+        let t = self.expr_inner(e);
+        self.types.set(e.id, t.clone());
+        t
+    }
+
+    fn expr_inner(&mut self, e: &Expr) -> Type {
         match &e.kind {
+            ExprKind::Number(_) => Type::Number,
+            ExprKind::Str(_) => Type::String,
+            ExprKind::Bool(_) => Type::Boolean,
+            ExprKind::Null => Type::Null,
             ExprKind::Ident(name) => self.read(name, &e.span),
-            ExprKind::Call { callee, args } => {
-                self.callee(callee);
-                for a in args {
-                    self.expr(a);
+            ExprKind::Call { callee, args } => self.call(e, callee, args),
+            ExprKind::Unary { op, expr } => {
+                if op == "!" {
+                    let t = self.expr(expr);
+                    self.check_condition_type(expr, &t);
+                    Type::Boolean
+                } else {
+                    let t = self.value(expr);
+                    if !t.is_open() && t != Type::Number {
+                        self.out.push(err(
+                            "SELU0325",
+                            format!("`-` needs a number, not {}", a(&t)),
+                            &expr.span,
+                        ));
+                    }
+                    Type::Number
                 }
             }
-            ExprKind::Binary { left, right, .. } => {
-                self.expr(left);
-                self.expr(right);
-            }
-            ExprKind::Unary { expr, .. } => self.expr(expr),
+            ExprKind::Binary { op, left, right } => self.binary(e, op, left, right),
             ExprKind::Assign { target, value } => {
                 // The value runs first, then the store.
-                self.expr(value);
+                let t = self.value(value);
                 match &target.kind {
-                    ExprKind::Ident(name) => self.write(name, &target.span),
-                    _ => self.expr(target),
+                    ExprKind::Ident(name) => self.write(name, &target.span, &t),
+                    _ => {
+                        self.expr(target);
+                    }
                 }
+                Type::Void
             }
-            ExprKind::Member { object, .. } => self.expr(object),
-            ExprKind::Number(_) | ExprKind::Str(_) | ExprKind::Bool(_) | ExprKind::Null => {}
+            ExprKind::Member { object, name } => {
+                let t = self.value(object);
+                self.member(&t, name, object)
+            }
         }
     }
 
-    fn callee(&mut self, callee: &Expr) {
-        match &callee.kind {
+    fn member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
+        match t {
+            Type::Untyped | Type::Error => Type::Untyped,
+            Type::Optional(_) | Type::Null => {
+                let what = object.dotted_name().unwrap_or_else(|| "this value".into());
+                self.out.push(
+                    err(
+                        "SELU0331",
+                        format!("`{what}` may be null here, so `.{name}` could fail"),
+                        &object.span,
+                    )
+                    .with_help(format!("check it first: `if ({what} != null) {{ ... }}`")),
+                );
+                Type::Error
+            }
+            t => {
+                self.out.push(err(
+                    "SELU0330",
+                    format!("{} has no field `{name}`", capital(&a(t))),
+                    &object.span,
+                ));
+                Type::Error
+            }
+        }
+    }
+
+    fn binary(&mut self, e: &Expr, op: &str, left: &Expr, right: &Expr) -> Type {
+        match op {
+            "&&" | "||" => {
+                let l = self.expr(left);
+                self.check_condition_type(left, &l);
+                // The right side runs only when the left one is true (`&&`)
+                // or false (`||`), so it sees that narrowing.
+                let (t, f) = self.narrowings(left);
+                self.scopes.push(Scope::default());
+                self.narrow_here(if op == "&&" { t } else { f });
+                let r = self.expr(right);
+                self.scopes.pop();
+                self.check_condition_type(right, &r);
+                match (&l, &r) {
+                    (Type::Boolean, Type::Boolean) => Type::Boolean,
+                    _ if l.is_open() || r.is_open() => Type::Untyped,
+                    _ => Type::Cond,
+                }
+            }
+            "??" => {
+                let l = self.value(left);
+                let r = self.value(right);
+                if !l.is_optional() && !l.is_open() {
+                    self.out.push(
+                        Diagnostic::warning("SELU0329", format!("the left side is {}, which is never null, so `??` never uses the right side", a(&l)))
+                            .with_span(left.span.clone()),
+                    );
+                    return l;
+                }
+                if l == Type::Null {
+                    return r;
+                }
+                let l = l.non_null();
+                match Type::join(&l, &r) {
+                    Some(t) => t,
+                    None => {
+                        self.out.push(err(
+                            "SELU0339",
+                            format!(
+                                "both sides of `??` must have the same type; this is {} and {}",
+                                a(&l),
+                                a(&r)
+                            ),
+                            &e.span,
+                        ));
+                        Type::Error
+                    }
+                }
+            }
+            "==" | "!=" => {
+                let l = self.value(left);
+                let r = self.value(right);
+                if Type::join(&l, &r).is_none() {
+                    self.out.push(
+                        err(
+                            "SELU0326",
+                            format!("{} and {} are never equal", capital(&a(&l)), a(&r)),
+                            &e.span,
+                        )
+                        .with_help(
+                            "Selu compares without converting types; convert one side first",
+                        ),
+                    );
+                }
+                Type::Boolean
+            }
+            "<" | "<=" | ">" | ">=" => {
+                let l = self.value(left);
+                let r = self.value(right);
+                let ok = l.is_open()
+                    || r.is_open()
+                    || (l == r && matches!(l, Type::Number | Type::String));
+                if !ok {
+                    self.out.push(err(
+                        "SELU0326",
+                        format!(
+                            "`{op}` compares two numbers or two strings, not {} and {}",
+                            a(&l),
+                            a(&r)
+                        ),
+                        &e.span,
+                    ));
+                }
+                Type::Boolean
+            }
+            "+" => {
+                let l = self.value(left);
+                let r = self.value(right);
+                match (&l, &r) {
+                    (Type::Number, Type::Number) => Type::Number,
+                    (Type::String, Type::String) => Type::String,
+                    (Type::Error, _) | (_, Type::Error) => Type::Error,
+                    (Type::Untyped, Type::Untyped) => {
+                        self.out.push(
+                            err(
+                                "SELU0324",
+                                "can't tell whether this `+` adds numbers or joins strings",
+                                &e.span,
+                            )
+                            .with_help(
+                                "give the values a type, for example a parameter `(count: number)`",
+                            ),
+                        );
+                        Type::Error
+                    }
+                    (Type::Untyped, t @ (Type::Number | Type::String))
+                    | (t @ (Type::Number | Type::String), Type::Untyped) => t.clone(),
+                    _ => {
+                        let help = if matches!(
+                            (&l, &r),
+                            (Type::Number, Type::String) | (Type::String, Type::Number)
+                        ) {
+                            "use a template string: `${a}${b}`"
+                        } else {
+                            "`+` adds two numbers or joins two strings"
+                        };
+                        self.out.push(
+                            err(
+                                "SELU0323",
+                                format!("`+` can't combine {} and {}", a(&l), a(&r)),
+                                &e.span,
+                            )
+                            .with_help(help),
+                        );
+                        Type::Error
+                    }
+                }
+            }
+            _ => {
+                // - * / %
+                let l = self.value(left);
+                let r = self.value(right);
+                for (t, side) in [(&l, left), (&r, right)] {
+                    if !t.is_open() && *t != Type::Number {
+                        self.out.push(err(
+                            "SELU0325",
+                            format!("`{op}` needs numbers, not {}", a(t)),
+                            &side.span,
+                        ));
+                    }
+                }
+                Type::Number
+            }
+        }
+    }
+
+    fn call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+        let callee_type = match &callee.kind {
             // `foo(...)`: a declared name, or a function the target has.
-            ExprKind::Ident(name) => match self.lookup(name).cloned() {
-                Some(b) => self.check_ready(name, &b, &callee.span),
+            ExprKind::Ident(name) => match self.lookup(name).map(|(_, b)| b.clone()) {
+                Some(b) => {
+                    self.check_ready(name, &b, &callee.span);
+                    self.type_of(name).unwrap_or(Type::Error)
+                }
                 None => {
                     if self.manifest.function(name).is_none() {
                         self.missing(name, callee.span.clone());
+                        Type::Error
+                    } else {
+                        Type::Untyped
                     }
                 }
             },
             // `C_Foo.Bar(...)`: a namespace function the target must have,
             // unless `C_Foo` is declared in the code. Other method calls
             // (`frame.SetPoint(...)`) check their object; the methods
-            // themselves are left to the typed pass.
-            ExprKind::Member { object, .. } => {
-                if let Some(full) = callee.dotted_name() {
-                    let root = full.split('.').next().unwrap_or("");
-                    if root.starts_with("C_") && self.lookup(root).is_none() {
-                        if self.manifest.function(&full).is_none() {
-                            self.missing(&full, callee.span.clone());
-                        }
-                        return;
+            // themselves are left for typed manifests.
+            ExprKind::Member { object, name } => {
+                let full = callee.dotted_name();
+                let root = full
+                    .as_deref()
+                    .and_then(|f| f.split('.').next())
+                    .unwrap_or("");
+                if root.starts_with("C_") && self.lookup(root).is_none() {
+                    let full = full.unwrap_or_default();
+                    if self.manifest.function(&full).is_none() {
+                        self.missing(&full, callee.span.clone());
+                    }
+                    Type::Untyped
+                } else {
+                    let t = self.value(object);
+                    self.member(&t, name, object)
+                }
+            }
+            _ => self.value(callee),
+        };
+        self.types.set(callee.id, callee_type.clone());
+        let arg_types: Vec<Type> = args.iter().map(|a| self.value(a)).collect();
+        match callee_type {
+            Type::Function { params, ret } => {
+                let name = callee
+                    .dotted_name()
+                    .unwrap_or_else(|| "this function".into());
+                if params.len() != args.len() {
+                    self.out.push(err(
+                        "SELU0334",
+                        format!(
+                            "`{name}` takes {} argument{}, but this call passes {}",
+                            params.len(),
+                            if params.len() == 1 { "" } else { "s" },
+                            args.len()
+                        ),
+                        &e.span,
+                    ));
+                }
+                for (i, ((p, t), arg)) in params.iter().zip(&arg_types).zip(args).enumerate() {
+                    if !t.assignable_to(p) {
+                        self.out.push(err(
+                            "SELU0335",
+                            format!(
+                                "argument {} of `{name}` must be {}, but this is {}",
+                                i + 1,
+                                a(p),
+                                a(t)
+                            ),
+                            &arg.span,
+                        ));
                     }
                 }
-                self.expr(object);
+                *ret
             }
-            _ => self.expr(callee),
+            Type::Untyped | Type::Error => Type::Untyped,
+            t => {
+                self.out.push(err(
+                    "SELU0333",
+                    format!("this is {}, not a function", a(&t)),
+                    &callee.span,
+                ));
+                Type::Error
+            }
         }
+    }
+}
+
+/// Whether running `stmts` never reaches its end (it returns).
+fn always_exits(stmts: &[Stmt]) -> bool {
+    match stmts.last().map(|s| &s.kind) {
+        Some(StmtKind::Return(_)) => true,
+        Some(StmtKind::Block(b)) => always_exits(b),
+        Some(StmtKind::If {
+            then_branch,
+            else_branch: Some(e),
+            ..
+        }) => always_exits(then_branch) && always_exits(e),
+        _ => false,
+    }
+}
+
+/// The return type of a function without a written one: `void` without a
+/// value, the values' common type, and `T?` when some paths return nothing.
+fn infer_return(returns: &[(Type, Span)], out: &mut Vec<Diagnostic>) -> Type {
+    let mut result: Option<Type> = None;
+    let mut bare = false;
+    for (t, span) in returns {
+        if *t == Type::Void {
+            bare = true;
+            continue;
+        }
+        result = match result {
+            None => Some(t.clone()),
+            Some(r) => match Type::join(&r, t) {
+                Some(j) => Some(j),
+                None => {
+                    out.push(
+                        err(
+                            "SELU0338",
+                            format!(
+                                "this returns {}, but an earlier `return` gives {}",
+                                a(t),
+                                a(&r)
+                            ),
+                            span,
+                        )
+                        .with_help("a function returns one type; write `: T?` or split it in two"),
+                    );
+                    Some(Type::Error)
+                }
+            },
+        };
+    }
+    match result {
+        None => Type::Void,
+        Some(t) if bare => Type::optional(t),
+        Some(t) => t,
+    }
+}
+
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
     }
 }
 
@@ -515,5 +1257,125 @@ mod tests {
     #[test]
     fn global_is_still_a_plain_name() {
         assert!(codes("const global = 1;\nprint(global);\n").is_empty());
+    }
+
+    #[test]
+    fn truthiness_rule() {
+        assert_eq!(codes("const n = 1;\nif (n) {}\n"), ["SELU0328"]);
+        assert_eq!(codes("const s = \"a\";\nif (!s) {}\n"), ["SELU0328"]);
+        assert!(codes("const n = 1;\nif (n != 0) {}\n").is_empty());
+        assert!(codes("let x: number? = null;\nif (x) {}\nif (!x) {}\n").is_empty());
+        assert!(codes("const b = true;\nif (b && !b) {}\n").is_empty());
+        // Untyped game values are not checked yet.
+        assert!(codes("if (UnitHealth(\"player\")) {}\n").is_empty());
+    }
+
+    #[test]
+    fn plus_minus_and_comparisons() {
+        assert!(codes("const a = 1 + 2;\nconst b = \"x\" + \"y\";\n").is_empty());
+        assert_eq!(codes("const a = 1 + \"x\";\n"), ["SELU0323"]);
+        assert_eq!(codes("const a = true + true;\n"), ["SELU0323"]);
+        assert_eq!(codes("const a = \"x\" - 1;\n"), ["SELU0325"]);
+        assert_eq!(codes("const a = -\"x\";\n"), ["SELU0325"]);
+        assert_eq!(codes("const a = 1 == \"1\";\n"), ["SELU0326"]);
+        assert_eq!(codes("const a = 1 < \"2\";\n"), ["SELU0326"]);
+        // Untyped plus a known type takes that type; two untyped can't decide.
+        assert!(codes("const t = GetTime() + 1;\n").is_empty());
+        assert_eq!(codes("function f(a, b) { return a + b; }\n"), ["SELU0324"]);
+        assert!(codes("function f(a: string, b) { return a + b; }\n").is_empty());
+    }
+
+    #[test]
+    fn triple_equals_is_a_syntax_error_with_fix() {
+        let e = selu_syntax::parse("t.selu", "const a = 1 === 1;\n").unwrap_err();
+        assert_eq!(e.code, "SELU0109");
+        assert_eq!(e.fix.as_deref(), Some("use `==`"));
+        let e = selu_syntax::parse("t.selu", "const a = 1 !== 1;\n").unwrap_err();
+        assert_eq!(e.fix.as_deref(), Some("use `!=`"));
+    }
+
+    #[test]
+    fn declarations_and_assignments_are_typed() {
+        assert_eq!(codes("let x = 1;\nx = \"a\";\n"), ["SELU0336"]);
+        assert_eq!(codes("let x: string = 1;\n"), ["SELU0336"]);
+        assert_eq!(codes("let x = null;\n"), ["SELU0321"]);
+        assert_eq!(codes("let x;\n"), ["SELU0321"]);
+        assert_eq!(codes("let x: number;\n"), ["SELU0322"]);
+        assert!(codes("let x: number? = null;\nx = 3;\nx = null;\nlet y: string?;\n").is_empty());
+        assert_eq!(codes("const x: Frame = 1;\n"), ["SELU0320"]);
+    }
+
+    #[test]
+    fn optional_values_need_a_check() {
+        // Using a `T?` where a `T` is needed fails until it is narrowed.
+        let src = "function f(n: number?) { const m: number = n; return m; }\n";
+        assert_eq!(codes(src), ["SELU0336"]);
+        let narrowed = [
+            "function f(n: number?) { if (n != null) { const m: number = n; } }\n",
+            "function f(n: number?) { if (n == null) { return; } const m: number = n; }\n",
+            "function f(n: number?) { if (!n) return; const m: number = n; }\n",
+            "function f(n: number?) { if (n == null) { } else { const m: number = n; } }\n",
+            "function f(n: number?) { if (n != null && n > 2) { } }\n",
+            "function f(n: number?) { if (n == null || n > 2) { } }\n",
+            "function f(n: number?) { const m: number = n ?? 0; }\n",
+        ];
+        for src in narrowed {
+            assert!(codes(src).is_empty(), "{src}: {:?}", codes(src));
+        }
+        // An assignment that may be null undoes the narrowing.
+        assert_eq!(
+            codes("function f(n: number?) { if (n != null) { n = null; const m: number = n; } }\n"),
+            ["SELU0336"]
+        );
+        assert_eq!(
+            codes("function f(n: number?) { if (n == null || n > 2) { } return n > 1; }\n"),
+            ["SELU0326"]
+        );
+        // `&&` with a `T?` is a condition, not a boolean value.
+        assert_eq!(
+            codes("function f(n: number?, b: boolean) { const c = n && b; }\n"),
+            ["SELU0327"]
+        );
+        assert!(codes("function f(n: number?, b: boolean) { if (n && b) {} }\n").is_empty());
+        assert_eq!(
+            codes("const s: string? = null;\nprint(s.x);\n"),
+            ["SELU0331"]
+        );
+        assert_eq!(codes("const n = 1;\nprint(n.x);\n"), ["SELU0330"]);
+        assert_eq!(
+            codes("const n: number? = 1;\nconst m = n ?? \"x\";\n"),
+            ["SELU0339"]
+        );
+        let warn = codes("const n = 1;\nconst m = n ?? 2;\n");
+        assert_eq!(warn, ["SELU0329"]);
+    }
+
+    #[test]
+    fn functions_are_typed() {
+        // Inferred return types.
+        assert!(codes("function f() { return 1; }\nconst x: number = f();\n").is_empty());
+        assert_eq!(
+            codes(
+                "function f(b: boolean) { if (b) return 1; return; }\nconst x: number = f(true);\n"
+            ),
+            ["SELU0336"]
+        );
+        assert_eq!(
+            codes("function f(b: boolean) { if (b) return 1; return \"x\"; }\n"),
+            ["SELU0338"]
+        );
+        assert_eq!(codes("function f(): string { return 1; }\n"), ["SELU0337"]);
+        // Arity and argument types.
+        assert_eq!(codes("function f(a: number) {}\nf();\n"), ["SELU0334"]);
+        assert_eq!(codes("function f(a: number) {}\nf(\"x\");\n"), ["SELU0335"]);
+        assert_eq!(codes("const n = 1;\nn();\n"), ["SELU0333"]);
+        // Void has no value.
+        assert_eq!(codes("function f() {}\nconst x = f();\n"), ["SELU0332"]);
+        assert_eq!(codes("return 1;\n"), ["SELU0317"]);
+        // Event parameters get their types from the manifest.
+        assert_eq!(
+            codes("on UNIT_HEALTH(unit) { const n: number = unit; }\n"),
+            ["SELU0336"]
+        );
     }
 }

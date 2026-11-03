@@ -12,13 +12,17 @@ fn run(src: &str) -> Vec<String> {
     )
     .unwrap();
     let program = selu_syntax::parse("t.selu", src).unwrap_or_else(|d| panic!("{}", d.render(src)));
-    let diags = selu_check::check(&program, &manifest);
+    let checked = selu_check::check_program(&program, &manifest);
     assert!(
-        diags.is_empty(),
+        checked.diagnostics.is_empty(),
         "{}",
-        diags.iter().map(|d| d.render(src)).collect::<String>()
+        checked
+            .diagnostics
+            .iter()
+            .map(|d| d.render(src))
+            .collect::<String>()
     );
-    let lua = selu_lower::lower(&program, &manifest).lua;
+    let lua = selu_lower::lower(&program, &manifest, &checked.types).lua;
     let sim = Sim::new().unwrap();
     sim.load_files(&[("t.lua".into(), lua.clone())])
         .unwrap_or_else(|e| panic!("{e}\n--- generated Lua ---\n{lua}"));
@@ -30,12 +34,13 @@ fn run(src: &str) -> Vec<String> {
 fn coalesce_keeps_false_and_evaluates_each_side_once() {
     let out = run(r#"
 let calls = 0;
-function no() { calls = calls + 1; return false; }
+function no(): boolean? { calls = calls + 1; return false; }
+function yes() { calls = calls + 1; return true; }
 function seven() { calls = calls + 1; return 7; }
 function none() { calls = calls + 1; return null; }
 function pick() { return none() ?? seven(); }
 on PLAYER_LOGIN() {
-  const a = no() ?? seven();
+  const a = no() ?? yes();
   print(a);
   print(calls);
   const b = none() ?? none() ?? seven();
@@ -45,7 +50,7 @@ on PLAYER_LOGIN() {
   let c = 1;
   c = none() ?? 2;
   print(c);
-  const t = 5;
+  const t: number? = 5;
   print(t ?? 0);
 }
 "#);
@@ -108,8 +113,9 @@ fn global_declaration_is_a_real_lua_global() {
     )
     .unwrap();
     let program = selu_syntax::parse("t.selu", src).unwrap();
-    assert!(selu_check::check(&program, &manifest).is_empty());
-    let lua = selu_lower::lower(&program, &manifest).lua;
+    let checked = selu_check::check_program(&program, &manifest);
+    assert!(checked.diagnostics.is_empty());
+    let lua = selu_lower::lower(&program, &manifest, &checked.types).lua;
     let sim = Sim::new().unwrap();
     // A second, plain Lua file reads the global the way another addon would.
     sim.load_files(&[
@@ -121,4 +127,20 @@ fn global_declaration_is_a_real_lua_global() {
     sim.load_files(&[("again.lua".into(), "print(MyAddon_Count)".into())])
         .unwrap();
     assert_eq!(sim.prints(), ["1", "2"]);
+}
+
+#[test]
+fn plus_joins_strings_and_adds_numbers() {
+    let out = run(r#"
+const prefix = "hp: ";
+function label(name: string, value: string) { return name + ": " + value; }
+on PLAYER_LOGIN() {
+  print(prefix + "full");
+  print(label("a", "b"));
+  print(1 + 2);
+  const t = GetTime() + 1;
+  print(t > 0);
+}
+"#);
+    assert_eq!(out, ["hp: full", "a: b", "3", "true"]);
 }

@@ -65,8 +65,34 @@ terminal with codespan-reporting.
   file (`SELU0316`), always with a starting value. `global` is a contextual
   keyword, so it is still a valid variable name.
 
+## Types (basic checker)
+
+- `selu-check` gives every expression a type (`number`, `string`,
+  `boolean`, `null`, `T?`, function types) and returns them in a
+  `TypeTable` keyed by the parser's expression ids; `selu-lower` reads it
+  (for example `+` on strings becomes `..`).
+- Declarations infer their type from the value. `let x;` and `let x = null;`
+  need a written type; `let x: T;` without a value is only allowed for `T?`.
+  Function return types are inferred from the `return`s (`T?` when some
+  paths return nothing) or written as `function f(): T`.
+- Conditions take a `boolean` or a `T?` (`SELU0328` otherwise). `a && b`
+  with a `T?` operand is condition-only (`SELU0327` as a value), because the
+  Lua result isn't a boolean.
+- `T?` narrows to `T` through `x != null`, `x == null` (else branch), a bare
+  `x`, `!`, `&&`/`||` (also inside the right operand) and early `return`. An
+  assignment that may be null undoes narrowings up to the declaration.
+  Narrowings of a `let` don't reach into nested functions.
+- `===`/`!==` are syntax errors (`SELU0109`) with the fix `==`/`!=`.
+
 ## Known simplifications in this base
 
+- **Untyped values:** manifests don't carry types yet, so results of game
+  API calls, game globals and parameters without a written type are
+  "untyped" and skip checks. `untyped + untyped` is still an error
+  (`SELU0324`), because the lowering must choose `+` or `..`.
+- A function's inferred return type is known only after its body is
+  checked; a call from an earlier function body sees it as untyped. There is
+  no "not all paths return a value" check yet.
 - `selu-check` checks plain global calls, `C_*` namespace calls, and event
   names against the target. Method calls on objects await the typed pass.
 - `??` keeps `false` and evaluates each side at most once. In a

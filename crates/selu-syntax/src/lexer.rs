@@ -294,6 +294,22 @@ pub fn lex(file: &str, src: &str) -> Result<Vec<Token>, Diagnostic> {
                     span: span(start, i),
                 });
             }
+            '=' | '!' if bytes.get(i + 1) == Some(&b'=') && bytes.get(i + 2) == Some(&b'=') => {
+                let (bad, good) = if c == '=' {
+                    ("===", "==")
+                } else {
+                    ("!==", "!=")
+                };
+                return Err(err(
+                    "SELU0109",
+                    format!(
+                        "`{bad}` isn't Selu: `{good}` already compares without converting types"
+                    ),
+                    start,
+                    i + 3,
+                )
+                .with_fix(format!("use `{good}`")));
+            }
             '=' => {
                 if bytes.get(i + 1) == Some(&b'=') {
                     i += 2;

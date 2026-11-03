@@ -77,6 +77,7 @@ impl Rules {
                 name_span,
                 params,
                 body,
+                ..
             } => {
                 self.name(name, name_span);
                 for p in params {

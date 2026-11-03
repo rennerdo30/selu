@@ -3,6 +3,7 @@
 //! (`frame.SetPoint(...)` in Selu is `frame:SetPoint(...)` in Lua).
 //! `on EVENT` handlers share one event frame with a dispatch table.
 
+use selu_check::TypeTable;
 use selu_diagnostics::Span;
 use selu_manifest::Manifest;
 use selu_syntax::{Expr, ExprKind, Program, Stmt, StmtKind, is_lua_keyword, visit};
@@ -41,13 +42,15 @@ pub struct Lowered {
     pub source_map: SourceMap,
 }
 
-pub fn lower(program: &Program, manifest: &Manifest) -> Lowered {
+/// Lowers a program the checker accepted; `types` is the checker's table.
+pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lowered {
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
     let mut w = Writer {
         out: String::new(),
         line: 1,
         map: SourceMap::default(),
         known: &known,
+        types,
     };
     let has_handlers = program
         .stmts
@@ -86,6 +89,7 @@ struct Writer<'a> {
     line: u32,
     map: SourceMap,
     known: &'a HashSet<String>,
+    types: &'a TypeTable,
 }
 
 impl Writer<'_> {
@@ -287,6 +291,11 @@ impl Writer<'_> {
                     "&&" => format!("({l} and {r})"),
                     "||" => format!("({l} or {r})"),
                     "!=" => format!("({l} ~= {r})"),
+                    // The checker allows `+` on two strings only; Lua joins
+                    // strings with `..`.
+                    "+" if self.types.is_string(left.id) || self.types.is_string(right.id) => {
+                        format!("({l} .. {r})")
+                    }
                     // Inline form: the checker (SELU0308) only allows it when
                     // `l` has no side effects and `r` is never false or nil, so
                     // evaluating `l` twice and using and/or is exact, including
@@ -413,9 +422,10 @@ mod tests {
 
     #[test]
     fn lowers_subset_with_method_colons_and_events() {
-        let src = "const limit = 10;\nfunction greet() { return \"hi\"; }\non PLAYER_LOGIN() {\n  print(greet());\n  frame.SetPoint(\"TOP\", null);\n  if (limit > 5 && limit != 9) { return; }\n}\n";
+        let src = "const limit = 10;\nconst frame = CreateFrame(\"Frame\");\nfunction greet() { return \"hi\"; }\non PLAYER_LOGIN() {\n  print(greet());\n  frame.SetPoint(\"TOP\", null);\n  if (limit > 5 && limit != 9) { return; }\n}\n";
         let p = selu_syntax::parse("main.selu", src).unwrap();
-        let out = lower(&p, &manifest());
+        let checked = selu_check::check_program(&p, &manifest());
+        let out = lower(&p, &manifest(), &checked.types);
         assert!(out.lua.contains("local limit = 10"), "{}", out.lua);
         assert!(out.lua.contains("local function greet()"), "{}", out.lua);
         assert!(
