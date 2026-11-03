@@ -7,9 +7,6 @@ pub(crate) struct LoopCtx;
 impl Ctx<'_> {
     pub(crate) fn loop_stmt(&mut self, s: &Stmt) {
         match &s.kind {
-            StmtKind::ForOf { .. } => {
-                self.unsupported("this loop statement", &s.span);
-            }
             StmtKind::Break | StmtKind::Continue => {
                 if self.loops.is_empty() {
                     self.out.push(

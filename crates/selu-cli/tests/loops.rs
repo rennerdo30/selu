@@ -119,10 +119,10 @@ fn fallback_return_and_shadow_with_continue() {
     );
 }
 #[test]
-fn for_of_is_diagnostic() {
-    assert!(
-        codes("let xs = CreateFrame(\"Frame\"); for (const x of xs) {}")
-            .contains(&"SELU0390".into())
+fn for_of_requires_known_collection() {
+    assert_eq!(
+        codes("let xs = CreateFrame(\"Frame\"); for (const x of xs) {}"),
+        ["SELU0357"]
     );
 }
 #[test]
@@ -186,5 +186,15 @@ fn update_narrowing_invalidated_by_body() {
     assert!(
         codes("for (let n: number? = 0; n != null && n < 2; n++) { continue; }")
             .contains(&"SELU0341".into())
+    );
+}
+
+#[test]
+fn compound_index_once() {
+    assert_eq!(
+        run(
+            "let calls = 0; function index(): number { calls++; return 0; } on PLAYER_LOGIN() { let t = [3]; t[index()] += 1; print(t[0]); print(calls); }"
+        ),
+        ["4", "1"]
     );
 }

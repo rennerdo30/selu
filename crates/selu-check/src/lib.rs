@@ -1458,18 +1458,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn constructs_still_being_built_are_reported_not_lowered() {
-        for src in [
-            "const xs = [1, 2];
-",
-            "const [a, b] = [1, 2];
-",
-            "const t = `a${1}`;
-",
-        ] {
-            let c = codes(src);
-            assert!(c.contains(&"SELU0390".to_string()), "{src}: {c:?}");
-        }
-    }
 }

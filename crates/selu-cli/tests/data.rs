@@ -154,10 +154,6 @@ fn weak_maps_optional_fields_and_errors() {
         ("const a = [1]; a.length = 0;", "SELU0355"),
         ("const a = [1]; a.push(false);", "SELU0355"),
         ("const a = [1]; a.push();", "SELU0356"),
-        (
-            "const a = [1]; for (const x of a) { continue; }",
-            "SELU0390",
-        ),
         ("const a = [1]; a.map(x => x);", "SELU0390"),
     ] {
         assert!(codes(src).contains(&code.into()), "{src}");
@@ -308,5 +304,96 @@ fn review_receiver_before_stabilized_argument() {
             "let s = \"abc\"; function suffix(): string { s = \"z\"; return \"bc\"; } print(s.endsWith(suffix()));"
         ),
         ["true"]
+    );
+}
+
+macro_rules! transfer_test {
+    ($name:ident, $setup:expr, $binding:expr, $transfer:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            assert_eq!(run(&format!("{} let seen = 0; let visits = 0; for ({}) {{ seen++; {} visits++; }} print(seen, visits);", $setup, $binding, $transfer)), [$expected]);
+        }
+    };
+}
+transfer_test!(
+    for_of_array_continue,
+    "const xs = [1, 2, 3, 4];",
+    "const x of xs",
+    "if (seen == 1) { continue; }",
+    "4\t3"
+);
+transfer_test!(
+    for_of_array_break,
+    "const xs = [1, 2, 3, 4];",
+    "const x of xs",
+    "if (seen == 2) { break; }",
+    "2\t1"
+);
+transfer_test!(
+    for_of_array_both,
+    "const xs = [1, 2, 3, 4];",
+    "const x of xs",
+    "if (seen == 1) { continue; } if (seen == 3) { break; }",
+    "3\t1"
+);
+transfer_test!(
+    for_of_map_continue,
+    "const xs = new Map<number, number>(); xs.set(1, 1); xs.set(2, 2); xs.set(3, 3); xs.set(4, 4);",
+    "const [k, v] of xs",
+    "if (seen == 1) { continue; }",
+    "4\t3"
+);
+transfer_test!(
+    for_of_map_break,
+    "const xs = new Map<number, number>(); xs.set(1, 1); xs.set(2, 2); xs.set(3, 3); xs.set(4, 4);",
+    "const [k, v] of xs",
+    "if (seen == 2) { break; }",
+    "2\t1"
+);
+transfer_test!(
+    for_of_map_both,
+    "const xs = new Map<number, number>(); xs.set(1, 1); xs.set(2, 2); xs.set(3, 3); xs.set(4, 4);",
+    "const [k, v] of xs",
+    "if (seen == 1) { continue; } if (seen == 3) { break; }",
+    "3\t1"
+);
+transfer_test!(
+    for_of_set_continue,
+    "const xs = new Set<number>(); xs.add(1); xs.add(2); xs.add(3); xs.add(4);",
+    "const x of xs",
+    "if (seen == 1) { continue; }",
+    "4\t3"
+);
+transfer_test!(
+    for_of_set_break,
+    "const xs = new Set<number>(); xs.add(1); xs.add(2); xs.add(3); xs.add(4);",
+    "const x of xs",
+    "if (seen == 2) { break; }",
+    "2\t1"
+);
+transfer_test!(
+    for_of_set_both,
+    "const xs = new Set<number>(); xs.add(1); xs.add(2); xs.add(3); xs.add(4);",
+    "const x of xs",
+    "if (seen == 1) { continue; } if (seen == 3) { break; }",
+    "3\t1"
+);
+#[test]
+fn for_of_closures_capture_each_turn() {
+    assert_eq!(
+        run(r#"
+        function initial(): number { return 0; }
+        const fs = [initial]; fs.pop();
+        const xs = [2, 4, 6];
+        for (const x of xs) { function capture(): number { return x; } fs.push(capture); }
+        for (const f of fs) { print(f()); }
+        function empty(): string { return ""; }
+        const gs = [empty]; gs.pop();
+        const m = new Map<string, number>(); m.set("a", 1); m.set("b", 2);
+        for (const [k, v] of m) { function capture(): string { return `${k}:${v}`; } gs.push(capture); }
+        const values: string[] = []; for (const g of gs) { values.push(g()); }
+        values.sort(); print(values.join());
+    "#),
+        ["2", "4", "6", "a:1,b:2"]
     );
 }

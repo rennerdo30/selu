@@ -59,8 +59,11 @@ for arrows without written parameter types, plus ordinary object function calls.
 B's early library dispatch excludes Object receivers. On this base the exact source
 `function f(x: string): string { return x; } const o = { slice: f }; print(o.slice("hi"));`
 still uses the existing colon-call path; its runtime result `hi` is pending C.
-Continue and break in for-of bodies currently reach package A's loop_stmt and remain
-SELU0390 on this base. A's loop-body helper must be integrated after A lands.
+Package A integration is complete after rebasing onto 47e3874: the checker pushes
+and pops A's LoopCtx, and lowering uses A's loop_body helper. Break, continue and
+both in one body work for arrays, maps and sets. Functions retain A's empty-loop
+boundary. For-of bindings use fresh per-turn locals, so captures are allowed;
+simulator tests collect array and map closures and call them after the loop.
 
 Optional access to a missing field is a checker error. Unsupported collection or
 Math method names retain SELU0390, rather than falling through to Blizzard method
@@ -99,3 +102,22 @@ All review tests were red before their fixes. The statement-elision and callback
 signature checks were also deliberately disabled to show their assertions fail,
 then restored. Full gates and commit hashes are recorded in the implementation
 report. No loops.rs or package C implementation was changed.
+
+## Package A integration verification
+
+The nine array/map/set transfer cases each failed with SELU0340 before integration.
+The closure test already passed; deliberately replacing the fresh array local with
+a shared assignment made all array closures return 6, proving the test can fail.
+A's exact compound_index_once source is now in CLI tests/loops.rs and passes; it
+was also demonstrated red with array checking deliberately disabled, then restored.
+The checker loops.rs ForOf unsupported arm was removed; A's lowerer loops.rs had
+no explicit ForOf arm to remove and was left unchanged. reject_capture stays private
+and is not applied to for-of. The stale for_of_is_diagnostic test was renamed to
+for_of_requires_known_collection and now expects exactly SELU0357 with approval.
+The old B pending-continue SELU0390 fixture was removed in favor of runtime tests.
+
+Final integration gates: cargo fmt --check, cargo clippy --all-targets -- -D warnings,
+and cargo test all passed (114 tests). Rebase conflict resolution preserved A's
+loop stack fields and function take/restore pairs plus B's dispatch hooks. The two
+previously approved obsolete array/template unsupported fixtures were removed
+after the full suite exposed their retention during conflict resolution.

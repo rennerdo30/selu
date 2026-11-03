@@ -375,7 +375,9 @@ impl Ctx<'_> {
             );
             self.finish_decl(&n, t);
         }
+        self.loops.push(crate::loops::LoopCtx);
         self.block(body, &[], vec![]);
+        self.loops.pop();
         self.scopes.pop();
     }
 }

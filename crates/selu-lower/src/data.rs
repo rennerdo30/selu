@@ -574,7 +574,7 @@ impl Lowerer<'_> {
         let v = self.expr(iter, &mut pre);
         let t = self.hold(v, &iter.span, &mut pre);
         let obj = name(&t);
-        let mut body = self.block(body);
+        let mut body = self.loop_body(body, &s.span);
         let kind = match self.types.get(iter.id) {
             Some(Type::Array(_)) => {
                 let ForBinding::Name(n, _) = binding else {
