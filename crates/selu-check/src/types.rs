@@ -28,6 +28,8 @@ pub enum Type {
     Function {
         params: Vec<Type>,
         ret: Box<Type>,
+        required: usize,
+        rest: Option<Box<Type>>,
     },
     /// What a function without a value returns.
     Void,
@@ -101,17 +103,30 @@ impl Type {
                 })
             }
             (
-                Type::Function { params, ret },
+                Type::Function {
+                    params,
+                    ret,
+                    required,
+                    rest,
+                },
                 Type::Function {
                     params: to_params,
                     ret: to_ret,
+                    required: to_required,
+                    rest: to_rest,
                 },
             ) => {
-                params.len() == to_params.len()
-                    && to_params
-                        .iter()
-                        .zip(params)
-                        .all(|(a, b)| a.assignable_to(b))
+                required <= to_required
+                    && (rest.is_some() || (to_rest.is_none() && params.len() >= to_params.len()))
+                    && to_params.iter().enumerate().all(|(i, a)| {
+                        params
+                            .get(i)
+                            .or(rest.as_deref())
+                            .is_some_and(|b| a.assignable_to(b))
+                    })
+                    && to_rest
+                        .as_deref()
+                        .is_none_or(|a| rest.as_deref().is_some_and(|b| a.assignable_to(b)))
                     && (ret.assignable_to(to_ret) || **to_ret == Type::Void)
             }
             _ => false,
@@ -157,8 +172,26 @@ impl fmt::Display for Type {
             Type::Map(k, v) => write!(f, "Map<{k}, {v}>"),
             Type::Set(t) => write!(f, "Set<{t}>"),
             Type::WeakMap(k, v) => write!(f, "WeakMap<{k}, {v}>"),
-            Type::Function { params, ret } => {
-                let ps: Vec<String> = params.iter().map(|p| p.to_string()).collect();
+            Type::Function {
+                params,
+                ret,
+                required,
+                rest,
+            } => {
+                let mut ps: Vec<String> = params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        if i >= *required {
+                            format!("{p} = ...")
+                        } else {
+                            p.to_string()
+                        }
+                    })
+                    .collect();
+                if let Some(t) = rest {
+                    ps.push(format!("...{t}[]"));
+                }
                 write!(f, "({}) => {ret}", ps.join(", "))
             }
             Type::Void => write!(f, "void"),
@@ -188,6 +221,8 @@ pub fn resolve(t: &TypeExpr, out: &mut Vec<Diagnostic>) -> Type {
                 .collect(),
         ),
         TypeExprKind::Function { params, ret } => Type::Function {
+            required: params.len(),
+            rest: None,
             params: params.iter().map(|p| resolve(p, out)).collect(),
             ret: Box::new(if is_void(ret) {
                 Type::Void

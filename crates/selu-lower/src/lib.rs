@@ -177,11 +177,7 @@ impl Lowerer<'_> {
 
     pub(crate) fn function(&mut self, params: &[Param], body: &[Stmt]) -> LFunction {
         let loops = std::mem::take(&mut self.loops);
-        let result = LFunction {
-            params: params.iter().map(|p| p.name.clone()).collect(),
-            vararg: false,
-            body: self.block(body),
-        };
+        let result = self.function_with_extras(params, body);
         self.loops = loops;
         result
     }
@@ -237,8 +233,8 @@ impl Lowerer<'_> {
             StmtKind::Return(None) => out.push(LStmt::new(LStmtKind::Return(Vec::new()), span)),
             StmtKind::Return(Some(e)) => {
                 let mut pre = Vec::new();
-                let v = self.expr(e, &mut pre);
-                self.finish(pre, LStmt::new(LStmtKind::Return(vec![v]), span), out);
+                let values = self.function_return(e, &mut pre);
+                self.finish(pre, LStmt::new(LStmtKind::Return(values), span), out);
             }
             StmtKind::If {
                 cond,
@@ -563,7 +559,9 @@ impl Lowerer<'_> {
                 all.extend(args);
                 let mut vals = self.seq(&all, pre);
                 let obj = vals.remove(0);
-                if is_namespace {
+                if is_namespace
+                    || matches!(self.types.get(object.id), Some(selu_check::Type::Object(fields)) if matches!(fields.get(method), Some(selu_check::Type::Function { .. })))
+                {
                     lua::call(LExpr::Field(Box::new(obj), method.clone()), vals)
                 } else {
                     LExpr::Method(Box::new(obj), method.clone(), vals)

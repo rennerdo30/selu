@@ -58,6 +58,7 @@ pub fn check_program(program: &Program, manifest: &Manifest) -> Checked {
         fn_depth: 0,
         returns: Vec::new(),
         loops: Vec::new(),
+        function_expected: Vec::new(),
         types: TypeTable::default(),
     };
     ctx.block(&program.stmts, &[], Vec::new());
@@ -111,6 +112,7 @@ struct Ctx<'a> {
     fn_depth: usize,
     /// Per function being checked: the type and span of every `return`.
     returns: Vec<Vec<(Type, Span)>>,
+    function_expected: Vec<Option<Type>>,
     types: TypeTable,
 }
 
@@ -270,10 +272,7 @@ impl Ctx<'_> {
                     // The return type is known only after the body; until then
                     // calls see an unchecked result.
                     let ret = self.annotation(ret).unwrap_or(Type::Untyped);
-                    let ty = Type::Function {
-                        params: self.param_types(params),
-                        ret: Box::new(ret),
-                    };
+                    let ty = self.function_signature(params, ret);
                     self.declare(name, name_span, Kind::Function, ty);
                 }
                 StmtKind::Global {
@@ -338,7 +337,7 @@ impl Ctx<'_> {
         self.fn_depth += 1;
         self.returns.push(Vec::new());
         let params: Vec<(Param, Type)> = params.iter().cloned().zip(param_types).collect();
-        self.block(body, &params, Vec::new());
+        self.function_block(body, &params, written_ret.as_ref());
         let returns = self.returns.pop().unwrap_or_default();
         self.fn_depth -= 1;
         self.loops = loops;
@@ -399,15 +398,24 @@ impl Ctx<'_> {
                 if let Some(Type::Function {
                     params: param_types,
                     ret,
+                    required,
+                    rest,
                 }) = declared
                 {
                     let written = (*ret != Type::Untyped).then_some(*ret);
-                    let ret = self.function_body(params, param_types.clone(), written, body);
+                    let ret = self.function_body(
+                        params,
+                        functions::body_param_types(params, &param_types, rest.as_deref()),
+                        written,
+                        body,
+                    );
                     self.finish_decl(
                         name,
                         Type::Function {
-                            params: param_types,
+                            params: self.checked_parameter_types(params, param_types),
                             ret: Box::new(ret),
+                            required,
+                            rest,
                         },
                     );
                 }
@@ -444,7 +452,7 @@ impl Ctx<'_> {
             }
             StmtKind::Return(e) => {
                 let t = match e {
-                    Some(e) => self.value(e),
+                    Some(e) => self.function_return(e),
                     None => Type::Void,
                 };
                 if let Some(r) = self.returns.last_mut() {
@@ -525,7 +533,7 @@ impl Ctx<'_> {
                 }
             };
         };
-        let t = self.value(init);
+        let t = self.value_expected(init, written.as_ref());
         match written {
             Some(w) => {
                 if !t.assignable_to(&w) {
@@ -689,6 +697,7 @@ impl Ctx<'_> {
     /// operand): it must be a real value.
     fn value(&mut self, e: &Expr) -> Type {
         let t = self.expr(e);
+        let t = self.check_tuple_value(e, t);
         match t {
             Type::Cond => {
                 self.out.push(
@@ -1061,19 +1070,24 @@ impl Ctx<'_> {
                     Type::Untyped
                 } else {
                     let t = self.value(object);
-                    self.member(&t, name, object)
+                    self.function_member(&t, name, object)
                 }
             }
             _ => self.value(callee),
         };
         self.types.set(callee.id, callee_type.clone());
-        let arg_types: Vec<Type> = args.iter().map(|a| self.value(a)).collect();
+        let arg_types = self.function_arguments(args, &callee_type);
         match callee_type {
-            Type::Function { params, ret } => {
+            Type::Function {
+                params,
+                ret,
+                required,
+                rest,
+            } => {
                 let name = callee
                     .dotted_name()
                     .unwrap_or_else(|| "this function".into());
-                if params.len() != args.len() {
+                if args.len() < required || (rest.is_none() && args.len() > params.len()) {
                     self.out.push(err(
                         "SELU0334",
                         format!(
@@ -1085,7 +1099,10 @@ impl Ctx<'_> {
                         &e.span,
                     ));
                 }
-                for (i, ((p, t), arg)) in params.iter().zip(&arg_types).zip(args).enumerate() {
+                for (i, (t, arg)) in arg_types.iter().zip(args).enumerate() {
+                    let Some(p) = params.get(i).or(rest.as_deref()) else {
+                        continue;
+                    };
                     if !t.assignable_to(p) {
                         self.out.push(err(
                             "SELU0335",
@@ -1438,11 +1455,7 @@ mod tests {
         for src in [
             "const xs = [1, 2];
 ",
-            "const f = (a: number) => a;
-",
             "const [a, b] = [1, 2];
-",
-            "function f(a = 1) { return a; }
 ",
             "const t = `a${1}`;
 ",
