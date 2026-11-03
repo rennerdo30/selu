@@ -29,6 +29,7 @@ mod rules;
 mod data;
 mod functions;
 mod loops;
+pub mod targets;
 pub mod types;
 mod wow;
 
@@ -72,6 +73,7 @@ pub fn check_program_with_options(
         module: ModuleBindings::default(),
         manifest,
         options,
+        availability: targets::Availability::new(std::slice::from_ref(manifest)),
         out: &mut out,
         scopes: Vec::new(),
         fn_depth: 0,
@@ -95,20 +97,30 @@ pub fn check_module(
     manifest: &Manifest,
     imports: ModuleBindings,
 ) -> (Checked, ModuleExports) {
-    check_module_with_options(program, manifest, imports, CheckOptions::default())
+    check_module_targets(program, manifest, imports, std::slice::from_ref(manifest))
 }
-pub fn check_module_with_options(
+
+pub fn check_module_targets(
     program: &Program,
     manifest: &Manifest,
     imports: ModuleBindings,
-    options: CheckOptions,
+    targets: &[Manifest],
 ) -> (Checked, ModuleExports) {
+    check_module_targets_with_options(program, manifest, imports, targets, CheckOptions::default())
+}
+pub fn check_module_with_options(program: &Program, manifest: &Manifest, imports: ModuleBindings, options: CheckOptions) -> (Checked, ModuleExports) {
+    check_module_targets_with_options(program,manifest,imports,std::slice::from_ref(manifest),options)
+}
+pub fn check_module_targets_with_options(program: &Program, manifest: &Manifest, imports: ModuleBindings, targets: &[Manifest], options: CheckOptions) -> (Checked, ModuleExports) {
+    let effective = targets::with_fallbacks(manifest, targets);
+    let manifest = &effective;
     let classes = classes::ClassContext::from_imports(&imports);
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         module: imports,
         manifest,
         options,
+        availability: targets::Availability::new(targets),
         out: &mut out,
         scopes: Vec::new(),
         fn_depth: 0,
@@ -176,6 +188,7 @@ struct Ctx<'a> {
     classes: classes::ClassContext,
     loops: Vec<loops::LoopCtx>,
     manifest: &'a Manifest,
+    availability: targets::Availability,
     out: &'a mut Vec<Diagnostic>,
     scopes: Vec<Scope>,
     fn_depth: usize,
@@ -515,6 +528,7 @@ impl Ctx<'_> {
                 params,
                 body,
             } => {
+                self.target_event(event, &s.span);
                 let entry = self.manifest.event(event).cloned();
                 if entry.is_none() {
                     self.out.push(
@@ -675,6 +689,9 @@ impl Ctx<'_> {
     // ---- names --------------------------------------------------------
 
     fn read(&mut self, name: &str, span: &Span) -> Type {
+        if let Some(t) = self.target_read(name, span) {
+            return t;
+        }
         self.saved_access(name, span);
         match self.lookup(name).map(|(_, b)| b.clone()) {
             Some(b) => {
@@ -862,6 +879,9 @@ impl Ctx<'_> {
 
     /// What a true or false condition says about optional names.
     fn narrowings(&self, e: &Expr) -> (Narrowings, Narrowings) {
+        if let Some(n) = self.has_narrowings(e) {
+            return n;
+        }
         let optional_name = |x: &Expr| -> Option<(String, Type)> {
             let ExprKind::Ident(n) = &x.kind else {
                 return None;
@@ -983,6 +1003,9 @@ impl Ctx<'_> {
     }
 
     fn member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
+        if let Some(t) = self.target_member(t, name, object) {
+            return t;
+        }
         if let Some(t) = self.api_member(t, name, object) {
             return t;
         }
@@ -1179,6 +1202,9 @@ impl Ctx<'_> {
     }
 
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+        if let Some(t) = self.target_call(callee, args) {
+            return t;
+        }
         if let Some(t) = self.api_call(e, callee, args) {
             return t;
         }

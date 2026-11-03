@@ -26,6 +26,7 @@ mod modules;
 mod purity;
 pub mod saved;
 pub use modules::ModuleBindings;
+pub mod targets;
 mod wow;
 
 use lua::{BinOp, LBlock, LExpr, LFunction, LStmt, LStmtKind, UnOp, bin, name, not};
@@ -103,12 +104,27 @@ pub fn lower_with_addon(
     types: &TypeTable,
     addon_name: &str,
 ) -> Lowered {
+    lower_addon_layout(program, manifest, types, addon_name, false, manifest)
+}
+fn lower_addon_layout(
+    program: &Program,
+    manifest: &Manifest,
+    types: &TypeTable,
+    addon_name: &str,
+    shared: bool,
+    availability: &Manifest,
+) -> Lowered {
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
     let mut module = ModuleBindings::default();
     module.addon_name = addon_name.into();
     let mut l = Lowerer {
         module,
         saved_globals: saved::globals(program, addon_name),
+        target: targets::TargetLowering {
+            manifest: availability.clone(),
+            universe: manifest.clone(),
+            shared,
+        },
         known: &known,
         types,
         temps: 0,
@@ -119,13 +135,11 @@ pub fn lower_with_addon(
         loops: Vec::new(),
     };
     let mut out: LBlock = Vec::new();
+    l.target_prelude(program, &mut out);
     l.file_prelude(program, &mut out);
     let captures_end = out.len();
     out.extend(saved::setup(program));
-    let has_handlers = program
-        .stmts
-        .iter()
-        .any(|s| matches!(s.kind, StmtKind::OnHandler { .. }));
+    let has_handlers = program.stmts.iter().any(targets::contains_event);
     if has_handlers {
         out.push(raw(EVENT_PROLOGUE));
         out.push(raw(""));
@@ -163,21 +177,44 @@ pub fn lower_module(
     types: &TypeTable,
     module: ModuleBindings,
 ) -> Lowered {
+    lower_module_layout(program, manifest, types, module, false, manifest)
+}
+pub fn lower_module_layout(
+    program: &Program,
+    manifest: &Manifest,
+    types: &TypeTable,
+    module: ModuleBindings,
+    shared: bool,
+    availability: &Manifest,
+) -> Lowered {
     if !program.stmts.iter().any(|s| {
-        matches!(
-            s.kind,
-            StmtKind::Saved { .. }
-                | StmtKind::Import { .. }
-                | StmtKind::Export(_)
-                | StmtKind::OnHandler { .. }
-        )
+        targets::contains_event(s)
+            || matches!(
+                s.kind,
+                StmtKind::Saved { .. }
+                    | StmtKind::Import { .. }
+                    | StmtKind::Export(_)
+                    | StmtKind::OnHandler { .. }
+            )
     }) {
-        return lower_with_addon(program, manifest, types, &module.addon_name);
+        return lower_addon_layout(
+            program,
+            manifest,
+            types,
+            &module.addon_name,
+            shared,
+            availability,
+        );
     }
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
     let mut l = Lowerer {
         saved_globals: saved::globals(program, &module.addon_name),
         module,
+        target: targets::TargetLowering {
+            manifest: availability.clone(),
+            universe: manifest.clone(),
+            shared,
+        },
         known: &known,
         types,
         temps: 0,
@@ -201,15 +238,13 @@ pub fn lower_module(
         ),
         span: None,
     };
+    l.target_prelude(program, &mut out);
     l.file_prelude(program, &mut out);
     out.push(namespace_fallback);
     let runtime_index = out.len();
     out.extend(saved::setup(program));
     l.module_prologue(&mut out);
-    let has_handlers = program
-        .stmts
-        .iter()
-        .any(|s| matches!(s.kind, StmtKind::OnHandler { .. }));
+    let has_handlers = program.stmts.iter().any(targets::contains_event);
     if has_handlers {
         out.push(raw(&module_event_prologue()));
         out.push(raw(""));
@@ -250,6 +285,7 @@ pub(crate) struct Lowerer<'a> {
     class_receiver: String,
     classes: classes::ClassLoweringState,
     loops: Vec<loops::LoopCtx>,
+    target: targets::TargetLowering,
     known: &'a HashSet<String>,
     types: &'a TypeTable,
     temps: u32,
@@ -394,6 +430,9 @@ impl Lowerer<'_> {
         span: &Span,
         out: &mut LBlock,
     ) {
+        if self.target_if(cond, then_branch, else_branch, span, out) {
+            return;
+        }
         let mut pre = Vec::new();
         let c = self.expr(cond, &mut pre);
         let mut arms = vec![(c, self.block(then_branch))];

@@ -64,6 +64,9 @@ impl Ctx<'_> {
         }
     }
     pub(crate) fn builtin_call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Option<Type> {
+        if let Some(t) = self.has_call(e, callee, args) {
+            return Some(t);
+        }
         let n = self.wow_name(callee)?;
         if !matches!(n.as_str(), "command" | "hook" | "hookScript") {
             return None;

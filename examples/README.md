@@ -25,3 +25,5 @@ with the real `selu` binary, loads it into the simulator in `.toc` order,
 fires `PLAYER_LOGIN` and compares what it printed with `expected.txt`
 (`crates/selu-cli/tests/examples.rs`). A new example needs that file, so it
 can't silently break.
+
+- `multi-target/`: a shared retail and Forever addon with a capability branch.

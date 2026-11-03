@@ -1,0 +1,6 @@
+[addon]
+name = "MultiTarget"
+targets = ["retail", "forever"]
+
+[build]
+layout = "shared"

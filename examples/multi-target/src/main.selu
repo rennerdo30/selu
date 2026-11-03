@@ -1,0 +1,7 @@
+on PLAYER_LOGIN() {
+  if (has(GetTime)) {
+    print("Client clock available");
+  } else {
+    print("Client clock unavailable");
+  }
+}

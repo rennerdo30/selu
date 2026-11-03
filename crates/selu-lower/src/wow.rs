@@ -94,6 +94,9 @@ impl Lowerer<'_> {
         args: &[Expr],
         pre: &mut LBlock,
     ) -> Option<LExpr> {
+        if let Some(v) = self.has_call(callee, args) {
+            return Some(v);
+        }
         // Built-in callees are deliberately not typed; ordinary bound callees are.
         if self.types.get(callee.id).is_some() {
             return None;

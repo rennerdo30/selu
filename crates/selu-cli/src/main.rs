@@ -63,6 +63,10 @@ struct Project {
     build: BuildSection,
 }
 
+#[derive(Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum BuildLayout { #[default] PerTarget, Shared }
+
 /// The `[addon]` table of `selu.toml`. Unknown keys are an error so a typo
 /// never silently does nothing.
 #[derive(Debug, Default, Deserialize)]
@@ -70,6 +74,8 @@ struct Project {
 struct BuildSection {
     #[serde(default)]
     strict_api: bool,
+    #[serde(default)]
+    layout: BuildLayout,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +188,7 @@ fn build(
     let check_options = selu_check::CheckOptions {
         strict_api: project.build.strict_api,
     };
+    let shared = project.build.layout == BuildLayout::Shared;
     let project = project.addon;
 
     let src_dir = project_dir.join("src");
@@ -201,6 +208,15 @@ fn build(
         return Err(ExitCode::FAILURE);
     }
     let manifests = find_manifests(manifest_dir, project_dir)?;
+    let selected: Vec<Manifest> = target_strings
+        .iter()
+        .map(|t| {
+            let spec = TargetSpec::parse(t).map_err(|d| fail(&d, ""))?;
+            selu_manifest::resolve(&spec, &manifests)
+                .cloned()
+                .map_err(|d| fail(&d, ""))
+        })
+        .collect::<Result<_, _>>()?;
     let multi = target_strings.len() > 1;
 
     let mut saved_shapes = std::collections::BTreeMap::new();
@@ -221,7 +237,7 @@ fn build(
         let manifest = selu_manifest::resolve(&spec, &manifests).map_err(|d| fail(&d, ""))?;
         println!("target {spec} -> {}", manifest.build);
 
-        let out_dir = if multi {
+        let out_dir = if multi && !shared {
             project_dir
                 .join("dist")
                 .join(format!("{}-{}", project.name, manifest.flavour))
@@ -251,12 +267,8 @@ fn build(
                 imports.imports.insert(from.clone(), signatures.clone());
                 lower_imports.insert(from.clone(), (key.clone(), signatures));
             }
-            let (checked, signature) = selu_check::check_module_with_options(
-                &module.program,
-                manifest,
-                imports,
-                check_options,
-            );
+            let (checked, signature) =
+                selu_check::check_module_targets_with_options(&module.program, manifest, imports, &selected, check_options);
             for d in &checked.diagnostics {
                 eprint!("{}", d.render(&module.source));
             }
@@ -274,8 +286,14 @@ fn build(
             let mut bindings =
                 selu_lower::ModuleBindings::new(module.key.clone(), lower_imports, &module.program);
             bindings.addon_name = project.name.clone();
-            let lowered =
-                selu_lower::lower_module(&module.program, manifest, &checked.types, bindings);
+            let lowered = selu_lower::lower_module_layout(
+                &module.program,
+                &selu_check::targets::with_fallbacks(manifest, &selected),
+                &checked.types,
+                bindings,
+                shared,
+                manifest,
+            );
             compiled.push((module, lowered));
         }
         validate_saved(&old_saved, &saved_shapes, &sources, &project.name)?;
@@ -299,7 +317,11 @@ fn build(
             })?;
             lua_files.push(lua_name);
         }
-        let mut toc = selu_lower::generate_toc(&project.name, manifest, &lua_files);
+        let mut toc = if shared {
+            selu_lower::targets::generate_shared_toc(&project.name, &selected, &lua_files)
+        } else {
+            selu_lower::generate_toc(&project.name, manifest, &lua_files)
+        };
         for (character, label) in [
             (false, "SavedVariables"),
             (true, "SavedVariablesPerCharacter"),
