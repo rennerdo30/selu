@@ -353,6 +353,7 @@ fn checked_module(source: &str) -> selu_check::Checked {
             selu_check::ModuleExport {
                 ty: selu_check::Type::Number,
                 mutable: false,
+                saved: false,
                 ..Default::default()
             },
         )]
@@ -532,6 +533,7 @@ fn review_missing_export_help_is_generic() {
                     selu_check::ModuleExport {
                         ty: selu_check::Type::Number,
                         mutable: false,
+                        saved: false,
                         ..Default::default()
                     },
                 )

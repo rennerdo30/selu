@@ -72,6 +72,20 @@ pub enum ForBinding {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StmtKind {
+    Saved {
+        name: String,
+        name_span: Span,
+        per_character: bool,
+        version: u32,
+        defaults: Box<Expr>,
+    },
+    Migrate {
+        name: String,
+        from: u32,
+        to: u32,
+        param: Param,
+        body: Vec<Stmt>,
+    },
     VarDecl {
         is_const: bool,
         name: String,

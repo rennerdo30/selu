@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 mod classes;
 mod modules;
+pub mod saved;
 pub use modules::{ModuleBindings, ModuleExport, ModuleExports};
 mod rules;
 // One file per language area. The central `stmt`/`expr_inner` matches only
@@ -118,6 +119,7 @@ enum Kind {
     Param,
     Global,
     Import,
+    Saved,
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +302,7 @@ impl Ctx<'_> {
                 _ => s,
             };
             match &s.kind {
+                StmtKind::Saved { .. } => self.declare_saved(s),
                 StmtKind::Class(c) => self.declare_class(c),
                 StmtKind::VarDecl {
                     is_const,
@@ -425,6 +428,7 @@ impl Ctx<'_> {
 
     fn stmt(&mut self, s: &Stmt) {
         match &s.kind {
+            StmtKind::Saved { .. } | StmtKind::Migrate { .. } => self.saved_stmt(s),
             StmtKind::VarDecl {
                 is_const,
                 name,
@@ -640,6 +644,7 @@ impl Ctx<'_> {
     // ---- names --------------------------------------------------------
 
     fn read(&mut self, name: &str, span: &Span) -> Type {
+        self.saved_access(name, span);
         match self.lookup(name).map(|(_, b)| b.clone()) {
             Some(b) => {
                 self.check_ready(name, &b, span);
@@ -684,6 +689,7 @@ impl Ctx<'_> {
 
     /// `name = value;` where the value has type `value`.
     fn write(&mut self, name: &str, span: &Span, value: &Type) {
+        self.saved_access(name, span);
         if self.module_write(name, span) {
             return;
         }
@@ -705,7 +711,7 @@ impl Ctx<'_> {
         };
         self.check_ready(name, &b, span);
         match b.kind {
-            Kind::Const => {
+            Kind::Const | Kind::Saved => {
                 self.out.push(
                     err(
                         "SELU0311",

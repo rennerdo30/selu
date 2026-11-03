@@ -23,6 +23,7 @@ mod data;
 mod functions;
 mod loops;
 mod modules;
+pub mod saved;
 pub use modules::ModuleBindings;
 mod wow;
 
@@ -115,6 +116,7 @@ pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lower
         out.push(raw(EVENT_PROLOGUE));
         out.push(raw(""));
     }
+    out.extend(saved::captures(program));
     out.extend(l.block(&program.stmts));
     if let Some(prologue) = l.wow_prologue() {
         out.splice(
@@ -152,7 +154,10 @@ pub fn lower_module(
     if !program.stmts.iter().any(|s| {
         matches!(
             s.kind,
-            StmtKind::Import { .. } | StmtKind::Export(_) | StmtKind::OnHandler { .. }
+            StmtKind::Saved { .. }
+                | StmtKind::Import { .. }
+                | StmtKind::Export(_)
+                | StmtKind::OnHandler { .. }
         )
     }) {
         return lower(program, manifest, types);
@@ -193,6 +198,7 @@ pub fn lower_module(
         out.push(raw(&module_event_prologue()));
         out.push(raw(""));
     }
+    out.extend(saved::captures(program));
     out.extend(l.block(&program.stmts));
     if let Some(prologue) = l.wow_prologue() {
         out.splice(runtime_index..runtime_index, prologue);
@@ -290,6 +296,7 @@ impl Lowerer<'_> {
     fn stmt(&mut self, s: &Stmt, forward: bool, out: &mut LBlock) {
         let span = &s.span;
         match &s.kind {
+            StmtKind::Saved { .. } | StmtKind::Migrate { .. } => self.saved_stmt(s, forward, out),
             StmtKind::VarDecl { init: None, .. } if forward => {}
             StmtKind::VarDecl {
                 name: n,
@@ -796,7 +803,9 @@ fn used_before_declaration(stmts: &[Stmt]) -> Vec<String> {
 fn declaration_names(s: &Stmt) -> Vec<String> {
     match &s.kind {
         StmtKind::Export(inner) => declaration_names(inner),
-        StmtKind::VarDecl { name, .. } | StmtKind::FuncDecl { name, .. } => vec![name.clone()],
+        StmtKind::Saved { name, .. }
+        | StmtKind::VarDecl { name, .. }
+        | StmtKind::FuncDecl { name, .. } => vec![name.clone()],
         StmtKind::Class(c) => vec![c.name.clone()],
         StmtKind::Destructure { pattern, .. } => match pattern {
             selu_syntax::Pattern::Array(items) => {

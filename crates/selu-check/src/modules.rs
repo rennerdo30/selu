@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 pub struct ModuleExport {
     pub ty: Type,
     pub mutable: bool,
+    pub saved: bool,
     /// Class signatures reachable through this export, keyed by module and declaration.
     pub classes: std::collections::HashMap<String, crate::ClassInfo>,
 }
@@ -16,12 +17,14 @@ impl Default for ModuleExport {
             ty: Type::Untyped,
             mutable: false,
             classes: Default::default(),
+            saved: false,
         }
     }
 }
 pub type ModuleExports = BTreeMap<String, ModuleExport>;
 #[derive(Debug, Default, Clone)]
 pub struct ModuleBindings {
+    pub(crate) saved_imports: std::collections::HashSet<String>,
     pub imports: BTreeMap<String, ModuleExports>,
     pub exports: ModuleExports,
 }
@@ -54,6 +57,15 @@ impl Ctx<'_> {
                     .and_then(|m| m.get(remote))
                     .map(|e| e.ty.clone())
                     .unwrap_or(Type::Untyped);
+                if self
+                    .module
+                    .imports
+                    .get(from)
+                    .and_then(|m| m.get(remote))
+                    .is_some_and(|e| e.saved)
+                {
+                    self.module.saved_imports.insert(local.clone());
+                }
                 self.declare(local, span, Kind::Import, ty.clone());
                 self.finish_decl(local, ty);
             }
@@ -122,6 +134,7 @@ impl Ctx<'_> {
         self.stmt(inner);
         let (name, mutable) = match &inner.kind {
             StmtKind::VarDecl { name, is_const, .. } => (name, !is_const),
+            StmtKind::Saved { name, .. } => (name, true),
             StmtKind::FuncDecl { name, .. } => (name, false),
             StmtKind::Global { name, .. } => (name, true),
             StmtKind::Class(c) => (&c.name, false),
@@ -134,6 +147,7 @@ impl Ctx<'_> {
                     ty,
                     mutable,
                     classes: self.classes.infos.clone(),
+                    saved: matches!(inner.kind, StmtKind::Saved { .. }),
                 },
             );
         }

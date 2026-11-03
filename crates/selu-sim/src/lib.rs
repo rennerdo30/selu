@@ -7,6 +7,7 @@ use mlua::{Function, Lua, MultiValue, Table, Value};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+pub mod saved;
 mod wow_api;
 
 pub use mlua::Value as SimValue;
@@ -225,6 +226,10 @@ impl Sim {
                 .set_name(name)
                 .call::<()>((addon, ns.clone()))?;
         }
+        self.fire(
+            "ADDON_LOADED",
+            vec![Value::String(self.lua.create_string(addon)?)],
+        )?;
         Ok(())
     }
 

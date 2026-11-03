@@ -262,6 +262,7 @@ impl Lowerer<'_> {
         self.stmt(inner, forward, out);
         let (n, mutable) = match &inner.kind {
             StmtKind::VarDecl { name, is_const, .. } => (name, !is_const),
+            StmtKind::Saved { name, .. } => (name, true),
             StmtKind::FuncDecl { name, .. } => (name, false),
             StmtKind::Global { name, .. } => (name, true),
             StmtKind::Class(c) => (&c.name, false),

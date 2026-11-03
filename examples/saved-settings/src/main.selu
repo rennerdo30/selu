@@ -1,0 +1,15 @@
+saved settings version 2 = {
+    enabled: true,
+    thresholdPercent: 35,
+    panel: { scale: 1 },
+};
+migrate settings 1 -> 2 (old) {
+    old.thresholdPercent = 35;
+}
+saved perCharacter progress = { visits: 0 };
+on PLAYER_LOGIN() {
+    progress.visits += 1;
+    print(settings.enabled);
+    print(settings.thresholdPercent);
+    print(progress.visits);
+}

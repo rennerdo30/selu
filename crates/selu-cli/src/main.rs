@@ -4,7 +4,7 @@
 use clap::{Parser, Subcommand};
 use selu_diagnostics::Diagnostic;
 use selu_manifest::{Manifest, TargetSpec};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -190,6 +190,19 @@ fn build(
     let manifests = find_manifests(manifest_dir, project_dir)?;
     let multi = target_strings.len() > 1;
 
+    let mut saved_shapes = std::collections::BTreeMap::new();
+    let mut saved_globals = Vec::new();
+    let old_saved: SavedFile = match std::fs::read_to_string(project_dir.join("selu.saved.toml")) {
+        Ok(text) => toml::from_str(&text).map_err(|e| {
+            eprintln!("SELU0466: invalid selu.saved.toml: {e}");
+            ExitCode::FAILURE
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SavedFile::default(),
+        Err(e) => {
+            eprintln!("SELU0466: cannot read selu.saved.toml: {e}");
+            return Err(ExitCode::FAILURE);
+        }
+    };
     for target_str in &target_strings {
         let spec = TargetSpec::parse(target_str).map_err(|d| fail(&d, ""))?;
         let manifest = selu_manifest::resolve(&spec, &manifests).map_err(|d| fail(&d, ""))?;
@@ -232,6 +245,13 @@ fn build(
             if checked.has_errors() {
                 return Err(ExitCode::FAILURE);
             }
+            collect_saved(
+                module,
+                &checked.types,
+                &project.name,
+                &mut saved_shapes,
+                &mut saved_globals,
+            )?;
             exports.insert(module.key.clone(), signature);
             let bindings =
                 selu_lower::ModuleBindings::new(module.key.clone(), lower_imports, &module.program);
@@ -239,6 +259,7 @@ fn build(
                 selu_lower::lower_module(&module.program, manifest, &checked.types, bindings);
             compiled.push((module, lowered));
         }
+        validate_saved(&old_saved, &saved_shapes, &sources, &project.name)?;
         for (module, lowered) in compiled {
             let lua_name = format!("{}.lua", module.key);
             let output = out_dir.join(&lua_name);
@@ -259,13 +280,37 @@ fn build(
             })?;
             lua_files.push(lua_name);
         }
-        let toc = selu_lower::generate_toc(&project.name, manifest, &lua_files);
+        let mut toc = selu_lower::generate_toc(&project.name, manifest, &lua_files);
+        for (character, label) in [
+            (false, "SavedVariables"),
+            (true, "SavedVariablesPerCharacter"),
+        ] {
+            let names: std::collections::BTreeSet<_> = saved_globals
+                .iter()
+                .filter(|(_, c)| *c == character)
+                .map(|(n, _)| n.as_str())
+                .collect();
+            if !names.is_empty() {
+                toc = format!(
+                    "## {label}: {}\n{toc}",
+                    names.into_iter().collect::<Vec<_>>().join(", ")
+                );
+            }
+        }
         std::fs::write(out_dir.join(format!("{}.toc", project.name)), toc).map_err(|e| {
             eprintln!("selu: cannot write .toc: {e}");
             ExitCode::FAILURE
         })?;
         println!("built {} -> {}", project.name, out_dir.display());
     }
+    let text = toml::to_string_pretty(&SavedFile {
+        saved: saved_shapes,
+    })
+    .expect("saved schema serializes");
+    std::fs::write(project_dir.join("selu.saved.toml"), text).map_err(|e| {
+        eprintln!("SELU0466: cannot write saved shapes: {e}");
+        ExitCode::FAILURE
+    })?;
     Ok(())
 }
 
@@ -494,4 +539,176 @@ fn project_sources(src: &Path) -> Result<Vec<ModuleSource>, ExitCode> {
         ordered.push(modules.remove(&key).unwrap());
     }
     Ok(ordered)
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedFile {
+    #[serde(default)]
+    saved: std::collections::BTreeMap<String, SavedShape>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedShape {
+    version: u32,
+    per_character: bool,
+    fields: std::collections::BTreeMap<String, String>,
+}
+fn saved_inner(s: &selu_syntax::Stmt) -> &selu_syntax::Stmt {
+    if let selu_syntax::StmtKind::Export(inner) = &s.kind {
+        inner
+    } else {
+        s
+    }
+}
+fn collect_saved(
+    module: &ModuleSource,
+    types: &selu_check::TypeTable,
+    addon: &str,
+    shapes: &mut std::collections::BTreeMap<String, SavedShape>,
+    globals: &mut Vec<(String, bool)>,
+) -> Result<(), ExitCode> {
+    fn fields(
+        ty: &selu_check::Type,
+        path: String,
+        out: &mut std::collections::BTreeMap<String, String>,
+    ) {
+        if let selu_check::Type::Object(fs) = ty {
+            out.insert(path.clone(), "object".into());
+            for (key, ty) in fs {
+                fields(ty, format!("{path}/{}:{key}", key.len()), out);
+            }
+        } else if let selu_check::Type::Array(element) = ty {
+            out.insert(path.clone(), "array".into());
+            fields(element, format!("{path}/[]"), out);
+        } else {
+            out.insert(path, ty.to_string());
+        }
+    }
+    for s in &module.program.stmts {
+        if let selu_syntax::StmtKind::Saved {
+            name,
+            version,
+            per_character,
+            defaults,
+            ..
+        } = &saved_inner(s).kind
+        {
+            let mut fs = std::collections::BTreeMap::new();
+            fields(
+                types.get(defaults.id).expect("checked defaults"),
+                String::new(),
+                &mut fs,
+            );
+            let global = selu_lower::saved::global_name(addon, &module.key, name);
+            globals.push((global.clone(), *per_character));
+            shapes.insert(
+                global,
+                SavedShape {
+                    version: *version,
+                    per_character: *per_character,
+                    fields: fs,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+fn validate_saved(
+    old: &SavedFile,
+    new: &std::collections::BTreeMap<String, SavedShape>,
+    modules: &[ModuleSource],
+    addon: &str,
+) -> Result<(), ExitCode> {
+    let mut migrations: std::collections::BTreeMap<String, Vec<(u32, u32)>> =
+        std::collections::BTreeMap::new();
+    for module in modules {
+        for s in &module.program.stmts {
+            if let selu_syntax::StmtKind::Migrate { name, from, to, .. } = &s.kind {
+                migrations
+                    .entry(selu_lower::saved::global_name(addon, &module.key, name))
+                    .or_default()
+                    .push((*from, *to));
+            }
+        }
+    }
+    for (key, shape) in new {
+        let mut chain = migrations.remove(key).unwrap_or_default();
+        chain.sort();
+        if chain.len() as u64 != u64::from(shape.version - 1)
+            || chain.iter().enumerate().any(|(i, (from, to))| {
+                u64::from(*from) != i as u64 + 1 || u64::from(*to) != i as u64 + 2
+            })
+        {
+            saved_diagnostic(
+                key,
+                "SELU0471",
+                format!(
+                    "Saved data {key} {key} needs one migration for every step from version 1 to {}; old fields: {:?}; new fields: {:?}; write migrate <name> <from> -> <to> (old) {{ ... }}",
+                    shape.version,
+                    old.saved.get(key).map(|s| &s.fields),
+                    shape.fields
+                ),
+                modules,
+                addon,
+            );
+            return Err(ExitCode::FAILURE);
+        }
+    }
+    for (key, before) in &old.saved {
+        let Some(after) = new.get(key) else {
+            eprintln!(
+                "SELU0467: saved declaration {key} was removed; preserve it and migrate its data"
+            );
+            return Err(ExitCode::FAILURE);
+        };
+        let breaking = before.per_character != after.per_character
+            || before
+                .fields
+                .iter()
+                .any(|(k, v)| after.fields.get(k) != Some(v));
+
+        if before.per_character != after.per_character
+            || after.version < before.version
+            || (breaking && after.version == before.version)
+        {
+            saved_diagnostic(
+                key,
+                "SELU0468",
+                format!(
+                    "Saved shape {key} needs a checked migration; old fields: {:?}; new fields: {:?}; write migrate <name> {} -> {} (old) {{ ... }} and raise the version",
+                    before.fields,
+                    after.fields,
+                    before.version,
+                    before.version.saturating_add(1)
+                ),
+                modules,
+                addon,
+            );
+            return Err(ExitCode::FAILURE);
+        }
+    }
+    Ok(())
+}
+
+fn saved_diagnostic(key: &str, code: &str, message: String, modules: &[ModuleSource], addon: &str) {
+    for module in modules {
+        for stmt in &module.program.stmts {
+            let stmt = saved_inner(stmt);
+            if let selu_syntax::StmtKind::Saved {
+                name, name_span, ..
+            } = &stmt.kind
+                && selu_lower::saved::global_name(addon, &module.key, name) == key
+            {
+                eprint!(
+                    "{}",
+                    Diagnostic::error(code, message.replace("<name>", name))
+                        .with_span(name_span.clone())
+                        .with_help("preserve historical migrations and commit selu.saved.toml")
+                        .render(&module.source)
+                );
+                return;
+            }
+        }
+    }
 }

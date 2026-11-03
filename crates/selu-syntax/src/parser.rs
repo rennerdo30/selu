@@ -404,9 +404,74 @@ impl Parser {
         })
     }
 
+    fn saved_version(&mut self) -> PResult<u32> {
+        if let Tok::Number(n) = self.peek().clone()
+            && let Ok(v) = n.parse::<u32>()
+            && v > 0
+        {
+            self.bump();
+            return Ok(v);
+        }
+        Err(
+            Diagnostic::error("SELU0461", "a saved version must be a positive integer")
+                .with_span(self.peek_span()),
+        )
+    }
     fn stmt(&mut self) -> PResult<Stmt> {
         let start = self.peek_span().start;
         let kind = match self.peek().clone() {
+            Tok::Ident(ref w) if w == "saved" && matches!(self.peek_at(1), Some(Tok::Ident(_))) => {
+                self.bump();
+                let per_character = self.at_ident("perCharacter");
+                if per_character {
+                    self.bump();
+                }
+                let (name, name_span) = self.ident("a saved name")?;
+                let version = if self.at_ident("version") {
+                    self.bump();
+                    self.saved_version()?
+                } else {
+                    1
+                };
+                self.expect(&Tok::Eq, "`=`")?;
+                let defaults = Box::new(self.expr()?);
+                self.semi(start)?;
+                StmtKind::Saved {
+                    name,
+                    name_span,
+                    per_character,
+                    version,
+                    defaults,
+                }
+            }
+            Tok::Ident(ref w)
+                if w == "migrate" && matches!(self.peek_at(1), Some(Tok::Ident(_))) =>
+            {
+                self.bump();
+                let (name, _) = self.ident("a saved name")?;
+                let from = self.saved_version()?;
+                self.expect(&Tok::Minus, "`->`")?;
+                self.expect(&Tok::Gt, "`->`")?;
+                let to = self.saved_version()?;
+                self.expect(&Tok::LParen, "`(`")?;
+                let (n, span) = self.ident("the old data parameter")?;
+                self.expect(&Tok::RParen, "`)`")?;
+                let param = Param {
+                    name: n,
+                    span,
+                    ty: None,
+                    default: None,
+                    rest: false,
+                };
+                let body = self.block()?;
+                StmtKind::Migrate {
+                    name,
+                    from,
+                    to,
+                    param,
+                    body,
+                }
+            }
             Tok::Const | Tok::Let => self.declaration(start)?,
             Tok::Function => {
                 self.bump();
@@ -492,7 +557,8 @@ impl Parser {
                 self.bump();
                 let inner = self.stmt()?;
                 match inner.kind {
-                    StmtKind::VarDecl { .. }
+                    StmtKind::Saved { .. }
+                    | StmtKind::VarDecl { .. }
                     | StmtKind::FuncDecl { .. }
                     | StmtKind::Class(_)
                     | StmtKind::Global { .. } => StmtKind::Export(Box::new(inner)),

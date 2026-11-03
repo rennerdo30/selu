@@ -45,6 +45,8 @@ fn stmts<'a>(ss: &'a [Stmt], f: &mut impl FnMut(Child<'a>)) {
 /// Calls `f` with each direct child of `s`, in source order.
 pub fn child_stmts_and_exprs<'a>(s: &'a Stmt, f: &mut impl FnMut(Child<'a>)) {
     match &s.kind {
+        StmtKind::Saved { defaults, .. } => f(Child::Expr(defaults)),
+        StmtKind::Migrate { body, .. } => stmts(body, f),
         StmtKind::VarDecl { init, .. } => {
             if let Some(e) = init {
                 f(Child::Expr(e));
