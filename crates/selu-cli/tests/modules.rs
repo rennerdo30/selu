@@ -75,11 +75,19 @@ fn run(label: &str, files: &[(&str, &str)]) -> (Vec<String>, Vec<String>) {
         .map(|n| (n.clone(), std::fs::read_to_string(dist.join(n)).unwrap()))
         .collect();
     for n in &names {
-        assert!(
-            dir.join("dist/.selu/Modules")
-                .join(format!("{n}.map.json"))
-                .exists()
-        );
+        let map: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("dist/.selu/Modules").join(format!("{n}.map.json")))
+                .unwrap(),
+        )
+        .unwrap();
+        let entries = map["entries"].as_array().unwrap();
+        assert!(!entries.is_empty());
+        for entry in entries {
+            assert_eq!(
+                entry["span"]["file"].as_str().unwrap(),
+                n.replace(".lua", ".selu")
+            );
+        }
     }
     let sim = selu_sim::Sim::new().unwrap();
     sim.load_addon("Modules", &files).unwrap();
@@ -182,7 +190,7 @@ fn project_errors_render_the_owning_source() {
                     "export function f(n: number): number { return n; }",
                 ),
             ],
-            "SELU033",
+            "SELU0335",
             "main.selu",
         ),
         (
@@ -191,7 +199,7 @@ fn project_errors_render_the_owning_source() {
                 ("main.selu", "import { value } from \"./state\";"),
                 ("state.selu", "export const value: number = \"bad\";"),
             ],
-            "SELU033",
+            "SELU0336",
             "state.selu",
         ),
         (
@@ -217,7 +225,33 @@ fn project_errors_render_the_owning_source() {
         assert!(!result.status.success(), "{label}");
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(
-            stderr.contains(code) && stderr.contains(source),
+            stderr.contains(&format!("error[{code}]")) && stderr.contains(&format!("{source}:1:")),
+            "{label}: {stderr}"
+        );
+        let selected = match label {
+            "missing" => "\"./absent\"",
+            "name" => "nope",
+            "readonly" => "value =",
+            "signature" | "child" => "\"bad\"",
+            "cycle" => "\"./main\"",
+            "asset" => "\"./logo.png\"",
+            _ => unreachable!(),
+        };
+        let text = files.iter().find(|(name, _)| *name == source).unwrap().1;
+        let start = text.find(selected).unwrap();
+        assert!(
+            stderr.contains(&format!("{source}:1:{}", start + 1)),
+            "{label}: {stderr}"
+        );
+        let expected_length = if label == "readonly" {
+            "value".len()
+        } else {
+            selected.len()
+        };
+        let underline = stderr.lines().find(|line| line.contains('^')).unwrap();
+        assert_eq!(
+            underline.chars().filter(|c| *c == '^').count(),
+            expected_length,
             "{label}: {stderr}"
         );
         if label == "cycle" {
@@ -302,4 +336,218 @@ fn imports_are_initialized_before_statements_and_reads_keep_order() {
         ],
     );
     assert_eq!(prints, ["1\t9\t5"]);
+}
+
+fn checked_module(source: &str) -> selu_check::Checked {
+    let manifest = selu_manifest::load_manifest(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../manifests/fixtures/forever-1.0.0.1000.json"),
+    )
+    .unwrap();
+    let program = selu_syntax::parse("main.selu", source).unwrap();
+    let mut bindings = selu_check::ModuleBindings::default();
+    bindings.imports.insert(
+        "./state".into(),
+        [(
+            "n".into(),
+            selu_check::ModuleExport {
+                ty: selu_check::Type::Number,
+                mutable: false,
+            },
+        )]
+        .into(),
+    );
+    selu_check::check_module(&program, &manifest, bindings).0
+}
+fn exact_error(source: &str, code: &str, selected: &str) {
+    let checked = checked_module(source);
+    assert_eq!(checked.diagnostics.len(), 1, "{:?}", checked.diagnostics);
+    let d = &checked.diagnostics[0];
+    assert_eq!(d.code, code);
+    let span = d.span.as_ref().unwrap();
+    assert_eq!(span.file, "main.selu");
+    assert_eq!(
+        (span.start, span.end),
+        (
+            source.find(selected).unwrap(),
+            source.find(selected).unwrap() + selected.len()
+        )
+    );
+}
+#[test]
+fn review_alias_keyword() {
+    exact_error("import { n as end } from \"./state\";", "SELU0304", "end");
+}
+#[test]
+fn review_alias_reserved() {
+    exact_error(
+        "import { n as __selu_ns } from \"./state\";",
+        "SELU0318",
+        "__selu_ns",
+    );
+}
+#[test]
+fn review_case_variant() {
+    let (_, output) = project(
+        "case",
+        &[
+            (
+                "main.selu",
+                "import { n } from \"./state\"; import { n as other } from \"./State\";",
+            ),
+            ("state.selu", "export const n = 1;"),
+        ],
+    );
+    assert!(!output.status.success());
+    let text = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        text.contains("error[SELU0405]")
+            && text.contains("main.selu:1:57")
+            && text.contains("state.selu")
+            && text.contains("fix:"),
+        "{text}"
+    );
+}
+#[test]
+fn review_addon_global() {
+    let (dir, output) = project("addon-global", &[("main.selu", "export global ADDON = 8;")]);
+    assert!(output.status.success());
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_addon(
+        "Modules",
+        &[(
+            "main.lua".into(),
+            std::fs::read_to_string(dir.join("dist/Modules/main.lua")).unwrap(),
+        )],
+    )
+    .unwrap();
+    sim.eval("assert(ADDON == 8)").unwrap();
+}
+#[test]
+fn review_nested_import() {
+    exact_error(
+        "{ import { n } from \"./state\"; }",
+        "SELU0406",
+        "import { n } from \"./state\";",
+    );
+}
+#[test]
+fn review_nested_export() {
+    exact_error("{ export const n = 1; }", "SELU0406", "export const n = 1;");
+}
+#[test]
+fn review_global_live() {
+    let (prints, _) = run(
+        "global-live",
+        &[
+            (
+                "main.selu",
+                "import { n, change } from \"./state\"; print(n); change(); print(n);",
+            ),
+            (
+                "state.selu",
+                "export global n = 1; export function change(): void { n = 2; }",
+            ),
+        ],
+    );
+    assert_eq!(prints, ["1", "2"]);
+}
+#[test]
+fn review_shared_event_frame() {
+    let (dir, output) = project(
+        "events",
+        &[
+            (
+                "main.selu",
+                "import { n } from \"./state\"; on PLAYER_LOGIN() { print(n); }",
+            ),
+            (
+                "state.selu",
+                "export const n = 1; on PLAYER_LOGIN() { print(2); }",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let files: Vec<_> = ["state.lua", "main.lua"]
+        .iter()
+        .map(|n| {
+            (
+                n.to_string(),
+                std::fs::read_to_string(dir.join("dist/Modules").join(n)).unwrap(),
+            )
+        })
+        .collect();
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_addon("Modules", &files).unwrap();
+    sim.eval("assert(#__selu_sim_frames == 1)").unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), ["2", "1"]);
+}
+
+#[test]
+fn review_dependency_chain_and_diamond() {
+    let (prints, order) = run(
+        "diamond",
+        &[
+            (
+                "main.selu",
+                "import { a } from \"./a\"; import { b } from \"./b\"; print(a); print(b);",
+            ),
+            (
+                "a.selu",
+                "import { z } from \"./z\"; export const a = z + 1;",
+            ),
+            (
+                "b.selu",
+                "import { z } from \"./z\"; export const b = z + 2;",
+            ),
+            ("z.selu", "export const z = 10; print(z);"),
+        ],
+    );
+    assert_eq!(prints, ["10", "11", "12"]);
+    assert_eq!(order, ["z.lua", "a.lua", "b.lua", "main.lua"]);
+}
+#[test]
+fn review_missing_export_help_is_generic() {
+    let source = "import { greetng } from \"./state\";";
+    let manifest = selu_manifest::load_manifest(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../manifests/fixtures/forever-1.0.0.1000.json"),
+    )
+    .unwrap();
+    let program = selu_syntax::parse("main.selu", source).unwrap();
+    let mut bindings = selu_check::ModuleBindings::default();
+    bindings.imports.insert(
+        "./state".into(),
+        ["aaa", "greeting"]
+            .into_iter()
+            .map(|n| {
+                (
+                    n.into(),
+                    selu_check::ModuleExport {
+                        ty: selu_check::Type::Number,
+                        mutable: false,
+                    },
+                )
+            })
+            .collect(),
+    );
+    let checked = selu_check::check_module(&program, &manifest, bindings).0;
+    assert_eq!(checked.diagnostics.len(), 1);
+    assert_eq!(checked.diagnostics[0].code, "SELU0401");
+    assert!(
+        !checked.diagnostics[0]
+            .help
+            .as_ref()
+            .unwrap()
+            .contains("aaa")
+    );
+    assert_eq!(
+        checked.diagnostics[0].span.as_ref().unwrap(),
+        &selu_diagnostics::Span::new("main.selu", 9, 16)
+    );
 }

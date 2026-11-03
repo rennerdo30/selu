@@ -40,6 +40,9 @@ impl Ctx<'_> {
         }
     }
     pub(crate) fn import_stmt(&mut self, s: &Stmt) {
+        if self.module_not_top_level(s) {
+            return;
+        }
         if let StmtKind::Import {
             names,
             from,
@@ -64,11 +67,7 @@ impl Ctx<'_> {
             };
             for (remote, _, _, span) in names {
                 if !exports.contains_key(remote) {
-                    let help = exports
-                        .keys()
-                        .next()
-                        .map(|n| format!("did you mean `{n}`?"))
-                        .unwrap_or_else(|| "export the name from the imported module".into());
+                    let help = "check the exported name or export it from the imported module";
                     self.out.push(
                         err(
                             "SELU0401",
@@ -81,11 +80,30 @@ impl Ctx<'_> {
             }
         }
     }
-    pub(crate) fn export_stmt(&mut self, _s: &Stmt, inner: &Stmt) {
+    pub(crate) fn module_not_top_level(&mut self, s: &Stmt) -> bool {
+        if self.scopes.len() != 1 {
+            self.out.push(
+                err(
+                    "SELU0406",
+                    "imports and exports are only allowed at the top level",
+                    &s.span,
+                )
+                .with_help("move it to the top level"),
+            );
+            true
+        } else {
+            false
+        }
+    }
+    pub(crate) fn export_stmt(&mut self, s: &Stmt, inner: &Stmt) {
+        if self.module_not_top_level(s) {
+            return;
+        }
         self.stmt(inner);
         let (name, mutable) = match &inner.kind {
             StmtKind::VarDecl { name, is_const, .. } => (name, !is_const),
-            StmtKind::FuncDecl { name, .. } | StmtKind::Global { name, .. } => (name, false),
+            StmtKind::FuncDecl { name, .. } => (name, false),
+            StmtKind::Global { name, .. } => (name, true),
             StmtKind::Class(c) => (&c.name, false),
             _ => return,
         };

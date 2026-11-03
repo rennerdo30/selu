@@ -79,6 +79,18 @@ local function __selu_on(event, fn)
   __selu_handlers[event][#__selu_handlers[event] + 1] = fn
 end"#;
 
+// The shared function closes over its handler table and frame, created once.
+fn module_event_prologue() -> String {
+    format!(
+        "if not __selu_ns[true] then\n{}\n  __selu_ns[true] = __selu_on\nend\nlocal __selu_on = __selu_ns[true]",
+        EVENT_PROLOGUE
+            .lines()
+            .map(|l| format!("  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
 /// Lowers a program the checker accepted; `types` is the checker's table.
 pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lowered {
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
@@ -121,11 +133,12 @@ pub fn lower_module(
     types: &TypeTable,
     module: ModuleBindings,
 ) -> Lowered {
-    if !program
-        .stmts
-        .iter()
-        .any(|s| matches!(s.kind, StmtKind::Import { .. } | StmtKind::Export(_)))
-    {
+    if !program.stmts.iter().any(|s| {
+        matches!(
+            s.kind,
+            StmtKind::Import { .. } | StmtKind::Export(_) | StmtKind::OnHandler { .. }
+        )
+    }) {
         return lower(program, manifest, types);
     }
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
@@ -138,18 +151,25 @@ pub fn lower_module(
     };
     let mut out: LBlock = vec![LStmt {
         kind: LStmtKind::Local(
-            vec!["ADDON".into(), "__selu_ns".into()],
+            vec!["__selu_addon".into(), "__selu_ns".into()],
             vec![LExpr::Vararg],
         ),
         span: None,
     }];
+    out.push(LStmt {
+        kind: LStmtKind::Assign(
+            vec![name("__selu_ns")],
+            vec![bin(BinOp::Or, name("__selu_ns"), LExpr::Table(vec![]))],
+        ),
+        span: None,
+    });
     l.module_prologue(&mut out);
     let has_handlers = program
         .stmts
         .iter()
         .any(|s| matches!(s.kind, StmtKind::OnHandler { .. }));
     if has_handlers {
-        out.push(raw(EVENT_PROLOGUE));
+        out.push(raw(&module_event_prologue()));
         out.push(raw(""));
     }
     out.extend(l.block(&program.stmts));

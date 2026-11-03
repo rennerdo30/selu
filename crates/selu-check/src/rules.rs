@@ -88,6 +88,14 @@ impl Rules {
                 self.name(name, name_span);
                 self.params(params);
             }
+            StmtKind::Import { names, default, .. } => {
+                for (_, local, span, _) in names {
+                    self.name(local, span);
+                }
+                if let Some((local, span)) = default {
+                    self.name(local, span);
+                }
+            }
             StmtKind::OnHandler { params, .. } => self.params(params),
             StmtKind::Destructure { pattern, .. } => self.pattern(pattern),
             StmtKind::ForOf { binding, .. } => match binding {

@@ -296,6 +296,37 @@ fn import_key(key: &str, from: &str) -> Option<String> {
     }
     Some(parts.join("/"))
 }
+// Resolve each actual directory entry even on case-insensitive hosts.
+fn actual_module_key(src: &Path, key: &str) -> Option<String> {
+    let wanted = format!("{key}.selu");
+    let mut dir = src.to_path_buf();
+    let mut actual = Vec::new();
+    for component in wanted.split('/') {
+        let mut entries = std::fs::read_dir(&dir)
+            .ok()?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|e| e.file_name());
+        let entry = entries
+            .iter()
+            .find(|e| e.file_name() == component)
+            .or_else(|| {
+                entries.iter().find(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .eq(&component.to_lowercase())
+                })
+            })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        dir.push(&name);
+        actual.push(name);
+    }
+    if !dir.is_file() {
+        return None;
+    }
+    Some(actual.join("/").strip_suffix(".selu")?.to_string())
+}
 fn project_sources(src: &Path) -> Result<Vec<ModuleSource>, ExitCode> {
     use std::collections::{BTreeMap, BTreeSet};
     fn visit(
@@ -342,6 +373,21 @@ fn project_sources(src: &Path) -> Result<Vec<ModuleSource>, ExitCode> {
                         &source,
                     )
                 })?;
+                if let Some(actual) = actual_module_key(src, &dep)
+                    && actual != dep
+                {
+                    return Err(fail(
+                        &Diagnostic::error(
+                            "SELU0405",
+                            format!(
+                                "module path case does not match the real file `{actual}.selu`"
+                            ),
+                        )
+                        .with_span(from_span.clone())
+                        .with_fix(format!("match the path case to `{actual}.selu`")),
+                        &source,
+                    ));
+                }
                 if !src.join(format!("{dep}.selu")).is_file() {
                     return Err(fail(
                         &Diagnostic::error("SELU0400", format!("module `{from}` does not exist"))
