@@ -20,7 +20,7 @@ Three rules decide every open question:
 | Language | everything in section 2 | `enum`, pattern `switch`, getters/setters, decorators |
 | GUI | the framework in section 4 | animations, drag-and-drop between lists, Blizzard frame skinning |
 | Optimizer | `-O0`, `-O1`, `--strip-comments`, `--experimental-minify` | `-O2` |
-| Tools | `selu build`, `selu test`, `selu debug`, `selu targets`, `selu probe`, `selu package` | `selu fmt`, `selu init` templates beyond one |
+| Tools | `selu build`, `selu test`, `selu debug`, `selu targets`, `selu probe`, `selu export` | `selu fmt`, `selu init` templates beyond one |
 | Simulator | section 8 | client art and fonts, BLP textures, Blizzard's own UI |
 | Editors | VS Code: syntax colours and errors while typing | VS Code debugging (DAP), other editors |
 
@@ -397,21 +397,95 @@ garbage comes from.
   "notes": "One line shown in the AddOns list.",
   "targets": ["retail@12.0", "forever"],
   "lua": [],
-  "media": ["media/"],
+  "assets": "assets/",
   "locales": "locales/"
 }
 ```
 
 - Source is `src/`; the entry is `src/main.selu`, and everything reachable from
   its imports is compiled.
-- `selu build` writes `dist/<name>/` with the `.toc`, Lua files, `media/` and
+- `selu build` writes `dist/<name>/` with the `.toc`, Lua files, converted `assets/` and
   `locales`. Source maps go to `dist/.selu/`, not into the addon folder.
 - With several targets, one `.toc` per flavour uses the client's file-name
   suffix (`MyAddon_Mainline.toc`, ...) where the target supports it (the
   manifest says which), otherwise one `dist/<target>/<name>/` folder each.
-- `selu package` zips each output and writes a `.sha256` next to it.
+- `selu export` builds a release: the addon folder **and** a zip (section 6.2).
 - `selu install --wow <path>` copies a build into a local `Interface/AddOns`
   folder for testing in the game. It refuses while the game is running.
+
+### 6.1 Assets: images, fonts and sounds
+
+You keep assets in the formats you work with; the build converts them to what
+WoW loads.
+
+| You put in `assets/` | The addon gets |
+|---|---|
+| SVG, PNG, JPG, WebP | TGA (32-bit with alpha, the default) or BLP (`"format": "blp"`, smaller files) |
+| TTF, OTF | copied as is |
+| WAV, FLAC | OGG |
+| OGG, MP3 | copied as is |
+
+- **Assets are imported like code**, so a wrong name is a compile error and the
+  path is never typed by hand:
+
+  ```selu
+  import logo from "../assets/logo.svg";
+  import ding from "../assets/ding.wav";
+
+  <Icon texture={logo} size={[32, 32]} />
+  PlaySoundFile(ding, "Master");
+  ```
+
+  `logo` becomes the in-game path (`Interface\AddOns\MyAddon\assets\logo`,
+  without extension, as WoW expects) together with its size, so the compiler
+  can warn when an image is drawn far larger than it was rendered.
+- **Texture sizes follow the client's rules:** width and height are powers of
+  two, within the target's maximum (both come from the manifest). An SVG is
+  rendered straight at a valid size; a bitmap that isn't valid is padded
+  (never stretched) with a warning, and the stored texture coordinates hide
+  the padding.
+- **Per-asset settings** go in `assets/assets.json` when the defaults aren't
+  right: render size, `@2x` variants, format, a solid background, mipmaps.
+- **Atlases:** `"atlas": "icons"` on a group of small images packs them into one
+  texture and generates the texture coordinates. `import { gear } from
+  "../assets/icons.atlas";` then gives `<Icon atlas={gear} />`. Fewer texture
+  files load faster and use less memory.
+- **SVG rendering is reproducible:** it uses a built-in renderer and no system
+  fonts (text in an SVG must be converted to paths, otherwise the build says
+  so). The same input always gives the same bytes; `selu build --check`
+  confirms committed outputs are up to date.
+- Conversions are cached by content hash, so only changed assets are
+  converted again.
+- `selu debug` draws the converted files, so what you see in the simulator is
+  what the game gets.
+
+### 6.2 Export
+
+```
+selu export                 # every target in selu.json
+selu export --target forever
+```
+
+1. **Builds** the addon in release mode (`-O1`, source maps kept outside the
+   addon folder).
+2. **Converts** every asset (6.1).
+3. **Checks** the result before anything is zipped:
+   - the `.toc` has a title, version, interface number and only files that
+     exist;
+   - every file the code references exists, and no file is left unreferenced
+     (a warning);
+   - textures have valid sizes and formats for the target;
+   - file and folder names are ones the client loads reliably (ASCII, no
+     reserved characters, not too long);
+   - nothing outside the addon folder, no source files, no source maps, no
+     editor or OS files.
+4. **Writes** `export/<name>/` (the folder you could copy straight into
+   `Interface/AddOns`) and `export/<name>-<version>.zip` with the addon folder
+   at the top level of the zip, as CurseForge and Wago expect, plus a
+   `.sha256` next to the zip.
+
+An addon that consists of several folders (for example a separate data addon)
+lists them in `selu.json` under `"addons"`; the zip then contains all of them.
 
 ## 7. Manifests
 
@@ -498,7 +572,7 @@ says whether everything passed.
 5. **`selu debug` app:** game screen, frame inspector, event timeline, world
    panel, debugger, saved data view, memory panel.
 6. **Manifests:** generators for `retail` and `forever`, overlays, `selu probe`.
-7. **Async, `-O1`, minifier, packaging, VS Code extension.**
+7. **Async, `-O1`, minifier, asset conversion and `selu export`, VS Code extension.**
 8. **Proof:** rebuild one real feature of Renner's Toolkit in Selu, compare its
    output, memory and CPU against the hand-written version, and fix what the
    comparison shows.
