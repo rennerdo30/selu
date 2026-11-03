@@ -16,7 +16,7 @@ Three rules decide every open question:
 
 | Area | In v1 | Later |
 |---|---|---|
-| Targets | `retail`, `forever` (and their `-ptr`/`-beta` variants when a manifest exists) | `classic-era`, `classic`, `selu targets update` downloads |
+| Targets | `retail`, `forever`, `classic-era`, `classic-anniversary`, `classic-titan`, `classic` (owner, 2026-11-04: every client, generated from Blizzard's UI source); `-ptr`/`-beta` variants when a manifest exists | `selu targets update` downloads |
 | Language | everything in section 2 | `enum`, pattern `switch`, getters/setters, decorators |
 | GUI | the framework in section 4 | animations, drag-and-drop between lists, Blizzard frame skinning |
 | Optimizer | `-O0`, `-O1`, `--strip-comments`, `--experimental-minify` | `-O2` |
