@@ -6,3 +6,5 @@ the game.
 
 **This version is a placeholder.** The compiler is in development and will
 be published under this name as version 0.1.0.
+
+Source: https://github.com/rennerdo30/selu

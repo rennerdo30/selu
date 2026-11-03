@@ -1,3 +1,5 @@
 target/
 dist/
 examples/**/dist/
+# Machine-local build settings (shared sccache on the owner's PC).
+.cargo/config.toml

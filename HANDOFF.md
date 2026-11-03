@@ -19,6 +19,15 @@
 
 ## Traps
 
+- `.cargo/config.toml` is local only (gitignored since the repo went
+  public): it points builds at the shared sccache (`rustc-wrapper` =
+  `E:/Development/_tools/sccache/0.19.0/.../sccache.exe`, `jobs = 8`,
+  `incremental = false`, `[env] SCCACHE_DIR = "E:/sccache"`). A fresh
+  checkout on this PC needs it recreated; never commit it.
+- Push only `master`, by explicit ref (`git push origin
+  HEAD:refs/heads/master`): the local `refs/t3/...` checkpoints are tool
+  commits with a non-approved identity.
+
 - Python on Windows writes CRLF: open files with `newline='\n'` when
   patching. Bash heredocs in this tool can eat backslashes; write scripts
   with the Write tool when they contain `\`.

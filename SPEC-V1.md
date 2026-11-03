@@ -649,4 +649,4 @@ says whether everything passed.
   needs the owner's yes.
 - **npm:** not needed by the plan (the VS Code extension goes to the VS Code
   Marketplace); claiming the name there is optional and still open.
-- **GitHub:** `rennerdo30/selu`, private for now (2026-11-04).
+- **GitHub:** `rennerdo30/selu`, public (owner, 2026-11-04).

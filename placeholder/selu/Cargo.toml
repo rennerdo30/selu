@@ -7,6 +7,7 @@ edition = "2024"
 license = "MIT"
 description = "Selu: a TypeScript-style language that compiles to World of Warcraft addon Lua (in development; this is a placeholder)"
 readme = "README.md"
+repository = "https://github.com/rennerdo30/selu"
 keywords = ["wow", "addon", "lua", "compiler", "language"]
 categories = ["compilers", "development-tools"]
 

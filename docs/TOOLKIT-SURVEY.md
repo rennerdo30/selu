@@ -1,6 +1,6 @@
 # What Renner's Toolkit uses (survey, 2026-11-04)
 
-Goal (owner, 2026-11-04): Renner's Toolkit (`E:/Development/RennersAddons`)
+Goal (owner, 2026-11-04): Renner's Toolkit (the `RennersAddons` repository)
 should in the end be written in Selu. This survey lists what the addon
 uses today, so Selu supports that first. Source: every `.lua` file the
 `RennersAddons.toc` loads (111 files, about 78,500 lines, without tests and
