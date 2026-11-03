@@ -1,0 +1,3 @@
+[addon]
+name = "ClassTrackers"
+targets = ["forever@1.0"]

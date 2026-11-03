@@ -1,0 +1,51 @@
+// Shared tracker behavior, with a loot tracker that counts doubled rewards.
+class Tracker {
+    static created = 0;
+    name: string;
+    total = 0;
+
+    constructor(name: string) {
+        this.name = name;
+        Tracker.created += 1;
+    }
+
+    record(amount: number) {
+        this.total += amount;
+    }
+
+    summary(): string {
+        return `${this.name}: ${this.total}`;
+    }
+}
+
+class LootTracker extends Tracker {
+    multiplier = 2;
+
+    constructor(name: string) {
+        super(name);
+    }
+
+    static make(): LootTracker {
+        return new LootTracker("Loot");
+    }
+
+    record(amount: number) {
+        super.record(amount * this.multiplier);
+    }
+
+    collect() {
+        const add = (amount: number) => { this.record(amount); };
+        add(3);
+        add(2);
+    }
+}
+
+on PLAYER_LOGIN() {
+    const quests = new Tracker("Quests");
+    quests.record(2);
+    const loot = LootTracker.make();
+    loot.collect();
+    print(quests.summary());
+    print(loot.summary());
+    print(`Trackers: ${Tracker.created}`);
+}
