@@ -332,8 +332,9 @@ TypeScript, you already know most of Selu.**
   `undefined`.
 - Arrays start at 0, like every language you know. The compiler handles Lua's
   1-based tables.
-- Only one new keyword: `on`, for event handlers. SavedVariables are a `saved`
-  declaration. Everything else is a normal function or object.
+- Few new keywords, each for a WoW concept: `on` (event handlers), `saved` and
+  `migrate` (SavedVariables), `component` (UI). Everything else is
+  TypeScript.
 - Nice-to-haves from C# and Rust (`enum`, `switch` with patterns) come later and
   only if they stay easy to read.
 
@@ -429,22 +430,6 @@ versions of your addon, but they are not the exact numbers the game reports
 
 ## 11. Open questions
 
-- Implementation language for the compiler (Rust is the working assumption,
-  which is why the `selu` crate name matters).
-- Manifest pipeline: which sources each flavour's manifest is generated from,
-  and how it is updated per client build.
-- Editor support: a language server is likely needed early, because most of the
-  value is errors shown while typing.
-- Standard library and types: strings, arrays, maps, sets, numbers (Lua 5.1
-  has only doubles), and how `class` lowers to Lua tables and metatables.
-- Error handling: `try`/`catch` and `throw` lowered to `pcall`/`error`.
-- Async: `await after(1.5)` and `await event("BAG_UPDATE")` as easy
-  replacements for nested timer callbacks (coroutines underneath).
-- Building UI: how frames, templates and layout are written (plain API calls,
-  a declarative frame syntax, or both); XML is not planned.
-- Using existing Lua: calling LibStub/Ace3 and other libraries, and declaration
-  files that describe their types.
-- Localisation: string files, format arguments, and the missing-key check.
-- Packaging: output folder layout, `.toc` generation, zip and release
-  metadata.
-- Licence.
+Settled for version 1 in [SPEC-V1.md](SPEC-V1.md), including the GUI framework,
+standard library, async, Lua interop, localisation, packaging and the manifest
+pipeline. The remaining owner decisions are listed at its end.
