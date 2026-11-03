@@ -7,6 +7,9 @@ use std::{
 };
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn git(repo: &str, args: &[&str]) -> Result<String> {
+    Ok(String::from_utf8(git_bytes(repo, args)?)?)
+}
+fn git_bytes(repo: &str, args: &[&str]) -> Result<Vec<u8>> {
     let mut child = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -19,9 +22,9 @@ fn git(repo: &str, args: &[&str]) -> Result<String> {
     let stderr = child.stderr.take().unwrap();
     let out = std::thread::spawn(move || {
         use std::io::Read;
-        let mut s = String::new();
+        let mut s = Vec::new();
         let mut r = stdout;
-        r.read_to_string(&mut s).map(|_| s)
+        r.read_to_end(&mut s).map(|_| s)
     });
     let err = std::thread::spawn(move || {
         use std::io::Read;
@@ -67,11 +70,59 @@ fn run() -> Result<()> {
     let mut m: Manifest = serde_json::from_value(
         serde_json::json!({"flavour":flavour,"build":build,"interface":0,"luaDialects":["lua51"],"source":{"commit":commit,"version":version,"interfaceSource":""}}),
     )?;
-    let root = "Interface/AddOns/Blizzard_APIDocumentationGenerated";
-    let paths = git(repo, &["ls-tree", "-r", "--name-only", &commit, "--", root])?;
+    let temp = std::path::PathBuf::from("E:/AgentData/claude_temp/m1").join(format!(
+        "generator-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(temp.parent().unwrap())?;
+    std::fs::create_dir(&temp)?;
+    struct ArchiveCleanup(std::path::PathBuf);
+    impl Drop for ArchiveCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.0.join("source.tar"));
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+    let _cleanup = ArchiveCleanup(temp.clone());
+    let archive = temp.join("source.tar");
+    git(
+        repo,
+        &[
+            "archive",
+            "--format=tar",
+            "-o",
+            archive.to_str().ok_or("invalid archive path")?,
+            &commit,
+            "Interface/AddOns",
+        ],
+    )?;
+    let mut source_globals = selu_manifest_gen::source::Sources::default();
     let mut sources = vec![];
-    for path in paths.lines().filter(|p| p.ends_with(".lua")) {
-        sources.push(git(repo, &["show", &format!("{commit}:{path}")])?);
+    let mut files = 0;
+    for entry in tar::Archive::new(std::fs::File::open(archive)?).entries()? {
+        use std::io::Read;
+        let mut entry = entry?;
+        let path = entry.path()?.to_string_lossy().replace('\\', "/");
+        if !path.ends_with(".lua") {
+            continue;
+        }
+        let mut bytes = vec![];
+        entry.read_to_end(&mut bytes)?;
+        let text = match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("non-UTF8 Lua file parsed with byte-preserving Latin-1 mapping: {path}");
+                e.into_bytes().into_iter().map(char::from).collect()
+            }
+        };
+        source_globals.parse(&path, &text)?;
+        files += 1;
+        if path.starts_with("Interface/AddOns/Blizzard_APIDocumentationGenerated/") {
+            sources.push(text);
+        }
     }
     let systems = read_documents(&sources)?;
     if systems.is_empty() {
@@ -80,6 +131,8 @@ fn run() -> Result<()> {
     for system in systems {
         merge_system(&mut m, system);
     }
+    let (defined, called) = source_globals.extend_manifest(&mut m);
+    eprintln!("source globals: {defined} defined, {called} called; parsed {files} Lua files");
     let overlay = output
         .parent()
         .ok_or("output needs parent directory")?

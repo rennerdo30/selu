@@ -1,6 +1,7 @@
 use mlua::{Lua, LuaOptions, StdLib, Table, Value};
 use selu_manifest::{Declaration, EventEntry, EventParam, Evidence, FunctionEntry, Manifest};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+pub mod source;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -89,9 +90,17 @@ pub fn read_documents(sources: &[String]) -> Result<Vec<Declaration>> {
             }
         }
     }
+    let mut predicates = BTreeSet::new();
+    for t in captured.clone().sequence_values::<Table>() {
+        if let Some(list) = t?.get::<Option<Table>>("Predicates")? {
+            for p in list.sequence_values::<Table>() {
+                predicates.insert(p?.get::<String>("Name")?);
+            }
+        }
+    }
     captured
         .sequence_values::<Table>()
-        .map(|t| project(&t?).map_err(Into::into))
+        .map(|t| project(&t?, &predicates).map_err(Into::into))
         .collect()
 }
 
@@ -185,13 +194,16 @@ fn scalar(v: Value) -> mlua::Result<serde_json::Value> {
         }
     })
 }
-fn children(t: &Table, key: &str) -> mlua::Result<Vec<Declaration>> {
+fn children(t: &Table, key: &str, predicates: &BTreeSet<String>) -> mlua::Result<Vec<Declaration>> {
     match t.get::<Option<Table>>(key)? {
-        Some(v) => v.sequence_values::<Table>().map(|v| project(&v?)).collect(),
+        Some(v) => v
+            .sequence_values::<Table>()
+            .map(|v| project(&v?, predicates))
+            .collect(),
         None => Ok(vec![]),
     }
 }
-fn project(t: &Table) -> mlua::Result<Declaration> {
+fn project(t: &Table, predicates: &BTreeSet<String>) -> mlua::Result<Declaration> {
     let mut attributes = BTreeMap::new();
     for pair in t.clone().pairs::<String, Value>() {
         let (k, v) = pair?;
@@ -220,7 +232,8 @@ fn project(t: &Table) -> mlua::Result<Declaration> {
                 | "FailureMode"
                 | "Argument"
                 | "Aspect"
-        ) || k.contains("Secret")
+        ) || predicates.contains(&k)
+            || k.contains("Secret")
             || k.starts_with("Requires")
             || k.starts_with("RequireN")
             || k.starts_with("Check")
@@ -237,20 +250,38 @@ fn project(t: &Table) -> mlua::Result<Declaration> {
             attributes.insert(k, scalar(v)?);
         }
     }
-    let mut fields = children(t, "Fields")?;
-    fields.extend(children(t, "Tables")?);
-    fields.extend(children(t, "Values")?);
+    let mut fields = children(t, "Fields", predicates)?;
+    fields.extend(children(t, "Tables", predicates)?);
+    fields.extend(children(t, "Values", predicates)?);
     // Events retain payload order, just like function argument/return order.
-    let mut arguments = children(t, "Arguments")?;
-    arguments.extend(children(t, "Payload")?);
-    let mut methods = children(t, "Functions")?;
-    methods.extend(children(t, "Events")?);
+    let mut arguments = children(t, "Arguments", predicates)?;
+    arguments.extend(children(t, "Payload", predicates)?);
+    let mut methods = children(t, "Functions", predicates)?;
+    methods.extend(children(t, "Events", predicates)?);
+    let mut values = BTreeMap::new();
+    if t.get::<Option<String>>("Type")?.as_deref() == Some("Enumeration") {
+        for f in &fields {
+            if let Some(v) = f.attributes.get("EnumValue") {
+                values.insert(f.name.clone(), v.clone());
+            }
+        }
+        let enum_name = t.get::<String>("Name")?;
+        // Compact conventional members; retain exceptional member metadata losslessly.
+        fields.retain(|f| {
+            f.ty.as_deref() != Some(enum_name.as_str())
+                || f.attributes.len() != 1
+                || !f.attributes.contains_key("EnumValue")
+        });
+    }
     Ok(Declaration {
+        evidence: None,
+        predicates: children(t, "Predicates", predicates)?,
+        values,
         name: t.get::<Option<String>>("Name")?.unwrap_or_default(),
         namespace: t.get("Namespace")?,
         ty: t.get("Type")?,
         arguments,
-        returns: children(t, "Returns")?,
+        returns: children(t, "Returns", predicates)?,
         fields,
         methods,
         inherits: vec![],
@@ -258,7 +289,21 @@ fn project(t: &Table) -> mlua::Result<Declaration> {
     })
 }
 
-pub fn merge_system(m: &mut Manifest, system: Declaration) {
+pub fn merge_system(m: &mut Manifest, mut system: Declaration) {
+    m.predicates.append(&mut system.predicates);
+    let environment = system.attributes.get("Environment").cloned();
+    if let Some(e) = &environment {
+        for f in &mut system.methods {
+            f.attributes
+                .entry("Environment".into())
+                .or_insert(e.clone());
+        }
+        for f in &mut system.fields {
+            f.attributes
+                .entry("Environment".into())
+                .or_insert(e.clone());
+        }
+    }
     let widget = system.ty.as_deref() == Some("ScriptObject");
     for f in &system.methods {
         if f.ty.as_deref() == Some("Event") {
@@ -287,14 +332,17 @@ pub fn merge_system(m: &mut Manifest, system: Declaration) {
                 .as_ref()
                 .map(|n| format!("{n}.{}", f.name))
                 .unwrap_or_else(|| f.name.clone());
+            let available =
+                f.attributes.get("Environment").and_then(|e| e.as_str()) != Some("SecureOnly");
             m.functions.push(FunctionEntry {
                 name,
-                available: true,
+                available,
                 restrictions: vec![],
-                returns_secret: f.attributes.keys().any(|k| k.starts_with("SecretReturns")),
+                returns_secret: false,
                 params: f.arguments.iter().map(|p| p.name.clone()).collect(),
                 evidence: Evidence::Documented,
                 signature: Some(f.clone()),
+                provenance: None,
             });
         }
     }
@@ -307,6 +355,51 @@ pub fn merge_system(m: &mut Manifest, system: Declaration) {
     }
     if widget {
         m.widgets.push(system);
+    }
+    summarize(m);
+}
+fn active(v: &serde_json::Value) -> bool {
+    !v.is_null()
+        && v != &serde_json::Value::Bool(false)
+        && v.as_array().is_none_or(|a| !a.is_empty())
+}
+fn conditional(d: &Declaration) -> bool {
+    d.attributes.iter().any(|(k, v)| {
+        active(v)
+            && (k.starts_with("SecretWhen")
+                || k == "ConditionalSecret"
+                || k == "SecretInChatMessagingLockdown"
+                || k == "SecretValue"
+                || k == "SecretInActivePvPMatch")
+    }) || d.returns.iter().any(conditional)
+}
+pub fn summarize(m: &mut Manifest) {
+    let predicates: BTreeSet<_> = m.predicates.iter().map(|p| p.name.as_str()).collect();
+    for f in &mut m.functions {
+        if let Some(s) = &f.signature {
+            f.returns_secret = s
+                .attributes
+                .iter()
+                .any(|(k, v)| k.starts_with("SecretReturns") && active(v))
+                || conditional(s);
+            f.restrictions = s
+                .attributes
+                .iter()
+                .filter(|(k, v)| {
+                    active(v)
+                        && (predicates.contains(k.as_str())
+                            || k.as_str() == "IsProtectedFunction"
+                            || k.as_str() == "HasRestrictions"
+                            || k.starts_with("Requires")
+                            || k.starts_with("Check"))
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
+            if s.attributes.get("Environment").and_then(|v| v.as_str()) == Some("SecureOnly") {
+                f.available = false;
+                f.restrictions.push("SecureOnly".into());
+            }
+        }
     }
 }
 
@@ -324,26 +417,45 @@ pub struct Overlay {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InterfaceOverlay {
+    pub basis: String,
     pub value: u32,
     pub note: String,
+    pub evidence: Evidence,
+    #[serde(default)]
+    pub live_probe: Option<String>,
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FunctionOverlay {
     pub entry: FunctionEntry,
     pub note: String,
+    pub evidence: Evidence,
+    #[serde(default)]
+    pub live_probe: Option<String>,
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WidgetOverlay {
     pub entry: Declaration,
     pub note: String,
+    pub evidence: Evidence,
+    #[serde(default)]
+    pub live_probe: Option<String>,
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlobalOverlay {
     pub name: String,
     pub note: String,
+    pub evidence: Evidence,
+    #[serde(default)]
+    pub live_probe: Option<String>,
+}
+fn evidence(e: Evidence, probe: &Option<String>) -> Result<()> {
+    if e == Evidence::Verified && probe.as_ref().is_none_or(|p| p.trim().is_empty()) {
+        return Err("verified overlay evidence requires a live_probe record".into());
+    }
+    Ok(())
 }
 fn note(s: &str) -> Result<()> {
     if s.trim().is_empty() {
@@ -356,32 +468,46 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
     let overlay: Overlay = toml::from_str(text)?;
     if let Some(i) = overlay.interface {
         note(&i.note)?;
+        evidence(i.evidence, &i.live_probe)?;
+        if !matches!(i.basis.as_str(), "convention" | "source" | "probe") {
+            return Err("unknown interface basis".into());
+        }
         m.interface = i.value;
         if let Some(s) = &mut m.source {
             s.interface_source = format!("overlay: {}", i.note);
+            s.interface_basis = Some(i.basis);
+            s.interface_evidence = Some(i.evidence);
         }
     }
-    for f in overlay.functions {
+    for mut f in overlay.functions {
+        f.entry.evidence = f.evidence;
         note(&f.note)?;
+        evidence(f.evidence, &f.live_probe)?;
         m.functions.retain(|v| v.name != f.entry.name);
         m.functions.push(f.entry);
     }
-    for w in overlay.widgets {
+    for mut w in overlay.widgets {
+        w.entry.evidence = Some(w.evidence);
         note(&w.note)?;
+        evidence(w.evidence, &w.live_probe)?;
         m.widgets.retain(|v| v.name != w.entry.name);
         m.widgets.push(w.entry);
     }
     for g in overlay.globals {
         note(&g.note)?;
+        evidence(g.evidence, &g.live_probe)?;
         m.globals.retain(|v| v.name != g.name);
         m.globals.push(selu_manifest::GlobalEntry {
             name: g.name,
-            evidence: Evidence::Verified,
+            evidence: g.evidence,
         });
     }
     Ok(())
 }
 pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
+    summarize(m);
+    m.predicates.sort_by(|a, b| a.name.cmp(&b.name));
+    m.predicates.dedup_by(|a, b| a == b);
     m.functions.sort_by(|a, b| a.name.cmp(&b.name));
     m.events.sort_by(|a, b| a.name.cmp(&b.name));
     m.globals.sort_by(|a, b| a.name.cmp(&b.name));
@@ -419,7 +545,11 @@ mod tests {
             r#"{"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1}"#,
         )
         .unwrap();
-        apply_overlay(&mut m, "[interface]\nvalue=42\nnote='verified test source'").unwrap();
+        apply_overlay(
+            &mut m,
+            "[interface]\nvalue=42\nnote='test source'\nevidence='source'\nbasis='source'",
+        )
+        .unwrap();
         assert_eq!(m.interface, 42);
         assert!(apply_overlay(&mut m, "surprise=1").is_err());
         assert!(apply_overlay(&mut m, "[interface]\nvalue=1\nnote=''").is_err());

@@ -55,6 +55,7 @@ impl fmt::Display for Build {
 #[serde(rename_all = "lowercase")]
 pub enum Evidence {
     Documented,
+    Source,
     Verified,
 }
 
@@ -64,18 +65,38 @@ pub struct FunctionEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<Declaration>,
     pub name: String,
-    #[serde(default = "yes")]
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub available: bool,
     /// Restriction flags, e.g. `protected`, `outOfCombatOnly`, `hardwareClick`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub restrictions: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub returns_secret: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<String>,
     pub evidence: Evidence,
+    #[serde(
+        rename = "source",
+        alias = "provenance",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub provenance: Option<FunctionSource>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionSource {
+    pub file: String,
+    pub kind: String,
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
+}
+fn is_false(v: &bool) -> bool {
+    !v
+}
 fn yes() -> bool {
     true
 }
@@ -103,7 +124,7 @@ pub struct EventEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<Declaration>,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<EventParam>,
     pub evidence: Evidence,
 }
@@ -111,6 +132,8 @@ pub struct EventEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub predicates: Vec<Declaration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Source>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -132,7 +155,7 @@ pub struct Manifest {
     #[serde(default)]
     pub globals: Vec<GlobalEntry>,
     /// True for hand-made test fixtures, never for generated manifests.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub fixture: bool,
 }
 
@@ -382,6 +405,12 @@ mod tests {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Declaration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<Evidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub predicates: Vec<Declaration>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub values: std::collections::BTreeMap<String, serde_json::Value>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
@@ -406,4 +435,8 @@ pub struct Source {
     pub commit: String,
     pub version: String,
     pub interface_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_basis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_evidence: Option<Evidence>,
 }
