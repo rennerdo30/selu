@@ -96,6 +96,63 @@ Ordered by how many real bugs each one would have prevented:
 6. **Localisation.** User-facing strings are keys; a missing locale entry is a
    build warning (an error when configured).
 
+### Different rules per version
+
+Versions differ in four ways, and all four live in the target manifest, never
+in the compiler's code:
+
+| Difference | Example | Where it is recorded |
+|---|---|---|
+| Lua library | which `string`/`table`/`math` functions, `bit`, `strsplit`, `os` and `debug` parts exist | the manifest's Lua dialect |
+| API exists | a `C_*` function or event exists on one client but not another | per-symbol availability |
+| API is restricted | protected, out of combat only, needs a hardware click, restricted in instances or encounters | per-symbol restriction flags |
+| Value is secret | the same API returns a plain number on one client and a possibly secret one on another | per-symbol return flags |
+
+**One rule for every case: the compiler checks every call against every
+target, and the strictest target wins.** If one target can return a secret
+value, the code must handle "no value" for all targets. If one target needs a
+hardware click, the call must sit in a click handler.
+
+How the compiler handles each:
+
+- **Lua library.** You never call Lua's library directly; you use Selu's
+  (`str.split`, `arr.sort`, ...). It compiles to the native function where the
+  target has it and to a small emitted helper where it doesn't. Writing code
+  that works on every target needs no thought.
+- **Missing APIs.** A call to something a target lacks is a compile error that
+  names the target. To support it anyway, branch on it:
+
+  ```selu
+  if (has(C_Container.GetContainerItemInfo)) {
+    info = C_Container.GetContainerItemInfo(bag, slot);
+  } else {
+    info = legacyItemInfo(bag, slot);
+  }
+  ```
+
+  Built for one target, `has(...)` is decided at compile time and the dead
+  branch is removed. Built for several, it becomes a runtime check in shared
+  output, or is folded per target when each target gets its own build.
+- **Restrictions.** The compiler knows the context of every line: click
+  handler, event handler, timer, setup, and whether combat is possible there.
+  A call whose restriction that context can break is an error that explains
+  why, for example *"`CastSpellByName` needs a hardware click on retail@12.0;
+  this line runs from a timer"*. Combat-only restrictions get the automatic
+  "wait until combat ends" from section 3.
+- **Things that can only be known at runtime** (in an instance, in an encounter,
+  a new restriction the manifest doesn't know yet): the compiler emits a guard
+  and a one-time warning in the log. Code never fails silently.
+
+**Keeping manifests honest.** `selu probe --target retail@installed` builds a
+small probe addon. You log in once, it checks which functions, events and
+restrictions really exist on your client and writes the result to its
+SavedVariables; `selu probe import` turns that into manifest evidence. A
+manifest entry is then either "from documentation" or "verified in the game",
+and the build can be told to require verified entries.
+
+The simulator uses the same manifest, so a restriction breaks the same way in
+`selu debug` as in the game.
+
 ## 4. Output
 
 - One `.lua` file per `.selu` module plus a generated `.toc`. Local names and
