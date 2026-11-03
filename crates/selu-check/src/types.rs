@@ -1,8 +1,9 @@
 //! The types the checker knows (SPEC-V1 2.1), and the table of expression
 //! types it hands to the lowering.
 
-use selu_syntax::ExprId;
-use std::collections::HashMap;
+use selu_diagnostics::{Diagnostic, Span};
+use selu_syntax::{ExprId, TypeExpr, TypeExprKind};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14,6 +15,16 @@ pub enum Type {
     Null,
     /// `T?`: a `T` or `null`.
     Optional(Box<Type>),
+    /// `T[]`: a 0-based array without holes, a Lua sequence.
+    Array(Box<Type>),
+    /// `[A, B]`; also what a call with several results returns.
+    Tuple(Vec<Type>),
+    /// `{ a: T; b?: U }`: optional fields are stored as `T?`.
+    Object(BTreeMap<String, Type>),
+    Map(Box<Type>, Box<Type>),
+    Set(Box<Type>),
+    /// `WeakMap<K, V>`: a `Map` whose table has weak keys (`__mode = "k"`).
+    WeakMap(Box<Type>, Box<Type>),
     Function {
         params: Vec<Type>,
         ret: Box<Type>,
@@ -48,6 +59,13 @@ impl Type {
         }
     }
 
+    /// The same type, treating unknown parts as matching anything.
+    pub fn same(&self, other: &Type) -> bool {
+        self.is_open()
+            || other.is_open()
+            || (self.assignable_to(other) && other.assignable_to(self))
+    }
+
     /// Types the checker can't say anything about.
     pub fn is_open(&self) -> bool {
         matches!(self, Type::Untyped | Type::Error)
@@ -66,6 +84,22 @@ impl Type {
             (Type::Null, Type::Optional(_)) => true,
             (Type::Optional(a), Type::Optional(b)) => a.assignable_to(b),
             (t, Type::Optional(inner)) => t.assignable_to(inner),
+            // Arrays and tables are mutable, so their element types must
+            // match exactly (`number[]` is not a `number?[]`).
+            (Type::Array(a), Type::Array(b)) | (Type::Set(a), Type::Set(b)) => a.same(b),
+            (Type::Map(k1, v1), Type::Map(k2, v2))
+            | (Type::WeakMap(k1, v1), Type::WeakMap(k2, v2)) => k1.same(k2) && v1.same(v2),
+            (Type::Tuple(a), Type::Tuple(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.assignable_to(y))
+            }
+            // Structural: every field `to` needs must be there and fit; a
+            // missing field is fine when `to` allows null for it.
+            (Type::Object(have), Type::Object(want)) => {
+                want.iter().all(|(k, w)| match have.get(k) {
+                    Some(h) => h.assignable_to(w),
+                    None => w.is_optional(),
+                })
+            }
             (
                 Type::Function { params, ret },
                 Type::Function {
@@ -111,6 +145,18 @@ impl fmt::Display for Type {
             Type::Boolean => write!(f, "boolean"),
             Type::Null => write!(f, "null"),
             Type::Optional(t) => write!(f, "{t}?"),
+            Type::Array(t) => write!(f, "{t}[]"),
+            Type::Tuple(ts) => {
+                let ts: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
+                write!(f, "[{}]", ts.join(", "))
+            }
+            Type::Object(fields) => {
+                let fs: Vec<String> = fields.iter().map(|(k, t)| format!("{k}: {t}")).collect();
+                write!(f, "{{ {} }}", fs.join("; "))
+            }
+            Type::Map(k, v) => write!(f, "Map<{k}, {v}>"),
+            Type::Set(t) => write!(f, "Set<{t}>"),
+            Type::WeakMap(k, v) => write!(f, "WeakMap<{k}, {v}>"),
             Type::Function { params, ret } => {
                 let ps: Vec<String> = params.iter().map(|p| p.to_string()).collect();
                 write!(f, "({}) => {ret}", ps.join(", "))
@@ -122,20 +168,99 @@ impl fmt::Display for Type {
     }
 }
 
-/// Parses a written type (`number`, `string?`). `None` for names the
-/// checker doesn't know.
-pub fn parse_annotation(text: &str) -> Option<Type> {
-    let (base, optional) = match text.strip_suffix('?') {
-        Some(b) => (b, true),
-        None => (text, false),
+/// Resolves a written type. Unknown names are reported (SELU0320) and
+/// become `Error`, so one typo gives one message.
+pub fn resolve(t: &TypeExpr, out: &mut Vec<Diagnostic>) -> Type {
+    match &t.kind {
+        TypeExprKind::Optional(inner) => Type::optional(resolve(inner, out)),
+        TypeExprKind::Array(inner) => Type::Array(Box::new(resolve(inner, out))),
+        TypeExprKind::Tuple(items) => Type::Tuple(items.iter().map(|i| resolve(i, out)).collect()),
+        TypeExprKind::Object(fields) => Type::Object(
+            fields
+                .iter()
+                .map(|f| {
+                    let t = resolve(&f.ty, out);
+                    (
+                        f.name.clone(),
+                        if f.optional { Type::optional(t) } else { t },
+                    )
+                })
+                .collect(),
+        ),
+        TypeExprKind::Function { params, ret } => Type::Function {
+            params: params.iter().map(|p| resolve(p, out)).collect(),
+            ret: Box::new(if is_void(ret) {
+                Type::Void
+            } else {
+                resolve(ret, out)
+            }),
+        },
+        TypeExprKind::Named { name, args } => {
+            let args: Vec<Type> = args.iter().map(|a| resolve(a, out)).collect();
+            named(name, args, &t.span, out)
+        }
+    }
+}
+
+/// `void` is only meaningful as a return type.
+pub fn is_void(t: &TypeExpr) -> bool {
+    matches!(&t.kind, TypeExprKind::Named { name, args } if name == "void" && args.is_empty())
+}
+
+fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>) -> Type {
+    let want = match name {
+        "number" | "string" | "boolean" | "null" => 0,
+        "Set" => 1,
+        "Map" | "WeakMap" => 2,
+        _ => {
+            out.push(
+                Diagnostic::error("SELU0320", format!("unknown type `{name}`"))
+                    .with_span(span.clone())
+                    .with_help("known types are `number`, `string`, `boolean`, `T?`, `T[]`, `[A, B]`, `{ a: T }`, `Map<K, V>`, `Set<T>`, `WeakMap<K, V>` and function types `(a: A) => R`"),
+            );
+            return Type::Error;
+        }
     };
-    let t = match base {
+    if args.len() != want {
+        out.push(
+            Diagnostic::error(
+                "SELU0319",
+                format!(
+                    "`{name}` takes {want} type argument{}, not {}",
+                    if want == 1 { "" } else { "s" },
+                    args.len()
+                ),
+            )
+            .with_span(span.clone()),
+        );
+        return Type::Error;
+    }
+    let mut next = || Box::new(args.remove(0));
+    match name {
         "number" => Type::Number,
         "string" => Type::String,
         "boolean" => Type::Boolean,
-        _ => return None,
-    };
-    Some(if optional { Type::optional(t) } else { t })
+        "null" => Type::Null,
+        "Set" => Type::Set(next()),
+        "Map" => Type::Map(next(), next()),
+        _ => Type::WeakMap(next(), next()),
+    }
+}
+
+/// A parameter type as a manifest writes it (`string`, `number`...).
+/// Anything else stays untyped until manifests carry full types.
+pub fn manifest_type(name: &str) -> Type {
+    match name {
+        "number" => Type::Number,
+        "string" => Type::String,
+        "boolean" => Type::Boolean,
+        _ => Type::Untyped,
+    }
+}
+
+/// Resolves a type without reporting errors (for placeholders).
+pub fn resolve_quiet(t: &TypeExpr) -> Type {
+    resolve(t, &mut Vec::new())
 }
 
 /// The type of every checked expression, by expression id. The lowering
@@ -175,7 +300,26 @@ mod tests {
         );
         assert_eq!(Type::join(&num_opt, &Type::Number), Some(num_opt));
         assert_eq!(Type::join(&Type::Number, &Type::String), None);
-        assert_eq!(parse_annotation("string?").unwrap().to_string(), "string?");
-        assert_eq!(parse_annotation("Frame"), None);
+        let ty = |src: &str| {
+            let p = selu_syntax::parse("t.selu", &format!("let x: {src};")).unwrap();
+            match &p.stmts[0].kind {
+                selu_syntax::StmtKind::VarDecl { ty: Some(t), .. } => resolve_quiet(t),
+                _ => unreachable!(),
+            }
+        };
+        let show = |src: &str| ty(src).to_string();
+        assert_eq!(show("string?"), "string?");
+        assert_eq!(show("number[]?"), "number[]?");
+        assert_eq!(show("Map<string, number[]>"), "Map<string, number[]>");
+        assert_eq!(
+            show("{ a: number; b?: string }"),
+            "{ a: number; b: string? }"
+        );
+        assert_eq!(show("(a: number) => void"), "(number) => void");
+        assert_eq!(show("[string, boolean]"), "[string, boolean]");
+        assert_eq!(show("Frame"), "unknown");
+        assert!(ty("{ a: number; b: string }").assignable_to(&ty("{ a: number; c?: boolean }")));
+        assert!(!ty("{ a: number }").assignable_to(&ty("{ a: number; b: string }")));
+        assert!(!ty("number[]").assignable_to(&ty("number?[]")));
     }
 }

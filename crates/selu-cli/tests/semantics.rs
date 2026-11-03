@@ -1,34 +1,13 @@
 //! Behaviour of generated Lua, checked by running it in the simulator.
 //! Each test compiles Selu source with the library crates, loads the output
 //! into `selu-sim`, fires PLAYER_LOGIN and compares what the code printed.
+//! The helpers live in `common/mod.rs`; each language area has its own test
+//! file next to this one (docs/WORK-PACKAGES.md).
 
+mod common;
+
+use common::run;
 use selu_sim::Sim;
-use std::path::Path;
-
-fn run(src: &str) -> Vec<String> {
-    let manifest = selu_manifest::load_manifest(
-        &Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/fixtures/forever-1.0.0.1000.json"),
-    )
-    .unwrap();
-    let program = selu_syntax::parse("t.selu", src).unwrap_or_else(|d| panic!("{}", d.render(src)));
-    let checked = selu_check::check_program(&program, &manifest);
-    assert!(
-        checked.diagnostics.is_empty(),
-        "{}",
-        checked
-            .diagnostics
-            .iter()
-            .map(|d| d.render(src))
-            .collect::<String>()
-    );
-    let lua = selu_lower::lower(&program, &manifest, &checked.types).lua;
-    let sim = Sim::new().unwrap();
-    sim.load_files(&[("t.lua".into(), lua.clone())])
-        .unwrap_or_else(|e| panic!("{e}\n--- generated Lua ---\n{lua}"));
-    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
-    sim.prints()
-}
 
 #[test]
 fn coalesce_keeps_false_and_evaluates_each_side_once() {
@@ -107,15 +86,7 @@ on PLAYER_LOGIN() {
 fn global_declaration_is_a_real_lua_global() {
     let src =
         "global MyAddon_Count = 1;\non PLAYER_LOGIN() { MyAddon_Count = MyAddon_Count + 1; }\n";
-    let manifest = selu_manifest::load_manifest(
-        &Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/fixtures/forever-1.0.0.1000.json"),
-    )
-    .unwrap();
-    let program = selu_syntax::parse("t.selu", src).unwrap();
-    let checked = selu_check::check_program(&program, &manifest);
-    assert!(checked.diagnostics.is_empty());
-    let lua = selu_lower::lower(&program, &manifest, &checked.types).lua;
+    let lua = common::compile(src);
     let sim = Sim::new().unwrap();
     // A second, plain Lua file reads the global the way another addon would.
     sim.load_files(&[
@@ -143,4 +114,35 @@ on PLAYER_LOGIN() {
 }
 "#);
     assert_eq!(out, ["hp: full", "a: b", "3", "true"]);
+}
+
+#[test]
+fn coalesce_works_anywhere_and_keeps_order() {
+    // Used to be SELU0308 outside declarations, assignments and returns.
+    let out = run(r#"
+let log = "";
+function note(s: string, v: number?) { log = log + s; return v; }
+function pair(a: number, b: number) { return a * 10 + b; }
+on PLAYER_LOGIN() {
+  // Arguments run left to right even when the second needs a temporary.
+  print(pair(note("a", 1) ?? 0, note("b", null) ?? note("c", 2) ?? 9));
+  print(log);
+  // Inside &&: the right side only runs when the left is true.
+  log = "";
+  const t = true;
+  const f = false;
+  print(f && (note("x", null) ?? 1) > 0);
+  print(t && (note("y", null) ?? 1) > 0);
+  print(log);
+  // In conditions, including an `else if` that needs statements first.
+  const n: number? = null;
+  if ((note("p", null) ?? 5) == 4) {
+    print("no");
+  } else if ((note("q", n) ?? 7) == 7) {
+    print("else-if");
+  }
+  print(log);
+}
+"#);
+    assert_eq!(out, ["12", "abc", "false", "true", "y", "else-if", "ypq"]);
 }

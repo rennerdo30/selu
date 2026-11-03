@@ -129,3 +129,173 @@ on PLAYER_LOGIN() {
         );
     }
 }
+
+#[cfg(test)]
+mod new_syntax_tests {
+    use super::*;
+
+    fn stmt(src: &str) -> StmtKind {
+        parse("t.selu", src)
+            .unwrap_or_else(|d| panic!("{}", d.render(src)))
+            .stmts
+            .remove(0)
+            .kind
+    }
+
+    fn init(src: &str) -> ExprKind {
+        match stmt(src) {
+            StmtKind::VarDecl { init: Some(e), .. } => e.kind,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn loops() {
+        assert!(matches!(
+            stmt("while (a) { break; }"),
+            StmtKind::While { .. }
+        ));
+        assert!(matches!(
+            stmt("do { continue; } while (a);"),
+            StmtKind::DoWhile { .. }
+        ));
+        match stmt("for (let i = 0; i < 10; i++) {}") {
+            StmtKind::For {
+                init: Some(_),
+                cond: Some(_),
+                update: Some(u),
+                ..
+            } => assert!(matches!(u.kind, ExprKind::Update { .. })),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            stmt("for (;;) {}"),
+            StmtKind::For {
+                init: None,
+                cond: None,
+                update: None,
+                ..
+            }
+        ));
+        match stmt("for (const [k, v] of map) {}") {
+            StmtKind::ForOf {
+                binding: ForBinding::Pattern(Pattern::Array(items)),
+                ..
+            } => assert_eq!(items.len(), 2),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            stmt("for (const x of xs) print(x);"),
+            StmtKind::ForOf {
+                binding: ForBinding::Name(..),
+                ..
+            }
+        ));
+        let e = parse("t.selu", "for (const k in t) {}").unwrap_err();
+        assert_eq!(e.code, "SELU0110");
+    }
+
+    #[test]
+    fn data_and_templates() {
+        assert!(matches!(init("const a = [1, 2, 3,];"), ExprKind::Array(v) if v.len() == 3));
+        match init("const o = { x: 1, y, \"z w\": 2, end: 3 };") {
+            ExprKind::Object(fields) => {
+                let keys: Vec<_> = fields.iter().map(|f| f.key.as_str()).collect();
+                assert_eq!(keys, ["x", "y", "z w", "end"]);
+                assert!(matches!(fields[1].value.kind, ExprKind::Ident(ref n) if n == "y"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            init("const v = xs[i + 1];"),
+            ExprKind::Index { .. }
+        ));
+        assert!(matches!(
+            init("const v = a?.b;"),
+            ExprKind::OptionalMember { .. }
+        ));
+        match init("const t = `a${x}b${y + 1}c`;") {
+            ExprKind::Template { quasis, exprs } => {
+                assert_eq!(quasis, ["a", "b", "c"]);
+                assert_eq!(exprs.len(), 2);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(init("const t = `plain`;"), ExprKind::Str(s) if s == "plain"));
+        assert!(matches!(
+            init("const t = L`${n} missing`;"),
+            ExprKind::TaggedTemplate { .. }
+        ));
+        match init("const m = new Map<number, string>();") {
+            ExprKind::New {
+                class, type_args, ..
+            } => {
+                assert_eq!(class, "Map");
+                assert_eq!(type_args.len(), 2);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            init("const c = a ? b : c ? d : e;"),
+            ExprKind::Conditional { .. }
+        ));
+        // `?.5` after `?` is a number, not `?.`.
+        assert!(matches!(
+            init("const c = a ?.5 : 1;"),
+            ExprKind::Conditional { .. }
+        ));
+    }
+
+    #[test]
+    fn functions_and_patterns() {
+        for src in [
+            "const f = (a: number, b = 2, ...rest: number[]) => a + b;",
+            "const f = x => x * 2;",
+            "const f = (): number => { return 1; };",
+            "const f = function (a) { return a; };",
+            "const f = () => ({ a: 1 });",
+        ] {
+            assert!(matches!(init(src), ExprKind::Function { .. }), "{src}");
+        }
+        // A parenthesised value is not mistaken for an arrow function.
+        assert!(matches!(init("const v = (a);"), ExprKind::Ident(_)));
+        assert!(matches!(
+            init("const v = c ? (a) : b;"),
+            ExprKind::Conditional { .. }
+        ));
+        match stmt("const [name, , , level] = GetItemInfo(id);") {
+            StmtKind::Destructure {
+                pattern: Pattern::Array(items),
+                ..
+            } => {
+                assert_eq!(items.len(), 4);
+                assert!(items[1].is_none() && items[2].is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            stmt("let { x, y: renamed } = p;"),
+            StmtKind::Destructure {
+                pattern: Pattern::Object(_),
+                ..
+            }
+        ));
+        assert!(
+            matches!(stmt("x += 2;"), StmtKind::Expr(e) if matches!(e.kind, ExprKind::CompoundAssign { .. }))
+        );
+    }
+
+    #[test]
+    fn written_types() {
+        for src in [
+            "let a: number[] = x;",
+            "let a: Map<string, number[]>? = x;",
+            "let a: [string, number] = x;",
+            "let a: { x: number; label?: string } = x;",
+            "let a: (n: number, s: string) => boolean = x;",
+            "function f(cb: (n: number) => void): string[] { return x; }",
+        ] {
+            parse("t.selu", src).unwrap_or_else(|d| panic!("{src}: {}", d.render(src)));
+        }
+    }
+}

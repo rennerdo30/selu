@@ -5,7 +5,14 @@ pub enum Tok {
     Ident(String),
     Number(String),
     Str(String),
+    /// A template string without `${}`.
     Template(String),
+    /// The text of a template up to its first `${`.
+    TemplateHead(String),
+    /// The text between a `}` and the next `${` of a template.
+    TemplateMiddle(String),
+    /// The text after the last `}` of a template, up to the closing backtick.
+    TemplateTail(String),
     Const,
     Let,
     Function,
@@ -16,14 +23,25 @@ pub enum Tok {
     True,
     False,
     Null,
+    While,
+    Do,
+    For,
+    Break,
+    Continue,
+    New,
     Semi,
     Comma,
     LParen,
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Colon,
     Dot,
+    DotDotDot,
+    QuestionDot,
+    Arrow,
     Eq,
     EqEq,
     NotEq,
@@ -39,6 +57,13 @@ pub enum Tok {
     Star,
     Slash,
     Percent,
+    PlusPlus,
+    MinusMinus,
+    PlusEq,
+    MinusEq,
+    StarEq,
+    SlashEq,
+    PercentEq,
     Question,
     QuestionQuestion,
     Eof,
@@ -49,13 +74,59 @@ impl Tok {
         match self {
             Tok::Ident(n) => format!("`{n}`"),
             Tok::Number(n) => format!("number `{n}`"),
-            Tok::Str(_) | Tok::Template(_) => "a string".into(),
-            Tok::Semi => "`;`".into(),
+            Tok::Str(_) => "a string".into(),
+            Tok::Template(_) | Tok::TemplateHead(_) => "a template string".into(),
+            Tok::TemplateMiddle(_) | Tok::TemplateTail(_) => "the rest of a template string".into(),
             Tok::Eof => "end of file".into(),
-            t => format!("{t:?}").to_lowercase(),
+            t => match PUNCT.iter().find(|(_, p)| p == t) {
+                Some((text, _)) => format!("`{text}`"),
+                None => format!("`{}`", format!("{t:?}").to_lowercase()),
+            },
         }
     }
 }
+
+/// Punctuation, longest first so `...` wins over `.` and `===` is caught
+/// before `==`.
+const PUNCT: &[(&str, Tok)] = &[
+    ("...", Tok::DotDotDot),
+    ("==", Tok::EqEq),
+    ("!=", Tok::NotEq),
+    ("<=", Tok::LtEq),
+    (">=", Tok::GtEq),
+    ("&&", Tok::AndAnd),
+    ("||", Tok::OrOr),
+    ("??", Tok::QuestionQuestion),
+    ("?.", Tok::QuestionDot),
+    ("=>", Tok::Arrow),
+    ("++", Tok::PlusPlus),
+    ("--", Tok::MinusMinus),
+    ("+=", Tok::PlusEq),
+    ("-=", Tok::MinusEq),
+    ("*=", Tok::StarEq),
+    ("/=", Tok::SlashEq),
+    ("%=", Tok::PercentEq),
+    (";", Tok::Semi),
+    (",", Tok::Comma),
+    ("(", Tok::LParen),
+    (")", Tok::RParen),
+    ("{", Tok::LBrace),
+    ("}", Tok::RBrace),
+    ("[", Tok::LBracket),
+    ("]", Tok::RBracket),
+    (":", Tok::Colon),
+    (".", Tok::Dot),
+    ("=", Tok::Eq),
+    ("<", Tok::Lt),
+    (">", Tok::Gt),
+    ("!", Tok::Bang),
+    ("+", Tok::Plus),
+    ("-", Tok::Minus),
+    ("*", Tok::Star),
+    ("/", Tok::Slash),
+    ("%", Tok::Percent),
+    ("?", Tok::Question),
+];
 
 #[derive(Debug, Clone)]
 pub struct Token {
@@ -63,370 +134,374 @@ pub struct Token {
     pub span: Span,
 }
 
+struct Lexer<'a> {
+    file: &'a str,
+    src: &'a str,
+    bytes: &'a [u8],
+    i: usize,
+    out: Vec<Token>,
+    /// One entry per template whose `${ ... }` we are inside: the number of
+    /// `{` opened in that expression and not yet closed.
+    templates: Vec<usize>,
+}
+
 pub fn lex(file: &str, src: &str) -> Result<Vec<Token>, Diagnostic> {
-    let bytes = src.as_bytes();
-    let mut i = 0;
-    let mut out = Vec::new();
-    let span = |s: usize, e: usize| Span::new(file, s, e);
-    let err = |code: &str, msg: String, s: usize, e: usize| {
-        Diagnostic::error(code, msg).with_span(Span::new(file, s, e))
+    let mut lx = Lexer {
+        file,
+        src,
+        bytes: src.as_bytes(),
+        i: 0,
+        out: Vec::new(),
+        templates: Vec::new(),
     };
-    while i < bytes.len() {
-        let start = i;
-        let c = bytes[i] as char;
-        match c {
-            c if c.is_whitespace() => i += 1,
-            '/' if bytes.get(i + 1) == Some(&b'/') => {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            '/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                if i + 1 >= bytes.len() {
-                    return Err(err(
-                        "SELU0102",
-                        "unterminated block comment".into(),
-                        start,
-                        i,
-                    ));
-                }
-                i += 2;
-            }
-            '"' | '\'' => {
-                let quote = bytes[i];
-                i += 1;
-                let mut s = String::new();
-                loop {
-                    match bytes.get(i) {
-                        None => {
-                            return Err(err("SELU0103", "unterminated string".into(), start, i));
-                        }
-                        Some(b'\\') => {
-                            let escaped = match bytes.get(i + 1) {
-                                Some(b'n') => '\n',
-                                Some(b't') => '\t',
-                                Some(b'r') => '\r',
-                                Some(b'0') => '\0',
-                                Some(b'\\') => '\\',
-                                Some(b'"') => '"',
-                                Some(b'\'') => '\'',
-                                _ => {
-                                    let len = src[i + 1..].chars().next().map_or(0, char::len_utf8);
-                                    return Err(err(
-                                        "SELU0108",
-                                        format!("unknown escape `{}`", &src[i..i + 1 + len]),
-                                        i,
-                                        i + 1 + len,
-                                    )
-                                    .with_help(
-                                        r#"known escapes are \n \t \r \0 \\ \" \'; write a backslash as \\"#,
-                                    ));
-                                }
-                            };
-                            s.push(escaped);
-                            i += 2;
-                        }
-                        Some(&b) if b == quote => {
-                            i += 1;
-                            break;
-                        }
-                        Some(_) => {
-                            // Consume one UTF-8 char.
-                            let ch_len = src[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-                            s.push_str(&src[i..i + ch_len]);
-                            i += ch_len;
-                        }
+    lx.run()?;
+    let end = lx.bytes.len();
+    lx.push(Tok::Eof, end, end);
+    Ok(lx.out)
+}
+
+impl Lexer<'_> {
+    fn err(&self, code: &str, msg: impl Into<String>, s: usize, e: usize) -> Diagnostic {
+        Diagnostic::error(code, msg).with_span(Span::new(self.file, s, e))
+    }
+
+    fn push(&mut self, tok: Tok, s: usize, e: usize) {
+        self.out.push(Token {
+            tok,
+            span: Span::new(self.file, s, e),
+        });
+    }
+
+    fn at(&self, offset: usize) -> Option<u8> {
+        self.bytes.get(self.i + offset).copied()
+    }
+
+    fn run(&mut self) -> Result<(), Diagnostic> {
+        while self.i < self.bytes.len() {
+            let start = self.i;
+            let c = self.bytes[self.i] as char;
+            match c {
+                c if c.is_ascii_whitespace() => self.i += 1,
+                '/' if self.at(1) == Some(b'/') => {
+                    while self.i < self.bytes.len() && self.bytes[self.i] != b'\n' {
+                        self.i += 1;
                     }
                 }
-                out.push(Token {
-                    tok: Tok::Str(s),
-                    span: span(start, i),
-                });
-            }
-            '`' => {
-                i += 1;
-                let content_start = i;
-                while i < bytes.len() && bytes[i] != b'`' {
-                    i += 1;
+                '/' if self.at(1) == Some(b'*') => {
+                    self.i += 2;
+                    while self.i + 1 < self.bytes.len()
+                        && !(self.bytes[self.i] == b'*' && self.bytes[self.i + 1] == b'/')
+                    {
+                        self.i += 1;
+                    }
+                    if self.i + 1 >= self.bytes.len() {
+                        return Err(self.err(
+                            "SELU0102",
+                            "unterminated block comment",
+                            start,
+                            self.bytes.len(),
+                        ));
+                    }
+                    self.i += 2;
                 }
-                if i >= bytes.len() {
-                    return Err(err(
-                        "SELU0103",
-                        "unterminated template string".into(),
-                        start,
-                        i,
-                    ));
+                '"' | '\'' => {
+                    let s = self.string(start)?;
+                    self.push(Tok::Str(s), start, self.i);
                 }
-                let s = src[content_start..i].to_string();
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Template(s),
-                    span: span(start, i),
-                });
-            }
-            c if c.is_ascii_digit() => {
-                while i < bytes.len()
-                    && (bytes[i].is_ascii_digit()
-                        || bytes[i] == b'.' && bytes.get(i + 1).is_some_and(|b| b.is_ascii_digit()))
+                '`' => {
+                    self.i += 1;
+                    self.template_part(start, true)?;
+                }
+                '{' => {
+                    if let Some(depth) = self.templates.last_mut() {
+                        *depth += 1;
+                    }
+                    self.i += 1;
+                    self.push(Tok::LBrace, start, self.i);
+                }
+                // The `}` that ends a `${ ... }` continues its template.
+                '}' if self.templates.last() == Some(&0) => {
+                    self.templates.pop();
+                    self.i += 1;
+                    self.template_part(start, false)?;
+                }
+                '}' => {
+                    if let Some(depth) = self.templates.last_mut() {
+                        *depth -= 1;
+                    }
+                    self.i += 1;
+                    self.push(Tok::RBrace, start, self.i);
+                }
+                // `.5` is a number too.
+                c if c.is_ascii_digit()
+                    || c == '.' && self.at(1).is_some_and(|b| b.is_ascii_digit()) =>
                 {
-                    i += 1;
+                    self.i += 1;
+                    while self.i < self.bytes.len()
+                        && (self.bytes[self.i].is_ascii_digit()
+                            || self.bytes[self.i] == b'.'
+                                && self.at(1).is_some_and(|b| b.is_ascii_digit()))
+                    {
+                        self.i += 1;
+                    }
+                    let n = self.src[start..self.i].to_string();
+                    self.push(Tok::Number(n), start, self.i);
                 }
-                out.push(Token {
-                    tok: Tok::Number(src[start..i].to_string()),
-                    span: span(start, i),
-                });
-            }
-            c if c.is_ascii_alphabetic() || c == '_' => {
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                    i += 1;
+                c if c.is_ascii_alphabetic() || c == '_' => {
+                    while self.i < self.bytes.len()
+                        && (self.bytes[self.i].is_ascii_alphanumeric()
+                            || self.bytes[self.i] == b'_')
+                    {
+                        self.i += 1;
+                    }
+                    let tok = keyword(&self.src[start..self.i]);
+                    self.push(tok, start, self.i);
                 }
-                let word = &src[start..i];
-                let tok = match word {
-                    "const" => Tok::Const,
-                    "let" => Tok::Let,
-                    "function" => Tok::Function,
-                    "return" => Tok::Return,
-                    "if" => Tok::If,
-                    "else" => Tok::Else,
-                    "on" => Tok::On,
-                    "true" => Tok::True,
-                    "false" => Tok::False,
-                    "null" => Tok::Null,
-                    _ => Tok::Ident(word.to_string()),
-                };
-                out.push(Token {
-                    tok,
-                    span: span(start, i),
-                });
+                _ => self.punct(start)?,
             }
-            ';' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Semi,
-                    span: span(start, i),
-                });
-            }
-            ',' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Comma,
-                    span: span(start, i),
-                });
-            }
-            '(' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::LParen,
-                    span: span(start, i),
-                });
-            }
-            ')' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::RParen,
-                    span: span(start, i),
-                });
-            }
-            '{' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::LBrace,
-                    span: span(start, i),
-                });
-            }
-            '}' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::RBrace,
-                    span: span(start, i),
-                });
-            }
-            ':' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Colon,
-                    span: span(start, i),
-                });
-            }
-            '.' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Dot,
-                    span: span(start, i),
-                });
-            }
-            '+' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Plus,
-                    span: span(start, i),
-                });
-            }
-            '-' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Minus,
-                    span: span(start, i),
-                });
-            }
-            '*' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Star,
-                    span: span(start, i),
-                });
-            }
-            '%' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Percent,
-                    span: span(start, i),
-                });
-            }
-            '/' => {
-                i += 1;
-                out.push(Token {
-                    tok: Tok::Slash,
-                    span: span(start, i),
-                });
-            }
-            '=' | '!' if bytes.get(i + 1) == Some(&b'=') && bytes.get(i + 2) == Some(&b'=') => {
-                let (bad, good) = if c == '=' {
-                    ("===", "==")
-                } else {
-                    ("!==", "!=")
-                };
-                return Err(err(
-                    "SELU0109",
-                    format!(
-                        "`{bad}` isn't Selu: `{good}` already compares without converting types"
-                    ),
-                    start,
-                    i + 3,
-                )
-                .with_fix(format!("use `{good}`")));
-            }
-            '=' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    i += 2;
-                    out.push(Token {
-                        tok: Tok::EqEq,
-                        span: span(start, i),
-                    });
-                } else {
-                    i += 1;
-                    out.push(Token {
-                        tok: Tok::Eq,
-                        span: span(start, i),
-                    });
-                }
-            }
-            '!' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    i += 2;
-                    out.push(Token {
-                        tok: Tok::NotEq,
-                        span: span(start, i),
-                    });
-                } else {
-                    i += 1;
-                    out.push(Token {
-                        tok: Tok::Bang,
-                        span: span(start, i),
-                    });
-                }
-            }
-            '<' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    i += 2;
-                    out.push(Token {
-                        tok: Tok::LtEq,
-                        span: span(start, i),
-                    });
-                } else {
-                    i += 1;
-                    out.push(Token {
-                        tok: Tok::Lt,
-                        span: span(start, i),
-                    });
-                }
-            }
-            '>' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    i += 2;
-                    out.push(Token {
-                        tok: Tok::GtEq,
-                        span: span(start, i),
-                    });
-                } else {
-                    i += 1;
-                    out.push(Token {
-                        tok: Tok::Gt,
-                        span: span(start, i),
-                    });
-                }
-            }
-            '&' if bytes.get(i + 1) == Some(&b'&') => {
-                i += 2;
-                out.push(Token {
-                    tok: Tok::AndAnd,
-                    span: span(start, i),
-                });
-            }
-            '|' if bytes.get(i + 1) == Some(&b'|') => {
-                i += 2;
-                out.push(Token {
-                    tok: Tok::OrOr,
-                    span: span(start, i),
-                });
-            }
-            '?' => {
-                if bytes.get(i + 1) == Some(&b'?') {
-                    i += 2;
-                    out.push(Token {
-                        tok: Tok::QuestionQuestion,
-                        span: span(start, i),
-                    });
-                } else {
-                    i += 1;
-                    out.push(Token {
-                        tok: Tok::Question,
-                        span: span(start, i),
-                    });
-                }
-            }
-            _ => {
-                // Decode the real character: `bytes[i] as char` is wrong outside
-                // ASCII, and a span must end on a char boundary.
-                let ch = src[i..].chars().next().unwrap_or('?');
-                let end = i + ch.len_utf8();
-                if ch.is_alphabetic() {
-                    return Err(err(
-                        "SELU0107",
-                        format!("names can only use ASCII letters, digits and `_`, not `{ch}`"),
+        }
+        if !self.templates.is_empty() {
+            return Err(self.err(
+                "SELU0103",
+                "unterminated template string: a `${` has no closing `}`",
+                self.bytes.len(),
+                self.bytes.len(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn punct(&mut self, start: usize) -> Result<(), Diagnostic> {
+        let rest = &self.src[start..];
+        for bad in ["===", "!=="] {
+            if rest.starts_with(bad) {
+                let good = &bad[..2];
+                return Err(self
+                    .err(
+                        "SELU0109",
+                        format!(
+                            "`{bad}` isn't Selu: `{good}` already compares without converting types"
+                        ),
                         start,
-                        end,
+                        start + 3,
                     )
-                    .with_help(
-                        "Lua 5.1 only accepts ASCII names; strings can contain any character",
-                    ));
-                }
-                return Err(err(
-                    "SELU0104",
-                    format!("unexpected character `{ch}`"),
+                    .with_fix(format!("use `{good}`")));
+            }
+        }
+        // `a ?.5 : 1` is a conditional with the number `.5`, not `?.`.
+        if rest.starts_with("?.") && rest.as_bytes().get(2).is_some_and(u8::is_ascii_digit) {
+            self.i += 1;
+            self.push(Tok::Question, start, self.i);
+            return Ok(());
+        }
+        if let Some((text, tok)) = PUNCT.iter().find(|(text, _)| rest.starts_with(text)) {
+            self.i += text.len();
+            self.push(tok.clone(), start, self.i);
+            return Ok(());
+        }
+        // Decode the real character: a span must end on a char boundary.
+        let ch = rest.chars().next().unwrap_or('?');
+        let end = start + ch.len_utf8();
+        if ch.is_alphabetic() {
+            return Err(self
+                .err(
+                    "SELU0107",
+                    format!("names can only use ASCII letters, digits and `_`, not `{ch}`"),
                     start,
                     end,
-                ));
+                )
+                .with_help("Lua 5.1 only accepts ASCII names; strings can contain any character"));
+        }
+        Err(self.err(
+            "SELU0104",
+            format!("unexpected character `{ch}`"),
+            start,
+            end,
+        ))
+    }
+
+    /// One escape after a `\` at `self.i`; advances past it.
+    fn escape(&mut self, extra: &[(u8, char)]) -> Result<char, Diagnostic> {
+        let c = match self.at(1) {
+            Some(b'n') => '\n',
+            Some(b't') => '\t',
+            Some(b'r') => '\r',
+            Some(b'0') => '\0',
+            Some(b'\\') => '\\',
+            Some(b) if extra.iter().any(|(e, _)| *e == b) => extra
+                .iter()
+                .find(|(e, _)| *e == b)
+                .map(|(_, c)| *c)
+                .unwrap_or('?'),
+            _ => {
+                let len = self.src[self.i + 1..]
+                    .chars()
+                    .next()
+                    .map_or(0, char::len_utf8);
+                let known: String = extra.iter().map(|(_, c)| format!(" \\{c}")).collect();
+                return Err(self
+                    .err(
+                        "SELU0108",
+                        format!("unknown escape `{}`", &self.src[self.i..self.i + 1 + len]),
+                        self.i,
+                        self.i + 1 + len,
+                    )
+                    .with_help(format!(
+                        r"known escapes are \n \t \r \0 \\{known}; write a backslash as \\"
+                    )));
+            }
+        };
+        self.i += 2;
+        Ok(c)
+    }
+
+    fn string(&mut self, start: usize) -> Result<String, Diagnostic> {
+        let quote = self.bytes[self.i];
+        self.i += 1;
+        let mut s = String::new();
+        loop {
+            match self.at(0) {
+                None | Some(b'\n') => {
+                    return Err(self.err("SELU0103", "unterminated string", start, self.i));
+                }
+                Some(b'\\') => s.push(self.escape(&[(b'"', '"'), (b'\'', '\'')])?),
+                Some(b) if b == quote => {
+                    self.i += 1;
+                    return Ok(s);
+                }
+                Some(_) => s.push(self.char()),
             }
         }
     }
-    out.push(Token {
-        tok: Tok::Eof,
-        span: span(i, i),
-    });
-    Ok(out)
+
+    /// Consumes one UTF-8 character.
+    fn char(&mut self) -> char {
+        let c = self.src[self.i..].chars().next().unwrap_or('?');
+        self.i += c.len_utf8();
+        c
+    }
+
+    /// Template text from `self.i` up to the closing backtick or the next
+    /// `${`. `first`: right after the opening backtick (else after a `}`).
+    fn template_part(&mut self, start: usize, first: bool) -> Result<(), Diagnostic> {
+        let mut s = String::new();
+        loop {
+            match self.at(0) {
+                None => {
+                    return Err(self.err(
+                        "SELU0103",
+                        "unterminated template string",
+                        start,
+                        self.i,
+                    ));
+                }
+                Some(b'\\') => s.push(self.escape(&[(b'`', '`'), (b'$', '$')])?),
+                Some(b'`') => {
+                    self.i += 1;
+                    let tok = if first {
+                        Tok::Template(s)
+                    } else {
+                        Tok::TemplateTail(s)
+                    };
+                    self.push(tok, start, self.i);
+                    return Ok(());
+                }
+                Some(b'$') if self.at(1) == Some(b'{') => {
+                    self.i += 2;
+                    let tok = if first {
+                        Tok::TemplateHead(s)
+                    } else {
+                        Tok::TemplateMiddle(s)
+                    };
+                    self.push(tok, start, self.i);
+                    self.templates.push(0);
+                    return Ok(());
+                }
+                Some(_) => s.push(self.char()),
+            }
+        }
+    }
+}
+
+fn keyword(word: &str) -> Tok {
+    match word {
+        "const" => Tok::Const,
+        "let" => Tok::Let,
+        "function" => Tok::Function,
+        "return" => Tok::Return,
+        "if" => Tok::If,
+        "else" => Tok::Else,
+        "on" => Tok::On,
+        "true" => Tok::True,
+        "false" => Tok::False,
+        "null" => Tok::Null,
+        "while" => Tok::While,
+        "do" => Tok::Do,
+        "for" => Tok::For,
+        "break" => Tok::Break,
+        "continue" => Tok::Continue,
+        "new" => Tok::New,
+        _ => Tok::Ident(word.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toks(src: &str) -> Vec<Tok> {
+        lex("t.selu", src)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.tok)
+            .collect()
+    }
+
+    #[test]
+    fn templates_with_nested_braces_and_escapes() {
+        assert_eq!(
+            toks("`a${ {x: 1}.x }b${c}\\`d`"),
+            [
+                Tok::TemplateHead("a".into()),
+                Tok::LBrace,
+                Tok::Ident("x".into()),
+                Tok::Colon,
+                Tok::Number("1".into()),
+                Tok::RBrace,
+                Tok::Dot,
+                Tok::Ident("x".into()),
+                Tok::TemplateMiddle("b".into()),
+                Tok::Ident("c".into()),
+                Tok::TemplateTail("`d".into()),
+                Tok::Eof,
+            ]
+        );
+        assert_eq!(
+            toks("`plain $ {}`"),
+            [Tok::Template("plain $ {}".into()), Tok::Eof]
+        );
+        // A template inside a template.
+        assert_eq!(toks("`${`${x}`}`").len(), 6);
+        assert_eq!(lex("t.selu", "`${x").unwrap_err().code, "SELU0103");
+    }
+
+    #[test]
+    fn punctuation_takes_the_longest_match() {
+        assert_eq!(
+            toks("a?.b ?? c ... => ++ += ?"),
+            [
+                Tok::Ident("a".into()),
+                Tok::QuestionDot,
+                Tok::Ident("b".into()),
+                Tok::QuestionQuestion,
+                Tok::Ident("c".into()),
+                Tok::DotDotDot,
+                Tok::Arrow,
+                Tok::PlusPlus,
+                Tok::PlusEq,
+                Tok::Question,
+                Tok::Eof,
+            ]
+        );
+    }
 }

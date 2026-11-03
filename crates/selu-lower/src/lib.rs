@@ -1,14 +1,29 @@
-//! Lower the Selu subset to readable Lua 5.1 (DESIGN.md section 4):
-//! 2-space indent, local names preserved, Blizzard method calls use `:`
-//! (`frame.SetPoint(...)` in Selu is `frame:SetPoint(...)` in Lua).
-//! `on EVENT` handlers share one event frame with a dispatch table.
+//! Lower checked Selu to readable Lua 5.1 (DESIGN.md section 4).
+//!
+//! The lowering builds a small Lua syntax tree (`lua.rs`) and prints it:
+//! 2-space indent, local names preserved, only the brackets Lua needs, and
+//! Blizzard method calls with `:` (`frame.SetPoint(...)` in Selu is
+//! `frame:SetPoint(...)` in Lua). `on EVENT` handlers share one event frame.
+//!
+//! Lowering an expression may put statements in front of it (`pre`): a
+//! temporary for `a ?? b` in the middle of a call, for example. `seq` keeps
+//! the left-to-right evaluation order when that happens.
 
 use selu_check::TypeTable;
 use selu_diagnostics::Span;
 use selu_manifest::Manifest;
-use selu_syntax::{Expr, ExprKind, Program, Stmt, StmtKind, is_lua_keyword, visit};
+use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind, visit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+pub mod lua;
+// One file per language area; see docs/WORK-PACKAGES.md.
+mod data;
+mod functions;
+mod loops;
+mod wow;
+
+use lua::{BinOp, LBlock, LExpr, LFunction, LStmt, LStmtKind, UnOp, bin, name, not};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceMapEntry {
@@ -42,83 +57,110 @@ pub struct Lowered {
     pub source_map: SourceMap,
 }
 
+const EVENT_PROLOGUE: &str = r#"-- Selu: shared event frame and dispatch table
+local __selu_handlers = {}
+local __selu_frame = CreateFrame("Frame")
+__selu_frame:SetScript("OnEvent", function(self, event, ...)
+  local handlers = __selu_handlers[event]
+  if handlers then
+    for i = 1, #handlers do
+      handlers[i](...)
+    end
+  end
+end)
+local function __selu_on(event, fn)
+  if not __selu_handlers[event] then
+    __selu_handlers[event] = {}
+    __selu_frame:RegisterEvent(event)
+  end
+  __selu_handlers[event][#__selu_handlers[event] + 1] = fn
+end"#;
+
 /// Lowers a program the checker accepted; `types` is the checker's table.
 pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lowered {
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
-    let mut w = Writer {
-        out: String::new(),
-        line: 1,
-        map: SourceMap::default(),
+    let mut l = Lowerer {
         known: &known,
         types,
+        temps: 0,
     };
+    let mut out: LBlock = Vec::new();
     let has_handlers = program
         .stmts
         .iter()
         .any(|s| matches!(s.kind, StmtKind::OnHandler { .. }));
     if has_handlers {
-        w.raw("-- Selu: shared event frame and dispatch table");
-        w.raw("local __selu_handlers = {}");
-        w.raw("local __selu_frame = CreateFrame(\"Frame\")");
-        w.raw("__selu_frame:SetScript(\"OnEvent\", function(self, event, ...)");
-        w.raw("  local handlers = __selu_handlers[event]");
-        w.raw("  if handlers then");
-        w.raw("    for i = 1, #handlers do");
-        w.raw("      handlers[i](...)");
-        w.raw("    end");
-        w.raw("  end");
-        w.raw("end)");
-        w.raw("local function __selu_on(event, fn)");
-        w.raw("  if not __selu_handlers[event] then");
-        w.raw("    __selu_handlers[event] = {}");
-        w.raw("    __selu_frame:RegisterEvent(event)");
-        w.raw("  end");
-        w.raw("  __selu_handlers[event][#__selu_handlers[event] + 1] = fn");
-        w.raw("end");
-        w.raw("");
+        out.push(raw(EVENT_PROLOGUE));
+        out.push(raw(""));
     }
-    w.stmts(&program.stmts, 0);
+    out.extend(l.block(&program.stmts));
+    let printed = lua::print_block(&out);
     Lowered {
-        lua: w.out,
-        source_map: w.map,
+        lua: printed.text,
+        source_map: SourceMap {
+            entries: printed
+                .lines
+                .into_iter()
+                .map(|(generated_line, span)| SourceMapEntry {
+                    generated_line,
+                    span,
+                })
+                .collect(),
+        },
     }
 }
 
-struct Writer<'a> {
-    out: String,
-    line: u32,
-    map: SourceMap,
+fn raw(text: &str) -> LStmt {
+    LStmt {
+        kind: LStmtKind::Raw(text.into()),
+        span: None,
+    }
+}
+
+pub(crate) struct Lowerer<'a> {
     known: &'a HashSet<String>,
     types: &'a TypeTable,
+    temps: u32,
 }
 
-impl Writer<'_> {
-    fn raw(&mut self, text: &str) {
-        self.out.push_str(text);
-        self.out.push('\n');
-        self.line += 1;
+impl Lowerer<'_> {
+    /// A fresh local name for a temporary value.
+    pub(crate) fn temp(&mut self) -> String {
+        self.temps += 1;
+        format!("__selu_t{}", self.temps)
     }
-    fn emit(&mut self, indent: usize, text: &str, span: &Span) {
-        self.map.entries.push(SourceMapEntry {
-            generated_line: self.line,
-            span: span.clone(),
-        });
-        for _ in 0..indent {
-            self.out.push_str("  ");
+
+    /// `stmt`, preceded by `pre`. A statement that declares nothing gets
+    /// its temporaries in a `do ... end` of their own.
+    pub(crate) fn finish(&mut self, pre: LBlock, stmt: LStmt, out: &mut LBlock) {
+        if pre.is_empty() {
+            out.push(stmt);
+        } else {
+            let span = stmt.span.clone();
+            let mut body = pre;
+            body.push(stmt);
+            out.push(LStmt {
+                kind: LStmtKind::Do(body),
+                span,
+            });
         }
-        self.out.push_str(text);
-        self.out.push('\n');
-        self.line += 1;
     }
+
+    // ---- blocks and statements ------------------------------------------
+
     /// A block. Names the block declares but uses earlier (only possible
     /// inside a function body that runs later) are declared up front with
     /// one `local a, b`, so the earlier code sees the same variable.
-    fn stmts(&mut self, stmts: &[Stmt], indent: usize) {
+    pub(crate) fn block(&mut self, stmts: &[Stmt]) -> LBlock {
+        let mut out = Vec::new();
         let early = used_before_declaration(stmts);
         if let Some(first) = stmts.first()
             && !early.is_empty()
         {
-            self.emit(indent, &format!("local {}", early.join(", ")), &first.span);
+            out.push(LStmt::new(
+                LStmtKind::Local(early.clone(), Vec::new()),
+                &first.span,
+            ));
         }
         for s in stmts {
             let declared = match &s.kind {
@@ -126,214 +168,419 @@ impl Writer<'_> {
                 _ => None,
             };
             let forward = declared.is_some_and(|n| early.contains(n));
-            self.stmt(s, indent, forward);
+            self.stmt(s, forward, &mut out);
+        }
+        out
+    }
+
+    pub(crate) fn function(&mut self, params: &[Param], body: &[Stmt]) -> LFunction {
+        LFunction {
+            params: params.iter().map(|p| p.name.clone()).collect(),
+            vararg: false,
+            body: self.block(body),
         }
     }
+
     /// `forward`: the statement declares a name that was already declared
     /// with `local` at the top of the block, so it assigns instead.
-    fn stmt(&mut self, s: &Stmt, indent: usize, forward: bool) {
-        let local = if forward { "" } else { "local " };
+    fn stmt(&mut self, s: &Stmt, forward: bool, out: &mut LBlock) {
+        let span = &s.span;
         match &s.kind {
             StmtKind::VarDecl { init: None, .. } if forward => {}
-            StmtKind::VarDecl { name, init, .. } => match init {
-                Some(e) if is_coalesce(e) => {
-                    self.coalesce_into(indent, &format!("{local}{name}"), name, e, &s.span);
-                }
-                Some(e) => {
-                    let text = format!("{local}{name} = {}", self.expr(e));
-                    self.emit(indent, &text, &s.span);
-                }
-                None => self.emit(indent, &format!("local {name}"), &s.span),
-            },
-            StmtKind::Global { name, init, .. } => {
-                if is_coalesce(init) {
-                    self.coalesce_into(indent, name, name, init, &s.span);
-                } else {
-                    let text = format!("{name} = {}", self.expr(init));
-                    self.emit(indent, &text, &s.span);
-                }
+            StmtKind::VarDecl {
+                name: n,
+                init: None,
+                ..
+            } => out.push(LStmt::new(
+                LStmtKind::Local(vec![n.clone()], Vec::new()),
+                span,
+            )),
+            StmtKind::VarDecl {
+                name: n,
+                init: Some(e),
+                ..
+            } => self.assign_into(&name(n), !forward, e, span, out),
+            StmtKind::Global { name: n, init, .. } => {
+                self.assign_into(&name(n), false, init, span, out)
             }
             StmtKind::FuncDecl {
-                name, params, body, ..
+                name: n,
+                params,
+                body,
+                ..
             } => {
-                let ps: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
-                self.emit(
-                    indent,
-                    &format!("{local}function {name}({})", ps.join(", ")),
-                    &s.span,
-                );
-                self.stmts(body, indent + 1);
-                self.emit(indent, "end", &s.span);
+                let f = self.function(params, body);
+                let kind = if forward {
+                    LStmtKind::Function(n.clone(), f)
+                } else {
+                    LStmtKind::LocalFunction(n.clone(), f)
+                };
+                out.push(LStmt::new(kind, span));
             }
             StmtKind::OnHandler {
                 event,
                 params,
                 body,
             } => {
-                let ps: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
-                self.emit(
-                    indent,
-                    &format!("__selu_on({:?}, function({})", event, ps.join(", ")),
-                    &s.span,
+                let f = self.function(params, body);
+                let call = lua::call(
+                    name("__selu_on"),
+                    vec![LExpr::Str(event.clone()), LExpr::Function(f)],
                 );
-                self.stmts(body, indent + 1);
-                self.emit(indent, "end)", &s.span);
+                out.push(LStmt::new(LStmtKind::Call(call), span));
             }
-            StmtKind::Return(Some(e)) if is_coalesce(e) => {
-                self.emit(indent, "do", &s.span);
-                self.coalesce_into(indent + 1, "local __selu_v", "__selu_v", e, &s.span);
-                self.emit(indent + 1, "return __selu_v", &s.span);
-                self.emit(indent, "end", &s.span);
-            }
-            StmtKind::Return(e) => {
-                let text = match e {
-                    Some(e) => format!("return {}", self.expr(e)),
-                    None => "return".into(),
-                };
-                self.emit(indent, &text, &s.span);
+            StmtKind::Return(None) => out.push(LStmt::new(LStmtKind::Return(Vec::new()), span)),
+            StmtKind::Return(Some(e)) => {
+                let mut pre = Vec::new();
+                let v = self.expr(e, &mut pre);
+                self.finish(pre, LStmt::new(LStmtKind::Return(vec![v]), span), out);
             }
             StmtKind::If {
                 cond,
                 then_branch,
                 else_branch,
-            } => {
-                // `else if` (a single If in the else branch) becomes `elseif`.
-                self.emit(indent, &format!("if {} then", self.expr(cond)), &s.span);
-                self.stmts(then_branch, indent + 1);
-                let mut else_branch = else_branch.as_deref();
-                loop {
-                    match else_branch {
-                        Some([only]) if matches!(only.kind, StmtKind::If { .. }) => {
-                            if let StmtKind::If {
-                                cond,
-                                then_branch,
-                                else_branch: next,
-                            } = &only.kind
-                            {
-                                self.emit(
-                                    indent,
-                                    &format!("elseif {} then", self.expr(cond)),
-                                    &only.span,
-                                );
-                                self.stmts(then_branch, indent + 1);
-                                else_branch = next.as_deref();
-                            }
-                        }
-                        Some(body) => {
-                            self.emit(indent, "else", &s.span);
-                            self.stmts(body, indent + 1);
-                            break;
-                        }
-                        None => break,
-                    }
-                }
-                self.emit(indent, "end", &s.span);
-            }
+            } => self.if_stmt(cond, then_branch, else_branch.as_deref(), span, out),
             StmtKind::Block(b) => {
-                self.emit(indent, "do", &s.span);
-                self.stmts(b, indent + 1);
-                self.emit(indent, "end", &s.span);
+                let body = self.block(b);
+                out.push(LStmt::new(LStmtKind::Do(body), span));
             }
-            StmtKind::Expr(e) => match &e.kind {
-                ExprKind::Assign { target, value } if is_coalesce(value) => {
-                    let target = self.expr(target);
-                    self.emit(indent, "do", &s.span);
-                    self.coalesce_into(indent + 1, "local __selu_v", "__selu_v", value, &s.span);
-                    self.emit(indent + 1, &format!("{target} = __selu_v"), &s.span);
-                    self.emit(indent, "end", &s.span);
-                }
-                _ => {
-                    let text = self.expr(e);
-                    self.emit(indent, &text, &s.span);
-                }
-            },
+            StmtKind::Expr(e) => self.expr_stmt(e, span, out),
+            StmtKind::While { .. }
+            | StmtKind::DoWhile { .. }
+            | StmtKind::For { .. }
+            | StmtKind::ForOf { .. }
+            | StmtKind::Break
+            | StmtKind::Continue => self.loop_stmt(s, out),
+            StmtKind::Destructure { .. } => self.destructure(s, out),
         }
     }
 
-    /// `a ?? b ?? c` assigned to `var`: evaluate each side once and only when
-    /// needed, and keep `false` (unlike `a or b`):
+    fn if_stmt(
+        &mut self,
+        cond: &Expr,
+        then_branch: &[Stmt],
+        else_branch: Option<&[Stmt]>,
+        span: &Span,
+        out: &mut LBlock,
+    ) {
+        let mut pre = Vec::new();
+        let c = self.expr(cond, &mut pre);
+        let mut arms = vec![(c, self.block(then_branch))];
+        let mut otherwise = None;
+        let mut rest = else_branch;
+        // `else if` becomes `elseif`, unless its condition needs statements
+        // first; then it stays an `if` inside the `else`.
+        while let Some(stmts) = rest {
+            if let [only] = stmts
+                && let StmtKind::If {
+                    cond,
+                    then_branch,
+                    else_branch,
+                } = &only.kind
+            {
+                let mut cond_pre = Vec::new();
+                let c = self.expr(cond, &mut cond_pre);
+                if cond_pre.is_empty() {
+                    arms.push((c, self.block(then_branch)));
+                    rest = else_branch.as_deref();
+                    continue;
+                }
+            }
+            otherwise = Some(self.block(stmts));
+            break;
+        }
+        self.finish(pre, LStmt::new(LStmtKind::If(arms, otherwise), span), out);
+    }
+
+    fn expr_stmt(&mut self, e: &Expr, span: &Span, out: &mut LBlock) {
+        match &e.kind {
+            ExprKind::Assign { target, value } => match &target.kind {
+                ExprKind::Ident(n) => self.assign_into(&name(n), false, value, span, out),
+                _ => {
+                    let mut pre = Vec::new();
+                    let v = self.expr(value, &mut pre);
+                    let t = self.target(target, &mut pre);
+                    let stmt = LStmt::new(LStmtKind::Assign(vec![t], vec![v]), span);
+                    self.finish(pre, stmt, out);
+                }
+            },
+            ExprKind::CompoundAssign { .. } | ExprKind::Update { .. } => {
+                self.control_stmt(e, span, out)
+            }
+            _ => {
+                let mut pre = Vec::new();
+                let v = self.expr(e, &mut pre);
+                // Lua only allows calls as statements.
+                let kind = match v {
+                    LExpr::Call(..) | LExpr::Method(..) => LStmtKind::Call(v),
+                    v => LStmtKind::Local(vec!["_".into()], vec![v]),
+                };
+                self.finish(pre, LStmt::new(kind, span), out);
+            }
+        }
+    }
+
+    /// The place an assignment stores into (`t.x`, `xs[i]`).
+    pub(crate) fn target(&mut self, target: &Expr, pre: &mut LBlock) -> LExpr {
+        match &target.kind {
+            ExprKind::Ident(n) => name(n),
+            ExprKind::Member {
+                object,
+                name: field,
+            } => LExpr::Field(Box::new(self.expr(object, pre)), field.clone()),
+            _ => self.data_target(target, pre),
+        }
+    }
+
+    /// `var = e` (or `local var = e` when `declare`). A `??` chain stored in
+    /// a plain variable uses the variable itself, which reads best:
     ///
     /// ```lua
     /// local x = a
     /// if x == nil then x = b end
-    /// if x == nil then x = c end
     /// ```
-    fn coalesce_into(&mut self, indent: usize, decl: &str, var: &str, e: &Expr, span: &Span) {
+    pub(crate) fn assign_into(
+        &mut self,
+        var: &LExpr,
+        declare: bool,
+        e: &Expr,
+        span: &Span,
+        out: &mut LBlock,
+    ) {
+        let store = |value: LExpr| {
+            let kind = match (declare, var) {
+                (true, LExpr::Name(n)) => LStmtKind::Local(vec![n.clone()], vec![value]),
+                _ => LStmtKind::Assign(vec![var.clone()], vec![value]),
+            };
+            LStmt::new(kind, span)
+        };
         let mut chain = Vec::new();
         flatten_coalesce(e, &mut chain);
-        let (first, rest) = chain.split_first().expect("a chain has at least one part");
-        let first = self.expr(first);
-        self.emit(indent, &format!("{decl} = {first}"), span);
-        for part in rest {
-            let value = self.expr(part);
-            self.emit(
-                indent,
-                &format!("if {var} == nil then {var} = {value} end"),
-                span,
-            );
+        // The direct form must not read `var` after it was overwritten.
+        let reads_var = |parts: &[&Expr]| match var {
+            LExpr::Name(n) => parts.iter().any(|p| {
+                let mut hit = false;
+                visit::idents_in_expr(p, &mut |i| hit |= i == n);
+                hit
+            }),
+            _ => true,
+        };
+        if chain.len() > 1 && (declare || !reads_var(&chain[1..])) {
+            let mut pre = Vec::new();
+            let first = self.expr(chain[0], &mut pre);
+            out.extend(pre);
+            out.push(store(first));
+            for part in &chain[1..] {
+                let mut part_pre = Vec::new();
+                let v = self.expr(part, &mut part_pre);
+                part_pre.push(LStmt::new(
+                    LStmtKind::Assign(vec![var.clone()], vec![v]),
+                    span,
+                ));
+                let test = bin(BinOp::Eq, var.clone(), LExpr::Nil);
+                out.push(LStmt::new(
+                    LStmtKind::If(vec![(test, part_pre)], None),
+                    span,
+                ));
+            }
+            return;
+        }
+        let mut pre = Vec::new();
+        let v = self.expr(e, &mut pre);
+        if declare {
+            // The temporaries stay in the enclosing block: wrapping them would
+            // hide the declared name.
+            out.extend(pre);
+            out.push(store(v));
+        } else {
+            self.finish(pre, store(v), out);
         }
     }
 
-    fn expr(&self, e: &Expr) -> String {
+    // ---- expressions ----------------------------------------------------
+
+    /// Lowers `exprs` in order. When a later one needs statements first, the
+    /// earlier values that could change meanwhile are stored in temporaries,
+    /// so everything still runs left to right.
+    pub(crate) fn seq(&mut self, exprs: &[&Expr], pre: &mut LBlock) -> Vec<LExpr> {
+        let mut vals: Vec<LExpr> = Vec::new();
+        for e in exprs {
+            let mut own = Vec::new();
+            let v = self.expr(e, &mut own);
+            if !own.is_empty() {
+                for prev in vals.iter_mut() {
+                    if !prev.is_pure() {
+                        let t = self.hold(prev.clone(), &e.span, pre);
+                        *prev = name(&t);
+                    }
+                }
+                pre.extend(own);
+            }
+            vals.push(v);
+        }
+        vals
+    }
+
+    /// A temporary holding `value`, declared in `pre`.
+    pub(crate) fn hold(&mut self, value: LExpr, span: &Span, pre: &mut LBlock) -> String {
+        let t = self.temp();
+        pre.push(LStmt::new(
+            LStmtKind::Local(vec![t.clone()], vec![value]),
+            span,
+        ));
+        t
+    }
+
+    pub(crate) fn expr(&mut self, e: &Expr, pre: &mut LBlock) -> LExpr {
         match &e.kind {
-            ExprKind::Number(n) => n.clone(),
-            ExprKind::Str(s) => lua_string(s),
-            ExprKind::Bool(b) => b.to_string(),
-            ExprKind::Null => "nil".into(),
-            ExprKind::Ident(n) => n.clone(),
-            ExprKind::Unary { op, expr } => match op.as_str() {
-                "!" => format!("not ({})", self.expr(expr)),
-                _ => format!("-({})", self.expr(expr)),
-            },
-            ExprKind::Binary { op, left, right } => {
-                let (l, r) = (self.expr(left), self.expr(right));
+            ExprKind::Number(n) => LExpr::Number(n.clone()),
+            ExprKind::Str(s) => LExpr::Str(s.clone()),
+            ExprKind::Bool(b) => LExpr::Bool(*b),
+            ExprKind::Null => LExpr::Nil,
+            ExprKind::Ident(n) => name(n),
+            ExprKind::Unary { op, expr } => {
+                let v = self.expr(expr, pre);
                 match op.as_str() {
-                    "&&" => format!("({l} and {r})"),
-                    "||" => format!("({l} or {r})"),
-                    "!=" => format!("({l} ~= {r})"),
-                    // The checker allows `+` on two strings only; Lua joins
-                    // strings with `..`.
-                    "+" if self.types.is_string(left.id) || self.types.is_string(right.id) => {
-                        format!("({l} .. {r})")
-                    }
-                    // Inline form: the checker (SELU0308) only allows it when
-                    // `l` has no side effects and `r` is never false or nil, so
-                    // evaluating `l` twice and using and/or is exact, including
-                    // for `l == false`. Other forms use `coalesce_into`.
-                    "??" => format!("({l} == nil and {r} or {l})"),
-                    _ => format!("({l} {op} {r})"),
+                    "!" => not(v),
+                    _ => LExpr::Unary(UnOp::Neg, Box::new(v)),
                 }
             }
-            ExprKind::Assign { target, value } => {
-                format!("{} = {}", self.expr(target), self.expr(value))
+            ExprKind::Binary { op, left, right } => self.binary(e, op, left, right, pre),
+            ExprKind::Member {
+                object,
+                name: field,
+            } => LExpr::Field(Box::new(self.expr(object, pre)), field.clone()),
+            ExprKind::Call { callee, args } => self.call(callee, args, pre),
+            ExprKind::Assign { .. } => {
+                unreachable!("the checker allows assignments only as statements")
             }
-            // `t.end` is fine in Selu but not in Lua: use `t["end"]`.
-            ExprKind::Member { object, name } if is_lua_keyword(name) => {
-                format!("{}[{}]", self.expr(object), lua_string(name))
-            }
-            ExprKind::Member { object, name } => format!("{}.{name}", self.expr(object)),
-            ExprKind::Call { callee, args } => {
-                let args: Vec<String> = args.iter().map(|a| self.expr(a)).collect();
-                let joined = args.join(", ");
-                match &callee.kind {
-                    // Method call: `a.B(x)` -> `a:B(x)`, unless the whole
-                    // dotted name is a manifest namespace function
-                    // (`C_Foo.Bar(x)` stays a plain call).
-                    ExprKind::Member { object, name } => {
-                        let is_namespace = callee
-                            .dotted_name()
-                            .is_some_and(|full| self.known.contains(&full));
-                        if is_namespace {
-                            format!("{}.{name}({joined})", self.expr(object))
-                        } else {
-                            format!("{}:{name}({joined})", self.expr(object))
-                        }
-                    }
-                    _ => format!("{}({joined})", self.expr(callee)),
+            ExprKind::Conditional { .. }
+            | ExprKind::CompoundAssign { .. }
+            | ExprKind::Update { .. } => self.control_expr(e, pre),
+            ExprKind::Template { .. }
+            | ExprKind::Array(_)
+            | ExprKind::Object(_)
+            | ExprKind::Index { .. }
+            | ExprKind::OptionalMember { .. }
+            | ExprKind::New { .. } => self.data_expr(e, pre),
+            ExprKind::Function { .. } => self.function_expr(e, pre),
+            ExprKind::TaggedTemplate { .. } => self.tagged_template(e, pre),
+        }
+    }
+
+    fn binary(&mut self, e: &Expr, op: &str, left: &Expr, right: &Expr, pre: &mut LBlock) -> LExpr {
+        if let "&&" | "||" | "??" = op {
+            return self.short_circuit(e, op, left, right, pre);
+        }
+        let vals = self.seq(&[left, right], pre);
+        let [l, r]: [LExpr; 2] = vals.try_into().expect("two operands");
+        let op = match op {
+            // The checker allows `+` on two strings only; Lua joins strings
+            // with `..`.
+            "+" if self.types.is_string(left.id) || self.types.is_string(right.id) => BinOp::Concat,
+            "+" => BinOp::Add,
+            "-" => BinOp::Sub,
+            "*" => BinOp::Mul,
+            "/" => BinOp::Div,
+            "%" => BinOp::Mod,
+            "==" => BinOp::Eq,
+            "!=" => BinOp::Ne,
+            "<" => BinOp::Lt,
+            "<=" => BinOp::Le,
+            ">" => BinOp::Gt,
+            ">=" => BinOp::Ge,
+            other => unreachable!("unknown operator {other}"),
+        };
+        bin(op, l, r)
+    }
+
+    /// `&&`, `||` and `??`: the right side runs only when needed. When it
+    /// needs statements of its own, the whole thing becomes an `if` on a
+    /// temporary.
+    fn short_circuit(
+        &mut self,
+        e: &Expr,
+        op: &str,
+        left: &Expr,
+        right: &Expr,
+        pre: &mut LBlock,
+    ) -> LExpr {
+        let a = self.expr(left, pre);
+        let mut right_pre = Vec::new();
+        let b = self.expr(right, &mut right_pre);
+        if right_pre.is_empty() {
+            match op {
+                "&&" => return bin(BinOp::And, a, b),
+                "||" => return bin(BinOp::Or, a, b),
+                // `a == nil and b or a` is exact when `a` can be read twice and
+                // `b` is never false or nil.
+                _ if a.is_pure() && never_false_or_nil(&b) => {
+                    return bin(
+                        BinOp::Or,
+                        bin(BinOp::And, bin(BinOp::Eq, a.clone(), LExpr::Nil), b),
+                        a,
+                    );
                 }
+                _ => {}
+            }
+        }
+        let t = self.hold(a, &e.span, pre);
+        let test = match op {
+            "&&" => name(&t),
+            "||" => not(name(&t)),
+            _ => bin(BinOp::Eq, name(&t), LExpr::Nil),
+        };
+        right_pre.push(LStmt::new(
+            LStmtKind::Assign(vec![name(&t)], vec![b]),
+            &e.span,
+        ));
+        pre.push(LStmt::new(
+            LStmtKind::If(vec![(test, right_pre)], None),
+            &e.span,
+        ));
+        name(&t)
+    }
+
+    fn call(&mut self, callee: &Expr, args: &[Expr], pre: &mut LBlock) -> LExpr {
+        let mut all: Vec<&Expr> = Vec::new();
+        match &callee.kind {
+            // Method call: `a.B(x)` -> `a:B(x)`, unless the whole dotted name
+            // is a manifest namespace function (`C_Foo.Bar(x)` stays a plain
+            // call).
+            ExprKind::Member {
+                object,
+                name: method,
+            } => {
+                let is_namespace = callee
+                    .dotted_name()
+                    .is_some_and(|full| self.known.contains(&full));
+                all.push(object);
+                all.extend(args);
+                let mut vals = self.seq(&all, pre);
+                let obj = vals.remove(0);
+                if is_namespace {
+                    lua::call(LExpr::Field(Box::new(obj), method.clone()), vals)
+                } else {
+                    LExpr::Method(Box::new(obj), method.clone(), vals)
+                }
+            }
+            _ => {
+                all.push(callee);
+                all.extend(args);
+                let mut vals = self.seq(&all, pre);
+                let f = vals.remove(0);
+                lua::call(f, vals)
             }
         }
     }
+}
+
+/// Literals that are never `false` or `nil`.
+fn never_false_or_nil(e: &LExpr) -> bool {
+    matches!(
+        e,
+        LExpr::Number(_) | LExpr::Str(_) | LExpr::Bool(true) | LExpr::Table(_) | LExpr::Function(_)
+    )
 }
 
 /// Names declared in `stmts` that an earlier statement of the same block
@@ -357,10 +604,6 @@ fn used_before_declaration(stmts: &[Stmt]) -> Vec<String> {
     early
 }
 
-fn is_coalesce(e: &Expr) -> bool {
-    matches!(&e.kind, ExprKind::Binary { op, .. } if op == "??")
-}
-
 /// `a ?? b ?? c` (left-associative) as `[a, b, c]`.
 fn flatten_coalesce<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
     match &e.kind {
@@ -370,28 +613,6 @@ fn flatten_coalesce<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
         }
         _ => out.push(e),
     }
-}
-
-fn lua_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            // Other control characters as Lua 5.1 decimal escapes; padding
-            // to three digits keeps a following digit from joining the escape.
-            c if (c as u32) < 0x20 || c == '\u{7f}' => {
-                out.push_str(&format!("\\{:03}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 /// The interface number comes from the target manifest, so the `.toc`
@@ -420,46 +641,55 @@ mod tests {
         selu_manifest::load_manifest(&p).unwrap()
     }
 
-    #[test]
-    fn lowers_subset_with_method_colons_and_events() {
-        let src = "const limit = 10;\nconst frame = CreateFrame(\"Frame\");\nfunction greet() { return \"hi\"; }\non PLAYER_LOGIN() {\n  print(greet());\n  frame.SetPoint(\"TOP\", null);\n  if (limit > 5 && limit != 9) { return; }\n}\n";
+    fn lua(src: &str) -> Lowered {
         let p = selu_syntax::parse("main.selu", src).unwrap();
         let checked = selu_check::check_program(&p, &manifest());
-        let out = lower(&p, &manifest(), &checked.types);
-        assert!(out.lua.contains("local limit = 10"), "{}", out.lua);
-        assert!(out.lua.contains("local function greet()"), "{}", out.lua);
-        assert!(
-            out.lua.contains("__selu_on(\"PLAYER_LOGIN\", function()"),
-            "{}",
-            out.lua
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        lower(&p, &manifest(), &checked.types)
+    }
+
+    #[test]
+    fn lowers_subset_with_method_colons_and_events() {
+        let out = lua(
+            "const limit = 10;\nconst frame = CreateFrame(\"Frame\");\nfunction greet() { return \"hi\"; }\non PLAYER_LOGIN() {\n  print(greet());\n  frame.SetPoint(\"TOP\", null);\n  if (limit > 5 && limit != 9) { return; }\n}\n",
         );
-        assert!(
-            out.lua.contains("frame:SetPoint(\"TOP\", nil)"),
-            "{}",
-            out.lua
-        );
-        assert!(
-            out.lua.contains("(limit > 5) and (limit ~= 9)") || out.lua.contains("and"),
-            "{}",
-            out.lua
-        );
-        assert!(
-            out.lua.contains("__selu_frame:RegisterEvent(event)"),
-            "{}",
-            out.lua
-        );
-        // Source map points back at main.selu.
-        let span = out
-            .source_map
-            .lookup(1)
-            .or_else(|| out.source_map.lookup(30));
+        for want in [
+            "local limit = 10",
+            "local function greet()",
+            "__selu_on(\"PLAYER_LOGIN\", function()",
+            "  frame:SetPoint(\"TOP\", nil)",
+            "  if limit > 5 and limit ~= 9 then",
+            "__selu_frame:RegisterEvent(event)",
+        ] {
+            assert!(out.lua.contains(want), "missing {want:?} in\n{}", out.lua);
+        }
         assert!(
             out.source_map
                 .entries
                 .iter()
                 .all(|e| e.span.file == "main.selu")
         );
-        assert!(span.is_some());
+        // The handler's `print` line maps back to the source.
+        let line = out
+            .lua
+            .lines()
+            .position(|l| l.contains("print(greet())"))
+            .unwrap() as u32
+            + 1;
+        assert!(out.source_map.lookup(line).is_some());
+    }
+
+    #[test]
+    fn output_has_only_needed_brackets() {
+        let out = lua(
+            "function f(a: number, b: number) { return (a + b) * 2 - a / b + 1; }\nfunction g(s: string) { return s + \"x\" + s; }\n",
+        );
+        assert!(
+            out.lua.contains("return (a + b) * 2 - a / b + 1"),
+            "{}",
+            out.lua
+        );
+        assert!(out.lua.contains("return s .. \"x\" .. s"), "{}", out.lua);
     }
 
     #[test]

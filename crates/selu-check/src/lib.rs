@@ -15,11 +15,17 @@
 
 use selu_diagnostics::{Diagnostic, Span};
 use selu_manifest::Manifest;
-use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind};
+use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind, TypeExpr};
 use std::collections::HashMap;
 
 mod rules;
+// One file per language area. The central `stmt`/`expr_inner` matches only
+// dispatch; each area's checks live in its own file (docs/WORK-PACKAGES.md).
+mod data;
+mod functions;
+mod loops;
 pub mod types;
+mod wow;
 
 pub use types::{Type, TypeTable};
 
@@ -206,24 +212,24 @@ impl Ctx<'_> {
         }
     }
 
-    fn annotation(&mut self, text: &Option<String>, span: &Span) -> Option<Type> {
-        let text = text.as_ref()?;
-        match types::parse_annotation(text) {
-            Some(t) => Some(t),
-            None => {
-                self.out.push(
-                    err("SELU0320", format!("unknown type `{text}`"), span)
-                        .with_help("the types so far are `number`, `string`, `boolean` and `T?` for \"a T or null\""),
-                );
-                Some(Type::Error)
-            }
-        }
+    fn annotation(&mut self, t: &Option<TypeExpr>) -> Option<Type> {
+        let t = t.as_ref()?;
+        Some(if types::is_void(t) {
+            Type::Void
+        } else {
+            types::resolve(t, self.out)
+        })
     }
 
     fn param_types(&mut self, params: &[Param]) -> Vec<Type> {
         params
             .iter()
-            .map(|p| self.annotation(&p.ty, &p.span).unwrap_or(Type::Untyped))
+            .map(|p| {
+                if p.rest || p.default.is_some() {
+                    self.params_with_extras(p);
+                }
+                self.annotation(&p.ty).unwrap_or(Type::Untyped)
+            })
             .collect()
     }
 
@@ -249,7 +255,7 @@ impl Ctx<'_> {
                     // Until the declaration runs, a function body that uses
                     // the name sees its written type, or an unchecked one.
                     let kind = if *is_const { Kind::Const } else { Kind::Let };
-                    let t = ty.as_deref().and_then(types::parse_annotation);
+                    let t = ty.as_ref().map(types::resolve_quiet);
                     self.declare(name, name_span, kind, t.unwrap_or(Type::Untyped));
                 }
                 StmtKind::FuncDecl {
@@ -261,7 +267,7 @@ impl Ctx<'_> {
                 } => {
                     // The return type is known only after the body; until then
                     // calls see an unchecked result.
-                    let ret = self.annotation(ret, name_span).unwrap_or(Type::Untyped);
+                    let ret = self.annotation(ret).unwrap_or(Type::Untyped);
                     let ty = Type::Function {
                         params: self.param_types(params),
                         ret: Box::new(ret),
@@ -271,6 +277,14 @@ impl Ctx<'_> {
                 StmtKind::Global {
                     name, name_span, ..
                 } => self.declare_global(name, name_span, &s.span, top),
+                StmtKind::Destructure {
+                    is_const, pattern, ..
+                } => {
+                    let kind = if *is_const { Kind::Const } else { Kind::Let };
+                    for (name, span) in pattern_names(pattern) {
+                        self.declare(name, span, kind, Type::Untyped);
+                    }
+                }
                 _ => {}
             }
         }
@@ -359,7 +373,7 @@ impl Ctx<'_> {
                 ty,
                 init,
             } => {
-                let written = self.annotation(ty, name_span);
+                let written = self.annotation(ty);
                 let ty = self.declared_type(*is_const, name, name_span, written, init.as_deref());
                 self.finish_decl(name, ty);
             }
@@ -418,7 +432,7 @@ impl Ctx<'_> {
                 if let Some(entry) = entry {
                     for (t, p) in param_types.iter_mut().zip(&entry.params) {
                         if *t == Type::Untyped {
-                            *t = types::parse_annotation(&p.ty).unwrap_or(Type::Untyped);
+                            *t = types::manifest_type(&p.ty);
                         }
                     }
                 }
@@ -457,6 +471,13 @@ impl Ctx<'_> {
                 }
             }
             StmtKind::Block(b) => self.block(b, &[], Vec::new()),
+            StmtKind::While { .. }
+            | StmtKind::DoWhile { .. }
+            | StmtKind::For { .. }
+            | StmtKind::ForOf { .. }
+            | StmtKind::Break
+            | StmtKind::Continue => self.loop_stmt(s),
+            StmtKind::Destructure { .. } => self.destructure(s),
             StmtKind::Expr(e) => {
                 // A statement may be a call returning nothing.
                 self.expr(e);
@@ -805,7 +826,28 @@ impl Ctx<'_> {
                 let t = self.value(object);
                 self.member(&t, name, object)
             }
+            ExprKind::Conditional { .. }
+            | ExprKind::CompoundAssign { .. }
+            | ExprKind::Update { .. } => self.control_expr(e),
+            ExprKind::Template { .. }
+            | ExprKind::Array(_)
+            | ExprKind::Object(_)
+            | ExprKind::Index { .. }
+            | ExprKind::OptionalMember { .. }
+            | ExprKind::New { .. } => self.data_expr(e),
+            ExprKind::Function { .. } => self.function_expr(e),
+            ExprKind::TaggedTemplate { .. } => self.tagged_template(e),
         }
+    }
+
+    /// A construct whose package hasn't landed yet (docs/WORK-PACKAGES.md).
+    fn unsupported(&mut self, what: &str, span: &Span) -> Type {
+        self.out.push(
+            err("SELU0390", format!("{what} isn't supported yet"), span).with_help(
+                "this part of Selu is still being built; SPEC-V1.md describes how it will work",
+            ),
+        );
+        Type::Error
     }
 
     fn member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
@@ -1069,6 +1111,14 @@ impl Ctx<'_> {
 }
 
 /// Whether running `stmts` never reaches its end (it returns).
+/// The names a destructuring pattern declares.
+fn pattern_names(p: &selu_syntax::Pattern) -> Vec<(&String, &Span)> {
+    match p {
+        selu_syntax::Pattern::Array(items) => items.iter().flatten().map(|(n, s)| (n, s)).collect(),
+        selu_syntax::Pattern::Object(items) => items.iter().map(|(_, n, s)| (n, s)).collect(),
+    }
+}
+
 fn always_exits(stmts: &[Stmt]) -> bool {
     match stmts.last().map(|s| &s.kind) {
         Some(StmtKind::Return(_)) => true,
@@ -1377,5 +1427,29 @@ mod tests {
             codes("on UNIT_HEALTH(unit) { const n: number = unit; }\n"),
             ["SELU0336"]
         );
+    }
+
+    #[test]
+    fn constructs_still_being_built_are_reported_not_lowered() {
+        for src in [
+            "while (true) { break; }
+",
+            "const xs = [1, 2];
+",
+            "const f = (a: number) => a;
+",
+            "const [a, b] = [1, 2];
+",
+            "function f(a = 1) { return a; }
+",
+            "let n = 1;
+n += 2;
+",
+            "const t = `a${1}`;
+",
+        ] {
+            let c = codes(src);
+            assert!(c.contains(&"SELU0390".to_string()), "{src}: {c:?}");
+        }
     }
 }

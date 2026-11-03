@@ -6,11 +6,66 @@ pub struct Program {
     pub stmts: Vec<Stmt>,
 }
 
+/// A written type: `number`, `string?`, `number[]`, `Map<number, string>`,
+/// `[string, number]`, `{ x: number; label?: string }`,
+/// `(a: number) => string`. Names are resolved by the checker.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypeExpr {
+    pub kind: TypeExprKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TypeExprKind {
+    /// `number`, `Frame`, `Map<K, V>` (with `args`).
+    Named { name: String, args: Vec<TypeExpr> },
+    /// `T?`
+    Optional(Box<TypeExpr>),
+    /// `T[]`
+    Array(Box<TypeExpr>),
+    /// `[A, B]`
+    Tuple(Vec<TypeExpr>),
+    /// `{ a: T; b?: U }`
+    Object(Vec<FieldType>),
+    /// `(a: A, b: B) => R`
+    Function {
+        params: Vec<TypeExpr>,
+        ret: Box<TypeExpr>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldType {
+    pub name: String,
+    pub optional: bool,
+    pub ty: TypeExpr,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Param {
     pub name: String,
-    pub ty: Option<String>,
+    pub ty: Option<TypeExpr>,
+    /// `x = 5`: the value used when the caller passes nothing.
+    pub default: Option<Box<Expr>>,
+    /// `...rest`: collects the remaining arguments into an array.
+    pub rest: bool,
     pub span: Span,
+}
+
+/// The names a destructuring declaration binds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Pattern {
+    /// `[a, , b]`: `None` skips a position.
+    Array(Vec<Option<(String, Span)>>),
+    /// `{ a, b: renamed }`: (field, bound name, span of the name).
+    Object(Vec<(String, String, Span)>),
+}
+
+/// What a `for...of` loop binds on each turn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ForBinding {
+    Name(String, Span),
+    Pattern(Pattern),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -19,15 +74,21 @@ pub enum StmtKind {
         is_const: bool,
         name: String,
         name_span: Span,
-        ty: Option<String>,
+        ty: Option<TypeExpr>,
         init: Option<Box<Expr>>,
+    },
+    /// `const [a, b] = f();` or `const { x, y } = point;`
+    Destructure {
+        is_const: bool,
+        pattern: Pattern,
+        init: Box<Expr>,
     },
     FuncDecl {
         name: String,
         name_span: Span,
         params: Vec<Param>,
         /// The written return type, if any.
-        ret: Option<String>,
+        ret: Option<TypeExpr>,
         body: Vec<Stmt>,
     },
     OnHandler {
@@ -48,6 +109,30 @@ pub enum StmtKind {
         then_branch: Vec<Stmt>,
         else_branch: Option<Vec<Stmt>>,
     },
+    While {
+        cond: Box<Expr>,
+        body: Vec<Stmt>,
+    },
+    DoWhile {
+        body: Vec<Stmt>,
+        cond: Box<Expr>,
+    },
+    /// `for (init; cond; update) body`; every part may be missing.
+    For {
+        init: Option<Box<Stmt>>,
+        cond: Option<Box<Expr>>,
+        update: Option<Box<Expr>>,
+        body: Vec<Stmt>,
+    },
+    /// `for (const x of xs) body`
+    ForOf {
+        is_const: bool,
+        binding: ForBinding,
+        iter: Box<Expr>,
+        body: Vec<Stmt>,
+    },
+    Break,
+    Continue,
     Block(Vec<Stmt>),
     Expr(Box<Expr>),
 }
@@ -59,12 +144,42 @@ pub struct Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObjectField {
+    pub key: String,
+    pub key_span: Span,
+    pub value: Expr,
+}
+
+/// The body of an arrow or function expression.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FnBody {
+    Block(Vec<Stmt>),
+    /// `x => x + 1`
+    Expr(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExprKind {
     Number(String),
     Str(String),
     Bool(bool),
     Null,
     Ident(String),
+    /// A template string: `quasis` are the text parts around the `${}`
+    /// expressions, so `quasis.len() == exprs.len() + 1`. A template without
+    /// `${}` is a plain `Str`.
+    Template {
+        quasis: Vec<String>,
+        exprs: Vec<Expr>,
+    },
+    /// ``tag`...` ``, for example ``L`...` `` and ``log.warn`...` ``.
+    TaggedTemplate {
+        tag: Box<Expr>,
+        quasis: Vec<String>,
+        exprs: Vec<Expr>,
+    },
+    Array(Vec<Expr>),
+    Object(Vec<ObjectField>),
     Binary {
         op: String,
         left: Box<Expr>,
@@ -74,17 +189,58 @@ pub enum ExprKind {
         op: String,
         expr: Box<Expr>,
     },
+    /// `cond ? a : b`
+    Conditional {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        otherwise: Box<Expr>,
+    },
     Assign {
         target: Box<Expr>,
         value: Box<Expr>,
+    },
+    /// `x += v` and friends; `op` is the arithmetic operator (`+`).
+    CompoundAssign {
+        op: String,
+        target: Box<Expr>,
+        value: Box<Expr>,
+    },
+    /// `x++`, `x--` (`op` is `++` or `--`), only as a statement or a `for`
+    /// update.
+    Update {
+        op: String,
+        target: Box<Expr>,
     },
     Member {
         object: Box<Expr>,
         name: String,
     },
+    /// `a?.b`
+    OptionalMember {
+        object: Box<Expr>,
+        name: String,
+    },
+    /// `a[i]`
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
     Call {
         callee: Box<Expr>,
         args: Vec<Expr>,
+    },
+    /// `new Map<number, string>()`
+    New {
+        class: String,
+        type_args: Vec<TypeExpr>,
+        args: Vec<Expr>,
+    },
+    /// `(a, b) => a + b`, `x => { ... }`, `function (a) { ... }`.
+    Function {
+        params: Vec<Param>,
+        ret: Option<TypeExpr>,
+        body: FnBody,
+        is_arrow: bool,
     },
 }
 
