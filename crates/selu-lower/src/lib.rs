@@ -502,7 +502,15 @@ impl Lowerer<'_> {
         span: &Span,
         out: &mut LBlock,
     ) {
+        let scalar_api_call = matches!(&e.kind, ExprKind::Call { callee, .. }
+            if self.types.is_single_value(e.id) && matches!(self.types.get(callee.id),
+                Some(selu_check::Type::Function { multiple_results: true, .. } | selu_check::Type::Untyped)));
         let store = |value: LExpr| {
+            // A single assignment target already selects the first result.
+            let value = match value {
+                LExpr::Paren(inner) if scalar_api_call => *inner,
+                value => value,
+            };
             let kind = match (declare, var) {
                 (true, LExpr::Name(n)) => LStmtKind::Local(vec![n.clone()], vec![value]),
                 _ => LStmtKind::Assign(vec![var.clone()], vec![value]),
@@ -614,7 +622,8 @@ impl Lowerer<'_> {
             ExprKind::Call { callee, args } => {
                 let v = self.call(callee, args, pre);
                 if self.types.is_single_value(e.id)
-                    && (matches!(
+                    && matches!(v, LExpr::Call(..) | LExpr::Method(..))
+                    && matches!(
                         self.types.get(callee.id),
                         Some(
                             selu_check::Type::Function {
@@ -622,7 +631,7 @@ impl Lowerer<'_> {
                                 ..
                             } | selu_check::Type::Untyped
                         )
-                    ) || self.types.get(callee.id).is_none())
+                    )
                 {
                     LExpr::Paren(Box::new(v))
                 } else {

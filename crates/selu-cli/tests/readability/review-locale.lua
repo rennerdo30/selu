@@ -61,7 +61,7 @@ if not __selu_ns.__selu_wow then
 end
 local __selu_wow = __selu_ns.__selu_wow
 local function f()
-  return UnitName("player")
+  return (UnitName("player"))
 end
 emit = function()
   print(__selu_wow.text("{0}", "%s", (f())))
