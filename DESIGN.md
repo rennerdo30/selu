@@ -24,11 +24,44 @@ failures to compile time.
 
 ## 2. Targets
 
+A target is `flavour@version`. The version can be as exact as you want:
+
 ```
-selu build --target retail
-selu build --target classic-era
-selu build --target forever@1.60.1.69913
+selu build --target retail                 # newest retail build Selu knows
+selu build --target retail@12.0            # newest known 12.0.x build
+selu build --target retail@12.0.1          # newest known build of 12.0.1
+selu build --target retail@12.0.1.64914    # exactly this build
+selu build --target retail@installed       # whatever your installed client is
+selu build --target retail,classic-era     # several targets at once
 ```
+
+(Version numbers here are examples.)
+
+- **Flavours:** `retail`, `classic-era`, `classic` (the current progression
+  realm), `forever`, plus `-ptr` and `-beta` variants such as `retail-ptr`.
+- **Partial versions** resolve to the newest manifest Selu has that matches,
+  and the build prints which one it used: `target retail@12.0 -> 12.0.1.64914`.
+- **`@installed`** reads the build number from your local WoW install, so you
+  always check against the client you actually play.
+- **An unknown build** is an error that lists the closest known builds; Selu
+  never silently uses a different one.
+- `selu targets` lists every known flavour and build; `selu targets update`
+  downloads newer manifests.
+
+Normally you don't type it at all: the project file pins it, and `--target`
+only overrides it for one run.
+
+```json
+// selu.json
+{
+  "name": "MyAddon",
+  "targets": ["retail@12.0.1", "classic-era"]
+}
+```
+
+The interface number in the generated `.toc` (`## Interface: 120001`) comes
+from the target, so it can't drift from the API set the code was checked
+against.
 
 - A target is a **manifest**: the native functions with their signatures, the
   events and their payloads, FrameXML globals, templates and mixins, CVars,
