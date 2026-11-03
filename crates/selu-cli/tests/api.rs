@@ -708,3 +708,26 @@ fn review_region_factory_return_identities() {
         }
     }
 }
+
+#[test]
+fn review_scalar_conditions_and_index_keys() {
+    let lua = compile(
+        r#"const names = new Map<string, string>(); const name = names.get(UnitName("player")); if (UnitExists("player")) { print("exists"); } while (UnitExists("target")) { break; }"#,
+        "retail",
+    );
+    use selu_lower::lua::LExpr;
+    let key = LExpr::Paren(Box::new(LExpr::Call(
+        Box::new(LExpr::Name("f".into())),
+        vec![],
+    )));
+    let index = LExpr::Index(Box::new(LExpr::Name("names".into())), Box::new(key));
+    assert_eq!(selu_lower::lua::print_expr(&index), "names[f()]");
+    assert!(!lua.contains("if (UnitExists"), "{lua}");
+    assert!(!lua.contains("while (UnitExists"), "{lua}");
+}
+
+#[test]
+fn review_nonfinal_array_field_is_scalar() {
+    let lua = compile(r#"const values = [UnitName("player"), "end"];"#, "retail");
+    assert_eq!(lua, "local values = { UnitName(\"player\"), \"end\" }\n");
+}

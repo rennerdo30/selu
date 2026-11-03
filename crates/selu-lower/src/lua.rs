@@ -303,7 +303,7 @@ impl Printer {
                 self.line(indent, &format!("{t} = {v}"), sp);
             }
             LStmtKind::Call(e) => {
-                let text = self.expr(e, 0, indent);
+                let text = self.scalar_expr(e, indent);
                 self.line(indent, &text, sp);
             }
             LStmtKind::If(arms, otherwise) => {
@@ -326,7 +326,7 @@ impl Printer {
                     };
                     inner.stmt(only, 0);
                     let body_text = inner.out.trim_end().to_string();
-                    let c = self.expr(cond, 0, indent);
+                    let c = self.scalar_expr(cond, indent);
                     let text = format!("if {c} then {body_text} end");
                     if !body_text.contains('\n') && text.len() + indent * 2 <= 100 {
                         self.line(indent, &text, sp);
@@ -335,7 +335,7 @@ impl Printer {
                 }
                 for (i, (cond, body)) in arms.iter().enumerate() {
                     let kw = if i == 0 { "if" } else { "elseif" };
-                    let c = self.expr(cond, 0, indent);
+                    let c = self.scalar_expr(cond, indent);
                     self.line(indent, &format!("{kw} {c} then"), sp);
                     self.block(body, indent + 1);
                 }
@@ -346,7 +346,7 @@ impl Printer {
                 self.line(indent, "end", sp);
             }
             LStmtKind::While(cond, body) => {
-                let c = self.expr(cond, 0, indent);
+                let c = self.scalar_expr(cond, indent);
                 self.line(indent, &format!("while {c} do"), sp);
                 self.block(body, indent + 1);
                 self.line(indent, "end", sp);
@@ -354,7 +354,7 @@ impl Printer {
             LStmtKind::Repeat(body, cond) => {
                 self.line(indent, "repeat", sp);
                 self.block(body, indent + 1);
-                let c = self.expr(cond, 0, indent);
+                let c = self.scalar_expr(cond, indent);
                 self.line(indent, &format!("until {c}"), sp);
             }
             LStmtKind::NumFor {
@@ -366,14 +366,14 @@ impl Printer {
             } => {
                 let mut text = format!(
                     "for {var} = {}, {}",
-                    self.expr(start, 0, indent),
-                    self.expr(stop, 0, indent)
+                    self.scalar_expr(start, indent),
+                    self.scalar_expr(stop, indent)
                 );
                 // A step of 1 is Lua's default.
                 if let Some(step) = step
                     && *step != LExpr::Number("1".into())
                 {
-                    text.push_str(&format!(", {}", self.expr(step, 0, indent)));
+                    text.push_str(&format!(", {}", self.scalar_expr(step, indent)));
                 }
                 self.line(indent, &format!("{text} do"), sp);
                 self.block(body, indent + 1);
@@ -489,7 +489,11 @@ impl Printer {
             }
             LExpr::Field(obj, f) => format!("{}.{f}", self.prefix(obj, indent)),
             LExpr::Index(obj, i) => {
-                format!("{}[{}]", self.prefix(obj, indent), self.expr(i, 0, indent))
+                format!(
+                    "{}[{}]",
+                    self.prefix(obj, indent),
+                    self.scalar_expr(i, indent)
+                )
             }
             LExpr::Call(f, args) => {
                 format!("{}({})", self.prefix(f, indent), self.list(args, indent))
@@ -567,8 +571,15 @@ impl Printer {
                 }
                 let parts: Vec<String> = fields
                     .iter()
-                    .map(|f| match f {
-                        LField::Pos(v) => self.expr(v, 0, indent),
+                    .enumerate()
+                    .map(|(i, f)| match f {
+                        LField::Pos(v) => {
+                            if i + 1 < fields.len() {
+                                self.scalar_expr(v, indent)
+                            } else {
+                                self.expr(v, 0, indent)
+                            }
+                        }
                         LField::Named(k, v) if is_lua_name(k) && !is_lua_keyword(k) => {
                             format!("{k} = {}", self.scalar_expr(v, indent))
                         }
