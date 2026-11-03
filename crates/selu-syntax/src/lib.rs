@@ -312,9 +312,14 @@ mod new_syntax_tests {
                 assert!(default.is_none());
                 let n: Vec<_> = names
                     .iter()
-                    .map(|(e, l, _)| (e.as_str(), l.as_str()))
+                    .map(|(e, l, _, _)| (e.as_str(), l.as_str()))
                     .collect();
                 assert_eq!(n, [("a", "a"), ("b", "c")]);
+                let source = "import { a, b as c } from \"./other\";";
+                for (exported, local, local_span, exported_span) in &names {
+                    assert_eq!(&source[local_span.start..local_span.end], local);
+                    assert_eq!(&source[exported_span.start..exported_span.end], exported);
+                }
             }
             other => panic!("{other:?}"),
         }

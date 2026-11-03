@@ -1,0 +1,5 @@
+export let count = 0;
+export const greeting = "Hello from modules!";
+export function increment(): void {
+  count += 1;
+}

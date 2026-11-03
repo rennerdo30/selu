@@ -1,23 +1,112 @@
-//! Modules (package D1 in docs/WORK-PACKAGES.md): `import`, `export`, the
-//! shared addon table and the `.toc` order from the import graph.
-
-use crate::{Ctx, Type};
-use selu_syntax::Stmt;
-
+//! Cross-file signatures and module declaration checks.
+use crate::{Ctx, Kind, Type, err};
+use selu_diagnostics::Span;
+use selu_syntax::{Stmt, StmtKind};
+use std::collections::BTreeMap;
+#[derive(Debug, Clone)]
+pub struct ModuleExport {
+    pub ty: Type,
+    pub mutable: bool,
+}
+pub type ModuleExports = BTreeMap<String, ModuleExport>;
+#[derive(Debug, Default, Clone)]
+pub struct ModuleBindings {
+    pub imports: BTreeMap<String, ModuleExports>,
+    pub exports: ModuleExports,
+}
 impl Ctx<'_> {
-    /// Declares the names an `import` brings into the file's scope (called
-    /// while a block declares its names, before any statement is checked).
     pub(crate) fn declare_imports(&mut self, s: &Stmt) {
-        let _ = s;
+        if let StmtKind::Import {
+            names,
+            from,
+            default,
+            ..
+        } = &s.kind
+        {
+            if default.is_some() {
+                return;
+            }
+            for (remote, local, span, _) in names {
+                let ty = self
+                    .module
+                    .imports
+                    .get(from)
+                    .and_then(|m| m.get(remote))
+                    .map(|e| e.ty.clone())
+                    .unwrap_or(Type::Untyped);
+                self.declare(local, span, Kind::Import, ty.clone());
+                self.finish_decl(local, ty);
+            }
+        }
     }
-
     pub(crate) fn import_stmt(&mut self, s: &Stmt) {
-        self.unsupported("`import`", &s.span);
+        if let StmtKind::Import {
+            names,
+            from,
+            from_span,
+            default,
+        } = &s.kind
+        {
+            if default.is_some() {
+                self.unsupported("asset imports", &s.span);
+                return;
+            }
+            let Some(exports) = self.module.imports.get(from) else {
+                self.out.push(
+                    err(
+                        "SELU0400",
+                        format!("module `{from}` was not resolved"),
+                        from_span,
+                    )
+                    .with_help("build the project from src/main.selu"),
+                );
+                return;
+            };
+            for (remote, _, _, span) in names {
+                if !exports.contains_key(remote) {
+                    let help = exports
+                        .keys()
+                        .next()
+                        .map(|n| format!("did you mean `{n}`?"))
+                        .unwrap_or_else(|| "export the name from the imported module".into());
+                    self.out.push(
+                        err(
+                            "SELU0401",
+                            format!("module `{from}` does not export `{remote}`"),
+                            span,
+                        )
+                        .with_help(help),
+                    );
+                }
+            }
+        }
     }
-
-    /// `export <declaration>`; `inner` is the declaration.
-    pub(crate) fn export_stmt(&mut self, s: &Stmt, inner: &Stmt) {
-        let _ = inner;
-        let _: Type = self.unsupported("`export`", &s.span);
+    pub(crate) fn export_stmt(&mut self, _s: &Stmt, inner: &Stmt) {
+        self.stmt(inner);
+        let (name, mutable) = match &inner.kind {
+            StmtKind::VarDecl { name, is_const, .. } => (name, !is_const),
+            StmtKind::FuncDecl { name, .. } | StmtKind::Global { name, .. } => (name, false),
+            StmtKind::Class(c) => (&c.name, false),
+            _ => return,
+        };
+        if let Some(ty) = self.type_of(name) {
+            self.module
+                .exports
+                .insert(name.clone(), ModuleExport { ty, mutable });
+        }
+    }
+    pub(crate) fn module_write(&mut self, name: &str, span: &Span) -> bool {
+        if self
+            .lookup(name)
+            .is_some_and(|(_, b)| b.kind == Kind::Import)
+        {
+            self.out.push(
+                err("SELU0402", format!("import `{name}` is read-only"), span)
+                    .with_help("call an exported function to change the module's state"),
+            );
+            true
+        } else {
+            false
+        }
     }
 }

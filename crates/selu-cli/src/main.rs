@@ -172,26 +172,8 @@ fn build(
     })?;
     let project = project.addon;
 
-    let mut sources: Vec<PathBuf> = Vec::new();
     let src_dir = project_dir.join("src");
-    let scan_dir = if src_dir.is_dir() {
-        src_dir
-    } else {
-        project_dir.to_path_buf()
-    };
-    if let Ok(entries) = std::fs::read_dir(&scan_dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().is_some_and(|x| x == "selu") {
-                sources.push(p);
-            }
-        }
-    }
-    sources.sort();
-    if sources.is_empty() {
-        eprintln!("selu: no .selu files found in {}", scan_dir.display());
-        return Err(ExitCode::FAILURE);
-    }
+    let sources = project_sources(&src_dir)?;
 
     let target_strings: Vec<String> = match target_override {
         Some(t) => t
@@ -232,41 +214,47 @@ fn build(
         }
 
         let mut lua_files: Vec<String> = Vec::new();
-        for source_path in &sources {
-            let source = std::fs::read_to_string(source_path).map_err(|e| {
-                eprintln!("selu: cannot read {}: {e}", source_path.display());
-                ExitCode::FAILURE
-            })?;
-            let display_name = source_path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "main.selu".into());
-            let program =
-                selu_syntax::parse(&display_name, &source).map_err(|d| fail(&d, &source))?;
-            let checked = selu_check::check_program(&program, manifest);
+        let mut exports = std::collections::BTreeMap::new();
+        let mut compiled = Vec::new();
+        for module in &sources {
+            let mut imports = selu_check::ModuleBindings::default();
+            let mut lower_imports = std::collections::BTreeMap::new();
+            for (from, key) in &module.dependencies {
+                let signatures: selu_check::ModuleExports =
+                    exports.get(key).cloned().unwrap_or_default();
+                imports.imports.insert(from.clone(), signatures.clone());
+                lower_imports.insert(from.clone(), (key.clone(), signatures));
+            }
+            let (checked, signature) = selu_check::check_module(&module.program, manifest, imports);
             for d in &checked.diagnostics {
-                eprint!("{}", d.render(&source));
+                eprint!("{}", d.render(&module.source));
             }
             if checked.has_errors() {
                 return Err(ExitCode::FAILURE);
             }
-            let lowered = selu_lower::lower(&program, manifest, &checked.types);
-            let stem = source_path
-                .file_stem()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "main".into());
-            let lua_name = format!("{stem}.lua");
-            std::fs::write(out_dir.join(&lua_name), &lowered.lua).map_err(|e| {
-                eprintln!("selu: cannot write {lua_name}: {e}");
+            exports.insert(module.key.clone(), signature);
+            let bindings =
+                selu_lower::ModuleBindings::new(module.key.clone(), lower_imports, &module.program);
+            let lowered =
+                selu_lower::lower_module(&module.program, manifest, &checked.types, bindings);
+            compiled.push((module, lowered));
+        }
+        for (module, lowered) in compiled {
+            let lua_name = format!("{}.lua", module.key);
+            let output = out_dir.join(&lua_name);
+            let map = map_dir.join(format!("{lua_name}.map.json"));
+            for path in [&output, &map] {
+                std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| {
+                    eprintln!("selu: {e}");
+                    ExitCode::FAILURE
+                })?;
+            }
+            std::fs::write(output, lowered.lua).map_err(|e| {
+                eprintln!("selu: {e}");
                 ExitCode::FAILURE
             })?;
-            // Source maps stay outside the addon folder (SPEC-V1 section 6).
-            std::fs::write(
-                map_dir.join(format!("{stem}.lua.map.json")),
-                lowered.source_map.to_json(),
-            )
-            .map_err(|e| {
-                eprintln!("selu: cannot write source map: {e}");
+            std::fs::write(map, lowered.source_map.to_json()).map_err(|e| {
+                eprintln!("selu: {e}");
                 ExitCode::FAILURE
             })?;
             lua_files.push(lua_name);
@@ -279,4 +267,185 @@ fn build(
         println!("built {} -> {}", project.name, out_dir.display());
     }
     Ok(())
+}
+
+struct ModuleSource {
+    key: String,
+    source: String,
+    program: selu_syntax::Program,
+    dependencies: std::collections::BTreeMap<String, String>,
+}
+fn import_key(key: &str, from: &str) -> Option<String> {
+    if !from.starts_with("./") && !from.starts_with("../") {
+        return None;
+    }
+    if Path::new(from).extension().is_some() || from.contains('\\') {
+        return None;
+    }
+    let joined = Path::new(key).parent()?.join(from);
+    let mut parts = Vec::new();
+    for part in joined.components() {
+        match part {
+            std::path::Component::Normal(n) => parts.push(n.to_string_lossy().into_owned()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                parts.pop()?;
+            }
+            _ => return None,
+        }
+    }
+    Some(parts.join("/"))
+}
+fn project_sources(src: &Path) -> Result<Vec<ModuleSource>, ExitCode> {
+    use std::collections::{BTreeMap, BTreeSet};
+    fn visit(
+        key: &str,
+        src: &Path,
+        modules: &mut BTreeMap<String, ModuleSource>,
+        stack: &mut Vec<String>,
+    ) -> Result<(), ExitCode> {
+        if modules.contains_key(key) {
+            return Ok(());
+        }
+        let path = src.join(format!("{key}.selu"));
+        let source = std::fs::read_to_string(&path).map_err(|e| {
+            eprintln!("SELU0400: cannot read {}: {e}", path.display());
+            ExitCode::FAILURE
+        })?;
+        let program =
+            selu_syntax::parse(&format!("{key}.selu"), &source).map_err(|d| fail(&d, &source))?;
+        stack.push(key.into());
+        let mut dependencies = BTreeMap::new();
+        for s in &program.stmts {
+            if let selu_syntax::StmtKind::Import {
+                from,
+                from_span,
+                default,
+                ..
+            } = &s.kind
+            {
+                if default.is_some() {
+                    return Err(fail(
+                        &Diagnostic::error("SELU0390", "asset imports are not supported yet")
+                            .with_span(from_span.clone()),
+                        &source,
+                    ));
+                }
+                let dep = import_key(key, from).ok_or_else(|| {
+                    fail(
+                        &Diagnostic::error(
+                            "SELU0400",
+                            "module paths must be relative and omit the extension",
+                        )
+                        .with_span(from_span.clone())
+                        .with_help("use a path such as ./other"),
+                        &source,
+                    )
+                })?;
+                if !src.join(format!("{dep}.selu")).is_file() {
+                    return Err(fail(
+                        &Diagnostic::error("SELU0400", format!("module `{from}` does not exist"))
+                            .with_span(from_span.clone())
+                            .with_help("check the relative module path"),
+                        &source,
+                    ));
+                }
+                if let Some(at) = stack.iter().position(|n| n == &dep) {
+                    let mut cycle = stack[at..].to_vec();
+                    cycle.push(dep.clone());
+                    let message = format!("import cycle: {}", cycle.join(" -> "));
+                    eprint!(
+                        "{}",
+                        Diagnostic::error("SELU0403", &message)
+                            .with_span(from_span.clone())
+                            .render(&source)
+                    );
+                    for pair in cycle.windows(2).take(cycle.len() - 2) {
+                        let text = std::fs::read_to_string(src.join(format!("{}.selu", pair[0])))
+                            .map_err(|_| ExitCode::FAILURE)?;
+                        let p = selu_syntax::parse(&format!("{}.selu", pair[0]), &text)
+                            .map_err(|d| fail(&d, &text))?;
+                        for s in p.stmts {
+                            if let selu_syntax::StmtKind::Import {
+                                from, from_span, ..
+                            } = s.kind
+                                && import_key(&pair[0], &from).as_ref() == Some(&pair[1])
+                            {
+                                eprint!(
+                                    "{}",
+                                    Diagnostic::error("SELU0403", &message)
+                                        .with_span(from_span)
+                                        .render(&text)
+                                );
+                            }
+                        }
+                    }
+                    return Err(ExitCode::FAILURE);
+                }
+                visit(&dep, src, modules, stack)?;
+                dependencies.insert(from.clone(), dep);
+            }
+        }
+        stack.pop();
+        modules.insert(
+            key.into(),
+            ModuleSource {
+                key: key.into(),
+                source,
+                program,
+                dependencies,
+            },
+        );
+        Ok(())
+    }
+    let mut modules = BTreeMap::new();
+    visit("main", src, &mut modules, &mut Vec::new())?;
+    fn scan(
+        dir: &Path,
+        src: &Path,
+        modules: &BTreeMap<String, ModuleSource>,
+    ) -> std::io::Result<()> {
+        let mut entries = std::fs::read_dir(dir)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|e| e.path());
+        for entry in entries {
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                scan(&path, src, modules)?;
+            } else if path.extension().is_some_and(|e| e == "selu") {
+                let key = path
+                    .strip_prefix(src)
+                    .unwrap()
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if !modules.contains_key(&key) {
+                    eprintln!(
+                        "{}",
+                        Diagnostic::warning(
+                            "SELU0404",
+                            format!("{} is not reachable from src/main.selu", path.display())
+                        )
+                        .render("")
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+    scan(src, src, &modules).map_err(|e| {
+        eprintln!("selu: {e}");
+        ExitCode::FAILURE
+    })?;
+    let mut done = BTreeSet::new();
+    let mut ordered = Vec::new();
+    while !modules.is_empty() {
+        let key = modules
+            .iter()
+            .find(|(_, m)| m.dependencies.values().all(|d| done.contains(d)))
+            .map(|(k, _)| k.clone())
+            .expect("acyclic graph");
+        done.insert(key.clone());
+        ordered.push(modules.remove(&key).unwrap());
+    }
+    Ok(ordered)
 }

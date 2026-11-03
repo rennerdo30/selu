@@ -139,8 +139,8 @@ pub enum StmtKind {
     Expr(Box<Expr>),
     /// `import { a, b as c } from "./other";` or `import logo from "../x.svg";`
     Import {
-        /// `{ a, b as c }`: (exported name, local name, span of the local name).
-        names: Vec<(String, String, Span)>,
+        /// `{ a, b as c }`: (exported name, local name, local-name span, exported-name span).
+        names: Vec<(String, String, Span, Span)>,
         /// `import logo from ...`: the local name and its span.
         default: Option<(String, Span)>,
         from: String,

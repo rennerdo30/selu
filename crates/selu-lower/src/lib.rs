@@ -23,6 +23,7 @@ mod data;
 mod functions;
 mod loops;
 mod modules;
+pub use modules::ModuleBindings;
 mod wow;
 
 use lua::{BinOp, LBlock, LExpr, LFunction, LStmt, LStmtKind, UnOp, bin, name, not};
@@ -82,12 +83,67 @@ end"#;
 pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lowered {
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
     let mut l = Lowerer {
+        module: ModuleBindings::default(),
         known: &known,
         types,
         temps: 0,
         loops: Vec::new(),
     };
     let mut out: LBlock = Vec::new();
+    let has_handlers = program
+        .stmts
+        .iter()
+        .any(|s| matches!(s.kind, StmtKind::OnHandler { .. }));
+    if has_handlers {
+        out.push(raw(EVENT_PROLOGUE));
+        out.push(raw(""));
+    }
+    out.extend(l.block(&program.stmts));
+    let printed = lua::print_block(&out);
+    Lowered {
+        lua: printed.text,
+        source_map: SourceMap {
+            entries: printed
+                .lines
+                .into_iter()
+                .map(|(generated_line, span)| SourceMapEntry {
+                    generated_line,
+                    span,
+                })
+                .collect(),
+        },
+    }
+}
+
+pub fn lower_module(
+    program: &Program,
+    manifest: &Manifest,
+    types: &TypeTable,
+    module: ModuleBindings,
+) -> Lowered {
+    if !program
+        .stmts
+        .iter()
+        .any(|s| matches!(s.kind, StmtKind::Import { .. } | StmtKind::Export(_)))
+    {
+        return lower(program, manifest, types);
+    }
+    let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
+    let mut l = Lowerer {
+        module,
+        known: &known,
+        types,
+        temps: 0,
+        loops: Vec::new(),
+    };
+    let mut out: LBlock = vec![LStmt {
+        kind: LStmtKind::Local(
+            vec!["ADDON".into(), "__selu_ns".into()],
+            vec![LExpr::Vararg],
+        ),
+        span: None,
+    }];
+    l.module_prologue(&mut out);
     let has_handlers = program
         .stmts
         .iter()
@@ -121,6 +177,7 @@ fn raw(text: &str) -> LStmt {
 }
 
 pub(crate) struct Lowerer<'a> {
+    module: ModuleBindings,
     loops: Vec<loops::LoopCtx>,
     known: &'a HashSet<String>,
     types: &'a TypeTable,
@@ -469,7 +526,7 @@ impl Lowerer<'_> {
             ExprKind::Str(s) => LExpr::Str(s.clone()),
             ExprKind::Bool(b) => LExpr::Bool(*b),
             ExprKind::Null => LExpr::Nil,
-            ExprKind::Ident(n) => name(n),
+            ExprKind::Ident(n) => self.module_binding(e).unwrap_or_else(|| name(n)),
             ExprKind::Unary { op, expr } => {
                 let v = self.expr(expr, pre);
                 match op.as_str() {
@@ -655,6 +712,10 @@ fn used_before_declaration(stmts: &[Stmt]) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut early = Vec::new();
     for s in stmts {
+        let s = match &s.kind {
+            StmtKind::Export(inner) => inner.as_ref(),
+            _ => s,
+        };
         visit::idents_in_stmt(s, &mut |n| {
             seen.insert(n.to_string());
         });
@@ -672,6 +733,7 @@ fn used_before_declaration(stmts: &[Stmt]) -> Vec<String> {
 
 fn declaration_names(s: &Stmt) -> Vec<String> {
     match &s.kind {
+        StmtKind::Export(inner) => declaration_names(inner),
         StmtKind::VarDecl { name, .. } | StmtKind::FuncDecl { name, .. } => vec![name.clone()],
         StmtKind::Destructure { pattern, .. } => match pattern {
             selu_syntax::Pattern::Array(items) => {

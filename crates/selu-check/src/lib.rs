@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 mod classes;
 mod modules;
+pub use modules::{ModuleBindings, ModuleExport, ModuleExports};
 mod rules;
 // One file per language area. The central `stmt`/`expr_inner` matches only
 // dispatch; each area's checks live in its own file (docs/WORK-PACKAGES.md).
@@ -54,6 +55,7 @@ pub fn check(program: &Program, manifest: &Manifest) -> Vec<Diagnostic> {
 pub fn check_program(program: &Program, manifest: &Manifest) -> Checked {
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
+        module: ModuleBindings::default(),
         manifest,
         out: &mut out,
         scopes: Vec::new(),
@@ -71,6 +73,36 @@ pub fn check_program(program: &Program, manifest: &Manifest) -> Checked {
     }
 }
 
+/// Check one module against already checked dependencies.
+pub fn check_module(
+    program: &Program,
+    manifest: &Manifest,
+    imports: ModuleBindings,
+) -> (Checked, ModuleExports) {
+    let mut out = rules::check_rules(program);
+    let mut ctx = Ctx {
+        module: imports,
+        manifest,
+        out: &mut out,
+        scopes: Vec::new(),
+        fn_depth: 0,
+        returns: Vec::new(),
+        loops: Vec::new(),
+        function_expected: Vec::new(),
+        types: TypeTable::default(),
+    };
+    ctx.block(&program.stmts, &[], Vec::new());
+    let exports = ctx.module.exports;
+    let types = ctx.types;
+    (
+        Checked {
+            diagnostics: out,
+            types,
+        },
+        exports,
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Const,
@@ -78,6 +110,7 @@ enum Kind {
     Function,
     Param,
     Global,
+    Import,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +140,7 @@ struct Scope {
 type Narrowings = Vec<(String, Type)>;
 
 struct Ctx<'a> {
+    module: ModuleBindings,
     loops: Vec<loops::LoopCtx>,
     manifest: &'a Manifest,
     out: &'a mut Vec<Diagnostic>,
@@ -631,6 +665,9 @@ impl Ctx<'_> {
 
     /// `name = value;` where the value has type `value`.
     fn write(&mut self, name: &str, span: &Span, value: &Type) {
+        if self.module_write(name, span) {
+            return;
+        }
         let Some((at, b)) = self.lookup(name).map(|(i, b)| (i, b.clone())) else {
             if self.manifest.has_global(name) {
                 self.out.push(
@@ -674,7 +711,7 @@ impl Ctx<'_> {
                 );
                 return;
             }
-            Kind::Let | Kind::Param | Kind::Global => {}
+            Kind::Let | Kind::Param | Kind::Global | Kind::Import => {}
         }
         if !value.assignable_to(&b.ty) {
             self.out.push(err(
@@ -1495,12 +1532,19 @@ mod tests {
     }
 
     #[test]
+    fn named_import_without_context_has_path_span() {
+        let source = "import { a } from \"./other\";";
+        let program = selu_syntax::parse("test.selu", source).unwrap();
+        let diagnostics = check(&program, &manifest());
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "SELU0400");
+        let span = diagnostics[0].span.as_ref().unwrap();
+        assert_eq!(&source[span.start..span.end], "\"./other\"");
+    }
+
+    #[test]
     fn constructs_still_being_built_are_reported_not_lowered() {
         for src in [
-            "import { a } from \"./other\";
-",
-            "export function f() {}
-",
             "class A {}
 ",
             "const t = L`hello`;

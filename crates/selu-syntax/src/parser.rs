@@ -546,9 +546,9 @@ impl Parser {
                     self.bump();
                     self.ident("the local name after `as`")?
                 } else {
-                    (exported.clone(), exported_span)
+                    (exported.clone(), exported_span.clone())
                 };
-                names.push((exported, local, span));
+                names.push((exported, local, span, exported_span));
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
