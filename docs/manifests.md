@@ -11,7 +11,7 @@ The ref may be any local ref or commit. For reproducibility use immutable hashes
 as above: even remote-tracking refs move, and local branches may be stale. The generator prints the resolved commit and uses that immutable
 hash for every subsequent read. Version and build are parsed from the commit
 subject `version (build)`. `git log` and `git archive` read the clone. Archives
-are owned temporary files under `E:/AgentData/claude_temp/m2` and are removed
+are owned temporary files under the system temp folder (`std::env::temp_dir()`) and are removed
 on completion; archive entries are streamed without extracting addon source.
 The output filename should be the printed build under the flavour directory.
 The generator never fetches, checks out, or writes to the clone.

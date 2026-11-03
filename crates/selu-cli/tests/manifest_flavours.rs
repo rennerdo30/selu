@@ -76,8 +76,7 @@ impl Drop for Cleanup {
 }
 #[test]
 fn every_example_builds_for_every_client() {
-    let temp = PathBuf::from("E:/AgentData/claude_temp/m2")
-        .join(format!("examples-{}", std::process::id()));
+    let temp = std::env::temp_dir().join(format!("selu-flavour-examples-{}", std::process::id()));
     assert!(!temp.exists());
     std::fs::create_dir_all(&temp).unwrap();
     let _cleanup = Cleanup(temp.clone());

@@ -70,8 +70,8 @@ fn run() -> Result<()> {
     let mut m: Manifest = serde_json::from_value(
         serde_json::json!({"flavour":flavour,"build":build,"interface":0,"luaDialects":["lua51"],"source":{"commit":commit,"version":version,"interfaceSource":""}}),
     )?;
-    let temp = std::path::PathBuf::from("E:/AgentData/claude_temp/m2").join(format!(
-        "generator-{}-{}",
+    let temp = std::env::temp_dir().join(format!(
+        "selu-manifest-gen-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
