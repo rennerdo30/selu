@@ -146,3 +146,13 @@ on PLAYER_LOGIN() {
 "#);
     assert_eq!(out, ["12", "abc", "false", "true", "y", "else-if", "ypq"]);
 }
+
+#[test]
+fn call_snapshots_name_before_argument_pre() {
+    assert_eq!(
+        run(
+            "let x = 1; function g(): number? { x = 9; return 2; } function f(a: number, b: number) { print(a, b); } f(x, g() ?? 0);"
+        ),
+        ["1\t2"]
+    );
+}

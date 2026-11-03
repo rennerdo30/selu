@@ -307,6 +307,10 @@ impl Lowerer<'_> {
             _ => {
                 let mut pre = Vec::new();
                 let v = self.expr(e, &mut pre);
+                if v.is_pure() {
+                    out.extend(pre);
+                    return;
+                }
                 // Lua only allows calls as statements.
                 let kind = match v {
                     LExpr::Call(..) | LExpr::Method(..) => LStmtKind::Call(v),
@@ -406,7 +410,7 @@ impl Lowerer<'_> {
             let v = self.expr(e, &mut own);
             if !own.is_empty() {
                 for prev in vals.iter_mut() {
-                    if !prev.is_pure() {
+                    if !is_constant(prev) {
                         let t = self.hold(prev.clone(), &e.span, pre);
                         *prev = name(&t);
                     }
@@ -575,6 +579,14 @@ impl Lowerer<'_> {
             }
         }
     }
+}
+
+/// Only literals remain unchanged across another operand's pre-statements.
+fn is_constant(e: &LExpr) -> bool {
+    matches!(
+        e,
+        LExpr::Nil | LExpr::Bool(_) | LExpr::Number(_) | LExpr::Str(_)
+    )
 }
 
 /// Literals that are never `false` or `nil`.
