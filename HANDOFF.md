@@ -28,7 +28,12 @@
    with an inline arrow copy receiver and callback into extra temporaries
    instead of inlining the body; `m.set(k, (m.get(k) ?? 0) + n)` produces
    eight temporaries; `x += a.b * c` wraps a field read in temporaries;
-   `return (f()), x` has brackets Lua doesn't need. Each fix gets a test on
+   `return (f()), x` has brackets Lua doesn't need.
+   From round 2: the per-addon runtimes sit in the addon table under the
+   keys `[true]` (events) and `[false]` (log/L/commands), which is
+   collision-free but cryptic (use named reserved keys); log and `L` text
+   without placeholders still goes through `string.format`, and `tostring`
+   wraps values that are already strings. Each fix gets a test on
    the exact output.
 3. Owner wish (2026-11-04): more examples. Every package adds one with an
    `expected.txt` (`examples/README.md`); add `examples/modules` (from D1),
