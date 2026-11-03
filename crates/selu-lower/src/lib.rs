@@ -245,9 +245,9 @@ impl Lowerer<'_> {
             StmtKind::While { .. }
             | StmtKind::DoWhile { .. }
             | StmtKind::For { .. }
-            | StmtKind::ForOf { .. }
             | StmtKind::Break
             | StmtKind::Continue => self.loop_stmt(s, out),
+            StmtKind::ForOf { .. } => self.for_of(s, out),
             StmtKind::Destructure { .. } => self.destructure(s, forward, out),
         }
     }
@@ -324,7 +324,7 @@ impl Lowerer<'_> {
             ExprKind::Member {
                 object,
                 name: field,
-            } => LExpr::Field(Box::new(self.expr(object, pre)), field.clone()),
+            } => self.data_field(object, field, pre),
             _ => self.data_target(target, pre),
         }
     }
@@ -446,7 +446,7 @@ impl Lowerer<'_> {
             ExprKind::Member {
                 object,
                 name: field,
-            } => LExpr::Field(Box::new(self.expr(object, pre)), field.clone()),
+            } => self.data_field(object, field, pre),
             ExprKind::Call { callee, args } => self.call(callee, args, pre),
             ExprKind::Assign { .. } => {
                 unreachable!("the checker allows assignments only as statements")
@@ -539,6 +539,9 @@ impl Lowerer<'_> {
     }
 
     fn call(&mut self, callee: &Expr, args: &[Expr], pre: &mut LBlock) -> LExpr {
+        if let Some(v) = self.data_call(callee, args, pre) {
+            return v;
+        }
         let mut all: Vec<&Expr> = Vec::new();
         match &callee.kind {
             // Method call: `a.B(x)` -> `a:B(x)`, unless the whole dotted name

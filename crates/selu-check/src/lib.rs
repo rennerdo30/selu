@@ -486,9 +486,9 @@ impl Ctx<'_> {
             StmtKind::While { .. }
             | StmtKind::DoWhile { .. }
             | StmtKind::For { .. }
-            | StmtKind::ForOf { .. }
             | StmtKind::Break
             | StmtKind::Continue => self.loop_stmt(s),
+            StmtKind::ForOf { .. } => self.for_of(s),
             StmtKind::Destructure { .. } => self.destructure(s),
             StmtKind::Expr(e) => {
                 // A statement may be a call returning nothing.
@@ -533,7 +533,7 @@ impl Ctx<'_> {
                 }
             };
         };
-        let t = self.value_expected(init, written.as_ref());
+        let t = self.data_initializer(init, written.as_ref());
         match written {
             Some(w) => {
                 if !t.assignable_to(&w) {
@@ -833,9 +833,7 @@ impl Ctx<'_> {
                 let t = self.value(value);
                 match &target.kind {
                     ExprKind::Ident(name) => self.write(name, &target.span, &t),
-                    _ => {
-                        self.expr(target);
-                    }
+                    _ => self.data_write(target, &t),
                 }
                 Type::Void
             }
@@ -868,6 +866,9 @@ impl Ctx<'_> {
     }
 
     fn member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
+        if let Some(t) = self.data_member(t, name, object) {
+            return t;
+        }
         match t {
             Type::Untyped | Type::Error => Type::Untyped,
             Type::Optional(_) | Type::Null => {
@@ -1040,6 +1041,9 @@ impl Ctx<'_> {
     }
 
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+        if let Some(t) = self.data_call(e, callee, args) {
+            return t;
+        }
         let callee_type = match &callee.kind {
             // `foo(...)`: a declared name, or a function the target has.
             ExprKind::Ident(name) => match self.lookup(name).map(|(_, b)| b.clone()) {

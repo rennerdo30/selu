@@ -1,12 +1,390 @@
-//! Data (package B in docs/WORK-PACKAGES.md).
-//!
-//! Arrays, objects, indexing, `?.`, `new Map/Set/WeakMap`, template strings.
-
-use crate::{Ctx, Type};
-use selu_syntax::Expr;
+//! Data expressions and their type rules.
+use crate::{Ctx, Type, err, types};
+use selu_syntax::{Expr, ExprKind};
 
 impl Ctx<'_> {
     pub(crate) fn data_expr(&mut self, e: &Expr) -> Type {
-        self.unsupported("this expression", &e.span)
+        match &e.kind {
+            ExprKind::Array(items) => {
+                if items.is_empty() {
+                    self.out.push(
+                        err("SELU0351", "an empty array needs a written type", &e.span)
+                            .with_help("write `const xs: number[] = [];`"),
+                    );
+                }
+                let mut ty = Type::Untyped;
+                for (i, item) in items.iter().enumerate() {
+                    let t = self.value(item);
+                    if t.is_optional() {
+                        self.out.push(
+                            err("SELU0350", "array elements cannot be null", &item.span)
+                                .with_help("use a Map for gaps"),
+                        );
+                    }
+                    if i == 0 {
+                        ty = t;
+                    } else if !t.same(&ty) {
+                        self.out.push(
+                            err(
+                                "SELU0351",
+                                "array elements must have the same type",
+                                &item.span,
+                            )
+                            .with_help("use an object for different kinds of values"),
+                        );
+                    }
+                }
+                Type::Array(Box::new(ty))
+            }
+            ExprKind::Object(fields) => Type::Object(
+                fields
+                    .iter()
+                    .map(|f| (f.key.clone(), self.value(&f.value)))
+                    .collect(),
+            ),
+            ExprKind::Index { object, index } => {
+                let t = self.value(object);
+                let i = self.value(index);
+                if i != Type::Number && !i.is_open() {
+                    self.out.push(
+                        err("SELU0352", "an array index must be a number", &index.span)
+                            .with_help("use a 0-based number index"),
+                    );
+                }
+                match t {
+                    Type::Array(t) => *t,
+                    Type::Untyped | Type::Error => Type::Untyped,
+                    _ => {
+                        self.out.push(
+                            err("SELU0352", "only arrays can be indexed", &object.span)
+                                .with_help("use get(key) for a Map"),
+                        );
+                        Type::Error
+                    }
+                }
+            }
+            ExprKind::OptionalMember { object, name } => {
+                let t = self.value(object).non_null();
+                if t == Type::Null {
+                    Type::Null
+                } else {
+                    Type::optional(self.member(&t, name, object))
+                }
+            }
+            ExprKind::Template { exprs, .. } => {
+                for x in exprs {
+                    let t = self.value(x);
+                    if !matches!(
+                        t,
+                        Type::Number | Type::String | Type::Boolean | Type::Error | Type::Untyped
+                    ) {
+                        self.out.push(
+                            err(
+                                "SELU0353",
+                                "template interpolation needs a non-null string, number or boolean",
+                                &x.span,
+                            )
+                            .with_help("use `?? \"\"` or compare the value first"),
+                        );
+                    }
+                }
+                Type::String
+            }
+            ExprKind::New {
+                class,
+                type_args,
+                args,
+            } => {
+                for a in args {
+                    self.value(a);
+                }
+                let ts: Vec<_> = type_args
+                    .iter()
+                    .map(|t| types::resolve(t, self.out))
+                    .collect();
+                if !args.is_empty()
+                    || !matches!(
+                        (class.as_str(), ts.len()),
+                        ("Set", 1) | ("Map" | "WeakMap", 2)
+                    )
+                {
+                    self.out.push(
+                        err(
+                            "SELU0354",
+                            "collection construction needs type arguments and no value arguments",
+                            &e.span,
+                        )
+                        .with_help(
+                            "write `new Map<K, V>()`, `new Set<T>()` or `new WeakMap<K, V>()`",
+                        ),
+                    );
+                    return Type::Error;
+                }
+                if ts.iter().any(Type::is_optional) {
+                    self.out.push(
+                        err(
+                            "SELU0350",
+                            "collection keys and values cannot be null",
+                            &e.span,
+                        )
+                        .with_help("delete entries instead of storing null"),
+                    );
+                }
+                match class.as_str() {
+                    "Set" => Type::Set(Box::new(ts[0].clone())),
+                    "Map" => Type::Map(Box::new(ts[0].clone()), Box::new(ts[1].clone())),
+                    _ => Type::WeakMap(Box::new(ts[0].clone()), Box::new(ts[1].clone())),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Ctx<'_> {
+    pub(crate) fn data_initializer(&mut self, e: &Expr, expected: Option<&Type>) -> Type {
+        if matches!(&e.kind, ExprKind::Array(v) if v.is_empty()) {
+            if let Some(Type::Array(t)) = expected {
+                let ty = Type::Array(t.clone());
+                self.types.set(e.id, ty.clone());
+                return ty;
+            }
+            self.out.push(
+                err(
+                    "SELU0351",
+                    "an empty array needs a written array type",
+                    &e.span,
+                )
+                .with_help("write `const xs: number[] = [];`"),
+            );
+            return Type::Error;
+        }
+        self.value(e)
+    }
+
+    pub(crate) fn data_write(&mut self, target: &Expr, value: &Type) {
+        if let ExprKind::Member { object, name } = &target.kind
+            && name == "length"
+            && matches!(self.value(object), Type::Array(_) | Type::String)
+        {
+            self.out.push(
+                err("SELU0355", "length is read-only", &target.span)
+                    .with_help("use array methods to change its length"),
+            );
+            return;
+        }
+        let ty = self.expr(target);
+        if !value.assignable_to(&ty) {
+            self.out.push(
+                err(
+                    "SELU0355",
+                    format!("cannot store `{value}` in `{ty}`"),
+                    &target.span,
+                )
+                .with_help("assign a value of the field or element type"),
+            );
+        }
+    }
+
+    pub(crate) fn data_member(&mut self, t: &Type, field: &str, e: &Expr) -> Option<Type> {
+        match t {
+            Type::Object(fields) => Some(fields.get(field).cloned().unwrap_or_else(|| {
+                self.out.push(err(
+                    "SELU0330",
+                    format!("this object has no field `{field}`"),
+                    &e.span,
+                ));
+                Type::Error
+            })),
+            Type::Array(_) | Type::String if field == "length" => Some(Type::Number),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn data_call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Option<Type> {
+        let ExprKind::Member { object, name } = &callee.kind else {
+            return None;
+        };
+        let math =
+            matches!(&object.kind, ExprKind::Ident(n) if n == "Math" && self.lookup(n).is_none());
+        let t = if math {
+            Type::Number
+        } else {
+            // Inspect declared receiver types without checking it twice on the fallback path.
+            match &object.kind {
+                ExprKind::Ident(n) => self.type_of(n)?,
+                _ => self.value(object),
+            }
+        };
+        let (params, ret) = if math {
+            match name.as_str() {
+                "floor" | "ceil" | "round" | "abs" => (vec![Type::Number], Type::Number),
+                "clamp" => (vec![Type::Number; 3], Type::Number),
+                "min" | "max" if !args.is_empty() => (vec![Type::Number; args.len()], Type::Number),
+                "random" => (vec![], Type::Number),
+                _ => {
+                    self.unsupported("this Math operation", &e.span);
+                    return Some(Type::Error);
+                }
+            }
+        } else {
+            match &t {
+                Type::Array(item) => match name.as_str() {
+                    "push" => (vec![(**item).clone()], Type::Void),
+                    "pop" => (vec![], Type::optional((**item).clone())),
+                    "insert" => (vec![Type::Number, (**item).clone()], Type::Void),
+                    "removeAt" => (vec![Type::Number], Type::optional((**item).clone())),
+                    "indexOf" => (vec![(**item).clone()], Type::Number),
+                    "includes" => (vec![(**item).clone()], Type::Boolean),
+                    "slice" => (vec![Type::Number; args.len()], t.clone()),
+                    "join" => (
+                        if args.is_empty() {
+                            vec![]
+                        } else {
+                            vec![Type::String]
+                        },
+                        Type::String,
+                    ),
+                    "sort" if args.is_empty() => (vec![], Type::Void),
+                    "forEach" | "map" | "filter" | "find" | "some" | "every" | "reduce"
+                    | "sort" => {
+                        return Some(
+                            self.unsupported("callback array methods pending package C", &e.span),
+                        );
+                    }
+                    _ => return Some(self.unsupported("this array method", &e.span)),
+                },
+                Type::String => match name.as_str() {
+                    "upper" | "lower" | "trim" => (vec![], Type::String),
+                    "slice" => (vec![Type::Number; args.len()], Type::String),
+                    "includes" | "startsWith" | "endsWith" => (vec![Type::String], Type::Boolean),
+                    "split" => (vec![Type::String], Type::Array(Box::new(Type::String))),
+                    _ => return Some(self.unsupported("this string method", &e.span)),
+                },
+                Type::Map(k, v) | Type::WeakMap(k, v) => match name.as_str() {
+                    "get" => (vec![(**k).clone()], Type::optional((**v).clone())),
+                    "set" => (vec![(**k).clone(), (**v).clone()], Type::Void),
+                    "has" | "delete" => (vec![(**k).clone()], Type::Boolean),
+                    "count" => (vec![], Type::Number),
+                    "clear" => (vec![], Type::Void),
+                    _ => return Some(self.unsupported("this map method", &e.span)),
+                },
+                Type::Set(item) => match name.as_str() {
+                    "add" => (vec![(**item).clone()], Type::Void),
+                    "has" | "delete" => (vec![(**item).clone()], Type::Boolean),
+                    "count" => (vec![], Type::Number),
+                    "clear" => (vec![], Type::Void),
+                    _ => return Some(self.unsupported("this set method", &e.span)),
+                },
+                _ => return None,
+            }
+        };
+        if let Type::Array(item) = &t {
+            let allowed = match name.as_str() {
+                "sort" => matches!(**item, Type::Number | Type::String),
+                "join" => matches!(**item, Type::Number | Type::String | Type::Boolean),
+                _ => true,
+            };
+            if !allowed {
+                self.out.push(
+                    err(
+                        "SELU0355",
+                        "this operation needs scalar array elements",
+                        &e.span,
+                    )
+                    .with_help(
+                        "use numbers or strings for sort, or numbers, strings or booleans for join",
+                    ),
+                );
+            }
+        }
+        if !math {
+            self.value(object);
+        }
+        if matches!(name.as_str(), "slice") && (args.is_empty() || args.len() > 2) {
+            self.out.push(
+                err("SELU0356", "slice needs one or two indices", &e.span)
+                    .with_help("write slice(from, to)"),
+            );
+        }
+        if params.len() != args.len() {
+            self.out.push(
+                err(
+                    "SELU0356",
+                    format!("this method needs {} arguments", params.len()),
+                    &e.span,
+                )
+                .with_help("check the method arguments"),
+            );
+        }
+        for (arg, want) in args.iter().zip(&params) {
+            let got = self.value(arg);
+            if !got.assignable_to(want) {
+                self.out.push(
+                    err(
+                        "SELU0355",
+                        format!("expected `{want}`, got `{got}`"),
+                        &arg.span,
+                    )
+                    .with_help("pass a value of the expected type"),
+                );
+            }
+        }
+        Some(ret)
+    }
+
+    pub(crate) fn for_of(&mut self, s: &selu_syntax::Stmt) {
+        use selu_syntax::{ForBinding, Pattern, StmtKind};
+        let StmtKind::ForOf {
+            is_const,
+            binding,
+            iter,
+            body,
+        } = &s.kind
+        else {
+            unreachable!()
+        };
+        let t = self.value(iter);
+        let bindings = match (&t, binding) {
+            (Type::Array(t) | Type::Set(t), ForBinding::Name(n, sp)) => {
+                vec![(n.clone(), sp.clone(), (**t).clone())]
+            }
+            (Type::Map(k, v) | Type::WeakMap(k, v), ForBinding::Pattern(Pattern::Array(items)))
+                if items.len() == 2 =>
+            {
+                items
+                    .iter()
+                    .zip([&**k, &**v])
+                    .filter_map(|(i, t)| i.as_ref().map(|(n, s)| (n.clone(), s.clone(), t.clone())))
+                    .collect()
+            }
+            _ => {
+                self.out.push(
+                    err(
+                        "SELU0357",
+                        "iteration needs an array or set value, or a map key/value pair",
+                        &iter.span,
+                    )
+                    .with_help("use `x of xs` or `[key, value] of map`"),
+                );
+                return;
+            }
+        };
+        self.scopes.push(crate::Scope::default());
+        for (n, sp, t) in bindings {
+            self.declare(
+                &n,
+                &sp,
+                if *is_const {
+                    crate::Kind::Const
+                } else {
+                    crate::Kind::Let
+                },
+                t.clone(),
+            );
+            self.finish_decl(&n, t);
+        }
+        self.block(body, &[], vec![]);
+        self.scopes.pop();
     }
 }

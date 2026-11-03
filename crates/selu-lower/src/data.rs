@@ -1,26 +1,608 @@
-//! Data (package B in docs/WORK-PACKAGES.md). Until it lands, the
-//! checker rejects these constructs (SELU0390), so the lowering never sees
-//! them.
-
+//! Data expressions lowered through the Lua syntax tree.
 use crate::Lowerer;
-use crate::lua::{LBlock, LExpr};
-use selu_syntax::Expr;
+use crate::lua::{self, BinOp, LBlock, LExpr, LField, LStmt, LStmtKind, bin, name};
+use selu_check::Type;
+use selu_syntax::{Expr, ExprKind};
 
 impl Lowerer<'_> {
     pub(crate) fn data_expr(&mut self, e: &Expr, pre: &mut LBlock) -> LExpr {
-        let _ = pre;
-        unreachable!(
-            "rejected by the checker until package B lands: {:?}",
-            e.span
-        )
+        match &e.kind {
+            ExprKind::Array(items) => {
+                let refs: Vec<_> = items.iter().collect();
+                LExpr::Table(
+                    self.seq(&refs, pre)
+                        .into_iter()
+                        .map(|v| LField::Pos(LExpr::Paren(Box::new(v))))
+                        .collect(),
+                )
+            }
+            ExprKind::Object(fields) => {
+                let refs: Vec<_> = fields.iter().map(|f| &f.value).collect();
+                LExpr::Table(
+                    fields
+                        .iter()
+                        .zip(self.seq(&refs, pre))
+                        .map(|(f, v)| LField::Named(f.key.clone(), LExpr::Paren(Box::new(v))))
+                        .collect(),
+                )
+            }
+            ExprKind::Index { .. } => self.data_target(e, pre),
+            ExprKind::OptionalMember {
+                object,
+                name: field,
+            } => {
+                let value = self.expr(object, pre);
+                let t = self.hold(value, &e.span, pre);
+                pre.push(LStmt::new(
+                    LStmtKind::If(
+                        vec![(
+                            bin(BinOp::Ne, name(&t), LExpr::Nil),
+                            vec![LStmt::new(
+                                LStmtKind::Assign(
+                                    vec![name(&t)],
+                                    vec![LExpr::Field(Box::new(name(&t)), field.clone())],
+                                ),
+                                &e.span,
+                            )],
+                        )],
+                        None,
+                    ),
+                    &e.span,
+                ));
+                name(&t)
+            }
+            ExprKind::Template { quasis, exprs } => {
+                let mut format = quasis[0].replace('%', "%%");
+                for q in &quasis[1..] {
+                    format.push_str("%s");
+                    format.push_str(&q.replace('%', "%%"));
+                }
+                let refs: Vec<_> = exprs.iter().collect();
+                let vals = self.seq(&refs, pre);
+                let mut args = vec![LExpr::Str(format)];
+                args.extend(exprs.iter().zip(vals).map(|(e, v)| {
+                    if self.types.get(e.id) == Some(&Type::Boolean) {
+                        lua::call(name("tostring"), vec![v])
+                    } else {
+                        v
+                    }
+                }));
+                lua::call(
+                    LExpr::Field(Box::new(name("string")), "format".into()),
+                    args,
+                )
+            }
+            ExprKind::New { class, .. } if class == "WeakMap" => lua::call(
+                name("setmetatable"),
+                vec![
+                    LExpr::Table(vec![]),
+                    LExpr::Table(vec![LField::Named("__mode".into(), LExpr::Str("k".into()))]),
+                ],
+            ),
+            ExprKind::New { .. } => LExpr::Table(vec![]),
+            _ => unreachable!(),
+        }
     }
 
-    /// An assignment target other than a name or field (`xs[i] = v`).
     pub(crate) fn data_target(&mut self, target: &Expr, pre: &mut LBlock) -> LExpr {
-        let _ = pre;
-        unreachable!(
-            "rejected by the checker until package B lands: {:?}",
-            target.span
-        )
+        let ExprKind::Index { object, index } = &target.kind else {
+            unreachable!()
+        };
+        let mut vals = self.seq(&[object, index], pre);
+        let i = vals.pop().unwrap();
+        let i = match &index.kind {
+            ExprKind::Number(n) => n
+                .parse::<u64>()
+                .ok()
+                .and_then(|n| n.checked_add(1))
+                .map(|n| LExpr::Number(n.to_string()))
+                .unwrap_or_else(|| bin(BinOp::Add, i.clone(), LExpr::Number("1".into()))),
+            _ => bin(BinOp::Add, i, LExpr::Number("1".into())),
+        };
+        LExpr::Index(Box::new(vals.remove(0)), Box::new(i))
+    }
+}
+
+fn num(n: usize) -> LExpr {
+    LExpr::Number(n.to_string())
+}
+fn index(a: LExpr, i: LExpr) -> LExpr {
+    LExpr::Index(Box::new(a), Box::new(i))
+}
+fn field(a: LExpr, f: &str) -> LExpr {
+    LExpr::Field(Box::new(a), f.into())
+}
+fn len(a: LExpr) -> LExpr {
+    LExpr::Unary(lua::UnOp::Len, Box::new(a))
+}
+fn lib(lib: &str, f: &str, args: Vec<LExpr>) -> LExpr {
+    lua::call(field(name(lib), f), args)
+}
+impl Lowerer<'_> {
+    pub(crate) fn data_field(&mut self, object: &Expr, f: &str, pre: &mut LBlock) -> LExpr {
+        let v = self.expr(object, pre);
+        if f == "length"
+            && matches!(
+                self.types.get(object.id),
+                Some(Type::String | Type::Array(_))
+            )
+        {
+            len(v)
+        } else {
+            field(v, f)
+        }
+    }
+    pub(crate) fn data_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        pre: &mut LBlock,
+    ) -> Option<LExpr> {
+        let ExprKind::Member {
+            object,
+            name: method,
+        } = &callee.kind
+        else {
+            return None;
+        };
+        let math = matches!(&object.kind,ExprKind::Ident(n) if n == "Math")
+            && self.types.get(object.id).is_none();
+        let ty = self.types.get(object.id).cloned().unwrap_or(Type::Untyped);
+        if !math
+            && !matches!(
+                ty,
+                Type::String
+                    | Type::Array(_)
+                    | Type::Map(..)
+                    | Type::WeakMap(..)
+                    | Type::Set(_)
+                    | Type::Object(_)
+            )
+        {
+            return None;
+        }
+        let span = &callee.span;
+        if math {
+            let refs: Vec<_> = args.iter().collect();
+            let mut vs = self.seq(&refs, pre);
+            return Some(match method.as_str() {
+                "round" => lib(
+                    "math",
+                    "floor",
+                    vec![bin(BinOp::Add, vs.remove(0), LExpr::Number("0.5".into()))],
+                ),
+                "clamp" => {
+                    let x = vs.remove(0);
+                    let lo = vs.remove(0);
+                    let hi = vs.remove(0);
+                    lib("math", "min", vec![lib("math", "max", vec![x, lo]), hi])
+                }
+                m => lib("math", m, vs),
+            });
+        }
+        let mut refs = vec![&**object];
+        refs.extend(args);
+        let vals = self.seq(&refs, pre);
+        let mut stable = Vec::new();
+        for v in vals {
+            let t = self.hold(v, span, pre);
+            stable.push(name(&t));
+        }
+        let obj = stable.remove(0);
+        let mut a = stable;
+        if method == "slice" {
+            for bound in &mut a {
+                let value = lib("math", "floor", vec![bound.clone()]);
+                let t = self.temp();
+                pre.push(LStmt::new(
+                    LStmtKind::Local(vec![t.clone()], vec![value.clone()]),
+                    span,
+                ));
+                pre.push(LStmt::new(
+                    LStmtKind::If(
+                        vec![(
+                            bin(BinOp::Lt, value.clone(), num(0)),
+                            vec![LStmt::new(
+                                LStmtKind::Assign(
+                                    vec![name(&t)],
+                                    vec![lib(
+                                        "math",
+                                        "max",
+                                        vec![
+                                            bin(BinOp::Add, len(obj.clone()), value.clone()),
+                                            num(0),
+                                        ],
+                                    )],
+                                ),
+                                span,
+                            )],
+                        )],
+                        Some(vec![LStmt::new(
+                            LStmtKind::Assign(
+                                vec![name(&t)],
+                                vec![lib("math", "min", vec![value, len(obj.clone())])],
+                            ),
+                            span,
+                        )]),
+                    ),
+                    span,
+                ));
+                *bound = name(&t);
+            }
+        }
+        let mut emit = |kind| pre.push(LStmt::new(kind, span));
+        let result = match &ty {
+            Type::Object(_) => lua::call(field(obj, method), a),
+            Type::Map(..) | Type::WeakMap(..) | Type::Set(_) => match method.as_str() {
+                "get" => index(obj, a[0].clone()),
+                "has" => bin(BinOp::Ne, index(obj, a[0].clone()), LExpr::Nil),
+                "set" | "add" => {
+                    emit(LStmtKind::Assign(
+                        vec![index(obj, a[0].clone())],
+                        vec![if method == "add" {
+                            LExpr::Bool(true)
+                        } else {
+                            a[1].clone()
+                        }],
+                    ));
+                    LExpr::Nil
+                }
+                "delete" => {
+                    let t = self.temp();
+                    emit(LStmtKind::Local(
+                        vec![t.clone()],
+                        vec![bin(BinOp::Ne, index(obj.clone(), a[0].clone()), LExpr::Nil)],
+                    ));
+                    emit(LStmtKind::Assign(
+                        vec![index(obj, a[0].clone())],
+                        vec![LExpr::Nil],
+                    ));
+                    name(&t)
+                }
+                "count" | "clear" => {
+                    let t = self.temp();
+                    let k = self.temp();
+                    emit(LStmtKind::Local(vec![t.clone()], vec![num(0)]));
+                    let action = if method == "clear" {
+                        LStmtKind::Assign(vec![index(obj.clone(), name(&k))], vec![LExpr::Nil])
+                    } else {
+                        LStmtKind::Assign(vec![name(&t)], vec![bin(BinOp::Add, name(&t), num(1))])
+                    };
+                    emit(LStmtKind::GenFor {
+                        names: vec![k],
+                        exprs: vec![lua::call(name("pairs"), vec![obj])],
+                        body: vec![LStmt::new(action, span)],
+                    });
+                    if method == "count" {
+                        name(&t)
+                    } else {
+                        LExpr::Nil
+                    }
+                }
+                _ => unreachable!(),
+            },
+            Type::Array(_) => match method.as_str() {
+                "push" => {
+                    emit(LStmtKind::Assign(
+                        vec![index(obj.clone(), bin(BinOp::Add, len(obj), num(1)))],
+                        vec![a[0].clone()],
+                    ));
+                    LExpr::Nil
+                }
+                "pop" => lib("table", "remove", vec![obj]),
+                "insert" => lib(
+                    "table",
+                    "insert",
+                    vec![obj, bin(BinOp::Add, a[0].clone(), num(1)), a[1].clone()],
+                ),
+                "removeAt" => lib(
+                    "table",
+                    "remove",
+                    vec![obj, bin(BinOp::Add, a[0].clone(), num(1))],
+                ),
+                "sort" => lib("table", "sort", vec![obj]),
+                "join" => {
+                    let separator = a.first().cloned().unwrap_or(LExpr::Str(",".into()));
+                    if matches!(&ty,Type::Array(t) if **t == Type::Boolean) {
+                        let t = self.temp();
+                        let i = self.temp();
+                        emit(LStmtKind::Local(
+                            vec![t.clone()],
+                            vec![LExpr::Table(vec![])],
+                        ));
+                        emit(LStmtKind::NumFor {
+                            var: i.clone(),
+                            start: num(1),
+                            stop: len(obj.clone()),
+                            step: None,
+                            body: vec![LStmt::new(
+                                LStmtKind::Assign(
+                                    vec![index(name(&t), name(&i))],
+                                    vec![lua::call(name("tostring"), vec![index(obj, name(&i))])],
+                                ),
+                                span,
+                            )],
+                        });
+                        lib("table", "concat", vec![name(&t), separator])
+                    } else {
+                        lib("table", "concat", vec![obj, separator])
+                    }
+                }
+                "slice" => {
+                    let t = self.temp();
+                    let i = self.temp();
+                    emit(LStmtKind::Local(
+                        vec![t.clone()],
+                        vec![LExpr::Table(vec![])],
+                    ));
+                    emit(LStmtKind::NumFor {
+                        var: i.clone(),
+                        start: bin(BinOp::Add, a[0].clone(), num(1)),
+                        stop: lib(
+                            "math",
+                            "min",
+                            vec![
+                                a.get(1).cloned().unwrap_or_else(|| len(obj.clone())),
+                                len(obj.clone()),
+                            ],
+                        ),
+                        step: None,
+                        body: vec![LStmt::new(
+                            LStmtKind::Assign(
+                                vec![index(name(&t), bin(BinOp::Add, len(name(&t)), num(1)))],
+                                vec![index(obj, name(&i))],
+                            ),
+                            span,
+                        )],
+                    });
+                    name(&t)
+                }
+                "indexOf" | "includes" => {
+                    let t = self.temp();
+                    let i = self.temp();
+                    emit(LStmtKind::Local(
+                        vec![t.clone()],
+                        vec![if method == "includes" {
+                            LExpr::Bool(false)
+                        } else {
+                            LExpr::Number("-1".into())
+                        }],
+                    ));
+                    emit(LStmtKind::NumFor {
+                        var: i.clone(),
+                        start: num(1),
+                        stop: len(obj.clone()),
+                        step: None,
+                        body: vec![LStmt::new(
+                            LStmtKind::If(
+                                vec![(
+                                    bin(BinOp::Eq, index(obj, name(&i)), a[0].clone()),
+                                    vec![
+                                        LStmt::new(
+                                            LStmtKind::Assign(
+                                                vec![name(&t)],
+                                                vec![if method == "includes" {
+                                                    LExpr::Bool(true)
+                                                } else {
+                                                    bin(BinOp::Sub, name(&i), num(1))
+                                                }],
+                                            ),
+                                            span,
+                                        ),
+                                        LStmt::new(LStmtKind::Break, span),
+                                    ],
+                                )],
+                                None,
+                            ),
+                            span,
+                        )],
+                    });
+                    name(&t)
+                }
+                _ => unreachable!(),
+            },
+            Type::String => match method.as_str() {
+                "upper" | "lower" => lib("string", method, vec![obj]),
+                "slice" => lib(
+                    "string",
+                    "sub",
+                    vec![
+                        obj,
+                        bin(BinOp::Add, a[0].clone(), num(1)),
+                        a.get(1).cloned().unwrap_or(LExpr::Number("-1".into())),
+                    ],
+                ),
+                "trim" => LExpr::Paren(Box::new(lib(
+                    "string",
+                    "match",
+                    vec![obj, LExpr::Str("^%s*(.-)%s*$".into())],
+                ))),
+                "includes" => bin(
+                    BinOp::Ne,
+                    lib(
+                        "string",
+                        "find",
+                        vec![obj, a[0].clone(), num(1), LExpr::Bool(true)],
+                    ),
+                    LExpr::Nil,
+                ),
+                "startsWith" => bin(
+                    BinOp::Eq,
+                    lib("string", "sub", vec![obj, num(1), len(a[0].clone())]),
+                    a[0].clone(),
+                ),
+                "endsWith" => bin(
+                    BinOp::Eq,
+                    lib(
+                        "string",
+                        "sub",
+                        vec![
+                            obj.clone(),
+                            bin(
+                                BinOp::Add,
+                                bin(BinOp::Sub, len(obj), len(a[0].clone())),
+                                num(1),
+                            ),
+                        ],
+                    ),
+                    a[0].clone(),
+                ),
+                "split" => {
+                    let result = self.temp();
+                    let pos = self.temp();
+                    let found = self.temp();
+                    emit(LStmtKind::Local(
+                        vec![result.clone()],
+                        vec![LExpr::Table(vec![])],
+                    ));
+                    emit(LStmtKind::Local(vec![pos.clone()], vec![num(1)]));
+                    let append = |value| {
+                        LStmt::new(
+                            LStmtKind::Assign(
+                                vec![index(
+                                    name(&result),
+                                    bin(BinOp::Add, len(name(&result)), num(1)),
+                                )],
+                                vec![value],
+                            ),
+                            span,
+                        )
+                    };
+                    let chars = vec![append(lib(
+                        "string",
+                        "sub",
+                        vec![obj.clone(), name(&pos), name(&pos)],
+                    ))];
+                    let scan = vec![
+                        LStmt::new(
+                            LStmtKind::Local(
+                                vec![found.clone()],
+                                vec![lib(
+                                    "string",
+                                    "find",
+                                    vec![obj.clone(), a[0].clone(), name(&pos), LExpr::Bool(true)],
+                                )],
+                            ),
+                            span,
+                        ),
+                        LStmt::new(
+                            LStmtKind::If(
+                                vec![(
+                                    bin(BinOp::Eq, name(&found), LExpr::Nil),
+                                    vec![
+                                        append(lib("string", "sub", vec![obj.clone(), name(&pos)])),
+                                        LStmt::new(LStmtKind::Break, span),
+                                    ],
+                                )],
+                                None,
+                            ),
+                            span,
+                        ),
+                        append(lib(
+                            "string",
+                            "sub",
+                            vec![
+                                obj.clone(),
+                                name(&pos),
+                                bin(BinOp::Sub, name(&found), num(1)),
+                            ],
+                        )),
+                        LStmt::new(
+                            LStmtKind::Assign(
+                                vec![name(&pos)],
+                                vec![bin(BinOp::Add, name(&found), len(a[0].clone()))],
+                            ),
+                            span,
+                        ),
+                    ];
+                    emit(LStmtKind::If(
+                        vec![(
+                            bin(BinOp::Eq, a[0].clone(), LExpr::Str("".into())),
+                            vec![LStmt::new(
+                                LStmtKind::NumFor {
+                                    var: pos.clone(),
+                                    start: num(1),
+                                    stop: len(obj),
+                                    step: None,
+                                    body: chars,
+                                },
+                                span,
+                            )],
+                        )],
+                        Some(vec![LStmt::new(
+                            LStmtKind::While(LExpr::Bool(true), scan),
+                            span,
+                        )]),
+                    ));
+                    name(&result)
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        // Store-only methods return nil to the statement dispatcher; the
+        // checker rejects their use as values.
+        Some(result)
+    }
+
+    pub(crate) fn for_of(&mut self, s: &selu_syntax::Stmt, out: &mut LBlock) {
+        use selu_syntax::{ForBinding, Pattern, StmtKind};
+        let StmtKind::ForOf {
+            binding,
+            iter,
+            body,
+            ..
+        } = &s.kind
+        else {
+            unreachable!()
+        };
+        let mut pre = vec![];
+        let v = self.expr(iter, &mut pre);
+        let t = self.hold(v, &iter.span, &mut pre);
+        let obj = name(&t);
+        let mut body = self.block(body);
+        let kind = match self.types.get(iter.id) {
+            Some(Type::Array(_)) => {
+                let ForBinding::Name(n, _) = binding else {
+                    unreachable!()
+                };
+                let i = self.temp();
+                body.insert(
+                    0,
+                    LStmt::new(
+                        LStmtKind::Local(vec![n.clone()], vec![index(obj.clone(), name(&i))]),
+                        &s.span,
+                    ),
+                );
+                LStmtKind::NumFor {
+                    var: i,
+                    start: num(1),
+                    stop: len(obj),
+                    step: None,
+                    body,
+                }
+            }
+            _ => {
+                let names = match binding {
+                    ForBinding::Name(n, _) => vec![n.clone()],
+                    ForBinding::Pattern(Pattern::Array(items)) => items
+                        .iter()
+                        .map(|i| {
+                            i.as_ref()
+                                .map(|(n, _)| n.clone())
+                                .unwrap_or_else(|| self.temp())
+                        })
+                        .collect(),
+                    _ => unreachable!(),
+                };
+                LStmtKind::GenFor {
+                    names,
+                    exprs: vec![lua::call(name("pairs"), vec![obj])],
+                    body,
+                }
+            }
+        };
+        pre.push(LStmt::new(kind, &s.span));
+        out.push(LStmt::new(LStmtKind::Do(pre), &s.span));
     }
 }
