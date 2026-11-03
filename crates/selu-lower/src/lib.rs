@@ -193,16 +193,28 @@ pub fn lower_module(
         ),
         span: None,
     }];
-    out.push(LStmt {
+    let namespace_fallback = LStmt {
         kind: LStmtKind::Assign(
             vec![name("__selu_ns")],
             vec![bin(BinOp::Or, name("__selu_ns"), LExpr::Table(vec![]))],
         ),
         span: None,
-    });
-    let runtime_index = out.len();
+    };
+    let uses_saved = saved::has_saved(program);
+    if uses_saved {
+        out.push(namespace_fallback.clone());
+    }
+    let before_captures = out.len();
     l.class_prelude(&program.stmts, &mut out);
     out.extend(saved::captures(program));
+    if !uses_saved {
+        out.push(namespace_fallback);
+    }
+    let runtime_index = if uses_saved {
+        before_captures
+    } else {
+        out.len()
+    };
     l.module_prologue(&mut out);
     let has_handlers = program
         .stmts
