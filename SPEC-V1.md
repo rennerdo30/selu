@@ -20,7 +20,7 @@ Three rules decide every open question:
 | Language | everything in section 2 | `enum`, pattern `switch`, getters/setters, decorators |
 | GUI | the framework in section 4 | animations, drag-and-drop between lists, Blizzard frame skinning |
 | Optimizer | `-O0`, `-O1`, `--strip-comments`, `--experimental-minify` | `-O2` |
-| Tools | `selu build`, `selu test`, `selu debug`, `selu targets`, `selu probe`, `selu export` | `selu fmt`, `selu init` templates beyond one |
+| Tools | `selu build`, `selu test`, `selu debug`, `selu targets`, `selu probe`, `selu export`, `selu doctor` | `selu fmt`, `selu init` templates beyond one |
 | Simulator | section 8 | client art and fonts, BLP textures, Blizzard's own UI |
 | Editors | VS Code: syntax colours and errors while typing | VS Code debugging (DAP), other editors |
 
@@ -422,8 +422,9 @@ WoW loads.
 |---|---|
 | SVG, PNG, JPG, WebP | TGA (32-bit with alpha, the default) or BLP (`"format": "blp"`, smaller files) |
 | TTF, OTF | copied as is |
-| WAV, FLAC | OGG |
-| OGG, MP3 | copied as is |
+| Any audio ffmpeg can read (WAV, FLAC, AIFF, M4A, Opus, WMA, video soundtracks...) | OGG Vorbis, through ffmpeg |
+| OGG, MP3 | copied as is, or re-encoded when settings ask for it |
+| Anything else | a converter you configure (6.1.2) |
 
 - **Assets are imported like code**, so a wrong name is a compile error and the
   path is never typed by hand:
@@ -454,10 +455,58 @@ WoW loads.
   fonts (text in an SVG must be converted to paths, otherwise the build says
   so). The same input always gives the same bytes; `selu build --check`
   confirms committed outputs are up to date.
-- Conversions are cached by content hash, so only changed assets are
-  converted again.
+- Conversions are cached by content hash, settings and converter version, so
+  only changed assets are converted again.
 - `selu debug` draws the converted files, so what you see in the simulator is
   what the game gets.
+
+#### 6.1.1 Audio through ffmpeg
+
+- Audio conversion uses **ffmpeg**, so any format ffmpeg reads works. Selu
+  finds it in this order: `"tools": { "ffmpeg": "<path>" }` in `selu.json`, the
+  `SELU_FFMPEG` environment variable, then `PATH`. Selu does not ship ffmpeg
+  (its licence and size are the user's choice); if it's missing and a sound
+  needs it, the build stops with a message saying which file needs it and how
+  to install ffmpeg.
+- WAV and FLAC also convert without ffmpeg (a small built-in encoder), so a
+  project that only uses those needs nothing installed.
+- Output is OGG Vorbis, which every target plays. Defaults: 44.1 kHz, quality
+  5, stereo kept. Per-sound settings in `assets/assets.json`:
+
+  ```json
+  {
+    "sounds/ding.wav": { "channels": 1, "quality": 4 },
+    "sounds/alert.m4a": { "normalize": -16, "trimSilence": true, "maxSeconds": 3 }
+  }
+  ```
+
+  `normalize` sets the loudness in LUFS (ffmpeg's `loudnorm`), `trimSilence`
+  cuts silence at both ends, `maxSeconds` warns when a sound is longer.
+- Builds are reproducible for a given ffmpeg version: metadata is stripped and
+  bit-exact flags are used. `selu build --check` reports a different ffmpeg
+  version instead of claiming the files changed.
+- `selu doctor` lists the tools found (ffmpeg and any custom converters) with
+  their versions.
+
+#### 6.1.2 Custom converters
+
+Any other format can be handled by a command you configure, for example a PSD
+exporter or a different audio encoder:
+
+```json
+{
+  "converters": [
+    { "from": [".psd"], "to": ".png", "run": ["magick", "{in}", "{out}"] },
+    { "from": [".mid"], "to": ".wav", "run": ["fluidsynth", "-ni", "font.sf2", "{in}", "-F", "{out}"] }
+  ]
+}
+```
+
+- A converter turns a file into a format Selu already handles; the result then
+  goes through the normal pipeline (`.psd` -> `.png` -> TGA/BLP).
+- Converters run with a timeout, without a shell, and only on files inside the
+  project. Their version (`"version": [...]` command, optional) is part of the
+  cache key.
 
 ### 6.2 Export
 
