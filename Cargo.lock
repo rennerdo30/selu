@@ -427,6 +427,7 @@ dependencies = [
 name = "selu-lower"
 version = "0.1.0"
 dependencies = [
+ "selu-check",
  "selu-diagnostics",
  "selu-manifest",
  "selu-syntax",
