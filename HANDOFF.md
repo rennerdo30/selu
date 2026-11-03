@@ -13,8 +13,8 @@
     `command`/`hook`/`hookScript`/`log`/`L` (D4).
   - Round 3: `saved` with checked migrations and `selu.saved.toml` (D2),
     and generated manifests for retail 12.1.5 and Forever 1.60.1 (M1).
-- Round 4 is running (briefs in `docs/WORK-PACKAGES.md`): T1 typed game API
-  in the checker, T2 `has(...)` and several targets, R readability.
+- Round 4: R readability, M2 every client and T1 typed game API are merged;
+  T2 `has(...)` and several targets is in its final integration.
 - Examples: `hello`, `loot-summary`, `cooldowns`, `modules`, `classes`,
   `slash-and-hooks`, `saved-settings`; each is a test (`expected.txt`).
 - `selu` 0.0.1 placeholder is on crates.io; licence MIT.
@@ -46,6 +46,19 @@ Each is recorded in the named document; all can be reversed.
   all by destructuring, never implicit expansion; Selu's own tuple functions
   stay strict. Second opinion from Sol agreed (`docs/WORK-PACKAGES.md`,
   round 4).
+- **Game API checks warn, they don't block** (`docs/lang/api.md`): the
+  manifests can't capture templates, mixins, overloads and undocumented
+  optional arguments, so signature mismatches on game APIs and unknown
+  widget members are warnings (`[build] strict_api = true` makes them
+  errors); type names the documentation doesn't define are untyped. A
+  missing API on a target always stays an error. Selu's own code stays
+  strict. Reason: a false error blocks porting real code, a missing check
+  doesn't.
+- **Namespaces are not values** (`const ns = C_Foo` is an error), which
+  closes an availability bypass (`docs/lang/targets.md`).
+- **Every client:** manifests for `classic-era`, `classic-anniversary`,
+  `classic-titan` and `classic` next to `retail` and `forever` (owner's
+  wish; SPEC-V1 section 1 updated).
 - **Manifests stay plain JSON in git** (about 9.9 MB together, text that
   diffs well), not LFS.
 
