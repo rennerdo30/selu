@@ -163,6 +163,22 @@ fn failed_migration_rolls_back_and_retries_and_newer_data_is_untouched() {
     let snapshot = sim.logout_saved(&[&key]).unwrap();
     let next = Sim::login_saved("Saved", &files(&dir), &snapshot).unwrap();
     assert_eq!(next.logout_saved(&[&key]).unwrap(), snapshot);
+    let warning_prefix = format!("{key}: migration failed: ");
+    assert_eq!(
+        sim.prints()
+            .iter()
+            .filter(|v| v.starts_with(&warning_prefix))
+            .count(),
+        1
+    );
+    assert_eq!(
+        next.prints()
+            .iter()
+            .filter(|v| v.starts_with(&warning_prefix))
+            .count(),
+        1,
+        "failed step must be attempted again at the second login"
+    );
     let newer = Sim::new().unwrap();
     newer
         .eval(&format!("{key} = {{ x = false, __selu_version = 9 }}"))
@@ -206,4 +222,247 @@ fn per_character_defaults_arrays_maps_and_addon_names_are_isolated() {
         "assert({key}.map.key == 5); assert(#{key}.list == 3)"
     ))
     .unwrap();
+}
+#[test]
+fn review_generated_names_and_runtime_size() {
+    for saved in [
+        "data",
+        "version",
+        "fresh",
+        "candidate",
+        "migration",
+        "ok",
+        "message",
+    ] {
+        for (version, initial, migration, expected) in [
+            ("", "", "", "7"),
+            ("", "{ x = 9, __selu_version = 3 }", "", "9"),
+            (
+                " version 2",
+                "{ x = 11 }",
+                "migrate NAME 1 -> 2 (old) { old.x = 2; print(old.missing.value); }",
+                "11",
+            ),
+        ] {
+            let src = format!(
+                "saved {saved}{version} = {{ x: 7 }}; {} on PLAYER_LOGIN() {{ print({saved}.x); }}",
+                migration.replace("NAME", saved)
+            );
+            let dir = project(&src);
+            success(&dir);
+            let sim = Sim::new().unwrap();
+            let key = selu_lower::saved::global_name("Saved", "main", saved);
+            if !initial.is_empty() {
+                sim.eval(&format!("{key} = {initial}")).unwrap();
+            }
+            sim.load_addon("Saved", &files(&dir)).unwrap();
+            sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+            assert_eq!(sim.prints().last().unwrap(), expected, "{saved} {initial}");
+        }
+    }
+    let source = (0..45)
+        .map(|i| format!("saved s{i} = {{ x: {i} }};\n"))
+        .collect::<String>()
+        + "on PLAYER_LOGIN() { print(s44.x); }";
+    let dir = project(&source);
+    success(&dir);
+    let fs = files(&dir);
+    assert_eq!(fs[0].1.matches(" = ...").count(), 1);
+    let sim = Sim::new().unwrap();
+    sim.load_addon("Saved", &fs).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), vec!["44"]);
+}
+#[test]
+fn review_adoption_and_readable_names() {
+    let dir =
+        project("saved global MyAddonDB = { x: 1 }; on PLAYER_LOGIN() { print(MyAddonDB.x); }");
+    success(&dir);
+    let sim = Sim::new().unwrap();
+    sim.eval("MyAddonDB = { x = 99 }").unwrap();
+    sim.load_addon("Saved", &files(&dir)).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), vec!["99"]);
+    let snapshot = sim.logout_saved(&["MyAddonDB"]).unwrap();
+    std::fs::write(dir.join("src/main.selu"),"saved global MyAddonDB version 2 = { x: 1 }; migrate MyAddonDB 1 -> 2 (old) { old.x += 1; } on PLAYER_LOGIN() { print(MyAddonDB.x); }").unwrap();
+    success(&dir);
+    let next = Sim::login_saved("Saved", &files(&dir), &snapshot).unwrap();
+    next.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(next.prints(), vec!["100"]);
+    let default = project("saved settings = { x: 1 };");
+    success(&default);
+    assert!(
+        std::fs::read_to_string(default.join("dist/Saved/Saved.toc"))
+            .unwrap()
+            .contains("## SavedVariables: Saved_settings\n")
+    );
+    let sim = Sim::new().unwrap();
+    sim.load_addon("Saved", &files(&default)).unwrap();
+    assert_ne!(
+        sim.logout_saved(&["Saved_settings"]).unwrap().0["Saved_settings"],
+        selu_sim::saved::SavedValue::Nil
+    );
+}
+#[test]
+fn review_recursive_types_and_collection_shapes() {
+    for src in [
+        "saved s = { map: new Map<{ x: number }, number>() };",
+        "saved s = { map: new Map<string, () => number>() };",
+        "saved s = { map: new Map<string, { f: () => number }>() };",
+        "saved s = { f: () => 1 };",
+    ] {
+        assert!(common::codes(src).contains(&"SELU0469".into()), "{src}");
+    }
+    let dir = project("saved s = { items: [{ x: 1 }] };");
+    success(&dir);
+    std::fs::write(
+        dir.join("src/main.selu"),
+        "saved s = { items: [{ x: 1, added: 2 }] };",
+    )
+    .unwrap();
+    assert!(!build(&dir).status.success());
+}
+#[test]
+fn review_invalid_metadata_isolation_and_retry_warning() {
+    let dir = project(
+        "saved s version 2 = { x: 1 }; migrate s 1 -> 2 (old) { old.x = 2; print(old.missing.value); } saved healthy = { x: 7 }; log.info`ready`; on PLAYER_LOGIN() { print(healthy.x); }",
+    );
+    success(&dir);
+    let fs = files(&dir);
+    let key = selu_lower::saved::global_name("Saved", "main", "s");
+    for initial in [
+        "{ x = 99, __selu_version = 'bad' }",
+        "{ x = 99, __selu_version = false }",
+        "{ x = 99, __selu_version = 0 }",
+        "{ x = 99, __selu_version = -1 }",
+        "{ x = 99, __selu_version = 1.5 }",
+        "{ x = 99, __selu_version = 0/0 }",
+        "42",
+        "false",
+    ] {
+        let sim = Sim::new().unwrap();
+        sim.eval(&format!("{key} = {initial}")).unwrap();
+        sim.load_addon("Saved", &fs).unwrap();
+        sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+        assert_eq!(sim.prints(), vec!["7"], "{initial}");
+        sim.eval(&format!("local before = {initial}; local after = {key}; if type(before) == 'table' then assert(after.x == 99); if before.__selu_version ~= before.__selu_version then assert(after.__selu_version ~= after.__selu_version) else assert(after.__selu_version == before.__selu_version) end else assert(after == before) end")).unwrap();
+    }
+    let sim = Sim::new().unwrap();
+    sim.eval(&format!("{key} = {{ x = 99 }}")).unwrap();
+    let mut observed = fs.clone();
+    observed.push(("inspect.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent', function() for _,v in ipairs(ns[false].buffer) do if v.level == 'warn' then print(v.level) end end end)".into()));
+    sim.load_addon("Saved", &observed).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), vec!["7", "warn"]);
+    let snapshot = sim.logout_saved(&[&key]).unwrap();
+    let next = Sim::login_saved("Saved", &observed, &snapshot).unwrap();
+    next.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(next.prints(), vec!["7", "warn"]);
+}
+#[test]
+fn review_duplicate_names_and_migration_spans() {
+    let dir = project("import { s as other } from \"./state\"; saved s = { x: 1 };");
+    std::fs::write(dir.join("src/state.selu"), "export saved s = { x: 1 };").unwrap();
+    let out = build(&dir);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("state.selu") && err.contains("main.selu"),
+        "{err}"
+    );
+    for (src, part) in [
+        ("migrate missing 1 -> 2 (old) {}", "missing"),
+        (
+            "saved s version 3 = { x: 1 }; migrate s 1 -> 3 (old) {}",
+            "1 -> 3",
+        ),
+    ] {
+        let p = selu_syntax::parse("t.selu", src).unwrap();
+        let ds = selu_check::check(&p, &common::manifest());
+        let d = ds.iter().find(|d| d.code == "SELU0465").unwrap();
+        let span = d.span.as_ref().unwrap();
+        assert_eq!(&src[span.start..span.end], part);
+        assert!(d.help.is_some());
+    }
+}
+#[test]
+fn review_two_character_saved_sessions() {
+    let dir = project(
+        "saved account = { visits: 0 }; saved perCharacter character = { visits: 0 }; on PLAYER_LOGIN() { account.visits += 1; character.visits += 1; print(account.visits); print(character.visits); }",
+    );
+    success(&dir);
+    let fs = files(&dir);
+    let mut sessions = selu_sim::saved::SavedSessions::default();
+    for (who, expected) in [
+        ("Alice", vec!["1", "1"]),
+        ("Bob", vec!["2", "1"]),
+        ("Alice", vec!["3", "2"]),
+    ] {
+        let sim = Sim::login_character("Saved", &fs, &sessions, who).unwrap();
+        sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+        assert_eq!(sim.prints(), expected, "{who}");
+        sim.logout_character(&mut sessions, who, &["Saved_account"], &["Saved_character"])
+            .unwrap();
+    }
+}
+#[test]
+fn review_newer_warnings_adopted_character_and_moving_modules() {
+    let dir = project(
+        "saved global perCharacter LegacyCharacter = { x: 7 }; saved s = { x: 1 }; log.info`ready`;",
+    );
+    success(&dir);
+    let toc = std::fs::read_to_string(dir.join("dist/Saved/Saved.toc")).unwrap();
+    assert!(toc.contains("## SavedVariablesPerCharacter: LegacyCharacter\n"));
+    let mut fs = files(&dir);
+    fs.push(("verify.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent',function() assert(#ns[false].buffer == 2); assert(ns[false].buffer[2].level == 'warn'); assert(ns[false].buffer[2].message == 'Saved_s: saved data is newer than this addon'); assert(ns.__selu_saved == nil); print(LegacyCharacter.x) end)".into()));
+    let sim = Sim::new().unwrap();
+    sim.eval("Saved_s = { x = 99, __selu_version = 3 }; LegacyCharacter = { x = 99 }")
+        .unwrap();
+    sim.load_addon("Saved", &fs).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), vec!["99"]);
+    let dir = project("import { s } from \"./first\"; on PLAYER_LOGIN() { print(s.x); }");
+    std::fs::write(dir.join("src/first.selu"), "export saved s = { x: 7 };").unwrap();
+    success(&dir);
+    let sim = Sim::new().unwrap();
+    sim.load_addon("Saved", &files(&dir)).unwrap();
+    sim.eval("Saved_s.x = 99").unwrap();
+    let before = sim.logout_saved(&["Saved_s"]).unwrap();
+    std::fs::write(
+        dir.join("src/main.selu"),
+        "import { s } from \"./second\"; on PLAYER_LOGIN() { print(s.x); }",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/second.selu"), "export saved s = { x: 7 };").unwrap();
+    success(&dir);
+    let next = Sim::login_saved("Saved", &files(&dir), &before).unwrap();
+    next.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(next.prints(), vec!["99"]);
+}
+#[test]
+fn review_reserved_module_paths() {
+    for path in ["__selu_saved", "folder/__selu_private/data"] {
+        let src = format!("import {{ value }} from \"./{path}\"; saved s = {{ x: 1 }};");
+        let dir = project(&src);
+        let file = dir.join("src").join(format!("{path}.selu"));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "export const value = 1;").unwrap();
+        let out = build(&dir);
+        assert!(!out.status.success());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("SELU0318") && stderr.contains("rename"),
+            "{stderr}"
+        );
+        let p = selu_syntax::parse("t.selu", &src).unwrap();
+        let ds = selu_check::check(&p, &common::manifest());
+        let span = ds
+            .iter()
+            .find(|d| d.code == "SELU0318")
+            .unwrap()
+            .span
+            .as_ref()
+            .unwrap();
+        assert_eq!(&src[span.start..span.end], format!("\"./{path}\""));
+    }
 }

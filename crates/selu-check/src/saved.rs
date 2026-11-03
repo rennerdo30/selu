@@ -81,6 +81,16 @@ impl Ctx<'_> {
                     }
                 }
                 let ty = self.value(defaults);
+                if !serializable(&ty) {
+                    self.out.push(
+                        err(
+                            "SELU0469",
+                            "saved data contains a type that cannot be serialized",
+                            &defaults.span,
+                        )
+                        .with_help("use primitive map keys and serializable values at every depth"),
+                    );
+                }
                 if !matches!(ty, Type::Object(_)) {
                     self.out.push(err(
                         "SELU0464",
@@ -92,19 +102,32 @@ impl Ctx<'_> {
             }
             StmtKind::Migrate {
                 name,
+                name_span,
+                step_span,
                 from,
                 to,
                 param,
                 body,
             } => {
-                if self.lookup(name).is_none_or(|(_, b)| b.kind != Kind::Saved)
-                    || *to != from.saturating_add(1)
-                {
-                    self.out.push(err(
-                        "SELU0465",
-                        "a migration must name saved data and advance exactly one version",
-                        &s.span,
-                    ));
+                if self.lookup(name).is_none_or(|(_, b)| b.kind != Kind::Saved) {
+                    self.out.push(
+                        err(
+                            "SELU0465",
+                            "this migration does not name a saved declaration",
+                            name_span,
+                        )
+                        .with_help("use a saved name declared in this file"),
+                    );
+                }
+                if *to != from.saturating_add(1) {
+                    self.out.push(
+                        err(
+                            "SELU0465",
+                            "a migration must advance exactly one version",
+                            step_span,
+                        )
+                        .with_help("write a separate migration for each adjacent version"),
+                    );
                 }
                 if let Some((_, b)) = self.lookup(name).map(|(i, b)| (i, b.clone())) {
                     self.check_ready(name, &b, &s.span);
@@ -134,6 +157,20 @@ fn persistable(e: &selu_syntax::Expr) -> bool {
         ExprKind::Array(es) => es.iter().all(persistable),
         ExprKind::Unary { op, expr } => op == "-" && matches!(expr.kind, ExprKind::Number(_)),
         ExprKind::New { class, args, .. } => class == "Map" && args.is_empty(),
+        _ => false,
+    }
+}
+
+fn serializable(ty: &Type) -> bool {
+    match ty {
+        Type::Number | Type::String | Type::Boolean | Type::Null => true,
+        Type::Optional(t) | Type::Array(t) => serializable(t),
+        Type::Object(fs) => fs.values().all(serializable),
+        Type::Tuple(ts) => ts.iter().all(serializable),
+        Type::Map(k, v) => {
+            matches!(**k, Type::Number | Type::String | Type::Boolean) && serializable(v)
+        }
+        Type::Set(k) => matches!(**k, Type::Number | Type::String | Type::Boolean),
         _ => false,
     }
 }

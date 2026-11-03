@@ -21,7 +21,7 @@ use std::collections::HashMap;
 mod classes;
 mod modules;
 pub mod saved;
-pub use modules::{ModuleBindings, ModuleExport, ModuleExports};
+pub use modules::{ModuleBindings, ModuleExport, ModuleExports, reserved_module_path};
 mod rules;
 // One file per language area. The central `stmt`/`expr_inner` matches only
 // dispatch; each area's checks live in its own file (docs/WORK-PACKAGES.md).

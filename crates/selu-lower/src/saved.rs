@@ -1,14 +1,14 @@
-//! Saved initialization is cold-path code; migration attempts work on deep copies.
+//! Cold-path SavedVariables initialization. Generated bindings are always reserved.
 use crate::{
     Lowerer,
     lua::{self, *},
 };
-use selu_syntax::{Stmt, StmtKind};
-fn s(k: LStmtKind) -> LStmt {
-    LStmt {
-        kind: k,
-        span: None,
-    }
+use selu_syntax::{Program, Stmt, StmtKind};
+fn s(kind: LStmtKind) -> LStmt {
+    LStmt { kind, span: None }
+}
+fn g(v: &str) -> LExpr {
+    name(&format!("__selu_saved_{v}"))
 }
 fn st(v: &str) -> LExpr {
     LExpr::Str(v.into())
@@ -16,137 +16,307 @@ fn st(v: &str) -> LExpr {
 fn n(v: u32) -> LExpr {
     LExpr::Number(v.to_string())
 }
-fn f(v: LExpr, key: &str) -> LExpr {
-    LExpr::Field(Box::new(v), key.into())
+fn f(v: LExpr, k: &str) -> LExpr {
+    LExpr::Field(Box::new(v), k.into())
 }
 fn ix(v: LExpr, k: LExpr) -> LExpr {
     LExpr::Index(Box::new(v), Box::new(k))
 }
-fn call(v: &str, a: Vec<LExpr>) -> LExpr {
-    let callee = if matches!(
-        v,
-        "type" | "pairs" | "ipairs" | "CreateFrame" | "rawget" | "pcall" | "print" | "error"
-    ) {
-        format!("__selu_saved_{v}")
-    } else {
-        v.into()
-    };
-    lua::call(name(&callee), a)
+fn call(v: &str, args: Vec<LExpr>) -> LExpr {
+    lua::call(g(v), args)
+}
+fn invoke(v: LExpr) -> LStmt {
+    s(LStmtKind::Call(v))
 }
 fn assign(a: LExpr, b: LExpr) -> LStmt {
     s(LStmtKind::Assign(vec![a], vec![b]))
 }
-fn local(a: &str, b: LExpr) -> LStmt {
-    s(LStmtKind::Local(vec![a.into()], vec![b]))
+fn local(v: &str, value: LExpr) -> LStmt {
+    s(LStmtKind::Local(
+        vec![format!("__selu_saved_{v}")],
+        vec![value],
+    ))
 }
-fn fun(ps: &[&str], body: LBlock) -> LExpr {
+fn fun(params: &[&str], body: LBlock) -> LExpr {
     LExpr::Function(LFunction {
-        params: ps.iter().map(|x| (*x).into()).collect(),
+        params: params.iter().map(|v| format!("__selu_saved_{v}")).collect(),
         vararg: false,
         body,
     })
 }
-fn iff(c: LExpr, body: LBlock) -> LStmt {
-    s(LStmtKind::If(vec![(c, body)], None))
+fn iff(cond: LExpr, body: LBlock) -> LStmt {
+    s(LStmtKind::If(vec![(cond, body)], None))
 }
 fn eq(a: LExpr, b: LExpr) -> LExpr {
     bin(BinOp::Eq, a, b)
 }
+fn ret(v: LExpr) -> LStmt {
+    s(LStmtKind::Return(vec![v]))
+}
 fn rt() -> LExpr {
-    ix(name("__selu_saved_ns"), n(2))
+    g("runtime")
 }
-fn invoke(e: LExpr) -> LStmt {
-    s(LStmtKind::Call(e))
+fn method(v: LExpr, k: &str, args: Vec<LExpr>) -> LStmt {
+    invoke(LExpr::Method(Box::new(v), k.into(), args))
 }
-fn copy(v: LExpr) -> LExpr {
-    lua::call(f(rt(), "copy"), vec![v])
+fn helper(k: &str, args: Vec<LExpr>) -> LExpr {
+    lua::call(f(rt(), k), args)
+}
+fn warning(message: &str) -> LStmt {
+    invoke(helper(
+        "warn",
+        vec![bin(BinOp::Concat, g("key"), st(&format!(": {message}")))],
+    ))
+}
+fn each(iter: LExpr, body: LBlock) -> LStmt {
+    s(LStmtKind::GenFor {
+        names: vec!["__selu_saved_key".into(), "__selu_saved_value".into()],
+        exprs: vec![iter],
+        body,
+    })
 }
 fn runtime() -> LBlock {
-    let mut copy_body = vec![
+    let copy_body = vec![
         iff(
-            bin(BinOp::Ne, call("type", vec![name("value")]), st("table")),
-            vec![s(LStmtKind::Return(vec![name("value")]))],
+            bin(BinOp::Ne, call("type", vec![g("value")]), st("table")),
+            vec![ret(g("value"))],
         ),
         local("result", LExpr::Table(vec![])),
+        each(
+            call("pairs", vec![g("value")]),
+            vec![assign(
+                ix(g("result"), g("key")),
+                helper("copy", vec![g("value")]),
+            )],
+        ),
+        ret(g("result")),
     ];
-    copy_body.push(s(LStmtKind::GenFor {
-        names: vec!["key".into(), "value".into()],
-        exprs: vec![call("pairs", vec![name("value")])],
-        body: vec![assign(ix(name("result"), name("key")), copy(name("value")))],
-    }));
-    copy_body.push(s(LStmtKind::Return(vec![name("result")])));
-    let fill_body = vec![s(LStmtKind::GenFor {
-        names: vec!["key".into(), "value".into()],
-        exprs: vec![call("pairs", vec![name("defaults")])],
-        body: vec![s(LStmtKind::If(
+    let fill_body = vec![each(
+        call("pairs", vec![g("defaults")]),
+        vec![s(LStmtKind::If(
             vec![
                 (
-                    eq(ix(name("data"), name("key")), LExpr::Nil),
-                    vec![assign(ix(name("data"), name("key")), copy(name("value")))],
+                    eq(ix(g("data"), g("key")), LExpr::Nil),
+                    vec![assign(
+                        ix(g("data"), g("key")),
+                        helper("copy", vec![g("value")]),
+                    )],
                 ),
                 (
                     bin(
                         BinOp::And,
-                        eq(call("type", vec![name("value")]), st("table")),
-                        eq(
-                            call("type", vec![ix(name("data"), name("key"))]),
-                            st("table"),
-                        ),
+                        bin(BinOp::Ne, ix(g("objects"), g("key")), LExpr::Nil),
+                        eq(call("type", vec![ix(g("data"), g("key"))]), st("table")),
                     ),
-                    vec![invoke(lua::call(
-                        f(rt(), "fill"),
-                        vec![ix(name("data"), name("key")), name("value")],
+                    vec![invoke(helper(
+                        "fill",
+                        vec![
+                            ix(g("data"), g("key")),
+                            g("value"),
+                            ix(g("objects"), g("key")),
+                        ],
                     ))],
                 ),
             ],
             None,
         ))],
-    })];
+    )];
+    let warn_body = vec![
+        local("wow", ix(name("__selu_ns"), LExpr::Bool(false))),
+        s(LStmtKind::If(
+            vec![(
+                bin(BinOp::Ne, g("wow"), LExpr::Nil),
+                vec![iff(
+                    lua::call(f(g("wow"), "enabled"), vec![st("warn"), g("message")]),
+                    vec![invoke(lua::call(
+                        f(g("wow"), "write"),
+                        vec![st("warn"), g("message"), g("message")],
+                    ))],
+                )],
+            )],
+            Some(vec![invoke(call("print", vec![g("message")]))]),
+        )),
+    ];
+    let data = g("data");
+    let version = g("version");
+    let ver = f(data.clone(), "__selu_version");
+    let invalid = bin(
+        BinOp::Or,
+        bin(BinOp::Ne, call("type", vec![version.clone()]), st("number")),
+        bin(
+            BinOp::Or,
+            bin(BinOp::Lt, version.clone(), n(1)),
+            bin(BinOp::Ne, bin(BinOp::Mod, version.clone(), n(1)), n(0)),
+        ),
+    );
+    let load_body = vec![
+        local("data", call("rawget", vec![g("_G"), g("key")])),
+        iff(
+            eq(data.clone(), LExpr::Nil),
+            vec![
+                assign(data.clone(), LExpr::Table(vec![])),
+                assign(ver.clone(), g("current")),
+            ],
+        ),
+        iff(
+            bin(BinOp::Ne, call("type", vec![data.clone()]), st("table")),
+            vec![warning("saved root is not a table"), ret(data.clone())],
+        ),
+        local(
+            "version",
+            call("rawget", vec![data.clone(), st("__selu_version")]),
+        ),
+        iff(
+            eq(version.clone(), LExpr::Nil),
+            vec![assign(version.clone(), n(1))],
+        ),
+        iff(
+            invalid,
+            vec![warning("invalid saved version"), ret(data.clone())],
+        ),
+        iff(
+            bin(BinOp::Gt, version.clone(), g("current")),
+            vec![
+                warning("saved data is newer than this addon"),
+                ret(data.clone()),
+            ],
+        ),
+        s(LStmtKind::While(
+            bin(BinOp::Lt, version.clone(), g("current")),
+            vec![
+                local("migration", ix(g("migrations"), version.clone())),
+                iff(
+                    eq(g("migration"), LExpr::Nil),
+                    vec![warning("missing saved migration"), ret(data.clone())],
+                ),
+                local("candidate", helper("copy", vec![data.clone()])),
+                s(LStmtKind::Local(
+                    vec!["__selu_saved_ok".into(), "__selu_saved_message".into()],
+                    vec![call("pcall", vec![g("migration"), g("candidate")])],
+                )),
+                iff(
+                    LExpr::Unary(UnOp::Not, Box::new(g("ok"))),
+                    vec![
+                        invoke(helper(
+                            "warn",
+                            vec![bin(
+                                BinOp::Concat,
+                                g("key"),
+                                bin(
+                                    BinOp::Concat,
+                                    st(": migration failed: "),
+                                    call("tostring", vec![g("message")]),
+                                ),
+                            )],
+                        )),
+                        ret(data.clone()),
+                    ],
+                ),
+                assign(version.clone(), bin(BinOp::Add, version.clone(), n(1))),
+                assign(data.clone(), g("candidate")),
+                assign(ver.clone(), version.clone()),
+                assign(ix(g("_G"), g("key")), data.clone()),
+            ],
+        )),
+        invoke(helper(
+            "fill",
+            vec![data.clone(), g("defaults"), g("objects")],
+        )),
+        assign(ver, g("current")),
+        assign(ix(g("_G"), g("key")), data.clone()),
+        ret(data),
+    ];
     vec![
         assign(rt(), LExpr::Table(vec![])),
+        assign(f(name("__selu_ns"), "__selu_saved"), rt()),
         assign(f(rt(), "copy"), fun(&["value"], copy_body)),
-        assign(f(rt(), "fill"), fun(&["data", "defaults"], fill_body)),
+        assign(
+            f(rt(), "fill"),
+            fun(&["data", "defaults", "objects"], fill_body),
+        ),
+        assign(f(rt(), "warn"), fun(&["message"], warn_body)),
+        assign(
+            f(rt(), "load"),
+            fun(
+                &["key", "current", "defaults", "objects", "migrations"],
+                load_body,
+            ),
+        ),
+        assign(f(rt(), "entries"), LExpr::Table(vec![])),
         assign(f(rt(), "loaders"), LExpr::Table(vec![])),
-        local("__selu_saved_frame", call("CreateFrame", vec![st("Frame")])),
-        invoke(LExpr::Method(
-            Box::new(name("__selu_saved_frame")),
-            "RegisterEvent".into(),
-            vec![st("ADDON_LOADED")],
-        )),
-        invoke(LExpr::Method(
-            Box::new(name("__selu_saved_frame")),
-            "SetScript".into(),
+        local("frame", call("CreateFrame", vec![st("Frame")])),
+        method(g("frame"), "RegisterEvent", vec![st("ADDON_LOADED")]),
+        method(
+            g("frame"),
+            "SetScript",
             vec![
                 st("OnEvent"),
                 fun(
                     &["self", "event", "addon"],
                     vec![
                         iff(
-                            bin(BinOp::Ne, name("addon"), name("__selu_saved_addon")),
+                            bin(BinOp::Ne, g("addon"), name("__selu_addon")),
                             vec![s(LStmtKind::Return(vec![]))],
                         ),
-                        s(LStmtKind::GenFor {
-                            names: vec!["_".into(), "load".into()],
-                            exprs: vec![call("ipairs", vec![f(rt(), "loaders")])],
-                            body: vec![invoke(call("load", vec![]))],
-                        }),
-                        invoke(LExpr::Method(
-                            Box::new(name("self")),
-                            "UnregisterEvent".into(),
-                            vec![st("ADDON_LOADED")],
-                        )),
+                        each(
+                            call("ipairs", vec![f(rt(), "loaders")]),
+                            vec![
+                                s(LStmtKind::Local(
+                                    vec!["__selu_saved_ok".into(), "__selu_saved_message".into()],
+                                    vec![call("pcall", vec![g("value")])],
+                                )),
+                                iff(
+                                    LExpr::Unary(UnOp::Not, Box::new(g("ok"))),
+                                    vec![invoke(helper(
+                                        "warn",
+                                        vec![call("tostring", vec![g("message")])],
+                                    ))],
+                                ),
+                            ],
+                        ),
+                        assign(f(rt(), "entries"), LExpr::Nil),
+                        assign(f(rt(), "loaders"), LExpr::Nil),
+                        method(g("self"), "UnregisterEvent", vec![st("ADDON_LOADED")]),
+                        method(g("self"), "SetScript", vec![st("OnEvent"), LExpr::Nil]),
+                        assign(f(name("__selu_ns"), "__selu_saved"), LExpr::Nil),
                     ],
                 ),
             ],
-        )),
+        ),
     ]
 }
-/// Hex-encoding UTF-8 components is injective and avoids Lua keywords/punctuation.
-pub fn global_name(addon: &str, module: &str, saved: &str) -> String {
-    fn hex(s: &str) -> String {
-        s.bytes().map(|b| format!("{b:02x}")).collect()
+pub fn global_name(addon: &str, _module: &str, saved: &str) -> String {
+    format!("{addon}_{saved}")
+}
+pub fn declaration_global(addon: &str, saved: &str, adopted: bool) -> String {
+    if adopted {
+        saved.into()
+    } else {
+        global_name(addon, "", saved)
     }
-    format!("Selu_{}_{}_{}", hex(addon), hex(module), hex(saved))
+}
+pub(crate) fn has_saved(p: &Program) -> bool {
+    p.stmts
+        .iter()
+        .any(|s| matches!(inner(s).kind, StmtKind::Saved { .. }))
+}
+fn inner(s: &Stmt) -> &Stmt {
+    if let StmtKind::Export(s) = &s.kind {
+        s
+    } else {
+        s
+    }
+}
+fn objects(ty: Option<&selu_check::Type>) -> LExpr {
+    let fields = if let Some(selu_check::Type::Object(fs)) = ty {
+        fs.iter()
+            .filter(|(_, t)| matches!(t, selu_check::Type::Object(_)))
+            .map(|(k, t)| LField::Named(k.clone(), objects(Some(t))))
+            .collect()
+    } else {
+        vec![]
+    };
+    LExpr::Table(fields)
 }
 impl Lowerer<'_> {
     pub(crate) fn saved_stmt(&mut self, stmt: &Stmt, forward: bool, out: &mut LBlock) {
@@ -155,142 +325,30 @@ impl Lowerer<'_> {
                 name: saved,
                 version,
                 defaults,
+                adopted,
                 ..
             } => {
-                out.push(s(LStmtKind::Local(
-                    vec!["__selu_saved_addon".into(), "__selu_saved_ns".into()],
-                    vec![LExpr::Vararg],
-                )));
-                out.push(assign(
-                    name("__selu_saved_ns"),
-                    bin(BinOp::Or, name("__selu_saved_ns"), LExpr::Table(vec![])),
-                ));
-                out.push(iff(eq(rt(), LExpr::Nil), runtime()));
                 if !forward {
                     out.push(s(LStmtKind::Local(vec![saved.clone()], vec![])));
                 }
-                let migrations = format!("__selu_migrations_{saved}");
-                out.push(local(&migrations, LExpr::Table(vec![])));
-                // Build the global key from the actual addon loader name at runtime.
-                let suffix = global_name("", &self.module.key, saved)
-                    .strip_prefix("Selu__")
-                    .unwrap()
-                    .to_owned();
-                // Use a deterministic hex encoder for the addon name, without relying on string methods.
-                let encoder = fun(
-                    &["text"],
-                    vec![
-                        local("result", st("")),
-                        s(LStmtKind::NumFor {
-                            var: "i".into(),
-                            start: n(1),
-                            stop: LExpr::Unary(UnOp::Len, Box::new(name("text"))),
-                            step: None,
-                            body: vec![assign(
-                                name("result"),
-                                bin(
-                                    BinOp::Concat,
-                                    name("result"),
-                                    lua::call(
-                                        name("__selu_saved_format"),
-                                        vec![
-                                            st("%02x"),
-                                            lua::call(
-                                                name("__selu_saved_byte"),
-                                                vec![name("text"), name("i")],
-                                            ),
-                                        ],
-                                    ),
-                                ),
-                            )],
-                        }),
-                        s(LStmtKind::Return(vec![name("result")])),
-                    ],
-                );
-                let key = format!("__selu_saved_key_{saved}");
-                out.push(local(
-                    &key,
-                    bin(
-                        BinOp::Concat,
-                        st("Selu_"),
-                        bin(
-                            BinOp::Concat,
-                            lua::call(encoder, vec![name("__selu_saved_addon")]),
-                            st(&format!("_{suffix}")),
-                        ),
-                    ),
-                ));
-                let data = name("data");
-                let ver = f(data.clone(), "__selu_version");
-                let mut body = vec![
-                    local(
-                        "data",
-                        call("rawget", vec![name("__selu_saved__G"), name(&key)]),
-                    ),
-                    local("fresh", eq(data.clone(), LExpr::Nil)),
-                    iff(
-                        name("fresh"),
-                        vec![
-                            assign(data.clone(), LExpr::Table(vec![])),
-                            assign(ver.clone(), n(*version)),
-                        ],
-                    ),
-                    local("version", bin(BinOp::Or, ver.clone(), n(1))),
-                    iff(
-                        bin(BinOp::Gt, name("version"), n(*version)),
-                        vec![
-                            invoke(call(
-                                "print",
-                                vec![st("Selu warning: saved data is newer than this addon")],
-                            )),
-                            assign(name(saved), data.clone()),
-                            s(LStmtKind::Return(vec![])),
-                        ],
-                    ),
-                ];
-                body.push(s(LStmtKind::While(
-                    bin(BinOp::Lt, name("version"), n(*version)),
-                    vec![
-                        local("migration", ix(name(&migrations), name("version"))),
-                        iff(
-                            eq(name("migration"), LExpr::Nil),
-                            vec![invoke(call("error", vec![st("missing saved migration")]))],
-                        ),
-                        local("candidate", copy(data.clone())),
-                        s(LStmtKind::Local(
-                            vec!["ok".into(), "message".into()],
-                            vec![call("pcall", vec![name("migration"), name("candidate")])],
-                        )),
-                        iff(
-                            LExpr::Unary(UnOp::Not, Box::new(name("ok"))),
-                            vec![
-                                invoke(call(
-                                    "print",
-                                    vec![st("Selu warning: migration failed"), name("message")],
-                                )),
-                                assign(name(saved), data.clone()),
-                                s(LStmtKind::Return(vec![])),
-                            ],
-                        ),
-                        assign(name("version"), bin(BinOp::Add, name("version"), n(1))),
-                        assign(data.clone(), name("candidate")),
-                        assign(ver.clone(), name("version")),
-                        assign(ix(name("__selu_saved__G"), name(&key)), data.clone()),
-                    ],
-                )));
-                let mut pre = vec![];
-                let defaults = self.expr(defaults, &mut pre);
-                body.extend(pre);
-                body.push(invoke(lua::call(
-                    f(rt(), "fill"),
-                    vec![data.clone(), defaults],
-                )));
-                body.push(assign(ver, n(*version)));
+                let key = declaration_global(&self.module.addon_name, saved, *adopted);
+                let entry = ix(f(rt(), "entries"), st(&key));
+                out.push(assign(entry.clone(), LExpr::Table(vec![])));
+                let mut body = vec![];
+                let defaults_value = self.expr(defaults, &mut body);
                 body.push(assign(
-                    ix(name("__selu_saved__G"), name(&key)),
-                    data.clone(),
+                    name(saved),
+                    helper(
+                        "load",
+                        vec![
+                            st(&key),
+                            n(*version),
+                            defaults_value,
+                            objects(self.types.get(defaults.id)),
+                            entry,
+                        ],
+                    ),
                 ));
-                body.push(assign(name(saved), data));
                 let loaders = f(rt(), "loaders");
                 out.push(assign(
                     ix(
@@ -307,9 +365,15 @@ impl Lowerer<'_> {
                 body,
                 ..
             } => {
+                // The matching declaration controls whether this key adopts a legacy global.
+                let key = self
+                    .saved_globals
+                    .get(saved)
+                    .cloned()
+                    .expect("saved declaration checked");
                 let func = self.function(std::slice::from_ref(param), body);
                 out.push(assign(
-                    ix(name(&format!("__selu_migrations_{saved}")), n(*from)),
+                    ix(ix(f(rt(), "entries"), st(&key)), n(*from)),
                     LExpr::Function(func),
                 ));
             }
@@ -317,20 +381,11 @@ impl Lowerer<'_> {
         }
     }
 }
-
-pub(crate) fn captures(program: &selu_syntax::Program) -> LBlock {
-    let has_saved = program.stmts.iter().any(|s| {
-        let s = if let StmtKind::Export(inner) = &s.kind {
-            inner.as_ref()
-        } else {
-            s
-        };
-        matches!(s.kind, StmtKind::Saved { .. })
-    });
-    if !has_saved {
+pub(crate) fn captures(program: &Program) -> LBlock {
+    if !has_saved(program) {
         return vec![];
     }
-    let mut out = Vec::new();
+    let mut out = vec![];
     for global in [
         "_G",
         "type",
@@ -340,11 +395,24 @@ pub(crate) fn captures(program: &selu_syntax::Program) -> LBlock {
         "rawget",
         "pcall",
         "print",
-        "error",
+        "tostring",
     ] {
-        out.push(local(&format!("__selu_saved_{global}"), name(global)));
+        out.push(local(global, name(global)));
     }
-    out.push(local("__selu_saved_format", f(name("string"), "format")));
-    out.push(local("__selu_saved_byte", f(name("string"), "byte")));
+    out.push(local("runtime", f(name("__selu_ns"), "__selu_saved")));
+    out.push(iff(eq(rt(), LExpr::Nil), runtime()));
     out
+}
+pub(crate) fn globals(program: &Program, addon: &str) -> std::collections::HashMap<String, String> {
+    program
+        .stmts
+        .iter()
+        .filter_map(|s| {
+            if let StmtKind::Saved { name, adopted, .. } = &inner(s).kind {
+                Some((name.clone(), declaration_global(addon, name, *adopted)))
+            } else {
+                None
+            }
+        })
+        .collect()
 }

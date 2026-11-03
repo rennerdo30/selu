@@ -95,9 +95,20 @@ fn module_event_prologue() -> String {
 
 /// Lowers a program the checker accepted; `types` is the checker's table.
 pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lowered {
+    lower_with_addon(program, manifest, types, "Addon")
+}
+pub fn lower_with_addon(
+    program: &Program,
+    manifest: &Manifest,
+    types: &TypeTable,
+    addon_name: &str,
+) -> Lowered {
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
+    let mut module = ModuleBindings::default();
+    module.addon_name = addon_name.into();
     let mut l = Lowerer {
-        module: ModuleBindings::default(),
+        module,
+        saved_globals: saved::globals(program, addon_name),
         known: &known,
         types,
         temps: 0,
@@ -118,14 +129,15 @@ pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lower
     }
     out.extend(saved::captures(program));
     out.extend(l.block(&program.stmts));
-    if let Some(prologue) = l.wow_prologue() {
+    let wow = l.wow_prologue();
+    if wow.is_some() || saved::has_saved(program) {
         out.splice(
             0..0,
             [raw(
                 "local __selu_addon, __selu_ns = ...\n__selu_ns = __selu_ns or {}",
             )]
             .into_iter()
-            .chain(prologue),
+            .chain(wow.into_iter().flatten()),
         );
     }
     let printed = lua::print_block(&out);
@@ -160,10 +172,11 @@ pub fn lower_module(
                 | StmtKind::OnHandler { .. }
         )
     }) {
-        return lower(program, manifest, types);
+        return lower_with_addon(program, manifest, types, &module.addon_name);
     }
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
     let mut l = Lowerer {
+        saved_globals: saved::globals(program, &module.addon_name),
         module,
         known: &known,
         types,
@@ -229,6 +242,7 @@ fn raw(text: &str) -> LStmt {
 
 pub(crate) struct Lowerer<'a> {
     module: ModuleBindings,
+    saved_globals: std::collections::HashMap<String, String>,
     wow: wow::WowState,
     class_receiver: String,
     classes: classes::ClassLoweringState,

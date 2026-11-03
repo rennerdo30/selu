@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 #[derive(Default, Clone)]
 pub struct ModuleBindings {
     pub key: String,
+    pub addon_name: String,
     pub imports: BTreeMap<String, (String, selu_check::ModuleExports)>,
     live_reads: HashSet<u32>,
     declarations: Vec<Stmt>,
@@ -33,6 +34,7 @@ impl ModuleBindings {
         let mut live_reads = HashSet::new();
         walk_block(&program.stmts, &live, &mut live_reads, false);
         Self {
+            addon_name: "Addon".into(),
             key,
             imports,
             live_reads,

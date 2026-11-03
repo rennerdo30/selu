@@ -422,6 +422,10 @@ impl Parser {
         let kind = match self.peek().clone() {
             Tok::Ident(ref w) if w == "saved" && matches!(self.peek_at(1), Some(Tok::Ident(_))) => {
                 self.bump();
+                let adopted = self.at_ident("global");
+                if adopted {
+                    self.bump();
+                }
                 let per_character = self.at_ident("perCharacter");
                 if per_character {
                     self.bump();
@@ -440,6 +444,7 @@ impl Parser {
                     name,
                     name_span,
                     per_character,
+                    adopted,
                     version,
                     defaults,
                 }
@@ -448,11 +453,13 @@ impl Parser {
                 if w == "migrate" && matches!(self.peek_at(1), Some(Tok::Ident(_))) =>
             {
                 self.bump();
-                let (name, _) = self.ident("a saved name")?;
+                let (name, name_span) = self.ident("a saved name")?;
+                let step_start = self.peek_span().start;
                 let from = self.saved_version()?;
                 self.expect(&Tok::Minus, "`->`")?;
                 self.expect(&Tok::Gt, "`->`")?;
                 let to = self.saved_version()?;
+                let step_span = self.span_from(step_start);
                 self.expect(&Tok::LParen, "`(`")?;
                 let (n, span) = self.ident("the old data parameter")?;
                 self.expect(&Tok::RParen, "`)`")?;
@@ -466,6 +473,8 @@ impl Parser {
                 let body = self.block()?;
                 StmtKind::Migrate {
                     name,
+                    name_span,
+                    step_span,
                     from,
                     to,
                     param,

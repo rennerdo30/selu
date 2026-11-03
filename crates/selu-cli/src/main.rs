@@ -174,6 +174,7 @@ fn build(
 
     let src_dir = project_dir.join("src");
     let sources = project_sources(&src_dir)?;
+    validate_saved_names(&sources, &project.name)?;
 
     let target_strings: Vec<String> = match target_override {
         Some(t) => t
@@ -253,8 +254,9 @@ fn build(
                 &mut saved_globals,
             )?;
             exports.insert(module.key.clone(), signature);
-            let bindings =
+            let mut bindings =
                 selu_lower::ModuleBindings::new(module.key.clone(), lower_imports, &module.program);
+            bindings.addon_name = project.name.clone();
             let lowered =
                 selu_lower::lower_module(&module.program, manifest, &checked.types, bindings);
             compiled.push((module, lowered));
@@ -406,6 +408,9 @@ fn project_sources(src: &Path) -> Result<Vec<ModuleSource>, ExitCode> {
                             .with_span(from_span.clone()),
                         &source,
                     ));
+                }
+                if let Some(diagnostic) = selu_check::reserved_module_path(from, from_span) {
+                    return Err(fail(&diagnostic, &source));
                 }
                 let dep = import_key(key, from).ok_or_else(|| {
                     fail(
@@ -578,9 +583,6 @@ fn collect_saved(
             for (key, ty) in fs {
                 fields(ty, format!("{path}/{}:{key}", key.len()), out);
             }
-        } else if let selu_check::Type::Array(element) = ty {
-            out.insert(path.clone(), "array".into());
-            fields(element, format!("{path}/[]"), out);
         } else {
             out.insert(path, ty.to_string());
         }
@@ -590,6 +592,7 @@ fn collect_saved(
             name,
             version,
             per_character,
+            adopted,
             defaults,
             ..
         } = &saved_inner(s).kind
@@ -600,7 +603,7 @@ fn collect_saved(
                 String::new(),
                 &mut fs,
             );
-            let global = selu_lower::saved::global_name(addon, &module.key, name);
+            let global = selu_lower::saved::declaration_global(addon, name, *adopted);
             globals.push((global.clone(), *per_character));
             shapes.insert(
                 global,
@@ -626,7 +629,25 @@ fn validate_saved(
         for s in &module.program.stmts {
             if let selu_syntax::StmtKind::Migrate { name, from, to, .. } = &s.kind {
                 migrations
-                    .entry(selu_lower::saved::global_name(addon, &module.key, name))
+                    .entry(
+                        module
+                            .program
+                            .stmts
+                            .iter()
+                            .find_map(|s| {
+                                if let selu_syntax::StmtKind::Saved {
+                                    name: n, adopted, ..
+                                } = &saved_inner(s).kind
+                                {
+                                    (n == name).then(|| {
+                                        selu_lower::saved::declaration_global(addon, name, *adopted)
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .expect("checked migration"),
+                    )
                     .or_default()
                     .push((*from, *to));
             }
@@ -696,9 +717,12 @@ fn saved_diagnostic(key: &str, code: &str, message: String, modules: &[ModuleSou
         for stmt in &module.program.stmts {
             let stmt = saved_inner(stmt);
             if let selu_syntax::StmtKind::Saved {
-                name, name_span, ..
+                name,
+                name_span,
+                adopted,
+                ..
             } = &stmt.kind
-                && selu_lower::saved::global_name(addon, &module.key, name) == key
+                && selu_lower::saved::declaration_global(addon, name, *adopted) == key
             {
                 eprint!(
                     "{}",
@@ -711,4 +735,46 @@ fn saved_diagnostic(key: &str, code: &str, message: String, modules: &[ModuleSou
             }
         }
     }
+}
+
+fn validate_saved_names(modules: &[ModuleSource], addon: &str) -> Result<(), ExitCode> {
+    let mut names = std::collections::BTreeMap::new();
+    let mut globals = std::collections::BTreeMap::new();
+    for module in modules {
+        for stmt in &module.program.stmts {
+            if let selu_syntax::StmtKind::Saved {
+                name,
+                name_span,
+                adopted,
+                ..
+            } = &saved_inner(stmt).kind
+            {
+                let global = selu_lower::saved::declaration_global(addon, name, *adopted);
+                let previous: Option<(&ModuleSource, &selu_diagnostics::Span)> =
+                    names.get(name).or_else(|| globals.get(&global)).copied();
+                if let Some((prior, span)) = previous {
+                    for (source, span) in [(prior, span), (module, name_span)] {
+                        eprint!(
+                            "{}",
+                            Diagnostic::error(
+                                "SELU0472",
+                                format!(
+                                    "saved name or global `{name}` is declared twice in this addon"
+                                )
+                            )
+                            .with_span(span.clone())
+                            .with_help(
+                                "choose distinct saved names and global names across all modules"
+                            )
+                            .render(&source.source)
+                        );
+                    }
+                    return Err(ExitCode::FAILURE);
+                }
+                names.insert(name, (module, name_span));
+                globals.insert(global, (module, name_span));
+            }
+        }
+    }
+    Ok(())
 }

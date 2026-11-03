@@ -1,16 +1,16 @@
-[saved.Selu_536176656453657474696e6773_6d61696e_70726f6772657373]
+[saved.SavedSettings_progress]
 version = 1
 per_character = true
 
-[saved.Selu_536176656453657474696e6773_6d61696e_70726f6772657373.fields]
+[saved.SavedSettings_progress.fields]
 "" = "object"
 "/6:visits" = "number"
 
-[saved.Selu_536176656453657474696e6773_6d61696e_73657474696e6773]
+[saved.SavedSettings_settings]
 version = 2
 per_character = false
 
-[saved.Selu_536176656453657474696e6773_6d61696e_73657474696e6773.fields]
+[saved.SavedSettings_settings.fields]
 "" = "object"
 "/16:thresholdPercent" = "number"
 "/5:panel" = "object"

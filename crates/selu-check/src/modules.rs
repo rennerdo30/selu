@@ -82,6 +82,10 @@ impl Ctx<'_> {
             default,
         } = &s.kind
         {
+            if let Some(diagnostic) = reserved_module_path(from, from_span) {
+                self.out.push(diagnostic);
+                return;
+            }
             if default.is_some() {
                 self.unsupported("asset imports", &s.span);
                 return;
@@ -166,4 +170,18 @@ impl Ctx<'_> {
             false
         }
     }
+}
+
+/// Module namespace slots share the compiler-reserved prefix with generated names.
+pub fn reserved_module_path(path: &str, span: &Span) -> Option<selu_diagnostics::Diagnostic> {
+    path.split(['/', '\\'])
+        .any(|part| part.starts_with("__selu"))
+        .then(|| {
+            err(
+                "SELU0318",
+                "module path names starting with __selu are reserved",
+                span,
+            )
+            .with_help("rename the file or directory so no path segment starts with __selu")
+        })
 }

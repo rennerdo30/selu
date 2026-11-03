@@ -88,3 +88,60 @@ impl Sim {
         Ok(sim)
     }
 }
+/// Account-wide data is shared; each character has an independent persisted tree.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SavedSessions {
+    pub account: SavedSnapshot,
+    pub characters: BTreeMap<String, SavedSnapshot>,
+}
+impl Sim {
+    pub fn login_character(
+        addon: &str,
+        files: &[(String, String)],
+        sessions: &SavedSessions,
+        character: &str,
+    ) -> SimResult<Self> {
+        let mut snapshot = sessions.account.clone();
+        if let Some(saved) = sessions.characters.get(character) {
+            snapshot.0.extend(saved.0.clone());
+        }
+        Self::login_saved(addon, files, &snapshot)
+    }
+    pub fn logout_character(
+        &self,
+        sessions: &mut SavedSessions,
+        character: &str,
+        account_names: &[&str],
+        character_names: &[&str],
+    ) -> SimResult<()> {
+        if account_names
+            .iter()
+            .any(|name| character_names.contains(name))
+        {
+            return Err(mlua::Error::RuntimeError(
+                "a saved global cannot have both account and character scope".into(),
+            ));
+        }
+        let names = account_names
+            .iter()
+            .chain(character_names)
+            .copied()
+            .collect::<Vec<_>>();
+        let mut snapshot = self.logout_saved(&names)?;
+        let mut account = SavedSnapshot::default();
+        for name in account_names {
+            account.0.insert(
+                (*name).into(),
+                snapshot.0.remove(*name).expect("captured saved name"),
+            );
+        }
+        sessions.account.0.extend(account.0);
+        sessions
+            .characters
+            .entry(character.into())
+            .or_default()
+            .0
+            .extend(snapshot.0);
+        Ok(())
+    }
+}
