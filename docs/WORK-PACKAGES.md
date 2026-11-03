@@ -626,3 +626,37 @@ A merges first (B's `for...of` uses its `continue` helper), then B and C in
 either order. Every branch gets an independent review before merge; the
 parent does the final check and merges. Findings outside a package become
 new issues, not more commits on the branch.
+
+## M2: manifests for every client (owner, 2026-11-04)
+
+The owner wants Selu to support every client through the source in
+`E:/Development/wow-ui-source` ("support all versions via the decompiled
+interface files"). M1's generator already reads any branch; M2 generates and
+commits the remaining flavours. Owned: `manifests/*/`, the generator crate,
+`crates/selu-manifest/`, `docs/manifests.md`, its tests. Shared edits: none
+expected (flavour names come from manifests, never from compiler code); ask
+first otherwise.
+
+Acceptance:
+
+1. Manifests for `classic-era` (branch `classic_era`, 1.15.9), `classic-anniversary`
+   (`classic_anniversary`, 2.5.6), `classic-titan` (`classic_titan`, 3.80.2)
+   and `classic` (`classic`, 5.5.4), from pinned commits, next to `retail`
+   and `forever`. Target names follow Blizzard's branch names. Refresh
+   `retail` and `forever` only if their pinned commits changed meaning;
+   otherwise leave them.
+2. Interface numbers from the version convention (`1.15.9` -> `11509`),
+   recorded as such, with the note that the owner's shipping addon
+   (`RennersAddons.toc`: 11509, 16001, 20506, 38002, 50504) loads with
+   exactly these numbers.
+3. Undocumented globals (`source` evidence) per flavour as for retail. The
+   owner's frequently used globals (`docs/TOOLKIT-SURVEY.md`) checked on
+   every flavour; list the ones that don't resolve, per flavour, with every
+   location searched.
+4. Every example builds against every flavour (a test), and `selu targets`
+   lists them all.
+5. `docs/manifests.md`: a table of flavours, branches, versions,
+   interfaces and pinned commits, and how to add PTR/beta manifests on
+   demand (not committed).
+6. Report the sizes; plain JSON in git (it deltas well) unless the total
+   exceeds 40 MB, then ask.
