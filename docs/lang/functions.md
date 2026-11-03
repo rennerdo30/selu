@@ -44,3 +44,21 @@ is introduced for Selu object function fields.
 The package's diagnostic range currently uses SELU0370-0377 for invalid rest
 parameters, rest position, invalid default values, out-of-range tuple bindings,
 invalid destructuring, missing fields and single-value tuple calls.
+
+## Review clarifications
+
+An explicit `null` also triggers a default: `function f(x: number? = 7)`
+receives 7 for `f(null)`. Lua 5.1 represents both an omitted argument and
+`null` as nil; Selu intentionally uses the same nil-based default rule for
+both. TypeScript preserves an explicit null, so this is a deliberate difference.
+
+Written function types preserve a final rest parameter, for example
+`(...xs: number[]) => void`. Nullable rest elements such as `number?[]` are
+rejected: Lua sequences cannot preserve nil holes. Function assignment checks
+every position contravariantly, including rest arguments that land in optional
+fixed parameters of the assigned function.
+
+Tuple calls are also rejected as condition operands, including `!`, `&&` and
+`||`. Destructure first and test the desired result. Self-referential closures
+and references to later destructuring declarations share forward-declared Lua
+locals. Empty destructuring evaluates its initializer once without bindings.
