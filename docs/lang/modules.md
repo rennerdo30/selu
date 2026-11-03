@@ -64,3 +64,9 @@ constructors and methods must remove their parameter bindings from the active
 live-import set before walking defaults and bodies, as function declarations do.
 Imported class names in written types belong in D3's checker name/type resolution;
 module signatures already pass each exported Type through to import bindings.
+
+Module path segments and filenames starting with `__selu` are reserved, like
+user bindings (SELU0318). The diagnostic underlines the import path and asks to
+rename the file or directory. This keeps named compiler runtime slots in the
+addon namespace separate from module tables. Both project path resolution and
+standalone module checking enforce the same validation.

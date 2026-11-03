@@ -1,67 +1,98 @@
 # Saved data
 
-`saved name = { ... };` declares addon-wide data; `saved perCharacter name`
-uses per-character storage. Versions are positive integers, defaulting to 1.
-Declarations and migrations belong at file scope. Exported saved objects are
-live bindings: importers read the object installed by the loader, not an early
-copy. The root binding cannot be reassigned; mutate its fields instead.
+`saved settings = { ... };` declares account-wide data. Use
+`saved perCharacter progress = { ... };` for character-specific data. Defaults
+must be literal serializable objects/arrays, primitives or empty typed Maps.
+Functions are rejected recursively, including inside collection types. Map and
+set keys must be primitive numbers, strings or booleans; table keys and weak
+maps cannot be persisted. Names obey the usual Lua keyword and reserved
+`__selu` prefix checks. The root object binding is immutable; mutate its fields.
 
-The Lua global is `Selu_<addon hex>_<module path hex>_<name hex>`, with UTF-8
-bytes encoded as lowercase hex. Addon names are the loader's installed folder
-name, which must match the build's addon name. Components cannot collide through
-punctuation or case folding; different addon names and module paths stay distinct.
-`__selu_version` at the object's root is reserved metadata. Migration parameter
-names and saved names also obey the Lua keyword and `__selu` prefix restrictions.
+The default global name is `<AddonName>_<savedName>`, using `[addon].name` from
+`selu.toml` at compile time. For example, addon `SavedSettings` and declaration
+`settings` use `SavedSettings_settings`. Module paths are deliberately absent:
+moving a declaration between modules keeps its data. Saved names and effective
+global names must be unique across the addon; duplicate diagnostics underline
+both declarations. Exported saved values remain live bindings.
 
-The private addon namespace's numeric slot 2 owns the saved runtime: copy/fill
-helpers, initialization callbacks and one ADDON_LOADED frame. Files share that
-runtime. Each file captures only the Lua globals used by its generated saved
-runtime before user declarations; user locals cannot shadow those dependencies.
-The initialization callback ignores other addons' ADDON_LOADED events and
-unregisters itself after its own. There is no idle updater.
+## Porting an existing addon
 
-Read saved data in PLAYER_LOGIN or a later event. Top-level direct reads and
-writes (including imported values and member roots) are SELU0460. Functions may
-refer to saved values, but callers must wait until loading completes. An arbitrary
-ADDON_LOADED handler may run before initialization because event-frame order is
-not guaranteed; PLAYER_LOGIN is the first guaranteed event for addon code.
-
-Defaults are literal serializable objects/arrays, primitives and empty typed
-Maps. Each missing value is deeply copied; recursive filling tests `nil`, never
-truthiness. Existing values, including false, remain intact. Functions, aliases,
-nonempty constructor calls and computed defaults are rejected. Arrays and Maps
-are ordinary persisted Lua tables; missing nested entries receive independent
-copies. The simulator snapshots plain values into Rust-owned data and restores
-fresh tables into a fresh VM; cycles and unsupported values fail explicitly.
-
-A migration is written after its saved declaration:
+Adopt its existing SavedVariables global explicitly:
 
 ```selu
-saved settings version 2 = { enabled: true, thresholdPercent: 35 };
-migrate settings 1 -> 2 (old) {
-    old.thresholdPercent = 35;
+saved global MyAddonDB version 2 = { count: 0 };
+migrate MyAddonDB 1 -> 2 (old) {
+    old.count = old.x;
+    old.x = null;
+}
+on PLAYER_LOGIN() {
+    print(MyAddonDB.count);
 }
 ```
 
-Keep exactly one migration for every adjacent version from 1 to the current
-version. Migration bodies use normal Selu statements, with `old` an untyped
-historical object. Each attempt receives a deep copy of the last committed
-object. On success the new version and object replace the global together.
-Failure logs a warning through print, stops that object's chain and retains the
-last successful object/version, so the next login retries. Defaults run only
-after the chain succeeds. Newer-version data is published unchanged with a
-warning and receives neither migrations nor defaults. Migration authors should
-only change `old`; external side effects cannot be rolled back.
+The `.toc` lists exactly `MyAddonDB`. A player's legacy
+`MyAddonDB = { x = 99 }` has no Selu metadata, so it counts as version 1;
+the migration preserves 99 as `count`. Fresh data (the global is nil) starts
+at the declaration's current version and receives defaults without historical
+migrations. This unversioned-data rule applies to default globals too.
+Use `saved global perCharacter ExistingCharacterDB = { ... };` to adopt a
+SavedVariablesPerCharacter global. Keep the same account/character scope as the
+old addon. Do not rename a published global or change its storage scope without
+a separately designed data transfer; builds reject such history changes.
 
-Every successful project build writes deterministic `selu.saved.toml`. Commit
-it. Field paths use length-prefixed segments to distinguish punctuation in keys.
-Adding object fields with defaults is compatible. Removing/retyping fields needs
-a higher version and a complete migration chain. Version rollback, declaration
-removal and malformed history fail without replacing history. Keep historical
-migrations in source. Generated Lua and schema examples are in the D2 handoff
-report and `examples/saved-settings/`.
+## Loading and migrations
 
-Simulator helpers: `load_addon` now fires ADDON_LOADED after the last file;
-`logout_saved(names)` fires PLAYER_LOGOUT and captures only listed globals;
-`Sim::login_saved(addon, files, snapshot)` restores them into a new VM before
-loading files. `SavedSnapshot` exposes the persisted tree for exact assertions.
+Declarations and migrations are file-scoped; write each migration after its
+saved declaration. Keep exactly one adjacent migration for every version step
+from 1 to the current positive integer version. A migration receives an untyped
+historical object in its written parameter. Each attempt receives a deep copy
+of the last good data; success commits its version and object together. Failure
+logs a warning, stops that declaration's chain and preserves the last good
+version. The next login attempts the failed step again. External side effects
+of a migration cannot be rolled back; confine changes to its parameter.
+
+Root `__selu_version` is reserved. Version metadata must be a positive integer.
+Invalid metadata or a non-table root is left untouched with a warning, and
+other saved declarations continue loading. Newer-version data is also left
+untouched with a warning and receives neither migrations nor defaults.
+Warnings use D4's per-addon log runtime at `warn` level when available; otherwise
+they use captured `print`. Disabled warning levels follow D4's normal rules.
+
+After migrations, missing object fields are filled recursively using `nil`
+checks, preserving false and all existing values. Missing arrays/maps and other
+tables are deep-copied. Existing arrays and maps are not traversed to fill
+element fields. Thus adding an object field with a default is compatible;
+changing an array/map element shape, including adding a field, requires a
+version bump and migration. Removing or retyping any existing field also needs
+that bump. Every successful build writes deterministic `selu.saved.toml`;
+commit it. Failed builds preserve the prior history.
+
+Read saved data at PLAYER_LOGIN or later. Direct top-level reads/writes,
+including imported bindings and member roots, are SELU0460. Functions may refer
+to saved values, but callers must wait for loading. An arbitrary ADDON_LOADED
+handler may run before initialization; PLAYER_LOGIN is the earliest guaranteed
+event for addon code.
+
+## Runtime and simulator
+
+Each file has exactly one reserved loader line and one saved runtime prologue
+when needed. Files share `__selu_ns.__selu_saved`, one event frame and one set
+of helpers. Only the globals used by those helpers are captured. Every generated
+local/parameter has a `__selu` prefix; each declaration adds only its user
+binding at file scope. Loaders and migrations, the event script and the reserved
+namespace entry are released after the addon's ADDON_LOADED. There is no idle
+updater. D1/D4 reserved boolean namespace keys remain unchanged.
+
+`lower_with_addon` supplies the compile-time addon name for standalone callers;
+`lower` defaults to `Addon`. Project lowering passes the configured name through
+module bindings. The loader's runtime addon name is used only to filter events.
+
+`load_addon` fires ADDON_LOADED after its files. `logout_saved(names)` fires
+PLAYER_LOGOUT and captures plain Lua data into a VM-independent SavedSnapshot;
+`login_saved` restores it into a fresh VM before loading files. Cycles and
+nonserializable values fail explicitly. For multiple characters, SavedSessions
+holds one account snapshot and a map of character snapshots. Pass a character
+identity to `Sim::login_character` and `logout_character`, plus account and
+character global lists on logout. Account values survive a character switch;
+character values are restored only for that identity. Overlapping scope lists
+are rejected.
