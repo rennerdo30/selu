@@ -41,8 +41,13 @@ with the owner.
 
 One metadata table in api.rs supplies the accepted scalar members for named
 scalar unions. Arguments may be any member. Returned union values fit a target
-only when every possible member fits that target. An opaque engine type without
-members remains nominal. Untyped values interoperate in either direction.
+only when every possible member fits that target. Only an engine type with an actual documentation-table definition and no Selu
+counterpart remains nominal. A referenced name without a definition is untyped,
+accepts anything, and interoperates with other types in both directions. A false
+error is worse than a missing check (owner decision, 2026-11-04). This applies to
+ItemInfo, ClubId, ClubStreamId and other undefined names; their use in a signature
+is not itself a type definition. Documented structures, enums, widgets, callbacks,
+primitive aliases and the sourced scalar-union table keep their existing types.
 
 | API type | Members | Source |
 |---|---|---|

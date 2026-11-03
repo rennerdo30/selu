@@ -387,3 +387,34 @@ fn unspecified_script_callbacks_accept_functions_and_null() {
         );
     }
 }
+
+macro_rules! undefined_api_type_case {
+    ($name:ident, $source:expr) => {
+        #[test]
+        fn $name() {
+            assert_eq!(
+                [codes($source, "retail"), codes($source, "forever")],
+                [Vec::<String>::new(), Vec::<String>::new()]
+            );
+            for flavour in ["retail", "forever"] {
+                compile($source, flavour);
+            }
+        }
+    };
+}
+undefined_api_type_case!(
+    undefined_item_info_accepts_id,
+    "const info = C_Item.GetItemInfo(12345);"
+);
+undefined_api_type_case!(
+    undefined_item_info_accepts_link,
+    r#"const info = C_Item.GetItemInfo("item:6948");"#
+);
+undefined_api_type_case!(
+    undefined_item_count_accepts_id,
+    "const count = C_Item.GetItemCount(6948);"
+);
+undefined_api_type_case!(
+    undefined_club_id_accepts_string,
+    r#"const club = C_Club.GetClubInfo("12345");"#
+);

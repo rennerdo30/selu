@@ -115,6 +115,9 @@ fn named(m: &Manifest, n: &str, depth: usize) -> Type {
             }
             return t;
         }
+        if !matches!(d.ty.as_deref(), Some("Structure" | "Constants")) {
+            return Type::ApiOpaque(n.into(), Vec::new());
+        }
         return Type::Object(
             d.fields
                 .iter()
@@ -122,15 +125,12 @@ fn named(m: &Manifest, n: &str, depth: usize) -> Type {
                 .collect(),
         );
     }
-    if n == "any" || n.is_empty() {
-        return Type::Untyped;
+    if let Some((_, members)) = SCALAR_UNIONS.iter().find(|(name, _)| *name == n) {
+        return Type::ApiOpaque(n.into(), members.to_vec());
     }
-    let members = SCALAR_UNIONS
-        .iter()
-        .find(|(name, _)| *name == n)
-        .map(|(_, types)| types.to_vec())
-        .unwrap_or_default();
-    Type::ApiOpaque(n.into(), members)
+    // A referenced name is not a definition. Missing type documentation must
+    // not reject valid engine values based on a guessed nominal identity.
+    Type::Untyped
 }
 fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
     let mut returns: Vec<Type> = d.returns.iter().map(|r| map(m, r, depth + 1)).collect();
