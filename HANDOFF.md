@@ -1,44 +1,64 @@
 # Handoff
 
-## State (2026-11-04)
+## State (2026-11-04, night)
 
 - `master`, public at https://github.com/rennerdo30/selu. Push only
-  `master`, by explicit ref. `cargo test` (153 tests), clippy and
+  `master`, by explicit ref. `cargo test` (290 tests, including every
+  example built with the real binary and run in the simulator), clippy and
   `cargo fmt --check` are clean.
-- The language core of SPEC-V1 section 2 is in, except classes, modules,
-  async and the WoW features: scopes, types, loops, `continue`, arrays,
-  objects, `Map`/`Set`/`WeakMap`, template strings, closures, defaults,
-  rest parameters, destructuring, tuple returns. Built as packages A-C by
-  Codex jobs, each independently reviewed (all three reviews found real
-  bugs, fixed before merge). Decisions per area are in `docs/lang/`.
+- Built and merged, each by a Codex job with an independent review (every
+  review found real bugs, all fixed before merge):
+  - Round 1: the language core of SPEC-V1 section 2 (packages A-C).
+  - Round 2: modules with `.toc` order from imports (D1), classes (D3),
+    `command`/`hook`/`hookScript`/`log`/`L` (D4).
+  - Round 3: `saved` with checked migrations and `selu.saved.toml` (D2),
+    and generated manifests for retail 12.1.5 and Forever 1.60.1 (M1).
+- Round 4 is running (briefs in `docs/WORK-PACKAGES.md`): T1 typed game API
+  in the checker, T2 `has(...)` and several targets, R readability.
+- Examples: `hello`, `loot-summary`, `cooldowns`, `modules`, `classes`,
+  `slash-and-hooks`, `saved-settings`; each is a test (`expected.txt`).
 - `selu` 0.0.1 placeholder is on crates.io; licence MIT.
 - Owner goal: Renner's Toolkit gets written in Selu
-  (`docs/TOOLKIT-SURVEY.md`).
+  (`docs/TOOLKIT-SURVEY.md`). Estimate after round 3: about 60% of what the
+  full port needs; a first small module is within reach once T1 lands.
+
+## Decisions taken while the owner was away (2026-11-04 night)
+
+Each is recorded in the named document; all can be reversed.
+
+- **Initialisation order of class fields:** standard (current TypeScript and
+  JavaScript), verified with node (`docs/lang/classes.md`).
+- **Classes versus object shapes:** an instance fits a fields-only object
+  type; an object literal never becomes a class instance
+  (`docs/lang/classes.md`).
+- **Import paths are case-exact;** module files starting with `__selu` are
+  rejected (`docs/lang/modules.md`).
+- **SavedVariables names:** readable `<Addon>_<name>` by default; `saved
+  global Name` adopts an existing global, and data without a Selu version
+  counts as version 1, which is the porting recipe for `RennerToolkitDB` /
+  `RennersAddonsDB` (`docs/lang/saved.md`). Class instances can't be stored
+  in saved data.
+- **Undocumented game globals** come from Blizzard's own UI Lua in the same
+  branch, with evidence `source` (`docs/manifests.md`); nothing is marked
+  `verified` without a probe in the client. `SetOverrideBindingClick` on
+  retail has no honest evidence yet and stays out until `selu probe`.
+- **Multiple results of game API calls:** first result as a single value,
+  all by destructuring, never implicit expansion; Selu's own tuple functions
+  stay strict. Second opinion from Sol agreed (`docs/WORK-PACKAGES.md`,
+  round 4).
+- **Manifests stay plain JSON in git** (about 9.9 MB together, text that
+  diffs well), not LFS.
 
 ## Next
 
-1. Package D (WoW features): `saved` with migrations and
-   `selu.saved.toml`, `command`, `hook`/`hookScript`, `log`, `L` strings,
-   modules with `.toc` order from the import graph, then classes. Write its
-   brief in `docs/WORK-PACKAGES.md` first, in the style of A-C, with the
-   shared-file hooks named up front (A-C each needed some that weren't
-   foreseen).
-2. Readability package (found by the examples, 2026-11-04): long table
-   literals print on one line (the printer should break them); `filter`/`map`
-   with an inline arrow copy receiver and callback into extra temporaries
-   instead of inlining the body; `m.set(k, (m.get(k) ?? 0) + n)` produces
-   eight temporaries; `x += a.b * c` wraps a field read in temporaries;
-   `return (f()), x` has brackets Lua doesn't need.
-   From round 2: the per-addon runtimes sit in the addon table under the
-   keys `[true]` (events) and `[false]` (log/L/commands), which is
-   collision-free but cryptic (use named reserved keys); log and `L` text
-   without placeholders still goes through `string.format`, and `tostring`
-   wraps values that are already strings. Each fix gets a test on
-   the exact output.
-3. Owner wish (2026-11-04): more examples. Every package adds one with an
-   `expected.txt` (`examples/README.md`); add `examples/modules` (from D1),
-   classes and WoW built-ins examples when those packages merge.
-4. Typed manifests (SPEC step 6) so game API values stop being untyped.
+1. Merge round 4 (R, then T1, then T2), with the usual review per branch.
+2. Then: restriction and combat checks and secret values (DESIGN.md
+   section 3), using the manifest flags M1 records; `selu probe` for
+   verified evidence; unify the two file-prelude mechanisms if R didn't.
+3. Proof port (SPEC step 8): one small Toolkit module (`XPBarETA` or
+   `JunkSell`) in Selu, compared with the hand-written Lua.
+4. Not yet planned: GUI framework (SPEC section 4), `selu debug` app, async,
+   asset pipeline and `selu export`, classic flavours, VS Code extension.
 
 ## Traps
 
