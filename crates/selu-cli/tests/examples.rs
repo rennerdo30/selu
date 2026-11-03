@@ -47,6 +47,23 @@ fn run_example(example: &Path) -> Vec<String> {
             continue;
         }
         let source = std::fs::read_to_string(dist.join(line.replace('\\', "/"))).unwrap();
+        let reference = if line == "main.lua" {
+            example.join("expected.lua")
+        } else {
+            example.join(format!("expected.{}", line.replace('\\', "/")))
+        };
+        if std::env::var_os("SELU_UPDATE_LUA").is_some() {
+            if let Some(parent) = reference.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&reference, &source).unwrap();
+        }
+        assert_eq!(
+            source,
+            std::fs::read_to_string(&reference).unwrap(),
+            "{}",
+            reference.display()
+        );
         files.push((line.to_string(), source));
     }
     let sim = Sim::new().unwrap();

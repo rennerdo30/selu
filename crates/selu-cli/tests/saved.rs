@@ -350,7 +350,7 @@ fn review_invalid_metadata_isolation_and_retry_warning() {
     let sim = Sim::new().unwrap();
     sim.eval(&format!("{key} = {{ x = 99 }}")).unwrap();
     let mut observed = fs.clone();
-    observed.push(("inspect.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent', function() for _,v in ipairs(ns[false].buffer) do if v.level == 'warn' then print(v.level) end end end)".into()));
+    observed.push(("inspect.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent', function() for _,v in ipairs(ns.__selu_wow.buffer) do if v.level == 'warn' then print(v.level) end end end)".into()));
     sim.load_addon("Saved", &observed).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), vec!["7", "warn"]);
@@ -414,7 +414,7 @@ fn review_newer_warnings_adopted_character_and_moving_modules() {
     let toc = std::fs::read_to_string(dir.join("dist/Saved/Saved.toc")).unwrap();
     assert!(toc.contains("## SavedVariablesPerCharacter: LegacyCharacter\n"));
     let mut fs = files(&dir);
-    fs.push(("verify.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent',function() assert(#ns[false].buffer == 2); assert(ns[false].buffer[2].level == 'warn'); assert(ns[false].buffer[2].message == 'Saved_s: saved data is newer than this addon'); assert(ns.__selu_saved == nil); print(LegacyCharacter.x) end)".into()));
+    fs.push(("verify.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent',function() assert(#ns.__selu_wow.buffer == 2); assert(ns.__selu_wow.buffer[2].level == 'warn'); assert(ns.__selu_wow.buffer[2].message == 'Saved_s: saved data is newer than this addon'); assert(ns.__selu_saved == nil); print(LegacyCharacter.x) end)".into()));
     let sim = Sim::new().unwrap();
     sim.eval("Saved_s = { x = 99, __selu_version = 3 }; LegacyCharacter = { x = 99 }")
         .unwrap();

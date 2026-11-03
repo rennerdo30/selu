@@ -66,8 +66,10 @@ impl Lowerer<'_> {
             return self
                 .seq(&items.iter().collect::<Vec<_>>(), pre)
                 .into_iter()
-                .map(|v| {
-                    if matches!(v, LExpr::Call(..) | LExpr::Method(..)) {
+                .enumerate()
+                .map(|(i, v)| {
+                    // Lua already truncates every non-final return operand.
+                    if i + 1 == items.len() && matches!(v, LExpr::Call(..) | LExpr::Method(..)) {
                         LExpr::Paren(Box::new(v))
                     } else {
                         v

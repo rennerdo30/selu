@@ -34,7 +34,7 @@ fn shared_runtime_translations_and_buffer() {
     let b = compile(
         "log.warnOnce`once`; command(\"/two\", () => {}); print(L`${1} then ${2}%`); for (let i = 0; i < 205; i++) { log.info`entry ${i}`; }",
     );
-    sim.load_addon("Shared", &[("setup.lua".into(), "local _, ns = ...; ns[false] = nil".into()),("a.lua".into(), a), ("translation.lua".into(), "local _, ns = ...; assert(#ns[false].buffer == 1); ns[false].locales.enUS = {['{0} then {1}%'] = '{1}% before {0}'}".into()), ("b.lua".into(),b), ("verify.lua".into(), "local _, ns = ...; assert(#ns[false].buffer == 200); assert(ns[false].buffer[1].message == 'entry 5'); assert(ns[false].buffer[200].message == 'entry 204'); assert(ns[false].commands == 2); assert(rawget(_G, 'SLASH_SELU_Shared_1') == nil); assert(SLASH_SELU_Shared_1_1 == '/one'); assert(SLASH_SELU_Shared_2_1 == '/two')".into())]).unwrap();
+    sim.load_addon("Shared", &[("setup.lua".into(), "local _, ns = ...; ns.__selu_wow = nil".into()),("a.lua".into(), a), ("translation.lua".into(), "local _, ns = ...; assert(#ns.__selu_wow.buffer == 1); ns.__selu_wow.locales.enUS = {['{0} then {1}%'] = '{1}% before {0}'}".into()), ("b.lua".into(),b), ("verify.lua".into(), "local _, ns = ...; assert(#ns.__selu_wow.buffer == 200); assert(ns.__selu_wow.buffer[1].message == 'entry 5'); assert(ns.__selu_wow.buffer[200].message == 'entry 204'); assert(ns.__selu_wow.commands == 2); assert(rawget(_G, 'SLASH_SELU_Shared_1') == nil); assert(SLASH_SELU_Shared_1_1 == '/one'); assert(SLASH_SELU_Shared_2_1 == '/two')".into())]).unwrap();
     assert_eq!(sim.prints(), ["2% before 1"]);
 }
 #[test]
@@ -167,12 +167,12 @@ fn review_fallback_allocation() {
 fn review_literal_braces_and_cache() {
     let sim = Sim::new().unwrap();
     let src = "global label = () => L`literal {0} ${2}`;";
-    sim.load_addon("Braces", &[("a.lua".into(),compile(src)),("b.lua".into(), "local _, ns = ...; assert(label() == 'literal {0} 2'); ns[false].locales.enUS = {['literal {{0}} {0}'] = 'translated {{0}} {0}'}; assert(label() == 'translated {0} 2'); local cached = ns[false].formats['translated {{0}} {0}']; assert(type(cached) == 'table'); assert(label() == 'translated {0} 2'); assert(ns[false].formats['translated {{0}} {0}'] == cached)".into())]).unwrap();
+    sim.load_addon("Braces", &[("a.lua".into(),compile(src)),("b.lua".into(), "local _, ns = ...; assert(label() == 'literal {0} 2'); ns.__selu_wow.locales.enUS = {['literal {{0}} {0}'] = 'translated {{0}} {0}'}; assert(label() == 'translated {0} 2'); local cached = ns.__selu_wow.formats['translated {{0}} {0}']; assert(type(cached) == 'table'); assert(label() == 'translated {0} 2'); assert(ns.__selu_wow.formats['translated {{0}} {0}'] == cached)".into())]).unwrap();
 }
 #[test]
 fn review_log_exact_message() {
     let sim = Sim::new().unwrap();
-    sim.load_addon("Log", &[("a.lua".into(),compile("log.info`100% ${true}`;")),("verify.lua".into(),"local _, ns = ...; assert(#ns[false].buffer == 1); assert(ns[false].buffer[1].level == 'info'); assert(ns[false].buffer[1].message == '100% true')".into())]).unwrap();
+    sim.load_addon("Log", &[("a.lua".into(),compile("log.info`100% ${true}`;")),("verify.lua".into(),"local _, ns = ...; assert(#ns.__selu_wow.buffer == 1); assert(ns.__selu_wow.buffer[1].level == 'info'); assert(ns.__selu_wow.buffer[1].message == '100% true')".into())]).unwrap();
 }
 #[test]
 fn review_template_limit() {
@@ -226,7 +226,7 @@ fn modules_share_wow_runtime_in_toc_order() {
         .collect();
     let sim = Sim::new().unwrap();
     // This assertion runs after all compiled modules with exactly the same namespace.
-    files.push(("verify.lua".into(), r#"local _, ns = ...; local w = ns[false]; assert(w.commands == 2); assert(#w.buffer == 3); assert(w.buffer[1].level == 'info' and w.buffer[1].message == 'first'); assert(w.buffer[2].level == 'warnOnce' and w.buffer[2].message == 'shared'); assert(w.buffer[3].level == 'info' and w.buffer[3].message == 'second'); assert(type(ns[true]) == 'function'); w.locales.enUS = {First = 'Premier', Second = 'Deuxieme'}"#.into()));
+    files.push(("verify.lua".into(), r#"local _, ns = ...; local w = ns.__selu_wow; assert(w.commands == 2); assert(#w.buffer == 3); assert(w.buffer[1].level == 'info' and w.buffer[1].message == 'first'); assert(w.buffer[2].level == 'warnOnce' and w.buffer[2].message == 'shared'); assert(w.buffer[3].level == 'info' and w.buffer[3].message == 'second'); assert(type(ns.__selu_events) == 'function'); w.locales.enUS = {First = 'Premier', Second = 'Deuxieme'}"#.into()));
     sim.load_addon("SharedWow", &files).unwrap();
     sim.slash("/first one").unwrap();
     sim.slash("/second two").unwrap();

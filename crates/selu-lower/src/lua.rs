@@ -524,7 +524,21 @@ impl Printer {
                         }
                     })
                     .collect();
-                format!("{{ {} }}", parts.join(", "))
+                let flat = format!("{{ {} }}", parts.join(", "));
+                if flat.contains('\n') || flat.len() + indent * 2 > 100 {
+                    // Break long table literals without changing field order.
+                    format!(
+                        "{{\n{}\n{}}}",
+                        parts
+                            .iter()
+                            .map(|p| format!("{}{},", "  ".repeat(indent + 1), p))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        "  ".repeat(indent)
+                    )
+                } else {
+                    flat
+                }
             }
         }
     }

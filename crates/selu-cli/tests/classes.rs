@@ -610,7 +610,7 @@ fn integrated_wow_class_method() {
         "class A { x = 4; message(): string { log.info`count ${this.x}`; return L`Count ${this.x}`; } } on PLAYER_LOGIN() { print(new A().message()); }",
     );
     let sim = selu_sim::Sim::new().unwrap();
-    sim.load_addon("ClassWow",&[("main.lua".into(),lua),("verify.lua".into(),"local _, ns = ...; function VerifyClassLog() assert(#ns[false].buffer == 1); assert(ns[false].buffer[1].message == 'count 4') end".into())]).unwrap();
+    sim.load_addon("ClassWow",&[("main.lua".into(),lua),("verify.lua".into(),"local _, ns = ...; function VerifyClassLog() assert(#ns.__selu_wow.buffer == 1); assert(ns.__selu_wow.buffer[1].message == 'count 4') end".into())]).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     sim.eval("VerifyClassLog()").unwrap();
     assert_eq!(sim.prints(), ["Count 4"]);

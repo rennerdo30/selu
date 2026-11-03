@@ -35,7 +35,14 @@ impl Lowerer<'_> {
         let vals = self
             .seq(&refs, &mut body)
             .into_iter()
-            .map(|x| lua::call(name("tostring"), vec![x]))
+            .zip(exprs)
+            .map(|(x, e)| {
+                if self.types.get(e.id) == Some(&selu_check::Type::String) {
+                    x
+                } else {
+                    lua::call(name("tostring"), vec![x])
+                }
+            })
             .collect::<Vec<_>>();
         if tag == "L" {
             if !self.wow.keys.contains(&key) {
@@ -60,7 +67,11 @@ impl Lowerer<'_> {
                     vec![
                         LExpr::Str(level.into()),
                         LExpr::Str(key.clone()),
-                        lua::call(name("string.format"), args),
+                        if exprs.is_empty() {
+                            LExpr::Str(quasis[0].clone())
+                        } else {
+                            lua::call(name("string.format"), args)
+                        },
                     ],
                 )),
                 &e.span,
@@ -100,9 +111,9 @@ impl Lowerer<'_> {
         })
     }
 }
-const RUNTIME: &str = r##"if not __selu_ns[false] then
+const RUNTIME: &str = r##"if not __selu_ns.__selu_wow then
   local w = { buffer = {}, levels = { info = true, warn = true, error = true, warnOnce = true }, once = {}, commands = 0, locales = {}, formats = {} }
-  __selu_ns[false] = w
+  __selu_ns.__selu_wow = w
   function w.enabled(level, key)
     return w.levels[level] and (level ~= "warnOnce" or not w.once[key])
   end
@@ -159,4 +170,4 @@ const RUNTIME: &str = r##"if not __selu_ns[false] then
     return string.format(cached.format, unpack(args, 1, #cached.order))
   end
 end
-local __selu_wow = __selu_ns[false]"##;
+local __selu_wow = __selu_ns.__selu_wow"##;

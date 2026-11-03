@@ -67,24 +67,23 @@ local __selu_handlers = {}
 local __selu_frame = CreateFrame("Frame")
 __selu_frame:SetScript("OnEvent", function(self, event, ...)
   local handlers = __selu_handlers[event]
-  if handlers then
-    for i = 1, #handlers do
-      handlers[i](...)
-    end
-  end
+  if not handlers then return end
+  for i = 1, #handlers do handlers[i](...) end
 end)
 local function __selu_on(event, fn)
-  if not __selu_handlers[event] then
-    __selu_handlers[event] = {}
+  local handlers = __selu_handlers[event]
+  if not handlers then
+    handlers = {}
+    __selu_handlers[event] = handlers
     __selu_frame:RegisterEvent(event)
   end
-  __selu_handlers[event][#__selu_handlers[event] + 1] = fn
+  handlers[#handlers + 1] = fn
 end"#;
 
 // The shared function closes over its handler table and frame, created once.
 fn module_event_prologue() -> String {
     format!(
-        "if not __selu_ns[true] then\n{}\n  __selu_ns[true] = __selu_on\nend\nlocal __selu_on = __selu_ns[true]",
+        "if not __selu_ns.__selu_events then\n{}\n  __selu_ns.__selu_events = __selu_on\nend\nlocal __selu_on = __selu_ns.__selu_events",
         EVENT_PROLOGUE
             .lines()
             .map(|l| format!("  {l}"))
@@ -118,8 +117,8 @@ pub fn lower_with_addon(
         loops: Vec::new(),
     };
     let mut out: LBlock = Vec::new();
-    l.class_prelude(&program.stmts, &mut out);
-    out.extend(saved::captures(program));
+    l.file_prelude(program, &mut out);
+    out.extend(saved::setup(program));
     let has_handlers = program
         .stmts
         .iter()
@@ -200,21 +199,10 @@ pub fn lower_module(
         ),
         span: None,
     };
-    let uses_saved = saved::has_saved(program);
-    if uses_saved {
-        out.push(namespace_fallback.clone());
-    }
-    let before_captures = out.len();
-    l.class_prelude(&program.stmts, &mut out);
-    out.extend(saved::captures(program));
-    if !uses_saved {
-        out.push(namespace_fallback);
-    }
-    let runtime_index = if uses_saved {
-        before_captures
-    } else {
-        out.len()
-    };
+    l.file_prelude(program, &mut out);
+    out.push(namespace_fallback);
+    let runtime_index = out.len();
+    out.extend(saved::setup(program));
     l.module_prologue(&mut out);
     let has_handlers = program
         .stmts
@@ -869,6 +857,14 @@ pub fn generate_toc(addon_name: &str, manifest: &Manifest, lua_files: &[String])
         out.push('\n');
     }
     out
+}
+
+impl Lowerer<'_> {
+    // Every protected runtime capture is emitted once, before source bindings.
+    fn file_prelude(&mut self, program: &Program, out: &mut LBlock) {
+        self.class_prelude(&program.stmts, out);
+        out.extend(saved::captures(program));
+    }
 }
 
 #[cfg(test)]

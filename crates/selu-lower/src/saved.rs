@@ -122,7 +122,7 @@ fn runtime() -> LBlock {
         ))],
     )];
     let warn_body = vec![
-        local("wow", ix(name("__selu_ns"), LExpr::Bool(false))),
+        local("wow", f(name("__selu_ns"), "__selu_wow")),
         s(LStmtKind::If(
             vec![(
                 bin(BinOp::Ne, g("wow"), LExpr::Nil),
@@ -399,9 +399,16 @@ pub(crate) fn captures(program: &Program) -> LBlock {
     ] {
         out.push(local(global, name(global)));
     }
-    out.push(local("runtime", f(name("__selu_ns"), "__selu_saved")));
-    out.push(iff(eq(rt(), LExpr::Nil), runtime()));
     out
+}
+pub(crate) fn setup(program: &Program) -> LBlock {
+    if !has_saved(program) {
+        return vec![];
+    }
+    vec![
+        local("runtime", f(name("__selu_ns"), "__selu_saved")),
+        iff(eq(rt(), LExpr::Nil), runtime()),
+    ]
 }
 pub(crate) fn globals(program: &Program, addon: &str) -> std::collections::HashMap<String, String> {
     program

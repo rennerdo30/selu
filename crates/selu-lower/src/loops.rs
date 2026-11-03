@@ -387,6 +387,7 @@ fn pure(e: &Expr) -> bool {
         | ExprKind::Str(_)
         | ExprKind::Bool(_)
         | ExprKind::Null => true,
+        ExprKind::Member { object, .. } => pure(object),
         ExprKind::Unary { expr, .. } => pure(expr),
         ExprKind::Binary { op, left, right } if op != "??" && op != "&&" && op != "||" => {
             pure(left) && pure(right)

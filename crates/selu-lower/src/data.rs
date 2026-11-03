@@ -187,13 +187,38 @@ impl Lowerer<'_> {
                 m => lib("math", m, vs),
             });
         }
+        // A map read and arithmetic on plain fields cannot call user code.
+        // Stable receivers/keys may be read again after the nullish prelude.
+        if matches!(ty, Type::Map(..) | Type::WeakMap(..)) {
+            if method == "get"
+                && args.iter().all(|e| read_only(e, self.types))
+                && self.types.is_stable(object.id)
+            {
+                let obj = self.expr(object, pre);
+                let key = self.expr(&args[0], pre);
+                return Some(index(obj, key));
+            }
+            if method == "set"
+                && self.types.is_stable(object.id)
+                && args.iter().all(|e| read_only(e, self.types))
+            {
+                let obj = self.expr(object, pre);
+                let key = self.expr(&args[0], pre);
+                let value = self.expr(&args[1], pre);
+                pre.push(LStmt::new(
+                    LStmtKind::Assign(vec![index(obj, key)], vec![value]),
+                    span,
+                ));
+                return Some(LExpr::Nil);
+            }
+        }
         let mut refs = vec![&**object];
         refs.extend(args);
         let mut vals = self.seq(&refs, pre);
         self.capture_store_receiver(&mut vals, span, pre);
         let mut stable = Vec::new();
         for v in vals {
-            stable.push(if v.is_pure() {
+            stable.push(if v.is_pure() || matches!(v, LExpr::Function(_)) {
                 v
             } else {
                 let t = self.hold(v, span, pre);
@@ -208,7 +233,14 @@ impl Lowerer<'_> {
                 "forEach" | "map" | "filter" | "find" | "some" | "every" | "reduce"
             ) || method == "sort" && !a.is_empty())
         {
-            return Some(self.data_callback(method, obj, a, span, pre));
+            return Some(self.data_callback(
+                method,
+                obj,
+                a,
+                span,
+                pre,
+                self.types.is_stable(object.id),
+            ));
         }
         if method == "slice" {
             for bound in &mut a {
@@ -655,13 +687,37 @@ impl Lowerer<'_> {
         args: Vec<LExpr>,
         span: &selu_diagnostics::Span,
         pre: &mut LBlock,
+        stable_receiver: bool,
     ) -> LExpr {
         // Both the receiver and function value stay fixed if a callback
         // reassigns their source names while the operation is running.
-        let receiver = self.hold(obj, span, pre);
-        let callback = self.hold(args[0].clone(), span, pre);
-        let obj = name(&receiver);
-        let cb = name(&callback);
+        let obj =
+            if stable_receiver || matches!(obj, LExpr::Name(ref n) if n.starts_with("__selu_t")) {
+                obj
+            } else {
+                let receiver = self.hold(obj, span, pre);
+                name(&receiver)
+            };
+        let cb = match &args[0] {
+            LExpr::Function(f)
+                if method != "sort"
+                    && !f.vararg
+                    && f.body
+                        .iter()
+                        .take(f.body.len().saturating_sub(1))
+                        .all(no_transfer)
+                    && f.body.last().is_some_and(|s| {
+                        matches!(s.kind, LStmtKind::Return(_))
+                            || method == "forEach" && no_transfer(s)
+                    }) =>
+            {
+                args[0].clone()
+            }
+            value => {
+                let t = self.hold(value.clone(), span, pre);
+                name(&t)
+            }
+        };
         if method == "sort" {
             let left = self.temp();
             let right = self.temp();
@@ -718,7 +774,48 @@ impl Lowerer<'_> {
         if method == "reduce" {
             cb_args.insert(0, name(&result));
         }
-        let call = lua::call(cb, cb_args);
+        let call = if let LExpr::Function(f) = &cb {
+            let mut inline = f.body.clone();
+            let terminal = inline.pop();
+            let safe = !f.vararg && inline.iter().all(no_transfer);
+            if safe
+                && matches!(
+                    terminal.as_ref().map(|s| &s.kind),
+                    Some(LStmtKind::Return(_))
+                )
+            {
+                if !f.params.is_empty() {
+                    body.push(LStmt::new(
+                        LStmtKind::Local(
+                            f.params.clone(),
+                            cb_args.iter().take(f.params.len()).cloned().collect(),
+                        ),
+                        span,
+                    ));
+                }
+                body.extend(inline);
+                let LStmtKind::Return(values) = terminal.unwrap().kind else {
+                    unreachable!()
+                };
+                values.into_iter().next().unwrap_or(LExpr::Nil)
+            } else if method == "forEach" && f.body.iter().all(no_transfer) && !f.vararg {
+                if !f.params.is_empty() {
+                    body.push(LStmt::new(
+                        LStmtKind::Local(
+                            f.params.clone(),
+                            cb_args.iter().take(f.params.len()).cloned().collect(),
+                        ),
+                        span,
+                    ));
+                }
+                body.extend(f.body.clone());
+                LExpr::Nil
+            } else {
+                lua::call(cb, cb_args)
+            }
+        } else {
+            lua::call(cb, cb_args)
+        };
         let store = |v| LStmt::new(LStmtKind::Assign(vec![name(&result)], vec![v]), span);
         let append = |v| {
             LStmt::new(
@@ -732,9 +829,16 @@ impl Lowerer<'_> {
                 span,
             )
         };
-        body.push(match method {
+        let action = match method {
+            "forEach" if call == LExpr::Nil => LStmt::new(LStmtKind::Do(vec![]), span),
             "forEach" => LStmt::new(LStmtKind::Call(call), span),
-            "map" => append(LExpr::Paren(Box::new(call))),
+            "map" => append(
+                if matches!(call, LExpr::Call(..) | LExpr::Method(..) | LExpr::Vararg) {
+                    LExpr::Paren(Box::new(call))
+                } else {
+                    call
+                },
+            ),
             "reduce" => store(call),
             "filter" => LStmt::new(
                 LStmtKind::If(vec![(call, vec![append(name(&value))])], None),
@@ -762,7 +866,10 @@ impl Lowerer<'_> {
                     span,
                 )
             }
-        });
+        };
+        if !matches!(&action.kind, LStmtKind::Do(b) if b.is_empty()) {
+            body.push(action);
+        }
         if method == "reduce" && args.len() == 1 {
             pre.push(LStmt::new(
                 LStmtKind::If(
@@ -815,10 +922,50 @@ impl Lowerer<'_> {
         // Stabilizing a later impure operand emits a statement. Snapshot
         // earlier name operands first, including map keys and the receiver.
         for i in 0..values.len() {
-            if matches!(values[i], LExpr::Name(_)) && values[i + 1..].iter().any(|v| !v.is_pure()) {
+            if matches!(values[i], LExpr::Name(_))
+                && values[i + 1..]
+                    .iter()
+                    .any(|v| !v.is_pure() && !matches!(v, LExpr::Function(_)))
+            {
                 let t = self.hold(values[i].clone(), span, pre);
                 values[i] = name(&t);
             }
         }
+    }
+}
+
+// Function bodies with early returns retain their call boundary: a return must
+// never escape the enclosing source function or skip an array-method action.
+fn no_transfer(s: &LStmt) -> bool {
+    match &s.kind {
+        LStmtKind::Return(_) | LStmtKind::Break => false,
+        LStmtKind::If(arms, other) => {
+            arms.iter().all(|(_, b)| b.iter().all(no_transfer))
+                && other.as_ref().is_none_or(|b| b.iter().all(no_transfer))
+        }
+        LStmtKind::While(_, b)
+        | LStmtKind::Repeat(b, _)
+        | LStmtKind::Do(b)
+        | LStmtKind::NumFor { body: b, .. }
+        | LStmtKind::GenFor { body: b, .. } => b.iter().all(no_transfer),
+        _ => true,
+    }
+}
+fn read_only(e: &Expr, types: &selu_check::TypeTable) -> bool {
+    match &e.kind {
+        ExprKind::Ident(_)
+        | ExprKind::Number(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Null => true,
+        ExprKind::Member { object, .. } => {
+            matches!(types.get(object.id), Some(Type::Object(_))) && read_only(object, types)
+        }
+        ExprKind::Binary { left, right, .. } => read_only(left, types) && read_only(right, types),
+        ExprKind::Call { callee, args, .. } => {
+            matches!(&callee.kind, ExprKind::Member { object, name } if name == "get" && matches!(types.get(object.id), Some(Type::Map(..) | Type::WeakMap(..))) && read_only(object, types))
+                && args.iter().all(|e| read_only(e, types))
+        }
+        _ => false,
     }
 }
