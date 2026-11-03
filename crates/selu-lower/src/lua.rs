@@ -205,6 +205,7 @@ pub struct Printed {
 
 pub fn print_block(block: &LBlock) -> Printed {
     let mut p = Printer {
+        column: 0,
         out: String::new(),
         line: 1,
         lines: Vec::new(),
@@ -219,6 +220,7 @@ pub fn print_block(block: &LBlock) -> Printed {
 /// One expression on its own (for tests and messages).
 pub fn print_expr(e: &LExpr) -> String {
     let mut p = Printer {
+        column: 0,
         out: String::new(),
         line: 1,
         lines: Vec::new(),
@@ -227,6 +229,7 @@ pub fn print_expr(e: &LExpr) -> String {
 }
 
 struct Printer {
+    column: usize,
     out: String,
     line: u32,
     lines: Vec<(u32, Span)>,
@@ -278,13 +281,17 @@ impl Printer {
                 let mut text = format!("local {}", names.join(", "));
                 if !values.is_empty() {
                     text.push_str(" = ");
+                    self.column = text.len() + indent * 2;
                     text.push_str(&self.list(values, indent));
+                    self.column = 0;
                 }
                 self.line(indent, &text, sp);
             }
             LStmtKind::Assign(targets, values) => {
                 let t = self.list(targets, indent);
+                self.column = t.len() + 3 + indent * 2;
                 let v = self.list(values, indent);
+                self.column = 0;
                 self.line(indent, &format!("{t} = {v}"), sp);
             }
             LStmtKind::Call(e) => {
@@ -304,6 +311,7 @@ impl Printer {
                     )
                 {
                     let mut inner = Printer {
+                        column: 0,
                         out: String::new(),
                         line: 0,
                         lines: Vec::new(),
@@ -489,6 +497,7 @@ impl Printer {
                 // Known simplification: lines inside a function expression
                 // map to the statement that holds it in the source map.
                 let mut sub = Printer {
+                    column: 0,
                     out: String::new(),
                     line: 0,
                     lines: Vec::new(),
@@ -525,7 +534,7 @@ impl Printer {
                     })
                     .collect();
                 let flat = format!("{{ {} }}", parts.join(", "));
-                if flat.contains('\n') || flat.len() + indent * 2 > 100 {
+                if flat.contains('\n') || flat.len() + self.column.max(indent * 2) > 100 {
                     // Break long table literals without changing field order.
                     format!(
                         "{{\n{}\n{}}}",

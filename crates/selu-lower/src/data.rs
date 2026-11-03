@@ -191,7 +191,8 @@ impl Lowerer<'_> {
         // Stable receivers/keys may be read again after the nullish prelude.
         if matches!(ty, Type::Map(..) | Type::WeakMap(..)) {
             if method == "get"
-                && args.iter().all(|e| read_only(e, self.types))
+                && self.plain_table(object)
+                && args.iter().all(|e| read_only(e, self))
                 && self.types.is_stable(object.id)
             {
                 let obj = self.expr(object, pre);
@@ -199,8 +200,9 @@ impl Lowerer<'_> {
                 return Some(index(obj, key));
             }
             if method == "set"
+                && self.plain_table(object)
                 && self.types.is_stable(object.id)
-                && args.iter().all(|e| read_only(e, self.types))
+                && args.iter().all(|e| read_only(e, self))
             {
                 let obj = self.expr(object, pre);
                 let key = self.expr(&args[0], pre);
@@ -707,7 +709,7 @@ impl Lowerer<'_> {
                         .take(f.body.len().saturating_sub(1))
                         .all(no_transfer)
                     && f.body.last().is_some_and(|s| {
-                        matches!(s.kind, LStmtKind::Return(_))
+                        matches!(&s.kind, LStmtKind::Return(values) if values.len() <= 1)
                             || method == "forEach" && no_transfer(s)
                     }) =>
             {
@@ -831,7 +833,13 @@ impl Lowerer<'_> {
         };
         let action = match method {
             "forEach" if call == LExpr::Nil => LStmt::new(LStmtKind::Do(vec![]), span),
-            "forEach" => LStmt::new(LStmtKind::Call(call), span),
+            "forEach" if matches!(call, LExpr::Call(..) | LExpr::Method(..)) => {
+                LStmt::new(LStmtKind::Call(call), span)
+            }
+            // Discarding a value does not make it a legal Lua call statement.
+            // Keep possible metamethods/effects by evaluating into an ignored local.
+            "forEach" if call.is_pure() => LStmt::new(LStmtKind::Do(vec![]), span),
+            "forEach" => LStmt::new(LStmtKind::Local(vec!["_".into()], vec![call]), span),
             "map" => append(
                 if matches!(call, LExpr::Call(..) | LExpr::Method(..) | LExpr::Vararg) {
                     LExpr::Paren(Box::new(call))
@@ -951,20 +959,19 @@ fn no_transfer(s: &LStmt) -> bool {
         _ => true,
     }
 }
-fn read_only(e: &Expr, types: &selu_check::TypeTable) -> bool {
+fn read_only(e: &Expr, l: &Lowerer<'_>) -> bool {
     match &e.kind {
-        ExprKind::Ident(_)
+        ExprKind::This
+        | ExprKind::Ident(_)
         | ExprKind::Number(_)
         | ExprKind::Str(_)
         | ExprKind::Bool(_)
         | ExprKind::Null => true,
-        ExprKind::Member { object, .. } => {
-            matches!(types.get(object.id), Some(Type::Object(_))) && read_only(object, types)
-        }
-        ExprKind::Binary { left, right, .. } => read_only(left, types) && read_only(right, types),
+        ExprKind::Member { object, .. } => l.plain_table(object) && read_only(object, l),
+        ExprKind::Binary { left, right, .. } => read_only(left, l) && read_only(right, l),
         ExprKind::Call { callee, args, .. } => {
-            matches!(&callee.kind, ExprKind::Member { object, name } if name == "get" && matches!(types.get(object.id), Some(Type::Map(..) | Type::WeakMap(..))) && read_only(object, types))
-                && args.iter().all(|e| read_only(e, types))
+            matches!(&callee.kind, ExprKind::Member { object, name } if name == "get" && matches!(l.types.get(object.id), Some(Type::Map(..) | Type::WeakMap(..))) && l.plain_table(object) && read_only(object, l))
+                && args.iter().all(|e| read_only(e, l))
         }
         _ => false,
     }

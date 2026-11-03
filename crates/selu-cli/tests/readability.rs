@@ -16,7 +16,9 @@ fn tuple_brackets() {
 }
 
 fn reference(case: &str, src: &str) {
-    let lua = compile(src);
+    reference_lua(case, compile(src));
+}
+fn reference_lua(case: &str, lua: String) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/readability")
         .join(format!("{case}.lua"));
@@ -98,4 +100,179 @@ print(zs.join(","));
         ),
         ["2,4", "1,2", "7,2"]
     );
+}
+
+fn review_run(src: &str) -> Vec<String> {
+    let case = if src.contains("const ys") {
+        "review-tuple-map"
+    } else if src.contains("function hit") {
+        "review-tuple-foreach"
+    } else {
+        "review-discard"
+    };
+    reference(case, src);
+    common::run(src)
+}
+#[test]
+fn review_discarded_foreach_expressions() {
+    assert_eq!(
+        review_run(
+            "const xs = [1]; xs.forEach((x) => x * 2); xs.forEach((x) => x); print(\"done\");"
+        ),
+        ["done"]
+    );
+}
+#[test]
+fn review_multiple_return_foreach() {
+    assert_eq!(
+        review_run(
+            r#"function hit(x: number): number { print(x); return x; }
+const xs = [1];
+xs.forEach((x): [number, number] => { return [hit(x), hit(x + 10)]; });
+print("done");"#
+        ),
+        ["1", "11", "done"]
+    );
+}
+#[test]
+fn review_multiple_return_map() {
+    assert_eq!(
+        review_run(
+            r#"function hit(x: number): number { print(x); return x; }
+const xs = [1];
+const ys = xs.map((x): [number, number] => { return [hit(x), hit(x + 10)]; });
+print("done");"#
+        ),
+        ["1", "11", "done"]
+    );
+}
+fn getter_run(case: &str, src: &str) -> Vec<String> {
+    reference(case, src);
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("UIParent = setmetatable({}, { __index = function() return mutate() end })")
+        .unwrap();
+    sim.load_files(&[("getter.lua".into(), compile(src))])
+        .unwrap();
+    sim.prints()
+}
+#[test]
+fn review_compound_getter() {
+    assert_eq!(
+        getter_run(
+            "review-compound-getter",
+            r#"let x = 1;
+global mutate = () => { x = 100; return 2; };
+const obj = UIParent;
+x += obj.n;
+print(x);"#
+        ),
+        ["3"]
+    );
+}
+#[test]
+fn review_map_getter() {
+    assert_eq!(
+        getter_run(
+            "review-map-getter",
+            r#"const m = new Map<string, number>();
+let k = "a";
+global mutate = () => { k = "b"; return 2; };
+const obj: { n: number } = UIParent;
+m.set(k, (m.get(k) ?? 0) + obj.n);
+print(m.get("a"));
+print(m.get("b"));"#
+        ),
+        ["2", "nil"]
+    );
+}
+#[test]
+fn review_translation_single_value() {
+    let src = r#"function f(): string { return UnitName("player"); }
+global emit = () => { print(L`${f()}`); };
+print(L`ready`);"#;
+    let mut manifest = common::manifest();
+    let mut function = manifest.functions[0].clone();
+    function.name = "UnitName".into();
+    manifest.functions.push(function);
+    let program = selu_syntax::parse("locale.selu", src).unwrap();
+    let checked = selu_check::check_program(&program, &manifest);
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let lua = selu_lower::lower(&program, &manifest, &checked.types).lua;
+    reference_lua("review-locale", lua.clone());
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("UnitName = function() return 'First', 'Realm' end")
+        .unwrap();
+    let err = sim
+        .load_addon(
+            "Locale",
+            &[
+                ("main.lua".into(), lua),
+                (
+                    "translate.lua".into(),
+                    "local _, ns = ...; ns.__selu_wow.locales.enUS = {['{0}'] = '{1}'}; emit()"
+                        .into(),
+                ),
+            ],
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid locale argument"), "{err}");
+}
+#[test]
+fn review_standalone_prelude_order() {
+    let lua = compile(
+        "class C { total = 0; add(amount: number) { this.total += amount; } } log.info`ready`;",
+    );
+    assert!(
+        lua.find("local __selu_setmetatable").unwrap()
+            < lua.find("if not __selu_ns.__selu_wow").unwrap()
+    );
+    assert!(lua.contains("self.total = self.total + amount"));
+    reference_lua("review-prelude", lua);
+}
+#[test]
+fn review_statement_prefix_width() {
+    let lua = compile(
+        "const aVeryLongLocalVariableNameThatConsumesTheRemainingColumns = { first: 123456789, second: 123456789, third: 123456789 };",
+    );
+    assert!(lua.lines().all(|l| l.len() <= 100), "{lua}");
+    reference_lua("review-prefix", lua);
+}
+
+#[test]
+fn review_origin_reassignment_and_shadowing() {
+    assert_eq!(
+        getter_run(
+            "review-reassigned",
+            r#"let x = 1;
+global mutate = () => { x = 100; return 2; };
+let obj: { n: number } = { n: 9 };
+obj = UIParent;
+x += obj.n;
+print(x);"#
+        ),
+        ["3"]
+    );
+    assert_eq!(
+        getter_run(
+            "review-shadowed",
+            r#"const obj = { n: 9 };
+let x = 1;
+global mutate = () => { x = 100; return 2; };
+function use(obj: { n: number }) {
+  x += obj.n;
+  print(x);
+}
+use(UIParent);"#
+        ),
+        ["3"]
+    );
+}
+#[test]
+fn review_class_and_literal_origins() {
+    let src = "class C { total = 0; add(amount: number) { this.total += amount; } } const c = new C(); c.add(3); print(c.total); let obj = { n: 2 }; let x = 1; x += obj.n; print(x);";
+    assert_eq!(common::run(src), ["3", "3"]);
+    let lua = compile(src);
+    assert!(lua.contains("self.total = self.total + amount"));
+    assert!(lua.contains("x = x + obj.n"));
+    reference_lua("review-origins", lua);
 }

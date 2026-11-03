@@ -23,6 +23,7 @@ mod data;
 mod functions;
 mod loops;
 mod modules;
+mod purity;
 pub mod saved;
 pub use modules::ModuleBindings;
 mod wow;
@@ -111,6 +112,7 @@ pub fn lower_with_addon(
         known: &known,
         types,
         temps: 0,
+        origins: purity::Origins::collect(program),
         wow: wow::WowState::default(),
         class_receiver: "self".into(),
         classes: Default::default(),
@@ -118,6 +120,7 @@ pub fn lower_with_addon(
     };
     let mut out: LBlock = Vec::new();
     l.file_prelude(program, &mut out);
+    let captures_end = out.len();
     out.extend(saved::setup(program));
     let has_handlers = program
         .stmts
@@ -130,13 +133,11 @@ pub fn lower_with_addon(
     out.extend(l.block(&program.stmts));
     let wow = l.wow_prologue();
     if wow.is_some() || saved::has_saved(program) {
+        out.insert(0, raw("local __selu_addon, __selu_ns = ..."));
+        out.insert(captures_end + 1, raw("__selu_ns = __selu_ns or {}"));
         out.splice(
-            0..0,
-            [raw(
-                "local __selu_addon, __selu_ns = ...\n__selu_ns = __selu_ns or {}",
-            )]
-            .into_iter()
-            .chain(wow.into_iter().flatten()),
+            captures_end + 2..captures_end + 2,
+            wow.into_iter().flatten(),
         );
     }
     let printed = lua::print_block(&out);
@@ -180,6 +181,7 @@ pub fn lower_module(
         known: &known,
         types,
         temps: 0,
+        origins: purity::Origins::collect(program),
         class_receiver: "self".into(),
         classes: Default::default(),
         wow: wow::WowState::default(),
@@ -241,6 +243,7 @@ fn raw(text: &str) -> LStmt {
 }
 
 pub(crate) struct Lowerer<'a> {
+    origins: purity::Origins,
     module: ModuleBindings,
     saved_globals: std::collections::HashMap<String, String>,
     wow: wow::WowState,

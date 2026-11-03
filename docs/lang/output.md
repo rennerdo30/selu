@@ -11,30 +11,46 @@ cargo test -p selu-cli --test examples --test readability
 Remove-Item Env:SELU_UPDATE_LUA
 ```
 
-Long table literals split into one field per line above 100 columns. Field order,
+Long table literals split into one field per line above 100 columns, counting
+indentation and the local declaration or assignment prefix. Field order,
 including the last positional value's multiple-result restriction, is preserved.
 Non-final tuple return operands need no parentheses: Lua truncates them already.
 The final operand keeps its single-result parentheses.
 
-Map updates on stable receivers with effect-free operands keep only the nullish
-temporary. A typed map get is a table read; reading ordinary object fields and
-arithmetic cannot invoke source functions. Unknown objects, effectful operands,
-mutable receivers, calls and computed stores retain their snapshots. Lua reads a
-local receiver again at store time, so receiver captures cannot be removed merely
-because its syntax is a name. Compound arithmetic reads its old value before the
-right operand, and direct updates retain that order.
+Property reads can run code through Lua `__index`. An object annotation alone
+proves nothing: `const obj: { n: number } = UIParent` still needs snapshots.
+A read is effect-free only when its receiver is proven to be a table Selu
+created with no code-running metatable: an object/array literal in an unreassigned
+local, a `new` Map/Set or class instance, or `this` in a class member (whose
+`__index` is the plain methods table). The origin pass conservatively rejects
+names that are shadowed anywhere or assigned anywhere, including inside closures.
+It does not infer origins from structural annotations, aliases, collection
+elements or class-typed parameters. Those uncertain cases keep their snapshots.
+`self.total = self.total + amount` remains direct.
 
-Inline callback bodies with a terminal return, or no return for forEach, become
+Map updates on proven receivers with effect-free operands keep only the nullish
+temporary. Every later property operand must have the same origin proof before
+receiver/key snapshots can be removed. Otherwise a getter could reassign the key
+between its evaluation and the Lua store. Compound assignments snapshot the old
+value before any possibly effectful right operand. Lua reads a local receiver
+again at store time; receiver captures cannot go merely because it is a name.
+
+Inline callback bodies with a single-value terminal return, or no return for forEach, become
 loop statements. Parameter locals preserve shadowing, assignment and per-turn
 closure capture; only declared parameters are bound. Stable array bindings need
 no receiver copy. Mutable bindings retain one copy since the callback can rebind
 them. Named callbacks, rest callbacks, sort adapters and callbacks with early
-returns retain a function boundary: removing it without modelling all return and
+returns or multiple-value returns retain a function boundary: removing it without modelling all return and
 loop transfers would change behavior. Callback values retained this way are
 captured once before iteration, never rebuilt on each turn.
 
+Discarded inline forEach results remain valid Lua statements: calls stay calls,
+literals/names may be dropped, and other expressions evaluate into `local _`.
+A multiple-value callback return keeps its boundary so every operand evaluates.
+
 Placeholder-free log messages are literal strings, including percent signs.
-String-typed placeholders skip tostring; other values retain conversion. L still
+String-typed placeholders skip tostring; calls still keep single-value parentheses
+when used as arguments. Other values retain conversion. L still
 calls the translation helper even without placeholders, since returning the English
 literal would disable translations. That helper returns a plain string without
 formatting when no arguments exist.
@@ -42,6 +58,7 @@ formatting when no arguments exist.
 The addon namespace uses __selu_events and __selu_wow for shared internal state.
 Each file checks the event registration function before constructing the shared
 frame. Dispatch preserves registration order and passes all event results through.
-One file_prelude path plans the class and saved-runtime captures before source
-bindings. Saved runtime setup follows namespace initialization; captures occur
+Both entry paths order their prelude as loader, protected class/saved captures,
+namespace initialization, then runtimes. The class capture precedes the WoW
+runtime even for a standalone lowering. Saved runtime setup follows namespace initialization; captures occur
 once even when both saved declarations and classes occur in the same file.

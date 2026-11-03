@@ -38,7 +38,11 @@ impl Lowerer<'_> {
             .zip(exprs)
             .map(|(x, e)| {
                 if self.types.get(e.id) == Some(&selu_check::Type::String) {
-                    x
+                    if matches!(x, LExpr::Call(..) | LExpr::Method(..) | LExpr::Vararg) {
+                        LExpr::Paren(Box::new(x))
+                    } else {
+                        x
+                    }
                 } else {
                     lua::call(name("tostring"), vec![x])
                 }

@@ -147,7 +147,7 @@ impl Lowerer<'_> {
         };
         if let ExprKind::Member { object, .. } = &target.kind
             && (matches!(object.kind, ExprKind::This) || self.types.is_stable(object.id))
-            && value.is_none_or(pure)
+            && value.is_none_or(|e| pure(e, self))
         {
             let mut pre = Vec::new();
             let t = self.target(target, &mut pre);
@@ -190,7 +190,7 @@ impl Lowerer<'_> {
         };
         // Plain locals and pure right operands need no snapshot. Otherwise
         // read the old value before the RHS can call code or run a prelude.
-        let old = if matches!(t, LExpr::Name(_)) && value.is_none_or(pure) {
+        let old = if matches!(t, LExpr::Name(_)) && value.is_none_or(|e| pure(e, self)) {
             t.clone()
         } else {
             let old = self.hold(t.clone(), span, &mut pre);
@@ -206,7 +206,7 @@ impl Lowerer<'_> {
         let mut right = value.unwrap_or(target).clone();
         match value {
             None => right.kind = ExprKind::Number("1".into()),
-            Some(v) if pure(v) => {}
+            Some(v) if pure(v, self) => {}
             Some(v) => {
                 let v = self.expr(v, &mut pre);
                 right.kind = ExprKind::Ident(self.hold(v, span, &mut pre));
@@ -380,17 +380,18 @@ fn writes_expr(e: &Expr, var: &str, writes: &mut bool) {
     });
 }
 
-fn pure(e: &Expr) -> bool {
+fn pure(e: &Expr, l: &Lowerer<'_>) -> bool {
     match &e.kind {
-        ExprKind::Ident(_)
+        ExprKind::This
+        | ExprKind::Ident(_)
         | ExprKind::Number(_)
         | ExprKind::Str(_)
         | ExprKind::Bool(_)
         | ExprKind::Null => true,
-        ExprKind::Member { object, .. } => pure(object),
-        ExprKind::Unary { expr, .. } => pure(expr),
+        ExprKind::Member { object, .. } => l.plain_table(object) && pure(object, l),
+        ExprKind::Unary { expr, .. } => pure(expr, l),
         ExprKind::Binary { op, left, right } if op != "??" && op != "&&" && op != "||" => {
-            pure(left) && pure(right)
+            pure(left, l) && pure(right, l)
         }
         _ => false,
     }

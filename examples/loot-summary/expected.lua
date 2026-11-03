@@ -42,13 +42,23 @@ __selu_on("PLAYER_LOGIN", function()
   local value = 0
   do
     local __selu_t1 = loot
-    for __selu_t3 = 1, #__selu_t1 do
-      local item = __selu_t1[__selu_t3]
+    for __selu_t11 = 1, #__selu_t1 do
+      local item = __selu_t1[__selu_t11]
       if item == nil then break end
-      local __selu_t2 = countByQuality[item.quality]
-      if __selu_t2 == nil then __selu_t2 = 0 end
-      countByQuality[item.quality] = __selu_t2 + item.count
-      value = value + item.count * item.price
+      local __selu_t5 = item.quality
+      local __selu_t2 = countByQuality
+      local __selu_t3 = item.quality
+      local __selu_t4 = __selu_t2[__selu_t3]
+      if __selu_t4 == nil then __selu_t4 = 0 end
+      local __selu_t6 = countByQuality
+      local __selu_t7 = __selu_t5
+      local __selu_t8 = __selu_t4 + item.count
+      __selu_t6[__selu_t7] = __selu_t8
+      do
+        local __selu_t9 = value
+        local __selu_t10 = item.count * item.price
+        value = __selu_t9 + __selu_t10
+      end
     end
   end
   print(string.format("Loot this session: %s kinds of items", #loot))
@@ -64,21 +74,21 @@ __selu_on("PLAYER_LOGIN", function()
       quality = quality + 1
     end
   end
-  local __selu_t4 = {}
-  for __selu_t5 = 1, #loot do
-    local __selu_t6 = loot[__selu_t5]
-    if __selu_t6 == nil then break end
-    local item = __selu_t6
-    if item.quality >= 2 then __selu_t4[#__selu_t4 + 1] = __selu_t6 end
+  local __selu_t12 = {}
+  for __selu_t13 = 1, #loot do
+    local __selu_t14 = loot[__selu_t13]
+    if __selu_t14 == nil then break end
+    local item = __selu_t14
+    if item.quality >= 2 then __selu_t12[#__selu_t12 + 1] = __selu_t14 end
   end
-  local __selu_t7 = {}
-  for __selu_t8 = 1, #__selu_t4 do
-    local __selu_t9 = __selu_t4[__selu_t8]
-    if __selu_t9 == nil then break end
-    local item = __selu_t9
-    __selu_t7[#__selu_t7 + 1] = item.name
+  local __selu_t15 = {}
+  for __selu_t16 = 1, #__selu_t12 do
+    local __selu_t17 = __selu_t12[__selu_t16]
+    if __selu_t17 == nil then break end
+    local item = __selu_t17
+    __selu_t15[#__selu_t15 + 1] = item.name
   end
-  local finds = __selu_t7
+  local finds = __selu_t15
   print(string.format("Notable: %s", table.concat(finds, ", ")))
   print(string.format("Vendor value: %s", formatMoney(value)))
 end)

@@ -1,5 +1,4 @@
 local __selu_addon, __selu_ns = ...
-__selu_ns = __selu_ns or {}
 local __selu_setmetatable = setmetatable
 local __selu_saved__G = _G
 local __selu_saved_type = type
@@ -10,6 +9,7 @@ local __selu_saved_rawget = rawget
 local __selu_saved_pcall = pcall
 local __selu_saved_print = print
 local __selu_saved_tostring = tostring
+__selu_ns = __selu_ns or {}
 local __selu_saved_runtime = __selu_ns.__selu_saved
 if __selu_saved_runtime == nil then
   __selu_saved_runtime = {}
