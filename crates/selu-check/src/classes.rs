@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 #[derive(Default)]
 pub(crate) struct ClassContext {
     infos: HashMap<String, Info>,
+    initialized: bool,
     pub(crate) receiver: Option<(String, bool)>,
 }
 #[derive(Clone)]
@@ -15,6 +16,7 @@ struct Info {
     statics: BTreeMap<String, Type>,
     constructor: Type,
     base: Option<String>,
+    methods: std::collections::HashSet<String>,
 }
 impl Ctx<'_> {
     fn validate_class(&mut self, c: &ClassDecl) {
@@ -42,6 +44,9 @@ impl Ctx<'_> {
             allowed: Option<usize>,
             out: &mut Vec<selu_diagnostics::Diagnostic>,
         ) {
+            if matches!(s.kind, StmtKind::Class(_)) {
+                return;
+            }
             visit::child_stmts_and_exprs(s, &mut |c| match c {
                 Child::Expr(e) => super_expr(e, allowed, out),
                 Child::Stmt(s) => super_stmt(s, allowed, out),
@@ -64,8 +69,10 @@ impl Ctx<'_> {
                     init,
                     ..
                 } => {
-                    if matches!(name.as_str(), "new" | "__init" | "__index")
-                        || !names.insert((m.is_static, name.clone()))
+                    if matches!(
+                        name.as_str(),
+                        "new" | "__init" | "__index" | "__fields" | "__proto"
+                    ) || !names.insert((m.is_static, name.clone()))
                     {
                         self.out.push(err(
                             "SELU0431",
@@ -85,8 +92,10 @@ impl Ctx<'_> {
                     body,
                     ..
                 } => {
-                    if matches!(name.as_str(), "new" | "__init" | "__index")
-                        || is_lua_keyword(name)
+                    if matches!(
+                        name.as_str(),
+                        "new" | "__init" | "__index" | "__fields" | "__proto"
+                    ) || is_lua_keyword(name)
                         || !names.insert((m.is_static, name.clone()))
                     {
                         self.out.push(err(
@@ -121,11 +130,18 @@ impl Ctx<'_> {
             };
             for p in params {
                 if is_lua_keyword(&p.name) || p.name.starts_with("__selu") {
-                    self.out.push(err(
-                        "SELU0431",
-                        "This parameter name is reserved by Lua or the compiler.",
-                        &p.span,
-                    ));
+                    self.out.push(
+                        err(
+                            "SELU0431",
+                            "This parameter name is reserved by Lua or the compiler.",
+                            &selu_diagnostics::Span::new(
+                                &p.span.file,
+                                p.span.start,
+                                p.span.start + p.name.len(),
+                            ),
+                        )
+                        .with_help("choose a parameter name that is not reserved"),
+                    );
                 }
                 if let Some(e) = &p.default {
                     super_expr(e, None, self.out);
@@ -145,7 +161,7 @@ impl Ctx<'_> {
             };
             if let StmtKind::Class(c) = &s.kind {
                 let key = format!("{}@{}", c.name, c.name_span.start);
-                let instance = Type::Class(key.clone(), Vec::new());
+                let instance = Type::Class(key.clone(), Vec::new(), BTreeMap::new());
                 self.classes.infos.insert(
                     key.clone(),
                     Info {
@@ -153,6 +169,7 @@ impl Ctx<'_> {
                         fields: BTreeMap::new(),
                         statics: BTreeMap::new(),
                         base: None,
+                        methods: Default::default(),
                         constructor: Type::Function {
                             params: Vec::new(),
                             ret: Box::new(instance),
@@ -166,13 +183,72 @@ impl Ctx<'_> {
         }
     }
 
+    fn check_before_super(&mut self, e: &Expr) {
+        if !self.classes.initialized
+            && (matches!(e.kind, ExprKind::This)
+                || matches!(&e.kind,ExprKind::Member {object,..} if matches!(object.kind,ExprKind::Super)))
+        {
+            self.out.push(
+                err(
+                    "SELU0433",
+                    "This cannot be read before super returns.",
+                    &e.span,
+                )
+                .with_help("use this after the super(...) statement"),
+            );
+        }
+        if let ExprKind::Call { callee, .. } = &e.kind
+            && let ExprKind::Function { body, .. } = &callee.kind
+        {
+            match body {
+                selu_syntax::FnBody::Expr(e) => self.check_before_super(e),
+                selu_syntax::FnBody::Block(stmts) => {
+                    for s in stmts {
+                        self.check_before_super_stmt(s);
+                    }
+                }
+            }
+        }
+        if matches!(e.kind, ExprKind::Function { .. }) {
+            return;
+        }
+        selu_syntax::visit::child_exprs_and_stmts(e, &mut |c| {
+            if let selu_syntax::visit::Child::Expr(e) = c {
+                self.check_before_super(e);
+            }
+        });
+    }
+    fn check_before_super_stmt(&mut self, s: &Stmt) {
+        if matches!(s.kind, StmtKind::Class(_) | StmtKind::FuncDecl { .. }) {
+            return;
+        }
+        selu_syntax::visit::child_stmts_and_exprs(s, &mut |c| match c {
+            selu_syntax::visit::Child::Expr(e) => self.check_before_super(e),
+            selu_syntax::visit::Child::Stmt(s) => self.check_before_super_stmt(s),
+        });
+    }
+    pub(crate) fn refresh_class_type(&self, t: Type) -> Type {
+        match t {
+            Type::Class(ref key, _, _) if self.classes.infos.contains_key(key) => {
+                self.instance_type(key)
+            }
+            _ => t,
+        }
+    }
+    fn instance_type(&self, key: &str) -> Type {
+        let i = &self.classes.infos[key];
+        let Type::Class(n, b, _) = &i.instance else {
+            unreachable!()
+        };
+        Type::Class(n.clone(), b.clone(), i.fields.clone())
+    }
     pub(crate) fn class_resolve(&mut self, t: &TypeExpr) -> Type {
         let mut names = HashMap::new();
         for scope in &self.scopes {
             for (n, b) in &scope.names {
                 if let Type::ClassObject(key) = &b.ty {
-                    if let Some(i) = self.classes.infos.get(key) {
-                        names.insert(n.clone(), i.instance.clone());
+                    if self.classes.infos.contains_key(key) {
+                        names.insert(n.clone(), self.instance_type(key));
                     }
                 } else {
                     names.remove(n);
@@ -193,12 +269,12 @@ impl Ctx<'_> {
             .cloned();
         let mut bases = Vec::new();
         if let Some(b) = &inherited
-            && let Type::Class(n, parents) = &b.instance
+            && let Type::Class(n, parents, _) = &b.instance
         {
             bases.push(n.clone());
             bases.extend(parents.clone());
         }
-        let instance = Type::Class(key.clone(), bases);
+        let instance = Type::Class(key.clone(), bases, BTreeMap::new());
         let empty = Type::Function {
             params: vec![],
             ret: Box::new(instance.clone()),
@@ -221,6 +297,10 @@ impl Ctx<'_> {
                     .as_ref()
                     .map(|b| b.constructor.clone())
                     .unwrap_or(empty),
+                methods: inherited
+                    .as_ref()
+                    .map(|i| i.methods.clone())
+                    .unwrap_or_default(),
                 base,
             },
         );
@@ -254,6 +334,13 @@ impl Ctx<'_> {
             };
             if let Some((n, t)) = entry {
                 let i = self.classes.infos.get_mut(&key).unwrap();
+                if !m.is_static {
+                    if matches!(m.kind, M::Method { .. }) {
+                        i.methods.insert(n.clone());
+                    } else {
+                        i.methods.remove(&n);
+                    }
+                }
                 if m.is_static {
                     i.statics.insert(n, t);
                 } else {
@@ -284,6 +371,8 @@ impl Ctx<'_> {
         self.finish_decl(&c.name, Type::ClassObject(key.clone()));
         for m in &c.members {
             let saved = self.classes.receiver.replace((key.clone(), m.is_static));
+            let saved_initialized = self.classes.initialized;
+            self.classes.initialized = true;
             match &m.kind {
                 M::Field {
                     name,
@@ -307,7 +396,13 @@ impl Ctx<'_> {
                         } else {
                             info.fields.get(name)
                         };
+                        if !m.is_static {
+                            self.fn_depth += 1;
+                        }
                         let t = self.value_expected(e, want);
+                        if !m.is_static {
+                            self.fn_depth -= 1;
+                        }
                         if ty.is_none() {
                             let i = self.classes.infos.get_mut(&key).unwrap();
                             if m.is_static {
@@ -329,10 +424,10 @@ impl Ctx<'_> {
                 }
                 M::Method {
                     name,
-                    name_span,
                     params,
                     ret,
                     body,
+                    ..
                 } => {
                     let ts = self.param_types(params);
                     let written = self.annotation(ret);
@@ -342,22 +437,12 @@ impl Ctx<'_> {
                     } else {
                         info.fields[name].clone()
                     };
-                    if let Type::Function { ret, .. } = &mut sig {
-                        **ret = result;
-                    }
-                    if !m.is_static
-                        && let Some(base) = info
-                            .base
-                            .as_ref()
-                            .and_then(|n| self.classes.infos.get(n))
-                            .and_then(|b| b.fields.get(name))
-                        && !sig.assignable_to(base)
+                    if let Type::Function {
+                        params: fixed, ret, ..
+                    } = &mut sig
                     {
-                        self.out.push(err(
-                            "SELU0423",
-                            "The override must match the base method signature.",
-                            name_span,
-                        ));
+                        *fixed = self.checked_parameter_types(params, fixed.clone());
+                        **ret = result;
                     }
                     let i = self.classes.infos.get_mut(&key).unwrap();
                     if m.is_static {
@@ -377,11 +462,62 @@ impl Ctx<'_> {
                             .with_help("move super(...) before other statements"),
                         );
                     }
+                    if info.base.is_some() {
+                        self.classes.initialized = false;
+                        for p in params {
+                            if let Some(e) = &p.default {
+                                self.check_before_super(e);
+                            }
+                        }
+                        if let Some(Stmt {
+                            kind: StmtKind::Expr(e),
+                            ..
+                        }) = body.first()
+                        {
+                            self.check_before_super(e);
+                        }
+                        self.classes.initialized = true;
+                    }
                     let ts = self.param_types(params);
                     self.function_body(params, ts, Some(Type::Void), body);
+                    let mut sig = self.classes.infos[&key].constructor.clone();
+                    if let Type::Function { params: fixed, .. } = &mut sig {
+                        *fixed = self.checked_parameter_types(params, fixed.clone());
+                    }
+                    self.classes.infos.get_mut(&key).unwrap().constructor = sig;
+                }
+            }
+            if let M::Field {
+                name, name_span, ..
+            }
+            | M::Method {
+                name, name_span, ..
+            } = &m.kind
+                && let Some(base) = info.base.as_ref().and_then(|k| self.classes.infos.get(k))
+            {
+                let have = &self.classes.infos[&key];
+                let (actual, expected) = if m.is_static {
+                    (have.statics.get(name), base.statics.get(name))
+                } else {
+                    (have.fields.get(name), base.fields.get(name))
+                };
+                if let (Some(a), Some(w)) = (actual, expected)
+                    && (!a.assignable_to(w)
+                        || (!m.is_static
+                            && have.methods.contains(name) != base.methods.contains(name)))
+                {
+                    self.out.push(
+                        err(
+                            "SELU0423",
+                            "The override must preserve the base member type.",
+                            name_span,
+                        )
+                        .with_help(format!("expected `{name}: {w}`")),
+                    );
                 }
             }
             self.classes.receiver = saved;
+            self.classes.initialized = saved_initialized;
         }
     }
     pub(crate) fn class_expr(&mut self, e: &Expr) -> Type {
@@ -403,7 +539,7 @@ impl Ctx<'_> {
         }
         let info = &self.classes.infos[&n];
         if matches!(e.kind, ExprKind::This) {
-            return info.instance.clone();
+            return self.instance_type(&n);
         }
         if let Some(b) = info.base.as_ref().and_then(|b| self.classes.infos.get(b)) {
             let mut sig = b.constructor.clone();
@@ -419,11 +555,11 @@ impl Ctx<'_> {
     }
     pub(crate) fn class_member(&mut self, t: &Type, name: &str, e: &Expr) -> Option<Type> {
         let (n, static_) = match t {
-            Type::Class(n, _) => (n, false),
+            Type::Class(n, _, _) => (n, false),
             Type::ClassObject(n) => (n, true),
             Type::Function { ret, .. } if matches!(&e.kind, ExprKind::Member {object,..} if matches!(object.kind,ExprKind::Super)) => {
                 match ret.as_ref() {
-                    Type::Class(n, _) => (n, false),
+                    Type::Class(n, _, _) => (n, false),
                     _ => return None,
                 }
             }
@@ -432,6 +568,9 @@ impl Ctx<'_> {
         let mut i = self.classes.infos.get(n)?;
         if matches!(t, Type::Function { .. }) {
             i = self.classes.infos.get(i.base.as_ref()?)?;
+        }
+        if !static_ && i.methods.contains(name) {
+            self.types.mark_method_call(e.id);
         }
         let found = if static_ {
             i.statics.get(name)
@@ -481,28 +620,53 @@ impl Ctx<'_> {
         } = &i.constructor
         {
             if args.len() < *required || (rest.is_none() && args.len() > params.len()) {
-                self.out.push(err(
-                    "SELU0429",
-                    "The constructor argument count does not match.",
-                    &e.span,
-                ));
+                self.out.push(
+                    err(
+                        "SELU0429",
+                        "The constructor argument count does not match.",
+                        &e.span,
+                    )
+                    .with_help(format!("expected constructor {}", i.constructor)),
+                );
             }
             let ts = self.function_arguments(args, &i.constructor);
             for (index, (a, t)) in args.iter().zip(ts).enumerate() {
                 if let Some(w) = params.get(index).or(rest.as_deref())
                     && !t.assignable_to(w)
                 {
-                    self.out.push(err(
-                        "SELU0430",
-                        "The constructor argument has the wrong type.",
-                        &a.span,
-                    ));
+                    self.out.push(
+                        err(
+                            "SELU0430",
+                            "The constructor argument has the wrong type.",
+                            &a.span,
+                        )
+                        .with_help(format!("expected constructor {}", i.constructor)),
+                    );
                 }
             }
         }
-        i.instance
+        self.instance_type(&key)
     }
 }
 fn is_super_statement(s: &Stmt) -> bool {
     matches!(&s.kind, StmtKind::Expr(e) if matches!(&e.kind, ExprKind::Call {callee,..} if matches!(callee.kind, ExprKind::Super)))
+}
+
+/// Explain the intentional structural boundary at every checker mismatch site.
+pub(crate) fn mismatch_help(
+    d: selu_diagnostics::Diagnostic,
+    have: &Type,
+    want: &Type,
+) -> selu_diagnostics::Diagnostic {
+    let want = match want {
+        Type::Optional(t) => t.as_ref(),
+        t => t,
+    };
+    if matches!(have, Type::Object(_))
+        && let Type::Class(name, _, _) = want
+    {
+        d.with_help(format!("an object literal has no class metatable or methods; construct it with new {}(...) instead",name.split('@').next().unwrap()))
+    } else {
+        d
+    }
 }

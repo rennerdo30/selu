@@ -105,6 +105,7 @@ pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lower
         loops: Vec::new(),
     };
     let mut out: LBlock = Vec::new();
+    classes::runtime_prelude(&program.stmts, &mut out);
     let has_handlers = program
         .stmts
         .iter()
@@ -699,6 +700,8 @@ impl Lowerer<'_> {
                 let mut vals = self.seq(&all, pre);
                 let obj = vals.remove(0);
                 if is_namespace
+                    || (matches!(self.types.get(object.id), Some(selu_check::Type::Class(..)))
+                        && !self.types.is_method_call(callee.id))
                     || matches!(
                         self.types.get(object.id),
                         Some(selu_check::Type::ClassObject(_))

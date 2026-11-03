@@ -395,14 +395,18 @@ impl Ctx<'_> {
                     t.assignable_to(&written)
                 };
                 if !ok {
-                    self.out.push(err(
-                        "SELU0337",
-                        format!(
-                            "this returns {}, but the function says it returns {}",
-                            a(t),
-                            a(&written)
+                    self.out.push(classes::mismatch_help(
+                        err(
+                            "SELU0337",
+                            format!(
+                                "this returns {}, but the function says it returns {}",
+                                a(t),
+                                a(&written)
+                            ),
+                            span,
                         ),
-                        span,
+                        t,
+                        &written,
                     ));
                 }
             }
@@ -449,12 +453,14 @@ impl Ctx<'_> {
                 }) = declared
                 {
                     let written = (*ret != Type::Untyped).then_some(*ret);
+                    let saved_this = self.classes.receiver.take();
                     let ret = self.function_body(
                         params,
                         functions::body_param_types(params, &param_types, rest.as_deref()),
                         written,
                         body,
                     );
+                    self.classes.receiver = saved_this;
                     self.finish_decl(
                         name,
                         Type::Function {
@@ -586,10 +592,14 @@ impl Ctx<'_> {
         match written {
             Some(w) => {
                 if !t.assignable_to(&w) {
-                    self.out.push(err(
-                        "SELU0336",
-                        format!("`{name}` is {}, but this value is {}", a(&w), a(&t)),
-                        &init.span,
+                    self.out.push(classes::mismatch_help(
+                        err(
+                            "SELU0336",
+                            format!("`{name}` is {}, but this value is {}", a(&w), a(&t)),
+                            &init.span,
+                        ),
+                        &t,
+                        &w,
                     ));
                 }
                 w
@@ -717,10 +727,14 @@ impl Ctx<'_> {
             Kind::Let | Kind::Param | Kind::Global | Kind::Import => {}
         }
         if !value.assignable_to(&b.ty) {
-            self.out.push(err(
-                "SELU0336",
-                format!("`{name}` is {}, but this value is {}", a(&b.ty), a(value)),
-                span,
+            self.out.push(classes::mismatch_help(
+                err(
+                    "SELU0336",
+                    format!("`{name}` is {}, but this value is {}", a(&b.ty), a(value)),
+                    span,
+                ),
+                value,
+                &b.ty,
             ));
             return;
         }
@@ -850,6 +864,7 @@ impl Ctx<'_> {
 
     fn expr(&mut self, e: &Expr) -> Type {
         let t = self.expr_inner(e);
+        let t = self.refresh_class_type(t);
         self.types.set(e.id, t.clone());
         t
     }
@@ -1192,15 +1207,19 @@ impl Ctx<'_> {
                         continue;
                     };
                     if !t.assignable_to(p) {
-                        self.out.push(err(
-                            "SELU0335",
-                            format!(
-                                "argument {} of `{name}` must be {}, but this is {}",
-                                i + 1,
-                                a(p),
-                                a(t)
+                        self.out.push(classes::mismatch_help(
+                            err(
+                                "SELU0335",
+                                format!(
+                                    "argument {} of `{name}` must be {}, but this is {}",
+                                    i + 1,
+                                    a(p),
+                                    a(t)
+                                ),
+                                &arg.span,
                             ),
-                            &arg.span,
+                            t,
+                            p,
                         ));
                     }
                 }

@@ -6,17 +6,11 @@ use selu_syntax::{ClassDecl, ClassMemberKind as M, Expr, ExprKind, Stmt};
 impl Lowerer<'_> {
     pub(crate) fn class_decl(&mut self, s: &Stmt, c: &ClassDecl, forward: bool, out: &mut LBlock) {
         let saved_receiver = self.class_receiver.clone();
-        let init_hygiene = c.members.iter().any(|m| match &m.kind {
-            M::Constructor { params, body } => {
-                params.iter().any(|p| p.name == "self") || body.iter().any(binds_self_stmt)
-            }
-            M::Field { init: Some(e), .. } => binds_self_expr(e),
-            _ => false,
-        });
-        self.class_receiver = if init_hygiene { "__selu_self" } else { "self" }.into();
         let span = &s.span;
         let class = name(&c.name);
+        let class_alias = format!("__selu_class_{}", c.name_span.start);
         let base_alias = format!("__selu_base_{}", c.name_span.start);
+        let proto = LExpr::Field(Box::new(name(&class_alias)), "__proto".into());
         out.push(LStmt::new(
             if forward {
                 LStmtKind::Assign(vec![class.clone()], vec![LExpr::Table(vec![])])
@@ -26,9 +20,17 @@ impl Lowerer<'_> {
             span,
         ));
         out.push(LStmt::new(
+            LStmtKind::Local(vec![class_alias.clone()], vec![class.clone()]),
+            span,
+        ));
+        out.push(LStmt::new(
+            LStmtKind::Assign(vec![proto.clone()], vec![LExpr::Table(vec![])]),
+            span,
+        ));
+        out.push(LStmt::new(
             LStmtKind::Assign(
-                vec![LExpr::Field(Box::new(class.clone()), "__index".into())],
-                vec![class.clone()],
+                vec![LExpr::Field(Box::new(proto.clone()), "__index".into())],
+                vec![proto.clone()],
             ),
             span,
         ));
@@ -37,19 +39,39 @@ impl Lowerer<'_> {
                 LStmtKind::Local(vec![base_alias.clone()], vec![name(base)]),
                 span,
             ));
-            out.push(LStmt::new(
-                LStmtKind::Call(lua::call(
-                    name("setmetatable"),
-                    vec![
-                        class.clone(),
-                        LExpr::Table(vec![LField::Named("__index".into(), name(&base_alias))]),
-                    ],
-                )),
-                span,
-            ));
+            for (target, base) in [
+                (class.clone(), name(&base_alias)),
+                (
+                    proto.clone(),
+                    LExpr::Field(Box::new(name(&base_alias)), "__proto".into()),
+                ),
+            ] {
+                out.push(LStmt::new(
+                    LStmtKind::Call(lua::call(
+                        name("__selu_setmetatable"),
+                        vec![
+                            target,
+                            LExpr::Table(vec![LField::Named("__index".into(), base)]),
+                        ],
+                    )),
+                    span,
+                ));
+            }
         }
+        let constructor = c.members.iter().find_map(|m| {
+            if let M::Constructor { params, body } = &m.kind {
+                Some((params, body))
+            } else {
+                None
+            }
+        });
         let mut initializers = Vec::new();
         let mut static_initializers = Vec::new();
+        let field_hygiene = c
+            .members
+            .iter()
+            .any(|m| matches!(&m.kind,M::Field{init:Some(e),..} if binds_self_expr(e)));
+        self.class_receiver = if field_hygiene { "__selu_self" } else { "self" }.into();
         for m in &c.members {
             if let M::Field {
                 name: field,
@@ -67,7 +89,7 @@ impl Lowerer<'_> {
                     LStmtKind::Assign(
                         vec![LExpr::Field(
                             Box::new(if m.is_static {
-                                class.clone()
+                                name(&class_alias)
                             } else {
                                 name(&self.class_receiver)
                             }),
@@ -79,26 +101,45 @@ impl Lowerer<'_> {
                 ));
             }
         }
-        let constructor = c.members.iter().find_map(|m| {
-            if let M::Constructor { params, body } = &m.kind {
-                Some((params, body))
-            } else {
-                None
-            }
+        out.push(LStmt::new(
+            LStmtKind::Function(
+                format!("{}.__fields", c.name),
+                LFunction {
+                    params: vec![self.class_receiver.clone()],
+                    vararg: false,
+                    body: initializers,
+                },
+            ),
+            span,
+        ));
+        let ctor_hygiene = constructor.is_some_and(|(params, body)| {
+            params
+                .iter()
+                .any(|p| p.name == "self" || p.default.as_ref().is_some_and(|e| binds_self_expr(e)))
+                || body.iter().any(binds_self_stmt)
         });
+        self.class_receiver = if ctor_hygiene { "__selu_self" } else { "self" }.into();
+        let field_call = LStmt::new(
+            LStmtKind::Call(lua::call(
+                LExpr::Field(Box::new(name(&class_alias)), "__fields".into()),
+                vec![name(&self.class_receiver)],
+            )),
+            span,
+        );
         let init = if let Some((params, body)) = constructor {
-            let mut f = if c.extends.is_some() {
-                self.function(params, &body[..1])
-            } else {
-                self.function(params, &[])
-            };
-            // A checked derived constructor begins with exactly one super call.
+            // Lower the complete body once, preserving its forward locals and defaults.
+            let mut f = self.function(params, body);
             if c.extends.is_some() {
-                f.body.extend(initializers);
-                f.body.extend(self.block(&body[1..]));
+                let first = &body[0].span;
+                let index = f
+                    .body
+                    .iter()
+                    .rposition(|s| s.span.as_ref() == Some(first))
+                    .expect("checked super statement")
+                    + 1;
+                f.body.insert(index, field_call);
             } else {
-                f.body.extend(initializers);
-                f.body.extend(self.block(body));
+                f.body.insert(0, field_call);
             }
             f.params.insert(0, self.class_receiver.clone());
             f
@@ -113,7 +154,7 @@ impl Lowerer<'_> {
                     span,
                 ));
             }
-            body.extend(initializers);
+            body.push(field_call);
             LFunction {
                 params: vec![self.class_receiver.clone()],
                 vararg: c.extends.is_some(),
@@ -124,30 +165,51 @@ impl Lowerer<'_> {
             LStmtKind::Function(format!("{}.__init", c.name), init),
             span,
         ));
-        let mut new_body = vec![LStmt::new(
-            LStmtKind::Local(
-                vec!["self".into()],
-                vec![lua::call(
-                    name("setmetatable"),
-                    vec![LExpr::Table(vec![]), class.clone()],
-                )],
+        let new_params: Vec<String> = constructor
+            .map(|(ps, _)| {
+                ps.iter()
+                    .filter(|p| !p.rest)
+                    .map(|p| p.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let vararg = constructor.map_or(c.extends.is_some(), |(ps, _)| ps.iter().any(|p| p.rest));
+        let instance = if new_params.iter().any(|n| n == "self") {
+            "__selu_instance"
+        } else {
+            "self"
+        };
+        let mut args = vec![name(instance)];
+        args.extend(new_params.iter().map(|n| name(n)));
+        if vararg {
+            args.push(LExpr::Vararg);
+        }
+        let new_body = vec![
+            LStmt::new(
+                LStmtKind::Local(
+                    vec![instance.into()],
+                    vec![lua::call(
+                        name("__selu_setmetatable"),
+                        vec![LExpr::Table(vec![]), proto],
+                    )],
+                ),
+                span,
             ),
-            span,
-        )];
-        new_body.push(LStmt::new(
-            LStmtKind::Call(lua::call(
-                LExpr::Field(Box::new(class.clone()), "__init".into()),
-                vec![name("self"), LExpr::Vararg],
-            )),
-            span,
-        ));
-        new_body.push(LStmt::new(LStmtKind::Return(vec![name("self")]), span));
+            LStmt::new(
+                LStmtKind::Call(lua::call(
+                    LExpr::Field(Box::new(name(&class_alias)), "__init".into()),
+                    args,
+                )),
+                span,
+            ),
+            LStmt::new(LStmtKind::Return(vec![name(instance)]), span),
+        ];
         out.push(LStmt::new(
             LStmtKind::Function(
                 format!("{}.new", c.name),
                 LFunction {
-                    params: vec![],
-                    vararg: true,
+                    params: new_params,
+                    vararg,
                     body: new_body,
                 },
             ),
@@ -162,8 +224,9 @@ impl Lowerer<'_> {
             } = &m.kind
             {
                 let hygiene = !m.is_static
-                    && (params.iter().any(|p| p.name == "self")
-                        || body.iter().any(binds_self_stmt));
+                    && (params.iter().any(|p| {
+                        p.name == "self" || p.default.as_ref().is_some_and(|e| binds_self_expr(e))
+                    }) || body.iter().any(binds_self_stmt));
                 self.class_receiver = if hygiene { "__selu_self" } else { "self" }.into();
                 let mut f = self.function(params, body);
                 if hygiene {
@@ -172,8 +235,9 @@ impl Lowerer<'_> {
                 out.push(LStmt::new(
                     LStmtKind::Function(
                         format!(
-                            "{}{}{}",
+                            "{}{}{}{}",
                             c.name,
+                            if m.is_static { "" } else { ".__proto" },
                             if m.is_static || hygiene { "." } else { ":" },
                             method
                         ),
@@ -196,7 +260,7 @@ impl Lowerer<'_> {
     fn super_name(&self, e: &Expr) -> LExpr {
         match self.types.get(e.id) {
             Some(Type::Function { ret, .. }) => {
-                if let Type::Class(n, _) = ret.as_ref() {
+                if let Type::Class(n, _, _) = ret.as_ref() {
                     name(&format!("__selu_base_{}", n.rsplit('@').next().unwrap()))
                 } else {
                     unreachable!()
@@ -217,9 +281,10 @@ impl Lowerer<'_> {
     ) -> Option<LExpr> {
         let (base, method) = match &callee.kind {
             ExprKind::Super => (self.super_name(callee), "__init".to_string()),
-            ExprKind::Member { object, name } if matches!(object.kind, ExprKind::Super) => {
-                (self.super_name(object), name.clone())
-            }
+            ExprKind::Member { object, name } if matches!(object.kind, ExprKind::Super) => (
+                LExpr::Field(Box::new(self.super_name(object)), "__proto".into()),
+                name.clone(),
+            ),
             _ => return None,
         };
         let mut vals = vec![name(&self.class_receiver)];
@@ -266,6 +331,7 @@ fn binds_self_stmt(s: &Stmt) -> bool {
             ForBinding::Name(n, _) => n == "self",
             ForBinding::Pattern(p) => pat(p),
         },
+        S::Class(c) => c.name == "self",
         _ => false,
     } || match &s.kind {
         S::FuncDecl { params, .. } | S::OnHandler { params, .. } => {
@@ -274,6 +340,9 @@ fn binds_self_stmt(s: &Stmt) -> bool {
         _ => false,
     };
     let mut found = own;
+    selu_syntax::visit::idents_in_stmt(s, &mut |n| {
+        found |= n == "self";
+    });
     selu_syntax::visit::child_stmts_and_exprs(s, &mut |c| {
         found |= match c {
             selu_syntax::visit::Child::Stmt(s) => binds_self_stmt(s),
@@ -283,8 +352,8 @@ fn binds_self_stmt(s: &Stmt) -> bool {
     found
 }
 fn binds_self_expr(e: &Expr) -> bool {
-    let mut found =
-        matches!(&e.kind,ExprKind::Function {params,..} if params.iter().any(|p|p.name=="self"));
+    let mut found = matches!(&e.kind,ExprKind::Ident(n) if n=="self")
+        || matches!(&e.kind,ExprKind::Function {params,..} if params.iter().any(|p|p.name=="self"));
     selu_syntax::visit::child_exprs_and_stmts(e, &mut |c| {
         found |= match c {
             selu_syntax::visit::Child::Stmt(s) => binds_self_stmt(s),
@@ -292,4 +361,33 @@ fn binds_self_expr(e: &Expr) -> bool {
         };
     });
     found
+}
+
+/// Capture compiler dependencies before user declarations can shadow them.
+pub(crate) fn runtime_prelude(stmts: &[Stmt], out: &mut LBlock) {
+    fn expression(e: &Expr) -> bool {
+        let mut found = false;
+        selu_syntax::visit::child_exprs_and_stmts(e, &mut |c| match c {
+            selu_syntax::visit::Child::Stmt(s) => found |= contains(s),
+            selu_syntax::visit::Child::Expr(e) => found |= expression(e),
+        });
+        found
+    }
+    fn contains(s: &Stmt) -> bool {
+        let mut found = matches!(s.kind, selu_syntax::StmtKind::Class(_));
+        selu_syntax::visit::child_stmts_and_exprs(s, &mut |c| match c {
+            selu_syntax::visit::Child::Stmt(s) => found |= contains(s),
+            selu_syntax::visit::Child::Expr(e) => found |= expression(e),
+        });
+        found
+    }
+    if stmts.iter().any(contains) {
+        out.push(LStmt {
+            kind: LStmtKind::Local(
+                vec!["__selu_setmetatable".into()],
+                vec![name("setmetatable")],
+            ),
+            span: None,
+        });
+    }
 }

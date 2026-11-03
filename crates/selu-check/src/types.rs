@@ -8,7 +8,8 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
-    Class(String, Vec<String>),
+    /// Nominal identity, base identities, and the checked instance member shape.
+    Class(String, Vec<String>, BTreeMap<String, Type>),
     ClassObject(String),
     Number,
     String,
@@ -85,9 +86,16 @@ impl Type {
             return true;
         }
         match (self, to) {
-            (Type::Class(have, bases), Type::Class(name, _)) => {
+            (Type::Class(have, bases, _), Type::Class(name, _, _)) => {
                 have == name || bases.contains(name)
             }
+            (Type::Class(_, _, have), Type::Object(want)) => want.iter().all(|(k, w)| {
+                !matches!(w.non_null(), Type::Function { .. })
+                    && match have.get(k) {
+                        Some(h) => h.assignable_to(w),
+                        None => w.is_optional(),
+                    }
+            }),
             (Type::Null, Type::Optional(_)) => true,
             (Type::Optional(a), Type::Optional(b)) => a.assignable_to(b),
             (t, Type::Optional(inner)) => t.assignable_to(inner),
@@ -164,7 +172,7 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Class(n, _) | Type::ClassObject(n) => {
+            Type::Class(n, _, _) | Type::ClassObject(n) => {
                 write!(f, "{}", n.split('@').next().unwrap_or(n))
             }
             Type::Number => write!(f, "number"),
@@ -362,9 +370,19 @@ pub fn resolve_quiet(t: &TypeExpr) -> Type {
 pub struct TypeTable {
     types: HashMap<ExprId, Type>,
     stable: std::collections::HashSet<ExprId>,
+    method_calls: std::collections::HashSet<ExprId>,
 }
 
 impl TypeTable {
+    /// Marks a callee that refers to a declared instance method, including inherited methods.
+    pub fn mark_method_call(&mut self, id: ExprId) {
+        self.method_calls.insert(id);
+    }
+    /// Whether this callee needs the implicit instance receiver in Lua.
+    pub fn is_method_call(&self, id: ExprId) -> bool {
+        self.method_calls.contains(&id)
+    }
+
     pub fn set(&mut self, id: ExprId, t: Type) {
         self.types.insert(id, t);
     }
