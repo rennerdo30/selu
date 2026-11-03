@@ -211,22 +211,22 @@ or an interactive console:
 test("badge hides at full health", () => {
   sim.unit("player", { health: 100, maxHealth: 100 });
   sim.fire("UNIT_HEALTH", "player");
-  expect(badge.isShown()).toBe(false);
+  expect(badge.IsShown()).toBe(false);
 });
 
 test("unreadable health shows nothing", () => {
   sim.secret("UnitHealth");          // the client hides the value
   sim.fire("UNIT_HEALTH", "player");
-  expect(badge.isShown()).toBe(false);
+  expect(badge.IsShown()).toBe(false);
 });
 
 test("bar moves after combat", () => {
-  const original = bar.point();
+  const original = bar.GetPoint();
   sim.combat(true);
   sim.fire("PLAYER_LEVEL_UP", 20);
-  expect(bar.point()).toEqual(original);
+  expect(bar.GetPoint()).toEqual(original);
   sim.combat(false);
-  expect(bar.point()).toEqual(["TOP", UIParent, "TOP", 0, -40]);
+  expect(bar.GetPoint()).toEqual(["TOP", UIParent, "TOP", 0, -40]);
 });
 ```
 
@@ -354,14 +354,14 @@ on UNIT_HEALTH(unit) {
 
   const missing = missingHealth(unit) ?? 0;
   if (missing > 0) {
-    badge.setText(L`${missing} missing`);
+    badge.SetText(L`${missing} missing`);
   } else {
-    badge.hide();
+    badge.Hide();
   }
 }
 
 on PLAYER_LEVEL_UP(level) {
-  bar.setPoint("TOP", UIParent, "TOP", 0, -40);  // waits for combat to end if needed
+  bar.SetPoint("TOP", UIParent, "TOP", 0, -40);  // waits for combat to end if needed
 }
 ```
 

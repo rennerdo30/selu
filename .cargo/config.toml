@@ -1,0 +1,12 @@
+[build]
+jobs = 8
+# Shared local sccache install and cache; no PATH or machine changes.
+rustc-wrapper = "E:/Development/_tools/sccache/0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc/sccache.exe"
+# sccache can't cache incremental builds.
+incremental = false
+
+[env]
+SCCACHE_DIR = { value = "E:/sccache", force = true }
+
+[net]
+retry = 2
