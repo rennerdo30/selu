@@ -23,10 +23,17 @@
    brief in `docs/WORK-PACKAGES.md` first, in the style of A-C, with the
    shared-file hooks named up front (A-C each needed some that weren't
    foreseen).
-2. Readability follow-ups: callback methods (`xs.map(x => ...)`) copy the
-   receiver and callback into extra temporaries; an inline arrow could be
-   inlined into the loop.
-3. Typed manifests (SPEC step 6) so game API values stop being untyped.
+2. Readability package (found by the examples, 2026-11-04): long table
+   literals print on one line (the printer should break them); `filter`/`map`
+   with an inline arrow copy receiver and callback into extra temporaries
+   instead of inlining the body; `m.set(k, (m.get(k) ?? 0) + n)` produces
+   eight temporaries; `x += a.b * c` wraps a field read in temporaries;
+   `return (f()), x` has brackets Lua doesn't need. Each fix gets a test on
+   the exact output.
+3. Owner wish (2026-11-04): more examples. Every package adds one with an
+   `expected.txt` (`examples/README.md`); add `examples/modules` (from D1),
+   classes and WoW built-ins examples when those packages merge.
+4. Typed manifests (SPEC step 6) so game API values stop being untyped.
 
 ## Traps
 

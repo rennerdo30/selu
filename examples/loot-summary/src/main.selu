@@ -1,0 +1,44 @@
+// Loot summary: at login, sums up the loot of a session by quality and
+// prints a short report with its vendor value.
+//
+// Shows: arrays of objects, `Map`, `for...of`, template strings, `?? `,
+// `filter`/`map` with arrow functions, and `Math`.
+
+const loot = [
+  { name: "Linen Cloth", quality: 1, count: 12, price: 13 },
+  { name: "Broken Fang", quality: 0, count: 3, price: 5 },
+  { name: "Silver Ore", quality: 1, count: 4, price: 120 },
+  { name: "Ring of the Fox", quality: 2, count: 1, price: 2150 },
+  { name: "Fiery War Axe", quality: 3, count: 1, price: 38455 },
+  { name: "Wool Cloth", quality: 1, count: 7, price: 33 },
+];
+
+const qualityNames = ["poor", "common", "uncommon", "rare"];
+
+function formatMoney(copper: number): string {
+  const gold = Math.floor(copper / 10000);
+  const silver = Math.floor(copper / 100) % 100;
+  const rest = copper % 100;
+  return `${gold}g ${silver}s ${rest}c`;
+}
+
+on PLAYER_LOGIN() {
+  const countByQuality = new Map<number, number>();
+  let value = 0;
+  for (const item of loot) {
+    countByQuality.set(item.quality, (countByQuality.get(item.quality) ?? 0) + item.count);
+    value += item.count * item.price;
+  }
+
+  print(`Loot this session: ${loot.length} kinds of items`);
+  for (let quality = 0; quality < qualityNames.length; quality++) {
+    const count = countByQuality.get(quality) ?? 0;
+    if (count > 0) {
+      print(`  ${qualityNames[quality]}: ${count}`);
+    }
+  }
+
+  const finds = loot.filter(item => item.quality >= 2).map(item => item.name);
+  print(`Notable: ${finds.join(", ")}`);
+  print(`Vendor value: ${formatMoney(value)}`);
+}

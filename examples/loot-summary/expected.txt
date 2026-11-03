@@ -1,0 +1,7 @@
+Loot this session: 6 kinds of items
+  poor: 3
+  common: 23
+  uncommon: 1
+  rare: 1
+Notable: Ring of the Fox, Fiery War Axe
+Vendor value: 4g 14s 87c

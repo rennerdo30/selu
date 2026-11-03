@@ -64,10 +64,16 @@ stop and report it to the parent instead of working around it.
    temporarily broken, and say so in your report.
 4. No stubs that make tests pass. If something can't be done in your
    package, leave the `SELU0390` error in place and list it in your report.
-5. Before you report: `cargo fmt --check`, `cargo clippy --all-targets --
+5. **Every package adds at least one example** under `examples/` (owner,
+   2026-11-04): a small addon using the package's features the way a real
+   addon would, listed in `examples/README.md`, with an `expected.txt` of
+   the lines it prints after `PLAYER_LOGIN` (see
+   `crates/selu-cli/tests/examples.rs`). Work the expected values out by hand,
+   not from the compiler's output.
+6. Before you report: `cargo fmt --check`, `cargo clippy --all-targets --
    -D warnings` and `cargo test` are clean. The workspace is small; the full
    `cargo test` is fine. No benchmarks or load generators.
-6. Commits: small and logical, on your branch, author `rennerdo30
+7. Commits: small and logical, on your branch, author `rennerdo30
    <9086097+rennerdo30@users.noreply.github.com>`. Don't write git config.
    No AI mentions, `Co-Authored-By` or "Generated with" lines. Don't push
    or publish anything; the parent merges.
