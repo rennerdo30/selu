@@ -1,5 +1,9 @@
 # Work packages for the language core
 
+> **Status (2026-11-04):** packages A, B and C are done, reviewed and merged
+> into `master`. Their decisions live in `docs/lang/control-flow.md`,
+> `docs/lang/data.md` and `docs/lang/functions.md`. Package D is next.
+
 SPEC-V1 section 11 step 2 is split into packages that can run side by side.
 The parser, AST, scopes, basic types and the lowering machinery are done;
 each package fills in checking and lowering for its constructs in **its own

@@ -86,6 +86,15 @@ terminal with codespan-reporting.
   Narrowings of a `let` don't reach into nested functions.
 - `===`/`!==` are syntax errors (`SELU0109`) with the fix `==`/`!=`.
 
+## Language areas
+
+The detailed rules of each language area, with the decisions taken while
+building it, are in `docs/lang/`: `control-flow.md` (loops, `continue`,
+`? :`, `+=`), `data.md` (arrays, objects, `Map`/`Set`/`WeakMap`, template
+strings, `for...of`, the string and `Math` libraries) and `functions.md`
+(closures, default and rest parameters, destructuring, tuple returns, `.`
+versus `:` calls).
+
 ## Lowering: the Lua tree and temporaries
 
 - The lowering never builds Lua text. It builds `lua.rs` nodes and the
@@ -109,6 +118,13 @@ terminal with codespan-reporting.
   `if x == nil then x = b end`), unless a later part reads that variable.
 - `else if` becomes `elseif` unless its condition needs statements; then it
   stays a nested `if` inside `else`.
+- Names that can't change (a `const`, a function declaration, a game
+  global) are marked stable by the checker (`TypeTable::is_stable`); `seq`
+  reads them again instead of copying them. `t.x = v` evaluates `t` first
+  and holds a plain local `t` when `v` calls code, because Lua reads the
+  local again at store time.
+- The printer wraps a `break` or `return` that isn't the last statement of
+  its block in `do ... end`, and leaves out a numeric `for`'s default step.
 
 ## Known simplifications in this base
 

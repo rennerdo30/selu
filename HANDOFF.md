@@ -2,28 +2,31 @@
 
 ## State (2026-11-04)
 
-- `master`, local only. `cargo test`, `cargo clippy --all-targets -- -D
-  warnings` and `cargo fmt --check` are clean.
-- SPEC-V1 section 11 step 2 (language core) is in progress. Done: real block
-  scopes, shadowing, use-before-declaration, `const` reassignment, undeclared
-  reads, `global name = value;`, and forward declarations in the lowering
-  (rules in `docs/ARCHITECTURE.md`, "Scopes and names"), and the basic
-  type checker ("Types").
-- Owner goal: Renner's Toolkit gets written in Selu. `docs/TOOLKIT-SURVEY.md`
-  lists what it uses and the resulting order of work.
+- `master`, public at https://github.com/rennerdo30/selu. Push only
+  `master`, by explicit ref. `cargo test` (153 tests), clippy and
+  `cargo fmt --check` are clean.
+- The language core of SPEC-V1 section 2 is in, except classes, modules,
+  async and the WoW features: scopes, types, loops, `continue`, arrays,
+  objects, `Map`/`Set`/`WeakMap`, template strings, closures, defaults,
+  rest parameters, destructuring, tuple returns. Built as packages A-C by
+  Codex jobs, each independently reviewed (all three reviews found real
+  bugs, fixed before merge). Decisions per area are in `docs/lang/`.
+- `selu` 0.0.1 placeholder is on crates.io; licence MIT.
+- Owner goal: Renner's Toolkit gets written in Selu
+  (`docs/TOOLKIT-SURVEY.md`).
 
 ## Next
 
-- The foundation for parallel work is done (owner asked, 2026-11-04): the
-  parser handles all of SPEC-V1 section 2 except classes and modules, the
-  lowering builds a Lua tree with temporaries, and each language area has
-  its own files. `docs/WORK-PACKAGES.md` holds the three briefs (A control
-  flow, B data, C functions) with acceptance items.
-- Owner's plan: three agents, effort medium, each in its own worktree on a
-  branch from current `master`; merge A first, then B and C; an independent
-  review per branch, then the final check here.
-- Published: `selu` 0.0.1 placeholder on crates.io; public repo
-  https://github.com/rennerdo30/selu (push `master` by explicit ref only).
+1. Package D (WoW features): `saved` with migrations and
+   `selu.saved.toml`, `command`, `hook`/`hookScript`, `log`, `L` strings,
+   modules with `.toc` order from the import graph, then classes. Write its
+   brief in `docs/WORK-PACKAGES.md` first, in the style of A-C, with the
+   shared-file hooks named up front (A-C each needed some that weren't
+   foreseen).
+2. Readability follow-ups: callback methods (`xs.map(x => ...)`) copy the
+   receiver and callback into extra temporaries; an inline arrow could be
+   inlined into the loop.
+3. Typed manifests (SPEC step 6) so game API values stop being untyped.
 
 ## Traps
 
