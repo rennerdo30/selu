@@ -7,6 +7,17 @@ use std::collections::BTreeMap;
 pub struct ModuleExport {
     pub ty: Type,
     pub mutable: bool,
+    /// Class signatures reachable through this export, keyed by module and declaration.
+    pub classes: std::collections::HashMap<String, crate::ClassInfo>,
+}
+impl Default for ModuleExport {
+    fn default() -> Self {
+        Self {
+            ty: Type::Untyped,
+            mutable: false,
+            classes: Default::default(),
+        }
+    }
 }
 pub type ModuleExports = BTreeMap<String, ModuleExport>;
 #[derive(Debug, Default, Clone)]
@@ -15,6 +26,15 @@ pub struct ModuleBindings {
     pub exports: ModuleExports,
 }
 impl Ctx<'_> {
+    /// Imports are hoisted so every signature in the block can see their types.
+    pub(crate) fn declare_block_imports(&mut self, stmts: &[Stmt]) {
+        for s in stmts {
+            if matches!(s.kind, StmtKind::Import { .. }) {
+                self.declare_imports(s);
+            }
+        }
+    }
+
     pub(crate) fn declare_imports(&mut self, s: &Stmt) {
         if let StmtKind::Import {
             names,
@@ -108,9 +128,14 @@ impl Ctx<'_> {
             _ => return,
         };
         if let Some(ty) = self.type_of(name) {
-            self.module
-                .exports
-                .insert(name.clone(), ModuleExport { ty, mutable });
+            self.module.exports.insert(
+                name.clone(),
+                ModuleExport {
+                    ty,
+                    mutable,
+                    classes: self.classes.infos.clone(),
+                },
+            );
         }
     }
     pub(crate) fn module_write(&mut self, name: &str, span: &Span) -> bool {

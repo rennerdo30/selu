@@ -5,18 +5,29 @@ use std::collections::{BTreeMap, HashMap};
 
 #[derive(Default)]
 pub(crate) struct ClassContext {
-    infos: HashMap<String, Info>,
+    pub(crate) infos: HashMap<String, ClassInfo>,
     initialized: bool,
     pub(crate) receiver: Option<(String, bool)>,
 }
-#[derive(Clone)]
-struct Info {
+#[derive(Debug, Clone)]
+pub struct ClassInfo {
     instance: Type,
     fields: BTreeMap<String, Type>,
     statics: BTreeMap<String, Type>,
     constructor: Type,
     base: Option<String>,
     methods: std::collections::HashSet<String>,
+}
+impl ClassContext {
+    pub(crate) fn from_imports(module: &crate::ModuleBindings) -> Self {
+        let mut ctx = Self::default();
+        for exports in module.imports.values() {
+            for e in exports.values() {
+                ctx.infos.extend(e.classes.clone());
+            }
+        }
+        ctx
+    }
 }
 impl Ctx<'_> {
     fn validate_class(&mut self, c: &ClassDecl) {
@@ -72,7 +83,8 @@ impl Ctx<'_> {
                     if matches!(
                         name.as_str(),
                         "new" | "__init" | "__index" | "__fields" | "__proto"
-                    ) || !names.insert((m.is_static, name.clone()))
+                    ) || (m.is_static && name == "methods")
+                        || !names.insert((m.is_static, name.clone()))
                     {
                         self.out.push(err(
                             "SELU0431",
@@ -95,7 +107,8 @@ impl Ctx<'_> {
                     if matches!(
                         name.as_str(),
                         "new" | "__init" | "__index" | "__fields" | "__proto"
-                    ) || is_lua_keyword(name)
+                    ) || (m.is_static && name == "methods")
+                        || is_lua_keyword(name)
                         || !names.insert((m.is_static, name.clone()))
                     {
                         self.out.push(err(
@@ -160,11 +173,11 @@ impl Ctx<'_> {
                 _ => s,
             };
             if let StmtKind::Class(c) = &s.kind {
-                let key = format!("{}@{}", c.name, c.name_span.start);
+                let key = format!("{}@{}@{}", c.name, c.name_span.file, c.name_span.start);
                 let instance = Type::Class(key.clone(), Vec::new(), BTreeMap::new());
                 self.classes.infos.insert(
                     key.clone(),
-                    Info {
+                    ClassInfo {
                         instance: instance.clone(),
                         fields: BTreeMap::new(),
                         statics: BTreeMap::new(),
@@ -258,7 +271,7 @@ impl Ctx<'_> {
         types::resolve_classes(t, self.out, &names)
     }
     pub(crate) fn declare_class(&mut self, c: &ClassDecl) {
-        let key = format!("{}@{}", c.name, c.name_span.start);
+        let key = format!("{}@{}@{}", c.name, c.name_span.file, c.name_span.start);
         let base = c.extends.as_ref().and_then(|(n, _)| match self.type_of(n) {
             Some(Type::ClassObject(k)) => Some(k),
             _ => None,
@@ -283,7 +296,7 @@ impl Ctx<'_> {
         };
         self.classes.infos.insert(
             key.clone(),
-            Info {
+            ClassInfo {
                 instance: instance.clone(),
                 fields: inherited
                     .as_ref()
@@ -350,7 +363,7 @@ impl Ctx<'_> {
         }
     }
     pub(crate) fn class_decl(&mut self, _s: &Stmt, c: &ClassDecl) {
-        let key = format!("{}@{}", c.name, c.name_span.start);
+        let key = format!("{}@{}@{}", c.name, c.name_span.file, c.name_span.start);
         if c.extends.is_some() {
             self.declare_class(c);
         }

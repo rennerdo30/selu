@@ -2,38 +2,52 @@
 
 Classes declare nominal instance types and class-object values. Types are visible
 throughout their block, including classes wrapped in export. Value reads retain
-use-before-declaration checks. A declaration location distinguishes nested
+use-before-declaration checks. A module and declaration location distinguish nested
 classes with the same name; derived instances fit base annotations.
 
-A class has two separate tables. The class table holds static fields, static
-methods and construction helpers. Its __proto table holds instance methods and
-has __index pointing to itself. Instances use __proto as their metatable.
-Derived class tables fall back to the base class table; derived prototypes fall
-back to the base prototype. Thus a static f and an instance f can coexist, and
-an instance override does not change an inherited static member.
+A class has two separate tables. The class table holds static members; its
+plainly named methods table holds instance methods and has __index pointing to
+itself. Instances use methods as their metatable. Derived class tables fall
+back to the base class table; derived method tables fall back to base.methods.
+Thus a static f and an instance f coexist without changing either convention.
+The name methods describes the table's role in generated Lua; it is reserved on the static side
+alongside new and the construction helper names. Instance members named methods
+remain independent.
 
 ```lua
 local __selu_setmetatable = setmetatable
 local Tracker = {}
-local __selu_class_6 = Tracker
-__selu_class_6.__proto = {}
-__selu_class_6.__proto.__index = __selu_class_6.__proto
-function Tracker.__proto:record(amount)
+Tracker.methods = {}
+Tracker.methods.__index = Tracker.methods
+function Tracker.methods:record(amount)
   self.total = self.total + amount
 end
 ```
 
-Compiler dependencies are captured before source statements and only in files
-containing classes. Reserved class/base aliases keep constructor parameters,
-locals and subsequent assignments from changing generated runtime references.
-One instance table is allocated per new; method calls allocate no tables or
-closures. Explicit rest parameters retain the allocation in functions.md.
-Construction uses named parameters when known and varargs for inherited or rest
-forwarding. The __init helper initializes an existing instance, including super
-construction without a second instance allocation.
+Class and base names are used directly unless a binding in the class code can
+shadow them. Only those cases get reserved __selu_class_N or __selu_base_N
+aliases. Mutable base aliases are captured because extends fixes the base value
+when the class is declared. Base/helper planning follows lexical scopes and uses
+the checked class identity of aliases; declarations inside an unrelated function
+do not force aliases or select a different base. Self-references inside a class do not force a forward
+local: local Tracker = {} suffices. Genuine earlier uses still get a forward
+local, preserving closures that construct a class declared later.
 
-Each class has a shared __fields helper in the declaration's lexical scope.
-Constructor parameters and body locals cannot capture field initializer names.
+A standalone class or local leaf subclass constructs directly in new, with
+named parameters when known. Bases with subclasses in the file retain __init
+so derived constructors initialize the same instance. Exported classes retain
+that entry too, since their subclasses can live in other modules. All classes
+still allocate exactly one instance table per new; method calls allocate none.
+Explicit rest parameters retain the allocation described in functions.md.
+
+Field initializers normally appear directly in new or __init. Only an actual
+lexical conflict with constructor parameters or forward locals requires a shared
+__fields helper. Free-name analysis reuses the module walker's lexical scopes;
+an arrow's own parameters do not create a false conflict. Receiver hygiene is
+shared across the inlined fields and constructor. Simple compound assignments
+on this or stable names, with a pure right operand, emit direct field updates.
+Other updates keep the existing evaluation-order protections.
+
 Instance initializers are checked as delayed code, while static initializers
 are eager. Fields need an annotation or initializer; checked initializer types
 and method/default-parameter types refine their signatures. Uninitialized typed
@@ -67,7 +81,7 @@ Overrides must preserve the base member's type, including fields and statics.
 Instance fields and declared methods also retain their calling convention.
 Constructor diagnostics show the expected signature; override diagnostics name
 the expected member type. Parameter diagnostics underline only the name.
-The runtime names new, __init, __fields, __proto and __index are reserved, as are
+The runtime names new, methods, __init, __fields, __proto and __index are reserved, as are
 duplicate members. Class-specific diagnostics use SELU0420-0433.
 
 A class instance may satisfy a structural object type when every requested
@@ -78,7 +92,23 @@ compatibility intentionally differs from TypeScript's structural class typing.
 Field-shape metadata is refreshed for class-valued expressions; non-class
 expressions pass through that hook without copying or allocating.
 
-D1 owns export checking/lowering. On this branch's 8da0740 base, export still
-reports SELU0390; the class prepass already unwraps export. Runtime module
-integration follows the parent's later rebase. Construction of values that are
-not known class objects retains SELU0390.
+Module integration carries class signatures through an additive classes registry
+on ModuleExport. The registry includes constructors, instance/static members,
+method calling conventions and ancestor identities, including transitive imports.
+Class identities include the source module and declaration location; unrelated
+classes named A in different files remain distinct. Imported names are declared
+by D1's helper before any block signatures are built, while ordinary class value
+reads retain use-before-declaration checks. Methods and constructors establish
+parameter/default/body scopes in D1's live-import walker, so local parameters
+shadowing mutable imports remain plain local reads.
+
+The class prelude stays one call per lowering entry. The project module path
+places it immediately after local __selu_addon, __selu_ns = ..., before source
+imports or declarations. WoW runtime setup follows the namespace fallback.
+D4's builtin-call dispatch remains ahead of data/class/generic calls, and class
+methods can register commands, log and return localized labels. Construction of
+values that are not known class objects retains SELU0390.
+
+The classes example has a full-string Lua comparison for both class definitions,
+as well as the real addon build/load/output test. Shadowed class/base aliases,
+standalone constructors, module identity and import scopes have regressions.

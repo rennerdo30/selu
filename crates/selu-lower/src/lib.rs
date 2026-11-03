@@ -102,10 +102,11 @@ pub fn lower(program: &Program, manifest: &Manifest, types: &TypeTable) -> Lower
         temps: 0,
         wow: wow::WowState::default(),
         class_receiver: "self".into(),
+        classes: Default::default(),
         loops: Vec::new(),
     };
     let mut out: LBlock = Vec::new();
-    classes::runtime_prelude(&program.stmts, &mut out);
+    l.class_prelude(&program.stmts, &mut out);
     let has_handlers = program
         .stmts
         .iter()
@@ -162,6 +163,8 @@ pub fn lower_module(
         known: &known,
         types,
         temps: 0,
+        class_receiver: "self".into(),
+        classes: Default::default(),
         wow: wow::WowState::default(),
         loops: Vec::new(),
     };
@@ -172,6 +175,7 @@ pub fn lower_module(
         ),
         span: None,
     }];
+    l.class_prelude(&program.stmts, &mut out);
     out.push(LStmt {
         kind: LStmtKind::Assign(
             vec![name("__selu_ns")],
@@ -179,6 +183,7 @@ pub fn lower_module(
         ),
         span: None,
     });
+    let runtime_index = out.len();
     l.module_prologue(&mut out);
     let has_handlers = program
         .stmts
@@ -190,7 +195,7 @@ pub fn lower_module(
     }
     out.extend(l.block(&program.stmts));
     if let Some(prologue) = l.wow_prologue() {
-        out.splice(2..2, prologue);
+        out.splice(runtime_index..runtime_index, prologue);
     }
     let printed = lua::print_block(&out);
     Lowered {
@@ -220,6 +225,7 @@ pub(crate) struct Lowerer<'a> {
     module: ModuleBindings,
     wow: wow::WowState,
     class_receiver: String,
+    classes: classes::ClassLoweringState,
     loops: Vec<loops::LoopCtx>,
     known: &'a HashSet<String>,
     types: &'a TypeTable,
@@ -767,6 +773,8 @@ fn used_before_declaration(stmts: &[Stmt]) -> Vec<String> {
             StmtKind::Export(inner) => inner.as_ref(),
             _ => s,
         };
+        let class_early = matches!(s.kind, StmtKind::Class(_))
+            .then(|| declaration_names(s).iter().any(|n| seen.contains(n)));
         visit::idents_in_stmt(s, &mut |n| {
             seen.insert(n.to_string());
         });
@@ -774,7 +782,7 @@ fn used_before_declaration(stmts: &[Stmt]) -> Vec<String> {
             seen.insert(n.to_string());
         });
         let names = declaration_names(s);
-        if names.iter().any(|n| seen.contains(n)) {
+        if class_early.unwrap_or_else(|| names.iter().any(|n| seen.contains(n))) {
             for name in names {
                 if !early.contains(&name) {
                     early.push(name);

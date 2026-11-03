@@ -146,8 +146,8 @@ on PLAYER_LOGIN() { const p = new Point(3); print(p.length(), p.callback(), p.lo
 "#;
     assert_eq!(run(src), ["3\t10\t12"]);
     let lua = common::compile(src);
-    assert!(lua.contains("function Point.__proto:length()\n"));
-    assert!(lua.contains("function Point.__proto.callback(__selu_self)\n"));
+    assert!(lua.contains("function Point.methods:length()\n"));
+    assert!(lua.contains("function Point.methods.callback(__selu_self)\n"));
 }
 #[test]
 fn class_before_function() {
@@ -162,7 +162,7 @@ fn class_before_function() {
 fn exported_class_type_predeclaration() {
     assert_eq!(
         codes("function make(): A { return new A(); } export class A {}"),
-        ["SELU0390"]
+        Vec::<String>::new()
     );
 }
 
@@ -532,4 +532,318 @@ fn review_immediate_this_before_super() {
     ] {
         assert!(codes(src).contains(&"SELU0433".into()), "{src}");
     }
+}
+
+fn class_module_sources(base: &str, main: &str) -> (Vec<String>, String) {
+    use std::collections::BTreeMap;
+    let manifest = common::manifest();
+    let base = selu_syntax::parse("base.selu", base).unwrap();
+    let main = selu_syntax::parse("main.selu", main).unwrap();
+    let (checked, exports) = selu_check::check_module(&base, &manifest, Default::default());
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let base_lua = selu_lower::lower_module(
+        &base,
+        &manifest,
+        &checked.types,
+        selu_lower::ModuleBindings::new("base".into(), BTreeMap::new(), &base),
+    )
+    .lua;
+    let mut bindings = selu_check::ModuleBindings::default();
+    bindings.imports.insert("./base".into(), exports.clone());
+    let (checked, _) = selu_check::check_module(&main, &manifest, bindings);
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let main_lua = selu_lower::lower_module(
+        &main,
+        &manifest,
+        &checked.types,
+        selu_lower::ModuleBindings::new(
+            "main".into(),
+            BTreeMap::from([("./base".into(), ("base".into(), exports))]),
+            &main,
+        ),
+    )
+    .lua;
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_addon(
+        "Classes",
+        &[
+            ("base.lua".into(), base_lua),
+            ("main.lua".into(), main_lua.clone()),
+        ],
+    )
+    .unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    (sim.prints(), main_lua)
+}
+#[test]
+fn integrated_exported_classes_and_same_names() {
+    let (out, _) = class_module_sources(
+        "export class A { x: number; constructor(x: number) { this.x = x; } value(n: number = 1): number { return this.x + n; } static make(n: number): A { return new A(n); } }",
+        "export class A extends Base { constructor(x: number) { super(x); } value(n: number = 1): number { return super.value(n) + 10; } } import { A as Base } from \"./base\"; on PLAYER_LOGIN() { const b: Base = Base.make(4); const a: A = new A(5); const up: Base = a; print(b.value(), up.value(2)); }",
+    );
+    assert_eq!(out, ["5\t17"]);
+}
+#[test]
+fn integrated_mutable_import_class_scopes() {
+    let (out, _) = class_module_sources(
+        "export let count = 3;",
+        r#"import { count } from "./base";
+class A { x: number; constructor(count: number) { this.x = count; } value(count: number): number { const n = count; return n + this.x; } localValue(): number { const count = 7; return count; } }
+on PLAYER_LOGIN() { const a = new A(5); print(a.value(6),a.localValue(),count); }"#,
+    );
+    assert_eq!(out, ["11\t7\t3"]);
+}
+#[test]
+fn integrated_module_runtime_capture() {
+    let (out, lua) = class_module_sources(
+        "export const n = 7;",
+        r#"import { n } from "./base"; class setmetatable {} on PLAYER_LOGIN() { const a = new setmetatable(); print(n); }"#,
+    );
+    assert_eq!(out, ["7"]);
+    assert!(lua.starts_with(
+        "local __selu_addon, __selu_ns = ...\nlocal __selu_setmetatable = setmetatable\n"
+    ));
+}
+#[test]
+fn integrated_wow_class_method() {
+    let lua = common::compile(
+        "class A { x = 4; message(): string { log.info`count ${this.x}`; return L`Count ${this.x}`; } } on PLAYER_LOGIN() { print(new A().message()); }",
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_addon("ClassWow",&[("main.lua".into(),lua),("verify.lua".into(),"local _, ns = ...; function VerifyClassLog() assert(#ns[false].buffer == 1); assert(ns[false].buffer[1].message == 'count 4') end".into())]).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    sim.eval("VerifyClassLog()").unwrap();
+    assert_eq!(sim.prints(), ["Count 4"]);
+}
+
+#[test]
+fn readable_standalone_class() {
+    assert_eq!(
+        common::compile(
+            "class Tracker { total = 0; add(amount: number) { this.total += amount; } }"
+        ),
+        r#"local __selu_setmetatable = setmetatable
+local Tracker = {}
+Tracker.methods = {}
+Tracker.methods.__index = Tracker.methods
+function Tracker.new()
+  local self = __selu_setmetatable({}, Tracker.methods)
+  self.total = 0
+  return self
+end
+function Tracker.methods:add(amount)
+  self.total = self.total + amount
+end
+"#
+    );
+}
+#[test]
+fn readable_stable_compound() {
+    assert_eq!(
+        common::compile("const p = { x: 1 }; const amount = 2; p.x += amount;"),
+        "local p = { x = 1 }\nlocal amount = 2\np.x = p.x + amount\n"
+    );
+}
+#[test]
+fn integrated_wow_module_fallback() {
+    let src = r#"class A { x = 4; register(): string { command("/class", (args) => { print(args); }); log.info`count ${this.x}`; return L`Count ${this.x}`; } } on PLAYER_LOGIN() { print(new A().register()); }"#;
+    let p = selu_syntax::parse("main.selu", src).unwrap();
+    let m = common::manifest();
+    let (checked, _) = selu_check::check_module(&p, &m, Default::default());
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let lua = selu_lower::lower_module(
+        &p,
+        &m,
+        &checked.types,
+        selu_lower::ModuleBindings::new("main".into(), Default::default(), &p),
+    )
+    .lua;
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("main.lua".into(), lua)]).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    sim.slash("/class hello").unwrap();
+    assert_eq!(sim.prints(), ["Count 4", "hello"]);
+}
+#[test]
+fn readable_example_hierarchy_exact() {
+    let source = include_str!("../../../examples/classes/src/main.selu");
+    let mut program = selu_syntax::parse("example.selu", source).unwrap();
+    program
+        .stmts
+        .retain(|s| matches!(s.kind, selu_syntax::StmtKind::Class(_)));
+    let manifest = common::manifest();
+    let checked = selu_check::check_program(&program, &manifest);
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let lua = selu_lower::lower(&program, &manifest, &checked.types).lua;
+    assert_eq!(
+        lua,
+        r#"local __selu_setmetatable = setmetatable
+local Tracker = {}
+Tracker.methods = {}
+Tracker.methods.__index = Tracker.methods
+function Tracker.__init(self, name)
+  self.total = 0
+  self.name = name
+  Tracker.created = Tracker.created + 1
+end
+function Tracker.new(name)
+  local self = __selu_setmetatable({}, Tracker.methods)
+  Tracker.__init(self, name)
+  return self
+end
+function Tracker.methods:record(amount)
+  self.total = self.total + amount
+end
+function Tracker.methods:summary()
+  return string.format("%s: %s", self.name, self.total)
+end
+Tracker.created = 0
+local LootTracker = {}
+LootTracker.methods = {}
+LootTracker.methods.__index = LootTracker.methods
+__selu_setmetatable(LootTracker, { __index = Tracker })
+__selu_setmetatable(LootTracker.methods, { __index = Tracker.methods })
+function LootTracker.new(name)
+  local self = __selu_setmetatable({}, LootTracker.methods)
+  Tracker.__init(self, name)
+  self.multiplier = 2
+  return self
+end
+function LootTracker.make()
+  return LootTracker.new("Loot")
+end
+function LootTracker.methods:record(amount)
+  Tracker.methods.record(self, amount * self.multiplier)
+end
+function LootTracker.methods:collect()
+  local add = function(amount)
+    self:record(amount)
+  end
+  add(3)
+  add(2)
+end
+"#
+    );
+}
+#[test]
+fn readable_alias_only_for_shadowed_class() {
+    let src = "class A { constructor(A: number) {} }";
+    assert_eq!(
+        common::compile(src),
+        r#"local __selu_setmetatable = setmetatable
+local A = {}
+local __selu_class_6 = A
+__selu_class_6.methods = {}
+__selu_class_6.methods.__index = __selu_class_6.methods
+function A.new(A)
+  local self = __selu_setmetatable({}, __selu_class_6.methods)
+  return self
+end
+"#
+    );
+    assert_eq!(
+        run(
+            "class A { constructor(A: number) {} } on PLAYER_LOGIN() { const a = new A(99); print(7); }"
+        ),
+        ["7"]
+    );
+}
+#[test]
+fn readable_shadowed_base_alias() {
+    let src = "class Base { f(): number { return 1; } } class Child extends Base { f(Base: number = 2): number { return super.f() + Base; } } on PLAYER_LOGIN() { print(new Child().f()); }";
+    assert_eq!(run(src), ["3"]);
+    let lua = common::compile(src);
+    assert!(lua.contains("local __selu_base_"));
+}
+#[test]
+fn integrated_class_identities_are_nominal_across_modules() {
+    use std::collections::BTreeMap;
+    let manifest = common::manifest();
+    let base = selu_syntax::parse("base.selu", "export class A { x = 1; }").unwrap();
+    let (_, exports) = selu_check::check_module(&base, &manifest, Default::default());
+    let main=selu_syntax::parse("main.selu","export class A { x = 1; } import { A as Other } from \"./base\"; const a: Other = new A();").unwrap();
+    let checked = selu_check::check_module(
+        &main,
+        &manifest,
+        selu_check::ModuleBindings {
+            imports: BTreeMap::from([("./base".into(), exports)]),
+            ..Default::default()
+        },
+    )
+    .0;
+    assert_eq!(
+        checked
+            .diagnostics
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect::<Vec<_>>(),
+        ["SELU0336"]
+    );
+}
+#[test]
+fn integrated_imported_type_before_import() {
+    let (out, _) = class_module_sources(
+        "export class A { x = 7; }",
+        r#"function read(p: Base): number { return p.x; } import { A as Base } from "./base"; on PLAYER_LOGIN() { print(read(new Base())); }"#,
+    );
+    assert_eq!(out, ["7"]);
+}
+
+#[test]
+fn integrated_function_signature_before_import() {
+    use std::collections::BTreeMap;
+    let m = common::manifest();
+    let p = selu_syntax::parse(
+        "base.selu",
+        "export function f(n: number): number { return n; }",
+    )
+    .unwrap();
+    let (_, exports) = selu_check::check_module(&p, &m, Default::default());
+    let p = selu_syntax::parse(
+        "main.selu",
+        r#"function wrapper(): number { return f("bad"); } import { f } from "./base";"#,
+    )
+    .unwrap();
+    let checked = selu_check::check_module(
+        &p,
+        &m,
+        selu_check::ModuleBindings {
+            imports: BTreeMap::from([("./base".into(), exports)]),
+            ..Default::default()
+        },
+    )
+    .0;
+    assert_eq!(
+        checked
+            .diagnostics
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect::<Vec<_>>(),
+        ["SELU0335"]
+    );
+}
+#[test]
+fn readable_method_table_keeps_instance_names_separate() {
+    assert_eq!(
+        run(
+            "class A { methods = 7; } class B { methods(): number { return 8; } } on PLAYER_LOGIN() { print(new A().methods,new B().methods()); }"
+        ),
+        ["7\t8"]
+    );
+    assert_eq!(codes("class A { static methods = 7; }"), ["SELU0431"]);
+}
+#[test]
+fn readable_unrelated_scopes_do_not_force_aliases() {
+    let src =
+        "class Base { x = 1; } function unrelated() { let Base = 3; } class Child extends Base {}";
+    assert!(!common::compile(src).contains("__selu_base_"));
+}
+#[test]
+fn readable_alias_in_another_scope_does_not_choose_the_base() {
+    assert_eq!(
+        run(
+            "class Base { x = 1; } class Other { x = 2; } const Alias = Base; function unrelated() { const Alias = Other; } class Child extends Alias {} on PLAYER_LOGIN() { print(new Child().x); }"
+        ),
+        ["1"]
+    );
 }

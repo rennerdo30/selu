@@ -145,6 +145,22 @@ impl Lowerer<'_> {
             }
             _ => unreachable!(),
         };
+        if let ExprKind::Member { object, .. } = &target.kind
+            && (matches!(object.kind, ExprKind::This) || self.types.is_stable(object.id))
+            && value.is_none_or(pure)
+        {
+            let mut pre = Vec::new();
+            let t = self.target(target, &mut pre);
+            let mut one = target.clone();
+            one.kind = ExprKind::Number("1".into());
+            let result = self.binary(e, op, target, value.unwrap_or(&one), &mut pre);
+            self.finish(
+                pre,
+                stmt(LStmtKind::Assign(vec![t], vec![result]), span),
+                out,
+            );
+            return;
+        }
         let mut pre = Vec::new();
         let t = match &target.kind {
             ExprKind::Member {

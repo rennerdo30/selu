@@ -94,6 +94,30 @@ fn walk_stmt(s: &Stmt, active: &HashSet<String>, out: &mut HashSet<u32>) {
             walk_block(body, &active, out, true);
             return;
         }
+        StmtKind::Class(c) => {
+            for m in &c.members {
+                match &m.kind {
+                    selu_syntax::ClassMemberKind::Field { init: Some(e), .. } => {
+                        walk_expr(e, &active, out)
+                    }
+                    selu_syntax::ClassMemberKind::Method { params, body, .. }
+                    | selu_syntax::ClassMemberKind::Constructor { params, body } => {
+                        let mut active = active.clone();
+                        for p in params {
+                            active.remove(&p.name);
+                        }
+                        for p in params {
+                            if let Some(e) = &p.default {
+                                walk_expr(e, &active, out);
+                            }
+                        }
+                        walk_block(body, &active, out, true);
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
         StmtKind::Block(ss) => {
             walk_block(ss, &active, out, true);
             return;
@@ -167,7 +191,7 @@ fn walk_stmt(s: &Stmt, active: &HashSet<String>, out: &mut HashSet<u32>) {
         visit::Child::Expr(e) => walk_expr(e, &active, out),
     });
 }
-fn walk_expr(e: &Expr, active: &HashSet<String>, out: &mut HashSet<u32>) {
+pub(crate) fn walk_expr(e: &Expr, active: &HashSet<String>, out: &mut HashSet<u32>) {
     if let ExprKind::Ident(n) = &e.kind
         && active.contains(n)
     {

@@ -30,6 +30,7 @@ mod loops;
 pub mod types;
 mod wow;
 
+pub use classes::ClassInfo;
 pub use types::{Type, TypeTable};
 
 /// Diagnostics plus the type of every expression, for the lowering.
@@ -80,6 +81,7 @@ pub fn check_module(
     manifest: &Manifest,
     imports: ModuleBindings,
 ) -> (Checked, ModuleExports) {
+    let classes = classes::ClassContext::from_imports(&imports);
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         module: imports,
@@ -90,9 +92,13 @@ pub fn check_module(
         returns: Vec::new(),
         loops: Vec::new(),
         function_expected: Vec::new(),
+        classes,
         types: TypeTable::default(),
     };
     ctx.block(&program.stmts, &[], Vec::new());
+    for e in ctx.module.exports.values_mut() {
+        e.classes = ctx.classes.infos.clone();
+    }
     let exports = ctx.module.exports;
     let types = ctx.types;
     (
@@ -284,6 +290,7 @@ impl Ctx<'_> {
         for (p, ty) in params {
             self.declare(&p.name, &p.span, Kind::Param, ty.clone());
         }
+        self.declare_block_imports(stmts);
         self.predeclare_class_names(stmts);
         let top = self.scopes.len() == 1;
         for s in stmts {
@@ -293,7 +300,6 @@ impl Ctx<'_> {
                 _ => s,
             };
             match &s.kind {
-                StmtKind::Import { .. } => self.declare_imports(s),
                 StmtKind::Class(c) => self.declare_class(c),
                 StmtKind::VarDecl {
                     is_const,
@@ -1567,5 +1573,4 @@ mod tests {
         let span = diagnostics[0].span.as_ref().unwrap();
         assert_eq!(&source[span.start..span.end], "\"./other\"");
     }
-
 }
