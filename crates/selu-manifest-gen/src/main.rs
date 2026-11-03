@@ -70,7 +70,7 @@ fn run() -> Result<()> {
     let mut m: Manifest = serde_json::from_value(
         serde_json::json!({"flavour":flavour,"build":build,"interface":0,"luaDialects":["lua51"],"source":{"commit":commit,"version":version,"interfaceSource":""}}),
     )?;
-    let temp = std::path::PathBuf::from("E:/AgentData/claude_temp/m1").join(format!(
+    let temp = std::path::PathBuf::from("E:/AgentData/claude_temp/m2").join(format!(
         "generator-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()

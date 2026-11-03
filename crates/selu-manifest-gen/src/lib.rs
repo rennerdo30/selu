@@ -564,7 +564,14 @@ mod tests {
     }
     #[test]
     fn committed_manifests_smoke() {
-        for (flavour, build) in [("retail", "12.1.5.70391"), ("forever", "1.60.1.70532")] {
+        for (flavour, build) in [
+            ("retail", "12.1.5.70391"),
+            ("forever", "1.60.1.70532"),
+            ("classic-era", "1.15.9.70576"),
+            ("classic-anniversary", "2.5.6.70577"),
+            ("classic-titan", "3.80.2.70522"),
+            ("classic", "5.5.4.70631"),
+        ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join(format!("../../manifests/{flavour}/{build}.json"));
             let m = selu_manifest::load_manifest(&path).unwrap();

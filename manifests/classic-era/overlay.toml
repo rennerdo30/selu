@@ -1,0 +1,171 @@
+[interface]
+basis = "convention"
+value = 11509
+evidence = "source"
+note = "Client version 1.15.9 interface convention (major * 10000 + minor * 100 + patch); E:/Development/RennersAddons/RennersAddons.toc ships interface 11509"
+
+[[functions]]
+evidence = "source"
+note = "E:/Development/RennersAddons/docs/WOW_LUA_API.md: native CreateFrame use; engine global absent from generated documentation"
+[functions.entry]
+name = "CreateFrame"
+params = ["frameType", "name", "parent", "template", "id"]
+evidence = "source"
+[functions.entry.signature]
+name = "CreateFrame"
+[[functions.entry.signature.arguments]]
+name = "frameType"
+type = "cstring"
+[[functions.entry.signature.arguments]]
+name = "name"
+type = "cstring"
+[functions.entry.signature.arguments.attributes]
+Nilable = true
+[[functions.entry.signature.arguments]]
+name = "parent"
+type = "Frame"
+[functions.entry.signature.arguments.attributes]
+Nilable = true
+[[functions.entry.signature.arguments]]
+name = "template"
+type = "cstring"
+[functions.entry.signature.arguments.attributes]
+Nilable = true
+[[functions.entry.signature.arguments]]
+name = "id"
+type = "number"
+[functions.entry.signature.arguments.attributes]
+Nilable = true
+[[functions.entry.signature.returns]]
+name = "frame"
+type = "Frame"
+
+[[functions]]
+evidence = "source"
+note = "Lua 5.1 standard global, available in client; fixture compatibility"
+[functions.entry]
+name = "print"
+params = ["..."]
+evidence = "source"
+
+[[globals]]
+name = "UIParent"
+evidence = "source"
+note = "docs/TOOLKIT-SURVEY.md: addon native global use"
+
+[[globals]]
+name = "GameTooltip"
+evidence = "source"
+note = "docs/TOOLKIT-SURVEY.md: addon native global use"
+
+[[globals]]
+name = "SlashCmdList"
+evidence = "source"
+note = "docs/TOOLKIT-SURVEY.md: addon native global use"
+
+
+[[globals]]
+name = "Enum"
+evidence = "source"
+note = "Generated documentation references this engine namespace root"
+
+[[globals]]
+name = "Constants"
+evidence = "source"
+note = "Generated documentation references this engine namespace root"
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client Frame connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "Frame"
+type = "ScriptObject"
+inherits = ["SimpleFrameAPI", "ScriptRegion"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client ScriptRegion connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "ScriptRegion"
+type = "ScriptObject"
+inherits = ["SimpleScriptRegionAPI", "SimpleScriptRegionResizingAPI", "SimpleFrameScriptObjectAPI"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client Region connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "Region"
+type = "ScriptObject"
+inherits = ["ScriptRegion"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client SimpleFontString connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "SimpleFontString"
+type = "ScriptObject"
+inherits = ["SimpleFontStringAPI", "ScriptRegion"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client FontString connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "FontString"
+type = "ScriptObject"
+inherits = ["SimpleFontString"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client SimpleTexture connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "SimpleTexture"
+type = "ScriptObject"
+inherits = ["SimpleTextureAPI", "ScriptRegion"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client Texture connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "Texture"
+type = "ScriptObject"
+inherits = ["SimpleTexture"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client Button connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "Button"
+type = "ScriptObject"
+inherits = ["SimpleButtonAPI", "Frame"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client EditBox connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "EditBox"
+type = "ScriptObject"
+inherits = ["SimpleEditBoxAPI", "Frame"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client Slider connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "Slider"
+type = "ScriptObject"
+inherits = ["SimpleSliderAPI", "Frame"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client ScrollFrame connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "ScrollFrame"
+type = "ScriptObject"
+inherits = ["SimpleScrollFrameAPI", "Frame"]
+
+[[widgets]]
+evidence = "source"
+note = "Canonical client StatusBar connects to generated declaration groups; widget type and group names from client API documentation and docs/TOOLKIT-SURVEY.md"
+[widgets.entry]
+name = "StatusBar"
+type = "ScriptObject"
+inherits = ["SimpleStatusBarAPI", "Frame"]

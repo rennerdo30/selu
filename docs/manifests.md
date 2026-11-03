@@ -11,7 +11,7 @@ The ref may be any local ref or commit. For reproducibility use immutable hashes
 as above: even remote-tracking refs move, and local branches may be stale. The generator prints the resolved commit and uses that immutable
 hash for every subsequent read. Version and build are parsed from the commit
 subject `version (build)`. `git log` and `git archive` read the clone. Archives
-are owned temporary files under `E:/AgentData/claude_temp/m1` and are removed
+are owned temporary files under `E:/AgentData/claude_temp/m2` and are removed
 on completion; archive entries are streamed without extracting addon source.
 The output filename should be the printed build under the flavour directory.
 The generator never fetches, checks out, or writes to the clone.
@@ -103,3 +103,38 @@ supply a documented signature or live probe. Native globals do not have to be
 hand-listed. Overlays still supply the CreateFrame return type and canonical widget
 connections. Enum and Constants are known namespace roots.
 Existing handmade fixtures stay intact.
+
+## Shipped clients
+
+Pins resolved from remote-tracking refs in the owner clone, without fetching.
+
+| Flavour | Branch | Version (build) | Interface | Pinned commit |
+|---|---|---|---|---|
+| `classic` | `classic` | 5.5.4 (70631) | 50504 | `e5d9b3a22c3f0f6f41ebac0e454f4969594261cf` |
+| `classic-anniversary` | `classic_anniversary` | 2.5.6 (70577) | 20506 | `68e0a2ec559d9761dfc4e7f864c3944f9d758a49` |
+| `classic-era` | `classic_era` | 1.15.9 (70576) | 11509 | `4192ac60067fc55566182291bc67c85dd9b6794d` |
+| `classic-titan` | `classic_titan` | 3.80.2 (70522) | 38002 | `7014c309a25338905c41dc3799a93f9719ebb533` |
+| `forever` | `forever` | 1.60.1 (70532) | 16001 | `ca8368f2f2380cbe696854f7f2646387c278a61b` |
+| `retail` | `live` | 12.1.5 (70391) | 120105 | `18c6d677b605b312f3d813d498404631fb941977` |
+
+Classic interfaces use `major * 10000 + minor * 100 + patch`: 1.15.9 gives
+11509, 2.5.6 gives 20506, 3.80.2 gives 38002 and 5.5.4 gives 50504.
+The owner's shipping `E:/Development/RennersAddons/RennersAddons.toc` loads
+with exactly these numbers and Forever 16001. Overlays record convention
+evidence, not a live probe. Retail and Forever retain their existing pins.
+
+For example:
+
+```powershell
+cargo run -p selu-manifest-gen -- classic-era 4192ac60067fc55566182291bc67c85dd9b6794d manifests/classic-era/1.15.9.70576.json E:/Development/wow-ui-source
+```
+
+For PTR/beta on demand, resolve `origin/<branch>` with
+`git log -1 --format="%H %s"` in the source clone. Create a local uncommitted
+`manifests/<flavour>-ptr/` or `<flavour>-beta/` with an overlay recording that
+client's interface provenance and applicable widget connections. Run the same
+generator with the immutable hash, matching flavour and version/build filename.
+Generate twice and compare bytes. Do not fetch or change the source clone.
+PTR/beta manifests are local on-demand artifacts; none are committed here.
+The scan covers every addon Lua variant in a pin, without asserting TOC loading
+or live availability for each variant.
