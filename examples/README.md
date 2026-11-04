@@ -28,3 +28,5 @@ fires `PLAYER_LOGIN` and compares what it printed with `expected.txt`
 can't silently break.
 
 - `multi-target/`: a shared retail and Forever addon with a capability branch.
+
+- `timers/`: defer a merchant-style action; advance the simulator 0.2 seconds to print `Sale ready`.

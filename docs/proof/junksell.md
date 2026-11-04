@@ -14,7 +14,6 @@ signatures, not whether a call throws or returns secret/unreadable values.
 Run from the repository root:
 
 ```powershell
-cargo run -p selu-cli -- build proof/junksell
 cargo test --manifest-path proof/junksell/tests/Cargo.toml
 # Deliberate broken-port proof (expected failure):
 $env:JUNKSELL_BREAK = '1'
@@ -25,11 +24,12 @@ cargo test --manifest-path proof/junksell/tests/Cargo.toml gap_reproductions -- 
 ```
 
 The isolated Rust test crate is under proof/ to respect ownership. Root cargo test
-does not discover it. Build first: its merchant test reads the actual generated Lua.
+does not discover it. Its merchant test builds the CLI, then builds the retail
+proof with a bounded invocation before reading generated Lua.
 JUNKSELL_BREAK changes only an in-memory copy of that Lua, replacing the count
 increment with zero. The observed assertion failure included
 `Sold 0 junk item(s) for 20c.`. Restored tests pass. The test stubs merchant,
-container, item and timer functions with Sim::eval; it checks junk 101 sold,
+container and item functions with Sim::eval; it checks junk 101 sold,
 quest 102, locked 103 and quality-2 item 104 skipped, repair using own funds,
 and two newly sold locked duplicates bought back from index 2 then 1.
 
@@ -37,8 +37,8 @@ and two newly sold locked duplicates bought back from index 2 then 1.
 (`typeof`) are closed by package L; gap 5 (`MerchantFrame`) is closed by M3;
 gap 6 (`NUM_TOTAL_EQUIPPED_BAG_SLOTS`) is closed on retail and forever, while
 the classic branches only reference it (guard with `has(...)` there). Gaps 1
-(`try`/`catch`), 4 (string patterns), 7 (simulator timers) and 8 (runtime
-scaffolding) are open and planned for round 6. `tests/src/lib.rs`
+(`try`/`catch`), 4 (string patterns) and 8 (runtime
+scaffolding) are open and planned for round 6. Gap 7 is closed by Q. `tests/src/lib.rs`
 (`gap_reproductions`) asserts each gap's current status, so this list can't
 drift from the compiler. The port itself still uses its original
 workarounds.
@@ -85,12 +85,11 @@ Numbered gaps encountered (4 language, 0 checker false errors, 2 manifests,
    are not scanned. No fabricated declaration was injected into manifests.
 7. **Simulator: merchant/container/timer behavior needs explicit models.**
    Minimal Selu: `C_Timer.After(0.2, () => { print("sold"); });`.
-   Sim::advance_time only changes the clock; src/lib.rs and src/wow_api.rs
-   contain no timer queue. Expected timer callbacks to run at due times.
-   Workaround: tests/merchant.lua installs C_Timer.After and drain via Sim::eval.
-   Unmodeled globals otherwise become callable no-ops, which cannot prove
-   a sale. Assertions inspect recorded actions. The test queue orders delays
-   but does not establish wall-clock pacing or native merchant validity.
+   Closed by package Q: Sim::advance_time runs built-in simulator timers at
+   exact positive deadlines, with a 60 Hz OnUpdate grid and next-frame zero
+   delays. The merchant test advances simulated time without a timer stub.
+   Merchant/container APIs still use explicit fixtures; no client validity
+   or wall-clock pacing is claimed.
 8. **Readability: considerable lowering scaffolding survives.** Minimal form:
    `saved settings = {enabled: true}; on PLAYER_LOGIN() { print(settings.enabled); }`.
    Expected compact readable addon setup. Observed generated saved-loader,

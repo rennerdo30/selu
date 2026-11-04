@@ -1,4 +1,4 @@
-sold, bought, buyback, timers = {}, {}, {}, {}
+sold, bought, buyback = {}, {}, {}
 repaired = 0
 local items = {
  {hyperlink='item:101', itemID=101, quality=0, stackCount=2},
@@ -6,13 +6,6 @@ local items = {
  {hyperlink='item:103', itemID=103, quality=0, stackCount=1},
  {hyperlink='item:104', itemID=104, quality=2, stackCount=1},
 }
-C_Timer = {After=function(delay, fn) timers[#timers+1]={delay=delay, fn=fn} end}
-function drain()
- while #timers > 0 do
-  table.sort(timers, function(a,b) return a.delay < b.delay end)
-  local timer=table.remove(timers,1); timer.fn()
- end
-end
 C_Container = {
  GetContainerNumSlots=function(bag) return bag == 0 and #items or 0 end,
  GetContainerItemInfo=function(bag,slot) return items[slot] end,

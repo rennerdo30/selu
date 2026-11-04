@@ -1,0 +1,4 @@
+on PLAYER_LOGIN() {
+  print("Sale queued");
+  C_Timer.After(0.2, () => { print("Sale ready"); });
+}

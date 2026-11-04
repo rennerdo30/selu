@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 mod regions;
 pub mod saved;
+mod timers;
 mod wow_api;
 
 pub use mlua::Value as SimValue;
@@ -215,6 +216,7 @@ impl Sim {
             globals.set_metatable(Some(mt));
         }
         wow_api::install(&lua)?;
+        timers::install(&lua, logs.clone())?;
 
         Ok(Sim {
             lua,
@@ -296,7 +298,7 @@ impl Sim {
         *self.clock.lock().unwrap()
     }
     pub fn advance_time(&self, seconds: f64) {
-        *self.clock.lock().unwrap() += seconds;
+        timers::advance(&self.lua, &self.clock, seconds);
     }
     pub fn lua(&self) -> &Lua {
         &self.lua

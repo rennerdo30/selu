@@ -2,6 +2,7 @@
 use selu_sim::Sim;
 #[test]
 fn merchant_visit() {
+    build_proof();
     let sim = Sim::new().unwrap();
     sim.eval(include_str!("../merchant.lua")).unwrap();
     let path =
@@ -15,10 +16,9 @@ fn merchant_visit() {
     sim.eval("JunkSellProof_settings.locks[103] = true")
         .unwrap();
     sim.fire("MERCHANT_SHOW", vec![]).unwrap();
-    sim.eval(
-        "drain(); assert(#sold == 1 and sold[1] == 101); assert(repaired == 1 and not guildUsed)",
-    )
-    .unwrap();
+    sim.advance_time(2.0);
+    sim.eval("assert(#sold == 1 and sold[1] == 101); assert(repaired == 1 and not guildUsed)")
+        .unwrap();
     assert!(
         sim.prints()
             .iter()
@@ -28,7 +28,8 @@ fn merchant_visit() {
     );
     sim.eval("buyback = {'item:103', 'item:103'}").unwrap();
     sim.fire("MERCHANT_UPDATE", vec![]).unwrap();
-    sim.eval("drain(); assert(#bought == 2 and bought[1] == 2 and bought[2] == 1)")
+    sim.advance_time(2.0);
+    sim.eval("assert(#bought == 2 and bought[1] == 2 and bought[2] == 1)")
         .unwrap();
     sim.fire("MERCHANT_CLOSED", vec![]).unwrap();
     sim.eval("assert(#sold == 1)").unwrap();
@@ -58,7 +59,12 @@ fn gap_reproductions() {
         // only reference the constant, so it stays missing there.
         (
             "const y = NUM_TOTAL_EQUIPPED_BAG_SLOTS;",
-            &["classic-era", "classic-anniversary", "classic-titan", "classic"],
+            &[
+                "classic-era",
+                "classic-anniversary",
+                "classic-titan",
+                "classic",
+            ],
         ),
     ];
     for (source, open_on) in cases {
@@ -66,7 +72,12 @@ fn gap_reproductions() {
         let program = match selu_syntax::parse("gap.selu", source) {
             Ok(p) => p,
             Err(d) => {
-                assert_eq!(open_on, ["*"], "{source} no longer parses:\n{}", d.render(source));
+                assert_eq!(
+                    open_on,
+                    ["*"],
+                    "{source} no longer parses:\n{}",
+                    d.render(source)
+                );
                 println!("{}", d.render(source));
                 continue;
             }
@@ -91,4 +102,55 @@ fn gap_reproductions() {
             );
         }
     }
+}
+
+// Build with the real CLI from a clean checkout. dist/ is ignored.
+#[cfg(test)]
+fn build_proof() {
+    use std::process::Command;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let mut build = Command::new("cargo");
+    build.current_dir(&root).args(["build", "-p", "selu-cli"]);
+    wait_bounded(build);
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .map(|p| if p.is_absolute() { p } else { root.join(p) })
+        .unwrap_or_else(|| root.join("target"));
+    let mut cli = Command::new(
+        target
+            .join("debug")
+            .join(format!("selu{}", std::env::consts::EXE_SUFFIX)),
+    );
+    cli.current_dir(&root)
+        .args(["build", "proof/junksell", "--target", "retail"]);
+    wait_bounded(cli);
+}
+
+#[cfg(test)]
+fn wait_bounded(mut command: std::process::Command) {
+    use std::time::{Duration, Instant};
+    let mut child = command.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "proof build failed");
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("proof build timed out (PID {})", child.id());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn gap_7_simulator_timers() {
+    let sim = Sim::new().unwrap();
+    sim.eval("C_Timer.After(0.2, function() print('sold') end)")
+        .unwrap();
+    assert!(sim.prints().is_empty());
+    sim.advance_time(0.2);
+    assert_eq!(sim.prints(), ["sold"]);
 }
