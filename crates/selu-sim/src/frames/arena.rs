@@ -33,6 +33,11 @@ pub struct Region {
     pub text: Option<String>,
     pub texture: Option<TextureFill>,
     pub font_size: f64,
+    pub font_path: String,
+    pub font_flags: String,
+    pub text_value: mlua::Value,
+    pub strata_explicit: bool,
+    pub level_explicit: bool,
     pub mouse: bool,
     pub enabled: bool,
     pub moving: bool,
@@ -49,6 +54,8 @@ pub struct Arena {
     pub cursor: (f64, f64),
     pub hover: Option<usize>,
     pub focus: Option<usize>,
+    pub capture: Option<usize>,
+    pub moving: Option<usize>,
 }
 pub fn store(lua: &mlua::Lua) -> Store {
     lua.app_data_ref::<Store>()
@@ -62,4 +69,21 @@ pub fn id(t: &Table) -> mlua::Result<usize> {
 static IDENTITY_KEY: u8 = 0;
 pub fn identity_key() -> mlua::LightUserData {
     mlua::LightUserData((&IDENTITY_KEY as *const u8).cast_mut().cast())
+}
+
+pub fn is_region(kind: &str) -> bool {
+    matches!(kind, "Texture" | "FontString" | "MaskTexture")
+}
+pub fn focus(a: &mut Arena, ctx: &crate::Ctx, target: Option<usize>) {
+    let target = target.filter(|&i| a.regions[i].kind == "EditBox" && a.regions[i].visible);
+    if a.focus == target {
+        return;
+    }
+    if let Some(i) = a.focus.take() {
+        super::widgets::callback(ctx, a.regions[i].table.clone(), "OnEditFocusLost", vec![]);
+    }
+    a.focus = target;
+    if let Some(i) = target {
+        super::widgets::callback(ctx, a.regions[i].table.clone(), "OnEditFocusGained", vec![]);
+    }
 }

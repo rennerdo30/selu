@@ -279,6 +279,7 @@ pub struct Budget {
     /// Hook calls allowed per dispatch.
     pub limit: u64,
     used: u64,
+    callbacks: usize,
     /// The limit was hit in this dispatch; the hook now fails on every
     /// instruction.
     exhausted: bool,
@@ -322,6 +323,7 @@ impl Ctx {
             budget: shared(Budget {
                 limit: DEFAULT_BUDGET,
                 used: 0,
+                callbacks: 0,
                 exhausted: false,
             }),
             pending: shared(VecDeque::new()),
@@ -413,6 +415,7 @@ fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
 fn reset_budget(lua: &Lua, ctx: &Ctx) {
     let mut b = lock(&ctx.budget);
     b.used = 0;
+    b.callbacks = 0;
     if b.exhausted {
         b.exhausted = false;
         drop(b);
@@ -454,14 +457,28 @@ pub fn dispatch<R>(
     result
 }
 
-/// Run queued callbacks until the queue is empty. Each gets a fresh budget;
+/// Run queued callbacks until the queue is empty. Callbacks share the outer dispatch instruction and callback budgets;
 /// callbacks a callback queues run in the same flush.
-fn flush(lua: &Lua, ctx: &Ctx) {
+pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
     loop {
         let Some(next) = lock(&ctx.pending).pop_front() else {
             break;
         };
-        reset_budget(lua, ctx);
+        let stop = {
+            let mut b = lock(&ctx.budget);
+            b.callbacks += 1;
+            b.exhausted || b.callbacks > 10_000
+        };
+        if stop {
+            lock(&ctx.pending).clear();
+            ctx.log("error: dispatch callback/instruction budget exhausted");
+            ctx.record(
+                TraceKind::Error,
+                "flush",
+                vec!["dispatch budget exhausted".into()],
+            );
+            break;
+        }
         if let Err(e) = next(lua) {
             let text = e.to_string();
             ctx.log(format!("error: {text}"));
@@ -648,7 +665,7 @@ pub fn measure_text(text: &str, font_size: f64) -> TextMeasurement {
 mod text_tests {
     #[test]
     fn unicode_and_markup() {
-        let m = super::measure_text("|cffffffff猫é|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
+        let m = super::measure_text("|cffffffffçŒ«Ã©|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
         assert_eq!((m.width, m.height), (12.0, 24.0));
     }
 }

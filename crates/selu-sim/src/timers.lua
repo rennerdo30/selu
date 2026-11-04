@@ -1,4 +1,5 @@
 local queue, frame = {}, 1
+local flush = __selu_sim_flush
 local frameTime = 1 / 60
 local function safe(fn, ...)
  __selu_sim_budget = __selu_sim_budget - 1
@@ -8,6 +9,7 @@ local function safe(fn, ...)
   local converted, message = pcall(tostring, err)
   __selu_sim_error(converted and message or 'error object could not be formatted')
  end
+ flush()
  return ok
 end
 local function deadline(origin, index, period, now)
@@ -19,9 +21,7 @@ local function deadline(origin, index, period, now)
  end
  return due, origin, index, period
 end
-local function visible(f)
- return f:IsVisible()
-end
+local visible = __selu_sim_visible
 local function create(delay, callback, iterations, after)
  assert(type(delay) == 'number' and delay == delay and delay < math.huge, 'invalid timer delay')
  assert(type(callback) == 'function', 'invalid timer callback')

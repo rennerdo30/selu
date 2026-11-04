@@ -35,6 +35,7 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
     }));
 }
 pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    lua.set_app_data(ctx.clone());
     lua.set_app_data(Rc::new(RefCell::new(Arena::default())) as Store);
     let ctx = ctx.clone();
     lua.globals().set(
@@ -61,6 +62,16 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
     lua.globals().set(
         "GetCursorPosition",
         lua.create_function(|lua, ()| Ok(store(lua).borrow().cursor))?,
+    )?;
+    lua.globals().set(
+        "__selu_sim_visible",
+        lua.create_function(|lua, t: Table| {
+            let a = store(lua);
+            let mut a = a.borrow_mut();
+            let ctx = lua.app_data_ref::<Ctx>().unwrap().clone();
+            layout::resolve(&mut a, &ctx);
+            Ok(a.regions[id(&t)?].visible)
+        })?,
     )?;
     Ok(())
 }
@@ -122,6 +133,11 @@ pub fn create(
         text: None,
         texture: None,
         font_size: 12.0,
+        font_path: "fixed".into(),
+        font_flags: String::new(),
+        text_value: Value::Nil,
+        strata_explicit: false,
+        level_explicit: false,
         mouse: matches!(kind, "Button" | "CheckButton" | "EditBox" | "Slider"),
         enabled: true,
         moving: false,
@@ -233,6 +249,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 MultiValue::from_vec(vec![
                     Value::Table(child.clone()),
                     Value::String(lua.create_string(layer)?),
+                    v.get(3).cloned().unwrap_or(Value::Integer(0)),
                 ]),
             )?;
         }
@@ -252,26 +269,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         let name = string(v.first()).unwrap_or_default();
         match method {
             "GetScript" => out!(scripts.raw_get::<Value>(name)?),
-            "HasScript" => out!(matches!(
-                name.as_str(),
-                "OnShow"
-                    | "OnHide"
-                    | "OnSizeChanged"
-                    | "OnUpdate"
-                    | "OnEvent"
-                    | "OnClick"
-                    | "OnEnter"
-                    | "OnLeave"
-                    | "OnDragStart"
-                    | "OnDragStop"
-                    | "OnMouseDown"
-                    | "OnMouseUp"
-                    | "OnEnterPressed"
-                    | "OnTextChanged"
-                    | "OnValueChanged"
-                    | "OnEditFocusGained"
-                    | "OnEditFocusLost"
-            )),
+            "HasScript" => out!(has_script(&a.borrow().regions[i].kind, &name)),
             "SetScript" => scripts.raw_set(name, v.get(1).cloned().unwrap_or(Value::Nil))?,
             "HookScript" => {
                 let old = scripts.raw_get::<Option<Function>>(name.clone())?;
@@ -304,12 +302,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     match method {
         "GetName" => out!(r.name.clone()),
         "GetObjectType" => out!(r.kind.clone()),
-        "IsObjectType" => out!(
-            r.kind == s
-                || s == "Region"
-                || s == "Frame"
-                    && !matches!(r.kind.as_str(), "Texture" | "FontString" | "MaskTexture")
-        ),
+        "IsObjectType" => out!(super::manifest::inherits(&r.kind, &s)),
         "GetParent" => {
             let p = r.parent;
             out!(p.map(|p| a.regions[p].table.clone()));
@@ -348,6 +341,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "GetAlpha" => out!(r.alpha),
         "GetEffectiveAlpha" => out!(r.effective_alpha),
         "SetFrameStrata" => {
+            r.strata_explicit = true;
             r.strata = match s.as_str() {
                 "WORLD" => Strata::World,
                 "BACKGROUND" => Strata::Background,
@@ -365,7 +359,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 .replace("FullscreenDialog", "FULLSCREEN_DIALOG")
                 .to_uppercase()
         ),
-        "SetFrameLevel" => r.level = n as i32,
+        "SetFrameLevel" => {
+            r.level = n as i32;
+            r.level_explicit = true;
+        }
         "GetFrameLevel" => out!(r.level),
         "SetDrawLayer" => {
             r.layer = (
@@ -385,7 +382,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "SetShown" => r.shown = boolean(v.first()),
         "IsShown" => out!(r.shown),
         "IsVisible" => out!(r.visible),
-        "IsProtected" => out!(false),
+        "IsProtected" => out!(t.raw_get::<Option<bool>>("__protected")?.unwrap_or(false)),
         "EnableMouse" => r.mouse = boolean(v.first()),
         "IsMouseEnabled" => out!(r.mouse),
         "Enable" => r.enabled = true,
@@ -394,35 +391,39 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "SetChecked" => r.checked = boolean(v.first()),
         "GetChecked" => out!(r.checked),
         "SetText" => {
-            if matches!(v.first(), Some(Value::LightUserData(_))) {
-                out!(());
-            }
-            r.text = if matches!(v.first(), None | Some(Value::Nil)) {
+            r.text_value = v.first().cloned().unwrap_or(Value::Nil);
+            r.text = if matches!(v.first(), None | Some(Value::Nil | Value::LightUserData(_))) {
                 None
             } else {
                 Some(crate::value_string(&v[0]))
             };
         }
-        "GetText" => out!(r.text.clone()),
-        "SetFont" => r.font_size = number(v.get(1), 12.0),
-        "GetFont" => out!(("fixed", r.font_size, "")),
+        "GetText" => out!(r.text_value.clone()),
+        "SetFont" => {
+            r.font_size = number(v.get(1), 12.0);
+            r.font_path = s;
+            r.font_flags = string(v.get(2)).unwrap_or_default();
+        }
+        "GetFont" => out!((r.font_path.clone(), r.font_size, r.font_flags.clone())),
         "GetStringWidth" => {
             out!(crate::core::measure_text(r.text.as_deref().unwrap_or(""), r.font_size).width)
         }
-        "GetStringHeight" => {
-            let m = crate::core::measure_text(r.text.as_deref().unwrap_or(""), r.font_size);
-            out!(if r.width > 0.0 {
-                m.height * (m.width / r.width).ceil().max(1.0)
-            } else {
-                m.height
-            });
-        }
+        "GetStringHeight" => out!(layout::text_height(
+            r,
+            r.rect
+                .map(|q| q.width / r.effective_scale)
+                .unwrap_or(r.width)
+        )),
         "SetTexture" => {
-            r.texture = Some(TextureFill::File(if s.is_empty() {
-                n.to_string()
+            r.texture = if matches!(v.first(), None | Some(Value::Nil)) {
+                None
             } else {
-                s
-            }))
+                Some(TextureFill::File(if s.is_empty() {
+                    n.to_string()
+                } else {
+                    s
+                }))
+            };
         }
         "GetTexture" => out!(match &r.texture {
             Some(TextureFill::File(s)) => Some(s.clone()),
@@ -529,12 +530,20 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             r.max = number(v.get(1), 1.0).max(n);
         }
         "GetMinMaxValues" => out!((r.min, r.max)),
-        "StartMoving" => r.moving = true,
-        "StopMovingOrSizing" => r.moving = false,
-        "SetFocus" => a.focus = Some(i),
+        "StartMoving" => {
+            r.moving = true;
+            a.moving = Some(i);
+        }
+        "StopMovingOrSizing" => {
+            r.moving = false;
+            if a.moving == Some(i) {
+                a.moving = None;
+            }
+        }
+        "SetFocus" => focus(&mut a, ctx, Some(i)),
         "ClearFocus" => {
             if a.focus == Some(i) {
-                a.focus = None;
+                focus(&mut a, ctx, None);
             }
         }
         "HasFocus" => out!(a.focus == Some(i)),
@@ -568,8 +577,73 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             vec![Value::Number(new.width), Value::Number(new.height)],
         );
     }
+    if old.value != new.value && new.kind == "Slider" {
+        callback(
+            ctx,
+            t.clone(),
+            "OnValueChanged",
+            vec![Value::Number(new.value), Value::Boolean(false)],
+        );
+    }
     if old.text != new.text {
         callback(ctx, t.clone(), "OnTextChanged", vec![Value::Boolean(false)]);
     }
+    if matches!(method, "SetFont" | "SetTexture") {
+        return true.into_lua_multi(lua);
+    }
     Ok(MultiValue::new())
+}
+
+fn has_script(kind: &str, name: &str) -> bool {
+    if matches!(name, "OnShow" | "OnHide" | "OnSizeChanged") {
+        return true;
+    }
+    if is_region(kind) {
+        return false;
+    }
+    if matches!(
+        name,
+        "OnEvent"
+            | "OnUpdate"
+            | "OnEnter"
+            | "OnLeave"
+            | "OnMouseDown"
+            | "OnMouseUp"
+            | "OnMouseWheel"
+            | "OnDragStart"
+            | "OnDragStop"
+            | "OnReceiveDrag"
+            | "OnAttributeChanged"
+            | "OnKeyDown"
+            | "OnKeyUp"
+    ) {
+        return true;
+    }
+    match kind {
+        "Button" | "CheckButton" => matches!(
+            name,
+            "PreClick" | "OnClick" | "PostClick" | "OnDoubleClick" | "OnEnable" | "OnDisable"
+        ),
+        "EditBox" => matches!(
+            name,
+            "OnEnterPressed"
+                | "OnEscapePressed"
+                | "OnTabPressed"
+                | "OnSpacePressed"
+                | "OnTextChanged"
+                | "OnTextSet"
+                | "OnChar"
+                | "OnCursorChanged"
+                | "OnEditFocusGained"
+                | "OnEditFocusLost"
+                | "OnInputLanguageChanged"
+        ),
+        "Slider" | "StatusBar" => matches!(name, "OnValueChanged" | "OnMinMaxChanged"),
+        "ScrollFrame" => matches!(
+            name,
+            "OnHorizontalScroll" | "OnVerticalScroll" | "OnScrollRangeChanged"
+        ),
+        "Cooldown" => matches!(name, "OnCooldownDone"),
+        _ => false,
+    }
 }

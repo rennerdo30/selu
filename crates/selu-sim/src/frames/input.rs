@@ -1,7 +1,27 @@
 //! Host input in screen pixels, bottom-left origin. Session may forward these Sim methods.
 use super::{arena::*, layout, widgets::callback};
 use crate::{RegionId, Sim, SimResult, core::dispatch};
-use mlua::Value;
+use mlua::{Function, MultiValue, Value};
+fn invoke(sim: &Sim, i: usize, name: &str, args: Vec<Value>) -> SimResult<()> {
+    let t = store(sim.lua()).borrow().regions[i].table.clone();
+    if let Some(f) = t
+        .raw_get::<mlua::Table>("__scripts")?
+        .raw_get::<Option<Function>>(name)?
+    {
+        let mut args = MultiValue::from_vec(args);
+        args.push_front(Value::Table(t));
+        f.call::<()>(args)?;
+    }
+    crate::core::flush(sim.lua(), sim.ctx());
+    Ok(())
+}
+fn eligible(sim: &Sim, i: usize) -> bool {
+    let a = store(sim.lua());
+    let mut a = a.borrow_mut();
+    layout::resolve(&mut a, sim.ctx());
+    let r = &a.regions[i];
+    r.visible && r.enabled && r.mouse && a.capture == Some(i)
+}
 fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
     let a = store(sim.lua());
     let mut a = a.borrow_mut();
@@ -50,23 +70,34 @@ impl Sim {
         })
     }
     pub fn click(&self, x: f64, y: f64, button: &str) -> SimResult<Option<RegionId>> {
-        self.hover(x, y)?;
         dispatch(self.lua(), self.ctx(), || {
+            self.hover(x, y)?;
+            crate::core::flush(self.lua(), self.ctx());
             let target = hit(self, x, y);
+            let a = store(self.lua());
+            a.borrow_mut().capture = target;
             if let Some(i) = target {
-                let a = store(self.lua());
-                let mut a = a.borrow_mut();
-                let r = &mut a.regions[i];
-                if r.kind == "CheckButton" {
-                    r.checked = !r.checked;
+                let button = Value::String(self.lua().create_string(button)?);
+                invoke(self, i, "OnMouseDown", vec![button.clone()])?;
+                if eligible(self, i) {
+                    invoke(self, i, "OnMouseUp", vec![button.clone()])?;
                 }
-                let t = r.table.clone();
-                drop(a);
-                let b = Value::String(self.lua().create_string(button)?);
-                for name in ["OnMouseDown", "OnMouseUp", "OnClick"] {
-                    callback(self.ctx(), t.clone(), name, vec![b.clone()]);
+                if eligible(self, i) {
+                    {
+                        let mut a = a.borrow_mut();
+                        if a.regions[i].kind == "CheckButton" {
+                            a.regions[i].checked = !a.regions[i].checked;
+                        }
+                    }
+                    for name in ["PreClick", "OnClick", "PostClick"] {
+                        if !eligible(self, i) {
+                            break;
+                        }
+                        invoke(self, i, name, vec![button.clone(), Value::Boolean(false)])?;
+                    }
                 }
             }
+            a.borrow_mut().capture = None;
             Ok(target.map(|i| RegionId {
                 index: i as u32,
                 generation: 0,
@@ -74,32 +105,32 @@ impl Sim {
         })
     }
     pub fn drag(&self, from: (f64, f64), to: (f64, f64)) -> SimResult<()> {
-        let target = hit(self, from.0, from.1);
         dispatch(self.lua(), self.ctx(), || {
+            let a = store(self.lua());
+            a.borrow_mut().cursor = from;
+            let target = hit(self, from.0, from.1);
+            a.borrow_mut().capture = target;
+            let button = Value::String(self.lua().create_string("LeftButton")?);
             if let Some(i) = target {
-                let t = store(self.lua()).borrow().regions[i].table.clone();
-                callback(self.ctx(), t, "OnDragStart", vec![]);
-            }
-            Ok(())
-        })?;
-        dispatch(self.lua(), self.ctx(), || {
-            if let Some(i) = target {
-                let a = store(self.lua());
-                let mut a = a.borrow_mut();
-                let r = &mut a.regions[i];
-                if r.moving {
-                    let scale = r.effective_scale;
-                    for p in &mut r.points {
-                        p.x += (to.0 - from.0) / scale;
-                        p.y += (to.1 - from.1) / scale;
+                invoke(self, i, "OnDragStart", vec![button.clone()])?;
+                {
+                    let mut a = a.borrow_mut();
+                    a.cursor = to;
+                    if let Some(moving) = a.moving {
+                        let r = &mut a.regions[moving];
+                        let scale = r.effective_scale;
+                        for point in &mut r.points {
+                            point.x += (to.0 - from.0) / scale;
+                            point.y += (to.1 - from.1) / scale;
+                        }
+                        a.dirty = true;
                     }
                 }
-                let t = r.table.clone();
-                a.cursor = to;
-                a.dirty = true;
-                drop(a);
-                callback(self.ctx(), t, "OnDragStop", vec![]);
+                invoke(self, i, "OnDragStop", vec![button])?;
+            } else {
+                a.borrow_mut().cursor = to;
             }
+            a.borrow_mut().capture = None;
             Ok(())
         })
     }
@@ -122,7 +153,10 @@ impl Sim {
             if let Some(i) = a.focus {
                 let r = &mut a.regions[i];
                 r.text = Some(format!("{}{text}", r.text.as_deref().unwrap_or("")));
+                r.text_value =
+                    Value::String(self.lua().create_string(r.text.as_deref().unwrap_or(""))?);
                 let t = r.table.clone();
+                a.dirty = true;
                 drop(a);
                 callback(self.ctx(), t, "OnTextChanged", vec![Value::Boolean(true)]);
             }

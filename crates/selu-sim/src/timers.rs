@@ -27,6 +27,14 @@ pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
             Ok(())
         })?,
     )?;
+    lua.globals().set(
+        "__selu_sim_flush",
+        lua.create_function(|lua, ()| {
+            let ctx = lua.app_data_ref::<crate::Ctx>().unwrap().clone();
+            crate::core::flush(lua, &ctx);
+            Ok(())
+        })?,
+    )?;
     lua.load(include_str!("timers.lua")).exec()
 }
 
