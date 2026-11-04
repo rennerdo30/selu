@@ -156,6 +156,28 @@ impl Ctx<'_> {
         if !present.iter().any(|(_, member)| member.is_some()) {
             // M3 records global names, not parentKey relationships. A name
             // prefix proves only a global exists, never a field on its parent.
+            if let Some((prefix, suffix)) = bases
+                .iter()
+                .find_map(|s| s.strip_prefix("@family:").and_then(|s| s.split_once('\t')))
+            {
+                let child_suffix = format!("{suffix}{name}");
+                if present.iter().any(|(m, _)| {
+                    m.frame_families
+                        .iter()
+                        .any(|f| f.prefix == prefix && f.suffix == child_suffix)
+                        || m.globals.iter().any(|g| {
+                            g.name
+                                .strip_prefix(prefix)
+                                .and_then(|s| s.strip_suffix(&child_suffix))
+                                .is_some_and(|n| {
+                                    !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit())
+                                })
+                        })
+                }) {
+                    self.out.push(err("SELU0582", format!("`{prefix}...{child_suffix}` is recorded as a global, not a `{name}` field"), &object.span).with_help(format!("use frameFamily(\"{prefix}\", index, \"{child_suffix}\")")));
+                    return Some(Type::Error);
+                }
+            }
             if let Some(g) = global {
                 let child = format!("{g}{name}");
                 if present

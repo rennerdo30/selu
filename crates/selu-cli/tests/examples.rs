@@ -3,7 +3,6 @@
 //! the client loads it, and must print exactly the lines of `expected.txt`
 //! after `PLAYER_LOGIN`. Examples can't silently break this way.
 
-use selu_sim::Sim;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -126,13 +125,11 @@ fn run_example(example: &Path) -> Vec<String> {
         files.push((line.to_string(), source));
     }
     assert_source_inventory(example, &example.join("src"), &mapped_sources);
-    let sim = Sim::new().unwrap();
-    for manifest in selu_manifest::load_manifest_dir(&manifests).unwrap() {
-        for family in manifest.frame_families {
-            sim.register_frame_family(&family.prefix, &family.suffix)
-                .unwrap();
-        }
-    }
+    let sim = selu_sim::Session::new(selu_sim::SessionConfig {
+        target: Some("retail".into()),
+        ..Default::default()
+    })
+    .unwrap();
     sim.load_addon(&name, &files)
         .unwrap_or_else(|e| panic!("{}: {e}", example.display()));
     sim.fire("PLAYER_LOGIN", vec![])

@@ -107,10 +107,14 @@ struct VmState {
     marks: std::collections::VecDeque<(u64, Snapshot)>,
     generation: Generation,
     ui_size: Option<(f64, f64)>,
+    frame_families: std::collections::BTreeSet<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionConfig {
+    /// The checked target manifest. Front ends may pass it directly; otherwise
+    /// sessions resolve `target` from the nearest manifests directory.
+    pub manifest: Option<selu_manifest::Manifest>,
     /// `flavour@version`, selecting flavour-specific `.toc` files.
     pub target: Option<String>,
     /// UIParent size in pixels at scale 1 (decision 4).
@@ -127,6 +131,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         SessionConfig {
+            manifest: None,
             target: None,
             ui_size: snapshot::DEFAULT_UI_SIZE,
             seed: 1,
@@ -209,12 +214,67 @@ fn saved_key(config: &SessionConfig, toc: &loader::Toc, name: &str) -> String {
     )
 }
 
+fn register_family(vm: &Vm, prefix: &str, suffix: &str) -> SimResult<()> {
+    if lock(&vm.state)
+        .frame_families
+        .insert((prefix.into(), suffix.into()))
+    {
+        let families: Table = vm.lua.globals().raw_get("__selu_frame_families")?;
+        families.raw_set(
+            families.raw_len() + 1,
+            vm.lua.create_sequence_from([prefix, suffix])?,
+        )?;
+    }
+    Ok(())
+}
+fn discover_manifest(
+    config: &SessionConfig,
+    from: &Path,
+) -> SimResult<Option<selu_manifest::Manifest>> {
+    let inferred = from.ancestors().find_map(|dir| {
+        let text = std::fs::read_to_string(dir.join("selu.toml")).ok()?;
+        let project: toml::Value = toml::from_str(&text).ok()?;
+        let targets = project.get("addon")?.get("targets")?.as_array()?;
+        if targets.len() == 1 {
+            return targets[0].as_str().map(str::to_owned);
+        }
+        let addon = from.file_name()?.to_str()?;
+        targets
+            .iter()
+            .filter_map(|v| v.as_str())
+            .find(|t| addon.ends_with(&format!("-{}", t.split('@').next().unwrap_or(t))))
+            .map(str::to_owned)
+    });
+    let Some(target) = config.target.as_ref().or(inferred.as_ref()) else {
+        return Ok(None);
+    };
+    // Session targets also select TOC flavours for plain Lua/synthetic addons,
+    // whose labels (for example retail@test) need not be manifest versions.
+    let Ok(spec) = selu_manifest::TargetSpec::parse(target) else {
+        return Ok(None);
+    };
+    for root in from.ancestors() {
+        let dir = root.join("manifests");
+        if dir.is_dir() {
+            let all = selu_manifest::load_manifest_dir(&dir).map_err(|e| runtime(e.to_string()))?;
+            // Synthetic simulator targets need not have installed manifests.
+            return Ok(selu_manifest::resolve(&spec, &all).ok().cloned());
+        }
+    }
+    Ok(None)
+}
+
 fn runtime(message: String) -> mlua::Error {
     mlua::Error::RuntimeError(message)
 }
 
 impl Session {
-    pub fn new(config: SessionConfig) -> SimResult<Session> {
+    pub fn new(mut config: SessionConfig) -> SimResult<Session> {
+        if config.manifest.is_none()
+            && let Ok(cwd) = std::env::current_dir()
+        {
+            config.manifest = discover_manifest(&config, &cwd)?;
+        }
         let sim = Self::start_vm(&config)?;
         Ok(Session {
             config,
@@ -227,6 +287,11 @@ impl Session {
 
     fn start_vm(config: &SessionConfig) -> SimResult<Vm> {
         let sim = Vm::new()?;
+        if let Some(manifest) = &config.manifest {
+            for family in &manifest.frame_families {
+                register_family(&sim, &family.prefix, &family.suffix)?;
+            }
+        }
         lock(&sim.ctx().trace).enabled = config.trace;
         lock(&sim.state).ui_size = Some(config.ui_size);
         frames::configure_ui_size(sim.lua(), config.ui_size)?;
@@ -318,6 +383,14 @@ impl Session {
     /// Load an addon folder through its `.toc` and fire `ADDON_LOADED`.
     /// Returns the addon name.
     pub fn load_addon_dir(&mut self, dir: &Path) -> SimResult<String> {
+        if self.config.manifest.is_none() {
+            self.config.manifest = discover_manifest(&self.config, dir)?;
+            if let Some(manifest) = &self.config.manifest {
+                for family in &manifest.frame_families {
+                    register_family(&self.sim, &family.prefix, &family.suffix)?;
+                }
+            }
+        }
         self.install_lod(
             dir.parent()
                 .ok_or_else(|| runtime("addon has no parent".into()))?,
@@ -443,6 +516,9 @@ impl Session {
             ));
         }
         let replacement = Self::start_vm(&self.config)?;
+        for (prefix, suffix) in &lock(&self.sim.state).frame_families {
+            register_family(&replacement, prefix, suffix)?;
+        }
         *lock(&replacement.clock) = self.now();
         {
             let mut state = lock(&replacement.state);
@@ -501,9 +577,7 @@ impl Session {
     /// Register a manifest family whose absent members must behave as nil,
     /// rather than the simulator's fallback for unmodelled API functions.
     pub fn register_frame_family(&self, prefix: &str, suffix: &str) -> SimResult<()> {
-        let families: Table = self.sim.lua.globals().raw_get("__selu_frame_families")?;
-        let pair = self.sim.lua.create_sequence_from([prefix, suffix])?;
-        families.raw_set(families.raw_len() + 1, pair)
+        register_family(&self.sim, prefix, suffix)
     }
 
     pub fn eval(&self, source: &str) -> SimResult<()> {

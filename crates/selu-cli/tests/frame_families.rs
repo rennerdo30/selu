@@ -90,3 +90,164 @@ fn suffix_widget_and_shadowing() {
         }
     }
 }
+
+#[test]
+fn review_family_children_and_environment_bindings_are_closed() {
+    let m = manifest();
+    for src in [
+        r#"const f = frameFamily("MailItem", 1); if (f != null) { f.Subject.SetText(123); }"#,
+        r#"const f = frameFamily("MailItem", 1); if (f != null) { const n: number = f.Subject; print(n + 1); }"#,
+        r#"const f = MailItem1; const n: number = f.Subject;"#,
+    ] {
+        let p = selu_syntax::parse("review.selu", src).unwrap();
+        let c = check_module_targets_with_options(
+            &p,
+            &m,
+            Default::default(),
+            std::slice::from_ref(&m),
+            CheckOptions { strict_api: true },
+        )
+        .0;
+        assert!(
+            c.diagnostics.iter().any(|d| d.code == "SELU0582"),
+            "{src}: {:?}",
+            c.diagnostics
+        );
+    }
+    let mut single = m.clone();
+    single
+        .frame_families
+        .retain(|f| f.prefix != "MailItem" || f.suffix != "Subject");
+    let (_, c) = check(
+        r#"const f=frameFamily("MailItem",1);if(f!=null){const n:number=f.Subject;}"#,
+        &[single],
+    );
+    assert!(c.diagnostics.iter().any(|d| d.code == "SELU0582"));
+    for src in [
+        r#"const _G = { MerchantItem1: 42 }; const f = frameFamily("MerchantItem", 1); if (f != null) { f.Show(); }"#,
+        "function f(_G: number) { return _G; }",
+        "const [_G] = [1];",
+        "function _G() {}",
+    ] {
+        assert!(check(src, std::slice::from_ref(&m)).1.has_errors(), "{src}");
+    }
+}
+#[test]
+fn review_zero_index_and_production_session_reload() {
+    let m = manifest();
+    assert!(
+        !check(
+            r#"frameFamily("CharacterBag", 0, "Slot");"#,
+            std::slice::from_ref(&m)
+        )
+        .1
+        .has_errors()
+    );
+    let mut session = selu_sim::Session::new(selu_sim::SessionConfig {
+        target: Some(m.target_string()),
+        ..Default::default()
+    })
+    .unwrap();
+    for reload in [false, true] {
+        if reload {
+            session.reload().unwrap();
+        }
+        session
+            .eval("assert(_G['MerchantItem2'] == nil); UnmodelledAPI(1); UnmodelledAPI(2)")
+            .unwrap();
+        assert_eq!(
+            session
+                .logs()
+                .iter()
+                .filter(|s| s.contains("UnmodelledAPI"))
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn review_probes_preserve_evaluation_and_intrinsic_shadowing() {
+    let m = manifest();
+    for (src, expected) in [
+        (
+            r#"let i=0; function next(){ i++; return i; } const f=frameFamily("MerchantItem",next()+next()-1); print(i); if(f!=null){print(f.GetName() ?? "missing");}"#,
+            vec!["2", "MerchantItem2"],
+        ),
+        (
+            r#"let i=0; function next(){i++;return i;} const f=frameFamily("MerchantItem",next());print(i);if(f!=null){print(f.GetName() ?? "missing");}"#,
+            vec!["1", "MerchantItem1"],
+        ),
+        (
+            r#"const frameFamily=(n:number)=>n;print(frameFamily(3));"#,
+            vec!["3"],
+        ),
+    ] {
+        let (p, c) = check(src, std::slice::from_ref(&m));
+        assert!(!c.has_errors(), "{:?}", c.diagnostics);
+        let session = selu_sim::Session::new(selu_sim::SessionConfig {
+            manifest: Some(m.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        session
+            .eval("CreateFrame('Frame','MerchantItem1');CreateFrame('Frame','MerchantItem2')")
+            .unwrap();
+        session
+            .eval(&selu_lower::lower(&p, &m, &c.types).lua)
+            .unwrap();
+        assert_eq!(session.prints(), expected);
+    }
+}
+#[test]
+fn review_loaded_project_manifest_and_manual_family_survive_reload() {
+    let mut m = manifest();
+    m.functions.clear();
+    m.events.clear();
+    m.widgets.clear();
+    m.globals.clear();
+    m.templates.clear();
+    m.data_globals.clear();
+    m.tables.clear();
+    m.enums.clear();
+    let root = std::env::temp_dir().join(format!("selu-f2-session-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(root.clone());
+    std::fs::create_dir(root.join("manifests")).unwrap();
+    std::fs::write(
+        root.join("manifests/target.json"),
+        serde_json::to_vec(&m).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("selu.toml"),
+        format!(
+            "[addon]\nname = \"FamilySession\"\ntargets = [\"{}\"]\n",
+            m.target_string()
+        ),
+    )
+    .unwrap();
+    let addon = root.join("FamilySession");
+    std::fs::create_dir(&addon).unwrap();
+    std::fs::write(addon.join("FamilySession.toc"), "main.lua\n").unwrap();
+    std::fs::write(addon.join("main.lua"), "assert(_G['MerchantItem2'] == nil)").unwrap();
+    let mut session = selu_sim::Session::new(Default::default()).unwrap();
+    session.load_addon_dir(&addon).unwrap();
+    session.register_frame_family("Extra", "Child").unwrap();
+    session.reload().unwrap();
+    session.eval("assert(_G['MerchantItem2'] == nil); assert(_G['Extra1Child'] == nil); UnmodelledAPI(); UnmodelledAPI()").unwrap();
+    assert_eq!(
+        session
+            .logs()
+            .iter()
+            .filter(|s| s.contains("UnmodelledAPI"))
+            .count(),
+        1
+    );
+}

@@ -71,14 +71,15 @@ A local declaration named `frameFamily` shadows the intrinsic normally.
 
 `frameFamilies` stores one record per prefix/suffix with `widget`, `minIndex`
 and `maxIndex`. Manifest generation splits the first decimal run in a typed
-named widget global, rejects leading zeroes and mixed widget types, and requires
+named widget global, rejects multi-digit leading zeroes and mixed widget types, and requires
 at least two distinct indices. Each suffix has its own range; missing interior
 indices remain safe because results are nullable. Existing template and XML
 child expansion supplies widget types without guessed signatures.
 
 Diagnostics: SELU0640 unknown family, 0641 unknown suffix, 0642 nonliteral
 prefix/suffix, 0643 nonnumeric index, 0644 family absent on another target,
-0645 literal outside bounds, 0646 arity, 0647 inconsistent target widget types.
+0645 literal outside bounds, 0646 arity, 0647 inconsistent target widget types,
+0648 a forbidden `_G` binding.
 
 Ranges describe source evidence, not guaranteed runtime existence. In retail's
 pinned source, MerchantFrame.xml:127 defines MerchantItem1 (and later rows);
@@ -102,3 +103,22 @@ assigned an invented range. QuestTitleButton uses a frame pool at
 Blizzard_UIPanels_Game/Mainline/QuestFrame.lua:303 and supplies no numbered
 creation evidence. Retail runtime evidence does include
 AchievementFrameSummaryAchievement, created in Mainline/Blizzard_AchievementUI.lua:2391.
+
+Family values retain their family identity through inferred aliases and null
+narrowing. A named child global is not a proven field: after narrowing a
+`frameFamily("MailItem", index)` value, `.Subject` reports SELU0582. Use
+`frameFamily("MailItem", index, "Subject")` for the typed FontString lookup.
+A single zero is valid (`frameFamily("CharacterBag", 0, "Slot")`); spellings
+such as `01` do not define family members. Runtime creation evidence retains
+all distinct widget types; conflicting types reject the whole family. Numeric
+loop discovery resolves the index binding, excludes writes to it, and excludes
+creation calls in nested functions whose execution need not match the loop.
+
+Simulator sessions accept the already selected manifest in
+`SessionConfig.manifest`, so runners with custom manifest locations can use the
+same checked data. Otherwise Session resolves its target from the nearest
+`manifests` directory; addon loading can infer a single project target from
+`selu.toml` (or the flavour suffix for a split multi-target addon). Families are
+installed before addon evaluation and retained across reload/replay, including
+manually registered families. Unrelated missing APIs keep their existing
+callable fallback and log-once behavior.

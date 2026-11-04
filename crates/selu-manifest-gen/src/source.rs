@@ -29,12 +29,22 @@ struct Scan {
     calls: Vec<(String, usize)>,
     frame_calls: Vec<FunctionCall>,
     numeric_loops: Vec<NumericFor>,
+    assignments: Vec<(String, usize)>,
+    function_bodies: Vec<(usize, usize)>,
     tables: Vec<(String, usize, TableConstructor)>,
     members: Vec<(String, String, usize)>,
     scalars: Vec<(String, usize, Expression)>,
     mixins: Vec<(String, usize, Vec<String>, String)>,
 }
 impl Scan {
+    fn binding(&self, n: &str, pos: usize) -> Option<(usize, usize)> {
+        self.locals
+            .iter()
+            .filter(|(v, a, b)| v == n && *a <= pos && pos <= *b)
+            .max_by_key(|(_, a, _)| *a)
+            .map(|(_, a, b)| (*a, *b))
+    }
+
     fn bind(&mut self, n: String, from: usize, to: usize) {
         self.locals.push((n, from, to));
     }
@@ -70,6 +80,7 @@ impl Visitor for Scan {
         self.bind(name(n.name()), start(n), self.blocks.last().unwrap().1);
     }
     fn visit_function_body(&mut self, n: &FunctionBody) {
+        self.function_bodies.push((start(n), end(n)));
         self.depth += 1;
         for p in n.parameters() {
             if let Parameter::Name(t) = p {
@@ -102,6 +113,7 @@ impl Visitor for Scan {
             );
         } else if n.name().names().len() == 1 {
             let t = n.name().names().iter().next().unwrap();
+            self.assignments.push((name(t), start(n)));
             self.definitions.push((
                 name(t),
                 start(n),
@@ -118,6 +130,11 @@ impl Visitor for Scan {
         }
     }
     fn visit_assignment(&mut self, n: &Assignment) {
+        for v in n.variables() {
+            if let Var::Name(t) = v {
+                self.assignments.push((name(t), start(n)));
+            }
+        }
         for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
             if self.depth == 0
                 && let Var::Name(t) = v
@@ -241,6 +258,16 @@ impl Sources {
                 if start(lp.block()) <= start(call)
                     && end(call) <= end(lp.block())
                     && parts[1] == name(lp.index_variable())
+                    && scan.binding(parts[1], start(call))
+                        == Some((start(lp.block()), end(lp.block())))
+                    && !scan.assignments.iter().any(|(n, p)| {
+                        n == parts[1]
+                            && scan.binding(n, *p) == Some((start(lp.block()), end(lp.block())))
+                    })
+                    && !scan
+                        .function_bodies
+                        .iter()
+                        .any(|(a, b)| *a > start(lp) && *a < start(call) && end(call) <= *b)
                     && lp.step().is_none()
                     && !scan.local(lp.start().to_string().trim(), start(lp))
                     && !scan.local(lp.end().to_string().trim(), start(lp))
@@ -425,7 +452,11 @@ impl Sources {
                 });
                 for i in lo..=hi {
                     let name = format!("{prefix}{i}");
-                    if !m.globals.iter().any(|g| g.name == name) {
+                    if !m
+                        .globals
+                        .iter()
+                        .any(|g| g.name == name && g.ty.as_deref() == Some(widget.as_str()))
+                    {
                         m.globals.push(selu_manifest::GlobalEntry {
                             name,
                             ty: Some(widget.clone()),

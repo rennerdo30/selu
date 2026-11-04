@@ -334,6 +334,10 @@ impl Ctx<'_> {
 
     /// Declares `name` in the innermost scope; only parameters start ready.
     fn declare(&mut self, name: &str, span: &Span, kind: Kind, ty: Type) {
+        if name == "_G" {
+            self.out
+                .push(err("SELU0648", "`_G` cannot be bound in Selu", span));
+        }
         self.reserved_error_name(name, span);
         let fn_depth = self.fn_depth;
         let scope = self.scopes.last_mut().expect("a scope is open");

@@ -26,7 +26,15 @@ struct Rules {
 
 impl Rules {
     fn name(&mut self, name: &str, span: &Span) {
-        if is_lua_keyword(name) {
+        if name == "_G" {
+            self.out.push(
+                Diagnostic::error(
+                    "SELU0648",
+                    "`_G` is reserved for the game environment and cannot be bound in Selu",
+                )
+                .with_span(span.clone()),
+            );
+        } else if is_lua_keyword(name) {
             self.out.push(
                 Diagnostic::error(
                     "SELU0304",

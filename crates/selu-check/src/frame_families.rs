@@ -98,7 +98,10 @@ impl Ctx<'_> {
                     &args[1].span,
                 ));
             }
-            let ty = crate::api::named(m, &f.widget, 0);
+            let mut ty = crate::api::named(m, &f.widget, 0);
+            if let Type::Widget(_, bases) = &mut ty {
+                bases.push(format!("@family:{prefix}\t{suffix}"));
+            }
             result = Some(match result {
                 None => ty,
                 Some(old) if old == ty => old,
