@@ -39,6 +39,7 @@ pub enum TypeExprKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldType {
     pub name: String,
+    pub name_span: Span,
     pub optional: bool,
     pub ty: TypeExpr,
 }
@@ -175,6 +176,7 @@ pub struct TypeDecl {
     pub name: String,
     pub name_span: Span,
     pub params: Vec<(String, Option<TypeExpr>)>,
+    pub param_spans: Vec<Span>,
     pub bases: Vec<TypeExpr>,
     pub body: TypeExpr,
 }

@@ -7,8 +7,25 @@ pub(crate) struct Aliases {
     pub(crate) declarations: HashMap<String, TypeDecl>,
     active: Vec<String>,
     shapes: HashMap<String, crate::types::NamedShape>,
+    validated: std::collections::HashSet<String>,
+    pub(crate) contexts: HashMap<String, HashMap<String, Type>>,
+    context_stack: Vec<HashMap<String, Type>>,
 }
 impl Ctx<'_> {
+    pub(crate) fn finish_alias_diagnostics(&mut self) {
+        let mut seen = std::collections::HashSet::new();
+        self.out.retain(|d| {
+            let Some(span) = &d.span else {
+                return true;
+            };
+            let declaration = self.aliases.declarations.values().any(|t| {
+                span.file == t.name_span.file
+                    && span.start >= t.name_span.start
+                    && span.end <= t.body.span.end
+            });
+            !declaration || seen.insert((d.code.clone(), span.file.clone(), span.start, span.end))
+        });
+    }
     pub(crate) fn predeclare_aliases(&mut self, ss: &[Stmt]) {
         if self.scopes.len() != 1 {
             return;
@@ -42,8 +59,11 @@ impl Ctx<'_> {
                             continue;
                         }
                         self.out.retain(|d| {
-                            !(d.code == "SELU0304" && d.span.as_ref() == Some(local_span))
+                            !(d.code == "SELU0304"
+                                && !export.has_value
+                                && d.span.as_ref() == Some(local_span))
                         });
+                        self.aliases.contexts.extend(export.type_contexts.clone());
                         let renames: HashMap<_, _> = export
                             .aliases
                             .iter()
@@ -70,7 +90,15 @@ impl Ctx<'_> {
                                 .declarations
                                 .insert(renames[n].clone(), d.clone());
                             if n == remote {
-                                self.aliases.declarations.insert(local.clone(), d);
+                                if let Some(existing) = self.aliases.declarations.get(local) {
+                                    self.out.push(err(
+                                        "SELU0520",
+                                        format!("type `{local}` is already declared"),
+                                        &existing.name_span,
+                                    ));
+                                } else {
+                                    self.aliases.declarations.insert(local.clone(), d);
+                                }
                             }
                         }
                     }
@@ -79,6 +107,9 @@ impl Ctx<'_> {
         }
     }
     pub(crate) fn check_alias(&mut self, d: &TypeDecl) {
+        if !self.aliases.validated.insert(declaration_key(d)) {
+            return;
+        }
         if self.scopes.len() != 1 {
             self.out.push(err(
                 "SELU0521",
@@ -94,12 +125,12 @@ impl Ctx<'_> {
             ));
         }
         let mut params = std::collections::HashSet::new();
-        for (name, _) in &d.params {
+        for ((name, _), span) in d.params.iter().zip(&d.param_spans) {
             if !params.insert(name) {
                 self.out.push(err(
                     "SELU0520",
                     format!("type parameter `{name}` is already declared"),
-                    &d.name_span,
+                    span,
                 ));
             }
             if name.starts_with("__selu") {
@@ -117,7 +148,7 @@ impl Ctx<'_> {
                     self.out.push(err(
                         "SELU0527",
                         format!("field `{}` is already declared", field.name),
-                        &field.ty.span,
+                        &field.name_span,
                     ));
                 }
             }
@@ -147,7 +178,15 @@ impl Ctx<'_> {
             },
             span: d.name_span.clone(),
         };
-        self.alias_resolve(&t, &env);
+        let resolved = self.alias_resolve(&t, &env);
+        if unguarded_cycle(&resolved) {
+            self.out.push(err(
+                "SELU0523",
+                format!("type `{}` has no finite shape", d.name),
+                &d.name_span,
+            ));
+        }
+        validate_resolved(&resolved, &d.body.span, &mut Default::default(), self.out);
     }
     pub(crate) fn alias_annotation(&mut self, t: &TypeExpr) -> Type {
         self.alias_resolve(t, &HashMap::new())
@@ -156,6 +195,11 @@ impl Ctx<'_> {
         let mut rewritten = t.clone();
         let mut names = HashMap::new();
         self.alias_rewrite(&mut rewritten, env, &mut names);
+        if let Some(context) = self.aliases.context_stack.last() {
+            let mut all = context.clone();
+            all.extend(names);
+            names = all;
+        }
         // Keep class resolution's lexical namespace and replace only named-type leaves.
         if names.is_empty() {
             self.class_resolve(&rewritten)
@@ -182,12 +226,17 @@ impl Ctx<'_> {
                     return;
                 };
                 let supplied: Vec<_> = args.iter().map(|a| self.alias_resolve(a, env)).collect();
+                let display = if name.starts_with("$module:") {
+                    &d.name
+                } else {
+                    &*name
+                };
                 let label = if supplied.is_empty() {
-                    name.clone()
+                    display.clone()
                 } else {
                     format!(
                         "{}<{}>",
-                        name,
+                        display,
                         supplied
                             .iter()
                             .map(ToString::to_string)
@@ -195,6 +244,11 @@ impl Ctx<'_> {
                             .join(", ")
                     )
                 };
+                let key = format!(
+                    "{}:{:?}",
+                    declaration_key(&d),
+                    supplied.iter().map(identity_key).collect::<Vec<_>>()
+                );
                 let ty = if supplied.len() != d.params.len() {
                     self.out.push(err(
                         "SELU0522",
@@ -206,8 +260,10 @@ impl Ctx<'_> {
                         &t.span,
                     ));
                     Type::Error
-                } else if self.aliases.active.contains(&label) {
-                    Type::Named(label.clone(), self.aliases.shapes[&label].reference())
+                } else if self.aliases.active.contains(&key) {
+                    Type::Named(label.clone(), self.aliases.shapes[&key].reference())
+                } else if let Some(shape) = self.aliases.shapes.get(&key) {
+                    Type::Named(label.clone(), shape.clone())
                 } else if self.aliases.active.len() >= 64 {
                     self.out.push(err(
                         "SELU0523",
@@ -216,10 +272,17 @@ impl Ctx<'_> {
                     ));
                     Type::Error
                 } else {
-                    self.aliases.active.push(label.clone());
-                    let shape = crate::types::NamedShape::new();
-                    self.aliases.shapes.insert(label.clone(), shape.clone());
+                    self.aliases.active.push(key.clone());
+                    let shape = crate::types::NamedShape::new(key.clone());
+                    self.aliases.shapes.insert(key.clone(), shape.clone());
                     self.types.named_roots.push(shape.clone());
+                    let context = self
+                        .aliases
+                        .contexts
+                        .get(&declaration_key(&d))
+                        .cloned()
+                        .unwrap_or_else(|| self.class_type_names());
+                    self.aliases.context_stack.push(context);
                     let local: HashMap<_, _> = d
                         .params
                         .iter()
@@ -265,23 +328,9 @@ impl Ctx<'_> {
                             ));
                         }
                     }
+                    self.aliases.context_stack.pop();
                     self.aliases.active.pop();
-                    fn unguarded(t: &Type) -> bool {
-                        match t {
-                            Type::Optional(t) => unguarded(t),
-                            Type::Named(_, s) => s.get().is_none(),
-                            _ => false,
-                        }
-                    }
-                    let naked_cycle = unguarded(&body);
-                    if naked_cycle {
-                        self.out.push(err(
-                            "SELU0523",
-                            format!("type `{label}` has no finite shape"),
-                            &t.span,
-                        ));
-                    }
-                    shape.set(if naked_cycle { Type::Error } else { body });
+                    shape.set(body);
                     if invalid {
                         Type::Error
                     } else {
@@ -340,28 +389,67 @@ impl Ctx<'_> {
                 && unary == "typeof"
                 && let ExprKind::Ident(n) = &expr.kind
             {
-                let ty = match tag.as_str() {
-                    "string" => Type::String,
-                    "number" => Type::Number,
-                    "boolean" => Type::Boolean,
-                    "table" => Type::Object(Default::default()),
-                    "function" => Type::Function {
-                        multiple_results: false,
-                        unspecified_callback: true,
-                        api: Default::default(),
-                        api_semantics: Default::default(),
-                        params: vec![],
-                        ret: Box::new(Type::Unknown),
-                        required: 0,
-                        rest: Some(Box::new(Type::Unknown)),
-                    },
-                    _ => return None,
+                let original = self.type_of(n)?;
+                let non_null = original.non_null();
+                let shape = shape_of(&non_null);
+                let category = match shape {
+                    Type::Number => "number",
+                    Type::String => "string",
+                    Type::Boolean => "boolean",
+                    Type::Function { .. } => "function",
+                    Type::Object(_)
+                    | Type::Array(_)
+                    | Type::Map(..)
+                    | Type::Set(_)
+                    | Type::WeakMap(..)
+                    | Type::Class(..)
+                    | Type::Widget(..) => "table",
+                    Type::Null => "nil",
+                    _ => "",
                 };
-                return Some(if op == "==" {
-                    (vec![(n.clone(), ty)], vec![])
+                let (yes, no) = if tag == "nil" {
+                    (
+                        vec![(n.clone(), Type::Null)],
+                        if original.is_optional() {
+                            vec![(n.clone(), non_null)]
+                        } else {
+                            vec![]
+                        },
+                    )
                 } else {
-                    (vec![], vec![(n.clone(), ty)])
-                });
+                    let ty = if category == tag {
+                        non_null
+                    } else if shape == Type::Unknown || shape.is_open() {
+                        match tag.as_str() {
+                            "string" => Type::String,
+                            "number" => Type::Number,
+                            "boolean" => Type::Boolean,
+                            "table" => Type::Object(Default::default()),
+                            "function" => Type::Function {
+                                multiple_results: false,
+                                unspecified_callback: true,
+                                api: Default::default(),
+                                api_semantics: Default::default(),
+                                params: vec![],
+                                ret: Box::new(Type::Unknown),
+                                required: 0,
+                                rest: Some(Box::new(Type::Unknown)),
+                            },
+                            _ => return None,
+                        }
+                    } else {
+                        return None;
+                    };
+                    (
+                        vec![(n.clone(), ty)],
+                        if original.is_optional() && category == tag {
+                            vec![(n.clone(), Type::Null)]
+                        } else {
+                            vec![]
+                        },
+                    )
+                };
+                return Some(if op == "==" { (yes, no) } else { (no, yes) });
             }
         }
         None
@@ -398,14 +486,139 @@ fn rename_types(t: &mut TypeExpr, names: &HashMap<String, String>) {
     }
 }
 
-pub(crate) fn shape_of(t: &Type) -> Type {
+pub fn shape_of(t: &Type) -> Type {
     let mut t = t.clone();
     let mut seen = std::collections::HashSet::new();
-    while let Type::Named(n, body) = t {
-        if !seen.insert(n) {
+    while let Type::Named(_, body) = t {
+        if !seen.insert(body.key.clone()) {
             return Type::Error;
         }
         t = body.get().unwrap_or(Type::Error);
     }
     t
+}
+
+pub(crate) fn declaration_key(d: &TypeDecl) -> String {
+    format!("{}:{}", d.name_span.file, d.name_span.start)
+}
+pub(crate) fn identity_key(t: &Type) -> String {
+    let parts = match t {
+        Type::Named(_, s) => return s.key.clone(),
+        Type::Class(n, ..) | Type::ClassObject(n) | Type::Widget(n, _) => vec![n.clone()],
+        Type::Optional(t) | Type::Array(t) | Type::Set(t) => vec![identity_key(t)],
+        Type::Map(k, v) | Type::WeakMap(k, v) => vec![identity_key(k), identity_key(v)],
+        Type::Object(fs) => fs
+            .iter()
+            .map(|(n, t)| format!("{n:?}:{}", identity_key(t)))
+            .collect(),
+        Type::Tuple(ts) => ts.iter().map(identity_key).collect(),
+        Type::ApiOpaque(n, ts) => std::iter::once(n.clone())
+            .chain(ts.iter().map(identity_key))
+            .collect(),
+        Type::Function {
+            params,
+            ret,
+            required,
+            rest,
+            multiple_results,
+            unspecified_callback,
+            ..
+        } => vec![
+            format!("{:?}", params.iter().map(identity_key).collect::<Vec<_>>()),
+            identity_key(ret),
+            format!(
+                "{required}:{multiple_results}:{unspecified_callback}:{:?}",
+                rest.as_deref().map(identity_key)
+            ),
+        ],
+        _ => vec![],
+    };
+    format!("{:?}{parts:?}", std::mem::discriminant(t))
+}
+
+fn unguarded_cycle(t: &Type) -> bool {
+    let mut t = t.clone();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        match t {
+            Type::Named(_, s) => {
+                if !seen.insert(s.key.clone()) {
+                    return true;
+                }
+                let Some(next) = s.get() else {
+                    return false;
+                };
+                t = next;
+            }
+            Type::Optional(inner) => t = *inner,
+            _ => return false,
+        }
+    }
+}
+fn validate_resolved(
+    t: &Type,
+    span: &selu_diagnostics::Span,
+    seen: &mut std::collections::HashSet<String>,
+    out: &mut Vec<selu_diagnostics::Diagnostic>,
+) {
+    if let Type::Named(_, s) = t
+        && !seen.insert(s.key.clone())
+    {
+        return;
+    }
+    match shape_of(t) {
+        Type::Array(t) => {
+            if t.is_optional() {
+                out.push(
+                    err("SELU0350", "array elements cannot be null", span)
+                        .with_help("use a Map for gaps"),
+                );
+            }
+            validate_resolved(&t, span, seen, out);
+        }
+        Type::Optional(t) | Type::Set(t) => validate_resolved(&t, span, seen, out),
+        Type::Map(k, v) | Type::WeakMap(k, v) => {
+            validate_resolved(&k, span, seen, out);
+            validate_resolved(&v, span, seen, out);
+        }
+        Type::Object(fs) => {
+            for t in fs.values() {
+                validate_resolved(t, span, seen, out);
+            }
+        }
+        Type::Tuple(ts) => {
+            for t in ts {
+                validate_resolved(&t, span, seen, out);
+            }
+        }
+        Type::Function {
+            params, ret, rest, ..
+        } => {
+            for t in params {
+                validate_resolved(&t, span, seen, out);
+            }
+            validate_resolved(&ret, span, seen, out);
+            if let Some(t) = rest {
+                validate_resolved(&t, span, seen, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn non_null_of(t: &Type) -> Type {
+    let mut t = t.clone();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        match t {
+            Type::Optional(inner) => t = *inner,
+            Type::Named(_, ref s) if matches!(shape_of(&t), Type::Optional(_) | Type::Null) => {
+                if !seen.insert(s.key.clone()) {
+                    return Type::Error;
+                }
+                t = s.get().unwrap_or(Type::Error);
+            }
+            _ => return t,
+        }
+    }
 }

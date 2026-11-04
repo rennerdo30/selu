@@ -32,41 +32,52 @@ impl PartialEq for ApiSemantics {
 }
 
 #[derive(Clone)]
-pub enum NamedShape {
+pub enum ShapeBody {
     Definition(std::sync::Arc<std::sync::OnceLock<Type>>),
     Reference(std::sync::Weak<std::sync::OnceLock<Type>>),
 }
+#[derive(Debug, Clone)]
+pub struct NamedShape {
+    pub(crate) key: String,
+    body: ShapeBody,
+}
 impl NamedShape {
-    pub(crate) fn new() -> Self {
-        Self::Definition(Default::default())
+    pub(crate) fn new(key: String) -> Self {
+        Self {
+            key,
+            body: ShapeBody::Definition(Default::default()),
+        }
     }
     pub(crate) fn reference(&self) -> Self {
-        match self {
-            Self::Definition(a) => Self::Reference(std::sync::Arc::downgrade(a)),
-            Self::Reference(w) => Self::Reference(w.clone()),
+        Self {
+            key: self.key.clone(),
+            body: match &self.body {
+                ShapeBody::Definition(a) => ShapeBody::Reference(std::sync::Arc::downgrade(a)),
+                ShapeBody::Reference(w) => ShapeBody::Reference(w.clone()),
+            },
         }
     }
     pub(crate) fn get(&self) -> Option<Type> {
-        match self {
-            Self::Definition(a) => a.get().cloned(),
-            Self::Reference(w) => w.upgrade().and_then(|a| a.get().cloned()),
+        match &self.body {
+            ShapeBody::Definition(a) => a.get().cloned(),
+            ShapeBody::Reference(w) => w.upgrade().and_then(|a| a.get().cloned()),
         }
     }
     pub(crate) fn set(&self, t: Type) {
-        if let Self::Definition(a) = self {
+        if let ShapeBody::Definition(a) = &self.body {
             let _ = a.set(t);
         }
     }
 }
 
-impl std::fmt::Debug for NamedShape {
+impl std::fmt::Debug for ShapeBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("NamedShape")
     }
 }
 impl PartialEq for NamedShape {
-    fn eq(&self, _: &Self) -> bool {
-        true
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
     }
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -120,7 +131,9 @@ pub enum Type {
 
 impl Type {
     pub(crate) fn result_convention_matches(&self, other: &Type) -> bool {
-        match (self, other) {
+        let a = crate::shape_of(self);
+        let b = crate::shape_of(other);
+        match (&a, &b) {
             (
                 Type::Function {
                     multiple_results: a,
@@ -137,6 +150,9 @@ impl Type {
     }
 
     pub fn optional(t: Type) -> Type {
+        if t.is_optional() {
+            return t;
+        }
         match t {
             Type::Optional(_) | Type::Untyped | Type::Error => t,
             Type::Null => Type::Null,
@@ -146,11 +162,7 @@ impl Type {
 
     /// The `T` of a `T?` (and `T` itself otherwise).
     pub fn non_null(&self) -> Type {
-        match self {
-            Type::Named(_, _) => crate::aliases::shape_of(self).non_null(),
-            Type::Optional(t) => (**t).clone(),
-            t => t.clone(),
-        }
+        crate::aliases::non_null_of(self)
     }
 
     /// The same type, treating unknown parts as matching anything.
@@ -162,7 +174,7 @@ impl Type {
 
     /// Types the checker can't say anything about.
     pub fn is_open(&self) -> bool {
-        matches!(self, Type::Untyped | Type::Error)
+        matches!(crate::shape_of(self), Type::Untyped | Type::Error)
     }
 
     pub fn is_optional(&self) -> bool {
@@ -195,13 +207,13 @@ impl Type {
         if matches!(to, Type::Unknown) {
             return true;
         }
-        if let (Type::Named(a, _), Type::Named(b, _)) = (self, to)
-            && a == b
+        if let (Type::Named(_, a), Type::Named(_, b)) = (self, to)
+            && a.key == b.key
         {
             return true;
         }
-        if let Type::Named(n, t) = self {
-            let key = (n.clone(), to.to_string());
+        if let Type::Named(_, t) = self {
+            let key = (t.key.clone(), crate::aliases::identity_key(to));
             if !seen.insert(key.clone()) {
                 return true;
             }
@@ -209,8 +221,11 @@ impl Type {
             seen.remove(&key);
             return result;
         }
-        if let Type::Named(n, t) = to {
-            let key = (self.to_string(), format!("target:{n}"));
+        if let Type::Named(_, t) = to {
+            let key = (
+                crate::aliases::identity_key(self),
+                format!("target:{}", t.key),
+            );
             if !seen.insert(key.clone()) {
                 return true;
             }
@@ -556,7 +571,7 @@ impl TypeTable {
     }
 
     pub fn set(&mut self, id: ExprId, t: Type) {
-        self.types.insert(id, t);
+        self.types.insert(id, crate::aliases::shape_of(&t));
     }
     pub fn get(&self, id: ExprId) -> Option<&Type> {
         self.types.get(&id)

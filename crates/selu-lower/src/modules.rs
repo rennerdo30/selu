@@ -35,7 +35,24 @@ impl ModuleBindings {
         let mut live_reads = HashSet::new();
         walk_block(&program.stmts, &live, &mut live_reads, false);
         Self {
-            type_only: program.stmts.iter().all(|s| matches!(&s.kind, StmtKind::TypeDecl(_)) || matches!(&s.kind, StmtKind::Export(inner) if matches!(inner.kind, StmtKind::TypeDecl(_)))),
+            type_only: program.stmts.iter().all(|s| match &s.kind {
+                StmtKind::TypeDecl(_) => true,
+                StmtKind::Export(inner) => matches!(inner.kind, StmtKind::TypeDecl(_)),
+                StmtKind::Import {
+                    names,
+                    from,
+                    default,
+                    ..
+                } => {
+                    default.is_none()
+                        && imports.get(from).is_some_and(|(_, es)| {
+                            names
+                                .iter()
+                                .all(|(n, ..)| es.get(n).is_some_and(|e| !e.has_value))
+                        })
+                }
+                _ => false,
+            }),
             addon_name: "Addon".into(),
             key,
             imports,
@@ -255,10 +272,7 @@ impl Lowerer<'_> {
             && let Some((key, exports)) = self.module.imports.get(from)
         {
             for (remote, local, _, _) in names {
-                if exports
-                    .get(remote)
-                    .is_some_and(|e| e.aliases.contains_key(remote))
-                {
+                if exports.get(remote).is_some_and(|e| !e.has_value) {
                     continue;
                 }
                 out.push(LStmt::new(

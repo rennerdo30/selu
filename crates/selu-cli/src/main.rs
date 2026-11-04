@@ -293,7 +293,16 @@ fn build(
                 check_options,
             );
             for d in &checked.diagnostics {
-                eprint!("{}", d.render(&module.source));
+                let source = d
+                    .span
+                    .as_ref()
+                    .and_then(|span| {
+                        sources
+                            .iter()
+                            .find(|m| format!("{}.selu", m.key) == span.file)
+                    })
+                    .unwrap_or(module);
+                eprint!("{}", d.render(&source.source));
             }
             if checked.has_errors() {
                 return Err(ExitCode::FAILURE);

@@ -234,11 +234,16 @@ impl Parser {
                 self.bump();
                 let mut fields = Vec::new();
                 while !self.at(&Tok::RBrace) {
-                    let (name, _) = self.field_name("a field name")?;
+                    let (name, name_span) = self.field_name("a field name")?;
                     let optional = self.eat(&Tok::Question);
                     self.expect(&Tok::Colon, "`:` and the field's type")?;
                     let ty = self.ty()?;
-                    fields.push(FieldType { name, optional, ty });
+                    fields.push(FieldType {
+                        name,
+                        name_span,
+                        optional,
+                        ty,
+                    });
                     if !self.eat(&Tok::Semi) && !self.eat(&Tok::Comma) {
                         break;
                     }
@@ -268,7 +273,7 @@ impl Parser {
                             break;
                         }
                     }
-                    self.expect(&Tok::Gt, "`>`")?;
+                    self.type_gt()?;
                 }
                 TypeExprKind::Named { name, args }
             }
@@ -919,14 +924,28 @@ impl Parser {
             &[(Tok::Star, "*"), (Tok::Slash, "/"), (Tok::Percent, "%")],
         )
     }
+    fn type_gt(&mut self) -> PResult<()> {
+        if self.at(&Tok::GtEq) {
+            let mut equal = self.bump();
+            equal.tok = Tok::Eq;
+            equal.span.start += 1;
+            self.tokens.insert(self.pos, equal);
+            Ok(())
+        } else {
+            self.expect(&Tok::Gt, "`>`")?;
+            Ok(())
+        }
+    }
     fn type_decl(&mut self) -> PResult<StmtKind> {
         let interface = self.at_ident("interface");
         self.bump();
         let (name, name_span) = self.ident("a type name")?;
         let mut params = Vec::new();
+        let mut param_spans = Vec::new();
         if self.eat(&Tok::Lt) {
             loop {
-                let (n, _) = self.ident("a type parameter")?;
+                let (n, span) = self.ident("a type parameter")?;
+                param_spans.push(span);
                 let bound = if self.eat(&Tok::Extends) {
                     Some(self.ty()?)
                 } else {
@@ -937,7 +956,7 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(&Tok::Gt, "`>`")?;
+            self.type_gt()?;
         }
         let mut bases = Vec::new();
         if interface && self.eat(&Tok::Extends) {
@@ -952,10 +971,16 @@ impl Parser {
             let start = self.expect(&Tok::LBrace, "`{`")?.span.start;
             let mut fields = Vec::new();
             while !self.at(&Tok::RBrace) {
-                let (name, _) = self.field_name("a field or method")?;
+                let (name, name_span) = self.field_name("a field or method")?;
                 let optional = self.eat(&Tok::Question);
                 let ty = if self.at(&Tok::LParen) {
                     let ps = self.params()?;
+                    for (i, p) in ps.iter().enumerate() {
+                        if p.default.is_some() || (p.rest && i + 1 != ps.len()) {
+                            return Err(self.unexpected("a final rest parameter with no default"));
+                        }
+                    }
+                    let rest = ps.last().is_some_and(|p| p.rest);
                     self.expect(&Tok::Colon, "`:`")?;
                     let ret = self.ty()?;
                     TypeExpr {
@@ -966,14 +991,19 @@ impl Parser {
                                 .map(|p| p.ty.ok_or_else(|| self.unexpected("a parameter type")))
                                 .collect::<PResult<_>>()?,
                             ret: Box::new(ret),
-                            rest: false,
+                            rest,
                         },
                     }
                 } else {
                     self.expect(&Tok::Colon, "`:`")?;
                     self.ty()?
                 };
-                fields.push(FieldType { name, optional, ty });
+                fields.push(FieldType {
+                    name,
+                    name_span,
+                    optional,
+                    ty,
+                });
                 if !self.at(&Tok::RBrace) {
                     self.expect(&Tok::Semi, "`;`")?;
                 } else {
@@ -996,6 +1026,7 @@ impl Parser {
             name,
             name_span,
             params,
+            param_spans,
             bases,
             body,
         }))
@@ -1258,7 +1289,7 @@ impl Parser {
                             break;
                         }
                     }
-                    self.expect(&Tok::Gt, "`>`")?;
+                    self.type_gt()?;
                 }
                 let args = self.args()?;
                 ExprKind::New {

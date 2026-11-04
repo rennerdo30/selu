@@ -46,7 +46,10 @@ impl Ctx<'_> {
         }
         for x in exprs {
             let t = self.value(x);
-            if !matches!(t, Type::String | Type::Number | Type::Boolean | Type::Error) {
+            if !matches!(
+                crate::shape_of(&t),
+                Type::String | Type::Number | Type::Boolean | Type::Error
+            ) {
                 self.out.push(
                     err(
                         "SELU0443",
@@ -100,14 +103,14 @@ impl Ctx<'_> {
                 }
                 self.value(x);
             } else if i + 1 == last {
-                if self.value(x) != Type::String {
+                if crate::shape_of(&self.value(x)) != Type::String {
                     self.out.push(
                         err("SELU0441", "A hook name must be a string.", &x.span)
                             .with_help(r#"use "GetTime" for hook or "OnShow" for hookScript"#),
                     );
                 }
             } else {
-                let ty = self.value(x);
+                let ty = crate::shape_of(&self.value(x));
                 if !matches!(
                     ty,
                     Type::Untyped | Type::Error | Type::Object(_) | Type::Widget(..)
@@ -141,7 +144,7 @@ impl Ctx<'_> {
             },
             ret: Box::new(Type::Void),
         };
-        let t = self.value_expected(&args[last], Some(&expected));
+        let t = crate::shape_of(&self.value_expected(&args[last], Some(&expected)));
         if !matches!(t, Type::Function { .. } | Type::Error) {
             self.out.push(
                 err(

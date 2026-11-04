@@ -201,26 +201,49 @@ fn persistable(e: &selu_syntax::Expr) -> bool {
 }
 
 fn serializable(ty: &Type) -> bool {
-    match ty {
+    serializable_seen(ty, &mut Default::default())
+}
+fn serializable_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) -> bool {
+    if let Type::Named(_, s) = ty
+        && !seen.insert(s.key.clone())
+    {
+        return true;
+    }
+    match crate::shape_of(ty) {
         Type::Number | Type::String | Type::Boolean | Type::Null => true,
-        Type::Optional(t) | Type::Array(t) => serializable(t),
-        Type::Object(fs) => fs.values().all(serializable),
-        Type::Tuple(ts) => ts.iter().all(serializable),
+        Type::Optional(t) | Type::Array(t) => serializable_seen(&t, seen),
+        Type::Object(fs) => fs.values().all(|t| serializable_seen(t, seen)),
+        Type::Tuple(ts) => ts.iter().all(|t| serializable_seen(t, seen)),
         Type::Map(k, v) => {
-            matches!(**k, Type::Number | Type::String | Type::Boolean) && serializable(v)
+            matches!(
+                crate::shape_of(&k),
+                Type::Number | Type::String | Type::Boolean
+            ) && serializable_seen(&v, seen)
         }
-        Type::Set(k) => matches!(**k, Type::Number | Type::String | Type::Boolean),
+        Type::Set(k) => matches!(
+            crate::shape_of(&k),
+            Type::Number | Type::String | Type::Boolean
+        ),
         _ => false,
     }
 }
-
 fn contains_class(ty: &Type) -> bool {
-    match ty {
+    contains_class_seen(ty, &mut Default::default())
+}
+fn contains_class_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) -> bool {
+    if let Type::Named(_, s) = ty
+        && !seen.insert(s.key.clone())
+    {
+        return false;
+    }
+    match crate::shape_of(ty) {
         Type::Class(..) | Type::ClassObject(_) => true,
-        Type::Optional(t) | Type::Array(t) | Type::Set(t) => contains_class(t),
-        Type::Object(fields) => fields.values().any(contains_class),
-        Type::Tuple(types) => types.iter().any(contains_class),
-        Type::Map(k, v) | Type::WeakMap(k, v) => contains_class(k) || contains_class(v),
+        Type::Optional(t) | Type::Array(t) | Type::Set(t) => contains_class_seen(&t, seen),
+        Type::Object(fs) => fs.values().any(|t| contains_class_seen(t, seen)),
+        Type::Tuple(ts) => ts.iter().any(|t| contains_class_seen(t, seen)),
+        Type::Map(k, v) | Type::WeakMap(k, v) => {
+            contains_class_seen(&k, seen) || contains_class_seen(&v, seen)
+        }
         _ => false,
     }
 }

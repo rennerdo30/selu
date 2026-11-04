@@ -19,6 +19,7 @@ use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind, TypeExpr};
 use std::collections::HashMap;
 
 mod aliases;
+pub use aliases::shape_of;
 mod api;
 mod classes;
 mod modules;
@@ -86,6 +87,7 @@ pub fn check_program_with_options(
         types: TypeTable::default(),
     };
     ctx.block(&program.stmts, &[], Vec::new());
+    ctx.finish_alias_diagnostics();
     let types = ctx.types;
     Checked {
         diagnostics: out,
@@ -151,7 +153,16 @@ pub fn check_module_targets_with_options(
         types: TypeTable::default(),
     };
     ctx.block(&program.stmts, &[], Vec::new());
+    ctx.finish_alias_diagnostics();
+    let context = ctx.class_type_names();
+    for d in ctx.aliases.declarations.values() {
+        ctx.aliases
+            .contexts
+            .entry(aliases::declaration_key(d))
+            .or_insert_with(|| context.clone());
+    }
     for e in ctx.module.exports.values_mut() {
+        e.type_contexts = ctx.aliases.contexts.clone();
         e.classes = ctx.classes.infos.clone();
     }
     let exports = ctx.module.exports;
@@ -404,6 +415,18 @@ impl Ctx<'_> {
         }
         for s in stmts {
             self.stmt(s);
+        }
+        if top {
+            let context = self.class_type_names();
+            for d in self.aliases.declarations.values().filter(|d| {
+                stmts
+                    .first()
+                    .is_some_and(|s| d.name_span.file == s.span.file)
+            }) {
+                self.aliases
+                    .contexts
+                    .insert(aliases::declaration_key(d), context.clone());
+            }
         }
         self.scopes.pop();
     }
@@ -877,12 +900,16 @@ impl Ctx<'_> {
 
     fn check_condition_type(&mut self, e: &Expr, t: &Type) {
         let projected = self.check_tuple_value(e, t.clone());
-        let t = &projected;
+        let shaped = shape_of(&projected);
+        let t = &shaped;
         if matches!(t, Type::Tuple(_)) {
             self.tuple_condition(e);
             return;
         }
         let fix = match t {
+            Type::Unknown => {
+                "narrow it first with `typeof x == \"number\"` or another explicit type check"
+            }
             Type::Number => "compare it: `count != 0` or `count > 0`",
             Type::String => "compare it: `text != \"\"`",
             Type::Void => "this call returns nothing; call it on its own line",
@@ -913,7 +940,7 @@ impl Ctx<'_> {
                 return None;
             };
             match self.alias_shape(self.type_of(n)?) {
-                Type::Optional(inner) => Some((n.clone(), *inner)),
+                Type::Optional(_) => Some((n.clone(), self.type_of(n)?.non_null())),
                 _ => None,
             }
         };
@@ -955,7 +982,6 @@ impl Ctx<'_> {
 
     fn expr(&mut self, e: &Expr) -> Type {
         let t = self.expr_inner(e);
-        let t = self.alias_shape(t);
         let t = self.refresh_class_type(t);
         self.types.set(e.id, t.clone());
         t
@@ -982,7 +1008,7 @@ impl Ctx<'_> {
                     Type::Boolean
                 } else {
                     let t = self.value(expr);
-                    if !t.is_open() && t != Type::Number {
+                    if !t.is_open() && shape_of(&t) != Type::Number {
                         self.out.push(err(
                             "SELU0325",
                             format!("`-` needs a number, not {}", a(&t)),
@@ -1035,6 +1061,8 @@ impl Ctx<'_> {
     }
 
     fn member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
+        let shaped = shape_of(t);
+        let t = &shaped;
         if let Some(t) = self.target_member(t, name, object) {
             return t;
         }
@@ -1098,7 +1126,8 @@ impl Ctx<'_> {
                 let r = self.check_tuple_value(right, r);
                 self.scopes.pop();
                 self.check_condition_type(right, &r);
-                match (&l, &r) {
+                match (&shape_of(&l), &shape_of(&r)) {
+                    (Type::Unknown, _) | (_, Type::Unknown) => Type::Error,
                     (Type::Boolean, Type::Boolean) => Type::Boolean,
                     _ if l.is_open() || r.is_open() => Type::Untyped,
                     _ => Type::Cond,
@@ -1156,7 +1185,8 @@ impl Ctx<'_> {
                 let r = self.value(right);
                 let ok = l.is_open()
                     || r.is_open()
-                    || (l == r && matches!(l, Type::Number | Type::String));
+                    || (shape_of(&l) == shape_of(&r)
+                        && matches!(shape_of(&l), Type::Number | Type::String));
                 if !ok {
                     self.out.push(err(
                         "SELU0326",
@@ -1174,7 +1204,7 @@ impl Ctx<'_> {
                 self.wow_join(e, left, right);
                 let l = self.value(left);
                 let r = self.value(right);
-                match (&l, &r) {
+                match (&shape_of(&l), &shape_of(&r)) {
                     (Type::Number, Type::Number) => Type::Number,
                     (Type::String, Type::String) => Type::String,
                     (Type::Error, _) | (_, Type::Error) => Type::Error,
@@ -1219,7 +1249,7 @@ impl Ctx<'_> {
                 let l = self.value(left);
                 let r = self.value(right);
                 for (t, side) in [(&l, left), (&r, right)] {
-                    if !t.is_open() && *t != Type::Number {
+                    if !t.is_open() && shape_of(t) != Type::Number {
                         self.out.push(err(
                             "SELU0325",
                             format!("`{op}` needs numbers, not {}", a(t)),

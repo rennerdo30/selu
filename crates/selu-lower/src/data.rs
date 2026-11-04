@@ -356,7 +356,7 @@ impl Lowerer<'_> {
                 "sort" => lib("table", "sort", vec![obj]),
                 "join" => {
                     let separator = a.first().cloned().unwrap_or(LExpr::Str(",".into()));
-                    if matches!(&ty,Type::Array(t) if **t == Type::Boolean) {
+                    if matches!(&ty,Type::Array(t) if selu_check::shape_of(t) == Type::Boolean) {
                         let t = self.temp();
                         let i = self.temp();
                         emit(LStmtKind::Local(

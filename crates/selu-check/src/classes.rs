@@ -267,6 +267,11 @@ impl Ctx<'_> {
         t: &TypeExpr,
         aliases: &HashMap<String, Type>,
     ) -> Type {
+        let mut names = self.class_type_names();
+        names.extend(aliases.clone());
+        types::resolve_classes(t, self.out, &names)
+    }
+    pub(crate) fn class_type_names(&self) -> HashMap<String, Type> {
         let mut names = HashMap::new();
         for scope in &self.scopes {
             for (n, b) in &scope.names {
@@ -279,8 +284,7 @@ impl Ctx<'_> {
                 }
             }
         }
-        names.extend(aliases.clone());
-        types::resolve_classes(t, self.out, &names)
+        names
     }
     pub(crate) fn declare_class(&mut self, c: &ClassDecl) {
         let key = format!("{}@{}@{}", c.name, c.name_span.file, c.name_span.start);
@@ -687,10 +691,10 @@ pub(crate) fn mismatch_help(
     have: &Type,
     want: &Type,
 ) -> selu_diagnostics::Diagnostic {
-    let want = match want {
-        Type::Optional(t) => t.as_ref(),
-        t => t,
-    };
+    let shaped_have = crate::shape_of(have);
+    let shaped_want = crate::shape_of(&want.non_null());
+    let have = &shaped_have;
+    let want = &shaped_want;
     if matches!(have, Type::Object(_))
         && let Type::Class(name, _, _) = want
     {

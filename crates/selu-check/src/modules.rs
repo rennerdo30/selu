@@ -5,6 +5,8 @@ use selu_syntax::{Stmt, StmtKind};
 use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct ModuleExport {
+    pub has_value: bool,
+    pub type_contexts: std::collections::HashMap<String, std::collections::HashMap<String, Type>>,
     pub aliases: std::collections::HashMap<String, selu_syntax::TypeDecl>,
     pub ty: Type,
     pub mutable: bool,
@@ -15,6 +17,8 @@ pub struct ModuleExport {
 impl Default for ModuleExport {
     fn default() -> Self {
         Self {
+            has_value: true,
+            type_contexts: Default::default(),
             aliases: Default::default(),
             ty: Type::Untyped,
             mutable: false,
@@ -58,7 +62,7 @@ impl Ctx<'_> {
                     .imports
                     .get(from)
                     .and_then(|m| m.get(remote))
-                    .is_some_and(|e| e.aliases.contains_key(remote))
+                    .is_some_and(|e| !e.has_value)
                 {
                     continue;
                 }
@@ -147,15 +151,28 @@ impl Ctx<'_> {
         if self.module_not_top_level(s) {
             return;
         }
+        let context = self.class_type_names();
+        for d in self
+            .aliases
+            .declarations
+            .values()
+            .filter(|d| d.name_span.file == s.span.file)
+        {
+            self.aliases
+                .contexts
+                .insert(crate::aliases::declaration_key(d), context.clone());
+        }
         self.stmt(inner);
         if let StmtKind::TypeDecl(d) = &inner.kind {
-            self.module.exports.insert(
-                d.name.clone(),
-                ModuleExport {
-                    aliases: self.aliases.declarations.clone(),
+            let e = self
+                .module
+                .exports
+                .entry(d.name.clone())
+                .or_insert_with(|| ModuleExport {
+                    has_value: false,
                     ..Default::default()
-                },
-            );
+                });
+            e.aliases = self.aliases.declarations.clone();
             return;
         }
         let (name, mutable) = match &inner.kind {
@@ -167,16 +184,12 @@ impl Ctx<'_> {
             _ => return,
         };
         if let Some(ty) = self.type_of(name) {
-            self.module.exports.insert(
-                name.clone(),
-                ModuleExport {
-                    aliases: Default::default(),
-                    ty,
-                    mutable,
-                    classes: self.classes.infos.clone(),
-                    saved: matches!(inner.kind, StmtKind::Saved { .. }),
-                },
-            );
+            let e = self.module.exports.entry(name.clone()).or_default();
+            e.has_value = true;
+            e.ty = ty;
+            e.mutable = mutable;
+            e.classes = self.classes.infos.clone();
+            e.saved = matches!(inner.kind, StmtKind::Saved { .. });
         }
     }
     pub(crate) fn module_write(&mut self, name: &str, span: &Span) -> bool {

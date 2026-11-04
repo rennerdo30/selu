@@ -543,10 +543,18 @@ fn edit_distance(a: &str, b: &str) -> usize {
     *row.last().unwrap()
 }
 fn api_assignable(have: &Type, want: &Type) -> bool {
-    have.assignable_to(want) || matches!((have, want.non_null()), (Type::Number, Type::String))
+    have.assignable_to(want)
+        || matches!(
+            (crate::shape_of(have), crate::shape_of(&want.non_null())),
+            (Type::Number, Type::String)
+        )
 }
 
 fn result_wrapper_fix(have: &Type, want: &Type) -> Option<String> {
+    let hs = crate::shape_of(have);
+    let ws = crate::shape_of(want);
+    let have = &hs;
+    let want = &ws;
     if matches!(
         (have, want),
         (

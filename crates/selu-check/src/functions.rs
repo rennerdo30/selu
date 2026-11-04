@@ -263,6 +263,7 @@ impl Ctx<'_> {
         } else {
             self.value(init)
         };
+        let t = crate::shape_of(&t);
         match pattern {
             Pattern::Array(items) => {
                 for (i, item) in items.iter().enumerate() {
@@ -333,6 +334,8 @@ impl Ctx<'_> {
 
 impl Ctx<'_> {
     pub(crate) fn check_tuple_value(&mut self, e: &Expr, t: Type) -> Type {
+        let original = t.clone();
+        let t = crate::shape_of(&t);
         if matches!(e.kind, ExprKind::Call { .. }) {
             self.types.mark_single_value(e.id);
         }
@@ -362,7 +365,7 @@ impl Ctx<'_> {
             );
             Type::Error
         } else {
-            t
+            original
         }
     }
 }
@@ -383,6 +386,8 @@ pub(crate) fn body_param_types(params: &[Param], fixed: &[Type], rest: Option<&T
 
 impl Ctx<'_> {
     pub(crate) fn function_member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
+        let shaped = crate::shape_of(t);
+        let t = &shaped;
         if matches!(t, Type::Widget(..)) {
             self.types.mark_method_call(object.id);
         }

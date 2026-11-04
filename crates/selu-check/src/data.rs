@@ -43,8 +43,8 @@ impl Ctx<'_> {
                     .collect(),
             ),
             ExprKind::Index { object, index } => {
-                let t = self.value(object);
-                let i = self.value(index);
+                let t = crate::shape_of(&self.value(object));
+                let i = crate::shape_of(&self.value(index));
                 if i != Type::Number && !i.is_open() {
                     self.out.push(
                         err("SELU0352", "an array index must be a number", &index.span)
@@ -73,7 +73,7 @@ impl Ctx<'_> {
             }
             ExprKind::Template { exprs, .. } => {
                 for x in exprs {
-                    let t = self.value(x);
+                    let t = crate::shape_of(&self.value(x));
                     if !matches!(
                         t,
                         Type::Number | Type::String | Type::Boolean | Type::Error | Type::Untyped
@@ -166,7 +166,7 @@ impl Ctx<'_> {
 
     pub(crate) fn data_write(&mut self, target: &Expr, value: &Type) {
         let ty = if let ExprKind::Member { object, name } = &target.kind {
-            let t = self.value(object);
+            let t = crate::shape_of(&self.value(object));
             if matches!(t, Type::Widget(..)) {
                 return;
             }
@@ -287,8 +287,13 @@ impl Ctx<'_> {
         };
         if let Type::Array(item) = &t {
             let allowed = match name.as_str() {
-                "sort" => !args.is_empty() || matches!(**item, Type::Number | Type::String),
-                "join" => matches!(**item, Type::Number | Type::String | Type::Boolean),
+                "sort" => {
+                    !args.is_empty() || matches!(crate::shape_of(item), Type::Number | Type::String)
+                }
+                "join" => matches!(
+                    crate::shape_of(item),
+                    Type::Number | Type::String | Type::Boolean
+                ),
                 _ => true,
             };
             if !allowed {
@@ -347,7 +352,7 @@ impl Ctx<'_> {
         else {
             unreachable!()
         };
-        let t = self.value(iter);
+        let t = crate::shape_of(&self.value(iter));
         let bindings = match (&t, binding) {
             (Type::Array(t) | Type::Set(t), ForBinding::Name(n, sp)) => {
                 vec![(n.clone(), sp.clone(), (**t).clone())]
@@ -396,10 +401,12 @@ impl Ctx<'_> {
 
 impl Ctx<'_> {
     pub(crate) fn data_receiver(&mut self, e: &Expr) -> Type {
-        self.types
+        let t = self
+            .types
             .get(e.id)
             .cloned()
-            .unwrap_or_else(|| self.value(e))
+            .unwrap_or_else(|| self.value(e));
+        crate::shape_of(&t)
     }
 
     pub(crate) fn data_annotation(&mut self, t: &selu_syntax::TypeExpr) -> Type {
@@ -490,7 +497,8 @@ impl Ctx<'_> {
         };
         let callback = args
             .first()
-            .map(|a| self.value_expected(a, Some(&expected)));
+            .map(|a| self.value_expected(a, Some(&expected)))
+            .map(|t| crate::shape_of(&t));
         for arg in args.iter().skip(2) {
             self.value(arg);
         }

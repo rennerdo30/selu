@@ -820,7 +820,7 @@ impl Lowerer<'_> {
                         self.types.get(object.id),
                         Some(selu_check::Type::ClassObject(_))
                     )
-                    || matches!(self.types.get(object.id), Some(selu_check::Type::Object(fields)) if matches!(fields.get(method), Some(selu_check::Type::Function { .. })))
+                    || matches!(self.types.get(object.id), Some(selu_check::Type::Object(fields)) if fields.get(method).is_some_and(|t| matches!(selu_check::shape_of(t), selu_check::Type::Function { .. })))
                 {
                     lua::call(LExpr::Field(Box::new(obj), method.clone()), vals)
                 } else {

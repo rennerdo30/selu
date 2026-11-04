@@ -137,7 +137,7 @@ impl Ctx<'_> {
             }
             ExprKind::Update { target, .. } => {
                 let t = self.value(target);
-                if t != Type::Number && !t.is_open() {
+                if crate::shape_of(&t) != Type::Number && !t.is_open() {
                     self.out.push(
                         err(
                             "SELU0341",
