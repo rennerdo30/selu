@@ -73,15 +73,19 @@ frames, mutable storage and mixed plain/unknown joins cannot retain that proof.
 Their flagged methods evaluate the receiver once and use the equivalent of:
 
 ```lua
-if InCombatLockdown() and receiver:IsProtected() then
-  defer(receiver.Method, receiver, ...)
-else
-  receiver:Method(...)
+if InCombatLockdown() then
+  local protected = receiver:IsProtected()
+  if (canaccessvalue and not canaccessvalue(protected)) or protected then
+    return defer(receiver.Method, receiver, ...)
+  end
 end
+return receiver:Method(...)
 ```
 
 Thus an unknown receiver that is plain still runs during combat; protected
-receivers wait. IsProtected includes inherited protection, unlike its second
+receivers wait. IsProtected itself has an ObjectSecurity secret aspect, so the
+internal read point defaults to deferral when that boolean is inaccessible.
+IsProtected includes inherited protection, unlike its second
 explicit-protection return. SELU0600 rejects a used result only when deferral is
 possible. `const x = CreateFrame("Frame").ClearAttribute("x");` does not get it.
 All execution contexts may run during combat, including load-on-demand setup,
@@ -138,7 +142,8 @@ At the retail ref, under Interface/AddOns/Blizzard_APIDocumentationGenerated:
   SimpleFrameAPIDocumentation.lua's GetID, use SecretReturnsForAspect.
 - SimpleScriptRegionAPIDocumentation.lua:516-527 declares IsProtected and its
   isProtected/isProtectedExplicitly results. Its own result uses the ObjectSecurity
-  aspect; the generated receiver check follows the parent's explicit policy.
+  aspect; the generated receiver check reads it through canaccessvalue and defaults
+  to deferral if inaccessible.
 - RestrictedActionsDocumentation.lua:15-20 describes permission for protected
   functions **on the supplied object**, supporting receiver-dependent checks.
 - SimpleFrameAPIDocumentation.lua:20 and SimpleRegionAPIDocumentation.lua carry

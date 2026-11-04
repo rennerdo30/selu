@@ -25,7 +25,10 @@ if not __selu_restriction_ns.__selu_restrictions then
     pending[#pending + 1] = item
   end
   local function widget(fn, receiver, ...)
-    if InCombatLockdown() and receiver:IsProtected() then return defer(fn, receiver, ...) end
+    if InCombatLockdown() then
+      local protected = receiver:IsProtected()
+      if (canaccessvalue and not canaccessvalue(protected)) or protected then return defer(fn, receiver, ...) end
+    end
     return fn(receiver, ...)
   end
   __selu_restriction_ns.__selu_restrictions = { defer = defer, widget = widget }

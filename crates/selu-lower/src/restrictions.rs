@@ -57,7 +57,18 @@ pub(super) fn emit_restriction_runtime(
         out.push(raw(READ_RUNTIME));
     }
     if queue {
-        out.push(raw(DEFER_RUNTIME));
+        let runtime = if manifest
+            .function("canaccessvalue")
+            .is_some_and(|f| f.available)
+        {
+            DEFER_RUNTIME.to_owned()
+        } else {
+            DEFER_RUNTIME.replace(
+                "(canaccessvalue and not canaccessvalue(protected)) or protected",
+                "protected",
+            )
+        };
+        out.push(raw(&runtime));
         out.push(raw("local __selu_defer = __selu_restrictions.defer\nlocal __selu_invoke = __selu_restrictions.defer\nlocal __selu_widget_call = __selu_restrictions.widget"));
     }
     out
@@ -87,7 +98,10 @@ if not __selu_restriction_ns.__selu_restrictions then
     pending[#pending + 1] = item
   end
   local function widget(fn, receiver, ...)
-    if InCombatLockdown() and receiver:IsProtected() then return defer(fn, receiver, ...) end
+    if InCombatLockdown() then
+      local protected = receiver:IsProtected()
+      if (canaccessvalue and not canaccessvalue(protected)) or protected then return defer(fn, receiver, ...) end
+    end
     return fn(receiver, ...)
   end
   __selu_restriction_ns.__selu_restrictions = { defer = defer, widget = widget }

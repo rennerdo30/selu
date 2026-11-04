@@ -355,3 +355,22 @@ fn review_secret_category_survives_untyped_joins() {
         sim.eval("assert(issecretvalue(label:GetText()))").unwrap();
     }
 }
+
+#[test]
+fn review_receiver_security_state_is_read_before_branching() {
+    let m = manifest();
+    let mut no_detector = m.clone();
+    no_detector.functions.retain(|f| f.name != "canaccessvalue");
+    assert!(!compile("UIParent.Hide();", &no_detector).contains("canaccessvalue"));
+    let lua = compile("UIParent.Hide();", &m);
+    let sim = Sim::new().unwrap();
+    sim.set_secret_global("hidden").unwrap();
+    sim.eval("reads=0; local access=canaccessvalue; canaccessvalue=function(v) reads=reads+1; return access(v) end; UIParent.IsProtected=function() return hidden end; UIParent.Hide=function() print('hidden') end").unwrap();
+    sim.set_combat(true).unwrap();
+    sim.load_files(&[("test.lua".into(), lua)]).unwrap();
+    assert!(sim.prints().is_empty());
+    sim.eval("print(reads)").unwrap();
+    assert_eq!(sim.prints(), ["1"]);
+    sim.set_combat(false).unwrap();
+    assert_eq!(sim.prints(), ["1", "hidden"]);
+}
