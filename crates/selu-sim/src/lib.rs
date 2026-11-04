@@ -110,6 +110,7 @@ mod tests {
             local f = CreateFrame("Frame")
             f:Wiggle()
             f:Wiggle()
+            assert(f.missingAddonField == nil)
             TotallyMadeUp(1)
             TotallyMadeUp(2)
             "#,
