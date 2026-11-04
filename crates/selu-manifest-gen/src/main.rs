@@ -53,7 +53,7 @@ fn git_bytes(repo: &str, args: &[&str]) -> Result<Vec<u8>> {
 }
 fn generate(args: &[String]) -> Result<()> {
     if args.len() != 4 {
-        return Err("usage: selu-manifest-gen <flavour> <ref-or-commit> <output.json> <source-repository> (reads overlay.toml beside output)".into());
+        return Err("usage: selu-manifest-gen <flavour> <ref-or-commit> <output.selum> <source-repository> (reads overlay.toml beside output)".into());
     }
     let (flavour, reference, output, repo) = (&args[0], &args[1], Path::new(&args[2]), &args[3]);
     let log = git(repo, &["log", "-1", "--format=%H%n%s", reference, "--"])?;
@@ -241,8 +241,8 @@ fn update(args: &[String]) -> Result<()> {
         let mut old = Vec::new();
         for entry in std::fs::read_dir(&directory)? {
             let path = entry?.path();
-            if path.extension().and_then(|x| x.to_str()) == Some("json") {
-                let m: Manifest = serde_json::from_slice(&std::fs::read(&path)?)?;
+            if path.extension().and_then(|x| x.to_str()) == Some("selum") {
+                let m: Manifest = selu_manifest::format::decode(&std::fs::read(&path)?)?;
                 if m.flavour != flavour {
                     return Err("manifest flavour differs from directory".into());
                 }
@@ -250,14 +250,14 @@ fn update(args: &[String]) -> Result<()> {
             }
         }
         old.sort_by_key(|a| a.1.build);
-        let output = directory.join(format!("{version}.{}.json", build.build));
+        let output = directory.join(format!("{version}.{}.selum", build.build));
         generate(&[
             flavour.into(),
             commit.into(),
             output.to_str().ok_or("invalid output path")?.into(),
             repo.into(),
         ])?;
-        let new: Manifest = serde_json::from_slice(&std::fs::read(&output)?)?;
+        let new: Manifest = selu_manifest::format::decode(&std::fs::read(&output)?)?;
         let previous = old.last().map(|(_, m)| m);
         let old_functions: Vec<String> = previous
             .map(|m| m.functions.iter().map(|f| f.name.clone()).collect())
@@ -317,6 +317,10 @@ fn update(args: &[String]) -> Result<()> {
 }
 fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.len() == 2 && args[0] == "dump" {
+        let value: serde_json::Value = selu_manifest::format::decode(&std::fs::read(&args[1])?)?;
+        println!("{}",serde_json::to_string_pretty(&value)?); return Ok(());
+    }
     if args.first().is_some_and(|a| a == "update") {
         update(&args[1..])
     } else {

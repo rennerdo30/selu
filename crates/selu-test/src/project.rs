@@ -414,7 +414,7 @@ fn build_impl(
             ExitCode::FAILURE
         })?;
         snapshots
-            .entry(map_dir.join("manifest.json"))
+            .entry(map_dir.join("manifest.selum"))
             .or_default()
             .push(manifest);
         if !quiet {
@@ -427,9 +427,9 @@ fn build_impl(
             manifests: &'a [&'a Manifest],
         }
         let bytes = if manifests.len() == 1 {
-            serde_json::to_vec(manifests[0])
+            selu_manifest::format::encode(manifests[0])
         } else {
-            serde_json::to_vec(&Targets {
+            selu_manifest::format::encode(&Targets {
                 manifests: &manifests,
             })
         }

@@ -927,7 +927,9 @@ mod data_tests {
         assert!(!constants.values.contains_key("HTML"));
         assert!(!constants.values.contains_key("PROSE"));
         assert_eq!(constants.values["SAFE"], "Token");
-        let encoded = String::from_utf8(crate::encode(&mut m).unwrap()).unwrap();
+        let value: serde_json::Value =
+            selu_manifest::format::decode(&crate::encode(&mut m).unwrap()).unwrap();
+        let encoded = serde_json::to_string(&value).unwrap();
         for text in [
             "<html>",
             "<body>",

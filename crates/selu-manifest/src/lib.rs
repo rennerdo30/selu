@@ -4,6 +4,7 @@
 //! matching known manifest; an unknown build is an error listing the
 //! closest known builds (DESIGN.md section 2).
 
+pub mod format;
 pub mod resolution;
 use selu_diagnostics::Diagnostic;
 use serde::{Deserialize, Serialize};
@@ -215,13 +216,13 @@ impl Manifest {
 }
 
 pub fn load_manifest(path: &Path) -> Result<Manifest, Diagnostic> {
-    let text = std::fs::read_to_string(path).map_err(|e| {
+    let bytes = std::fs::read(path).map_err(|e| {
         Diagnostic::error(
             "SELU0202",
             format!("cannot read manifest {}: {e}", path.display()),
         )
     })?;
-    serde_json::from_str(&text).map_err(|e| {
+    format::decode(&bytes).map_err(|e| {
         Diagnostic::error(
             "SELU0202",
             format!("invalid manifest {}: {e}", path.display()),
@@ -229,7 +230,7 @@ pub fn load_manifest(path: &Path) -> Result<Manifest, Diagnostic> {
     })
 }
 
-/// Load every `*.json` manifest under `dir`, recursively.
+/// Load every `*.json` or `*.selum` manifest under `dir`, recursively.
 pub fn load_manifest_dir(dir: &Path) -> Result<Vec<Manifest>, Diagnostic> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -244,7 +245,7 @@ pub fn load_manifest_dir(dir: &Path) -> Result<Vec<Manifest>, Diagnostic> {
             let p = entry.path();
             if p.is_dir() {
                 stack.push(p);
-            } else if p.extension().is_some_and(|x| x == "json") {
+            } else if p.extension().is_some_and(|x| x == "json" || x == "selum") {
                 out.push(load_manifest(&p)?);
             }
         }

@@ -578,9 +578,7 @@ pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
     }
     globals.extend(groups.into_values());
     json["globals"] = serde_json::Value::Array(globals);
-    let mut bytes = serde_json::to_vec(&json)?;
-    bytes.push(b'\n');
-    Ok(bytes)
+    selu_manifest::format::encode(&json)
 }
 #[cfg(test)]
 mod tests {
@@ -637,7 +635,7 @@ mod tests {
             ("classic", "5.5.4.70631"),
         ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("../../manifests/{flavour}/{build}.json"));
+                .join(format!("../../manifests/{flavour}/{build}.selum"));
             let m = selu_manifest::load_manifest(&path).unwrap();
             assert!(!m.fixture);
             assert!(m.function("C_Timer.After").is_some());

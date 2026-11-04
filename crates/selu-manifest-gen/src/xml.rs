@@ -324,9 +324,9 @@ mod tests {
         let mut m = manifest();
         xml.extend_manifest(&mut m);
         let bytes = crate::encode(&mut m).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let json: serde_json::Value = selu_manifest::format::decode(&bytes).unwrap();
         assert_eq!(json["globals"][0]["names"], serde_json::json!(["A", "B"]));
-        let loaded: Manifest = serde_json::from_slice(&bytes).unwrap();
+        let loaded: Manifest = selu_manifest::format::decode(&bytes).unwrap();
         assert_eq!(loaded, m);
     }
     #[test]
@@ -392,8 +392,9 @@ mod tests {
                 .any(|w| w.name == "Font" && w.inherits == ["SimpleFontAPI"])
         );
         let bytes = crate::encode(&mut m).unwrap();
-        assert!(!String::from_utf8_lossy(&bytes).contains("PRIVATE"));
-        let decoded: Manifest = serde_json::from_slice(&bytes).unwrap();
+        let json: serde_json::Value = selu_manifest::format::decode(&bytes).unwrap();
+        assert!(!serde_json::to_string(&json).unwrap().contains("PRIVATE"));
+        let decoded: Manifest = selu_manifest::format::decode(&bytes).unwrap();
         assert_eq!(decoded, m);
     }
 }
