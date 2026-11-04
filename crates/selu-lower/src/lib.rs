@@ -238,7 +238,9 @@ pub fn lower_module_layout(
         span: None,
     };
     l.file_prelude(program, &mut out);
-    out.push(namespace_fallback);
+    if !l.module.type_only {
+        out.push(namespace_fallback);
+    }
     let runtime_index = out.len();
     out.extend(saved::setup(program));
     l.module_prologue(&mut out);
@@ -414,6 +416,7 @@ impl Lowerer<'_> {
             | StmtKind::Continue => self.loop_stmt(s, out),
             StmtKind::ForOf { .. } => self.for_of(s, out),
             StmtKind::Destructure { .. } => self.destructure(s, forward, out),
+            StmtKind::TypeDecl(_) => {}
             StmtKind::Import { .. } => self.import_stmt(s, out),
             StmtKind::Export(inner) => self.export_stmt(s, inner, forward, out),
             StmtKind::Class(c) => self.class_decl(s, c, forward, out),
@@ -661,6 +664,7 @@ impl Lowerer<'_> {
             ExprKind::Unary { op, expr } => {
                 let v = self.expr(expr, pre);
                 match op.as_str() {
+                    "typeof" => lua::call(name("__selu_type"), vec![v]),
                     "!" => not(v),
                     _ => LExpr::Unary(UnOp::Neg, Box::new(v)),
                 }
@@ -929,6 +933,29 @@ pub fn generate_toc(addon_name: &str, manifest: &Manifest, lua_files: &[String])
 impl Lowerer<'_> {
     // Every protected runtime capture is emitted once, before source bindings.
     fn file_prelude(&mut self, program: &Program, out: &mut LBlock) {
+        fn inspect(c: visit::Child<'_>, found: &mut bool) {
+            match c {
+                visit::Child::Expr(e) => {
+                    if matches!(&e.kind, ExprKind::Unary {op,..} if op == "typeof") {
+                        *found = true;
+                    }
+                    visit::child_exprs_and_stmts(e, &mut |c| inspect(c, found));
+                }
+                visit::Child::Stmt(s) => {
+                    visit::child_stmts_and_exprs(s, &mut |c| inspect(c, found))
+                }
+            }
+        }
+        let mut found = false;
+        for s in &program.stmts {
+            inspect(visit::Child::Stmt(s), &mut found);
+        }
+        if found {
+            out.push(LStmt {
+                kind: LStmtKind::Local(vec!["__selu_type".into()], vec![name("type")]),
+                span: None,
+            });
+        }
         self.target_prelude(program, out);
         self.class_prelude(&program.stmts, out);
         out.extend(saved::captures(program));

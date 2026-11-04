@@ -109,7 +109,7 @@ pub fn child_stmts_and_exprs<'a>(s: &'a Stmt, f: &mut impl FnMut(Child<'a>)) {
         }
         StmtKind::Block(b) => stmts(b, f),
         StmtKind::Expr(e) => f(Child::Expr(e)),
-        StmtKind::Import { .. } => {}
+        StmtKind::TypeDecl(_) | StmtKind::Import { .. } => {}
         StmtKind::Export(inner) => f(Child::Stmt(inner)),
         StmtKind::Class(c) => {
             for m in &c.members {

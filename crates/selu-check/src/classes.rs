@@ -260,6 +260,13 @@ impl Ctx<'_> {
         Type::Class(n.clone(), b.clone(), i.fields.clone())
     }
     pub(crate) fn class_resolve(&mut self, t: &TypeExpr) -> Type {
+        self.class_resolve_with_aliases(t, &HashMap::new())
+    }
+    pub(crate) fn class_resolve_with_aliases(
+        &mut self,
+        t: &TypeExpr,
+        aliases: &HashMap<String, Type>,
+    ) -> Type {
         let mut names = HashMap::new();
         for scope in &self.scopes {
             for (n, b) in &scope.names {
@@ -272,6 +279,7 @@ impl Ctx<'_> {
                 }
             }
         }
+        names.extend(aliases.clone());
         types::resolve_classes(t, self.out, &names)
     }
     pub(crate) fn declare_class(&mut self, c: &ClassDecl) {

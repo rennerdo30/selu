@@ -1,0 +1,12 @@
+type Scores = number[];
+interface Entry { label: string; points: number; }
+function score(value: unknown): number {
+    if (typeof value == "number") { return value; }
+    return 0;
+}
+on PLAYER_LOGIN() {
+    const entry: Entry = { label: "Quest", points: score(7) };
+    const scores: Scores = [];
+    scores.push(entry.points);
+    print(entry.label, scores[0]);
+}

@@ -1,0 +1,19 @@
+# Named types
+
+Module-level `type Name = T;` and `interface Name { field: T; optional?: U; method(a: A): R; }` declare types in a separate namespace. They are visible throughout the module, including before their declaration. Type names may be Lua keywords because they never become Lua identifiers. The compiler prefix `__selu` is reserved, including on type parameters.
+
+Both forms accept generic parameters and `extends` constraints. For example, `type Pair<T extends number> = [T, T];`. Interfaces can extend object-shaped named types; their inherited fields are merged, and conflicting overrides are errors. Methods describe function-valued object fields and use ordinary dot calls. Class compatibility retains the data-only structural rule in classes.md.
+
+Aliases work in nested written types, tuple returns, array initializers, callback contexts and rest parameters. Diagnostics retain the written outer type name. Underlying shapes are inspected through one cycle-safe helper in aliases.rs. Recursive object/interface and generic types use shared definition cells with weak recursive references. The expression type table retains definition roots; comparison tracks recursive pairs. Bare alias cycles are rejected, and expanding generic recursion is bounded at 64 active instantiations with SELU0523.
+
+`export type` and `export interface` use ordinary named imports, including aliases. Export metadata carries their private supporting definitions. Import resolution qualifies these supporting names by defining module so they cannot leak into the importing module's type namespace or collide with its own names. Imported types have no value binding. Type declarations, exports and imports generate no Lua namespace entries or source locals. A module containing only type declarations emits only its loader line; standalone lowering emits no statements.
+
+`unknown` is an explicit opt-in boundary. Every value fits unknown, but unknown does not fit a specific declared type. It may be stored, passed to an unknown parameter, returned as unknown, or compared for equality. Arithmetic, member/index access, calls and conditions require appropriate narrowing. Untyped game values remain the existing internal untyped type.
+
+`typeof x == "string"`, `"number"`, `"boolean"`, `"table"` and `"function"` narrow the true branch; `!=` narrows the false branch. Existing negation, short-circuit and early-return handling propagates these facts. A table check establishes only a table, not a particular field shape. A function check establishes a callable returning unknown. An explicit primitive guard permits assignment to the corresponding declared type. A null check alone cannot establish a primitive or object shape for unknown; it remains unknown. Existing null checks still unwrap optional named types.
+
+`typeof` lowers to a call through one protected capture of Lua `type`, emitted only in files that use it. A source binding named type cannot change the intrinsic. Type declarations have no runtime allocation or idle cost.
+
+Diagnostics SELU0520-0525 cover duplicates, placement, argument count, cycles, constraints and inheritance. SELU0527 covers duplicate interface fields. Existing value/type mismatch diagnostics remain in force and print named types where available.
+
+The named-types example prints `Quest` and `7` on PLAYER_LOGIN. Its expected output was calculated from score(7) and the single array insertion; expected.lua records the generated Lua.

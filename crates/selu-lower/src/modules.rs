@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 #[derive(Default, Clone)]
 pub struct ModuleBindings {
     pub key: String,
+    pub(crate) type_only: bool,
     pub addon_name: String,
     pub imports: BTreeMap<String, (String, selu_check::ModuleExports)>,
     live_reads: HashSet<u32>,
@@ -34,6 +35,7 @@ impl ModuleBindings {
         let mut live_reads = HashSet::new();
         walk_block(&program.stmts, &live, &mut live_reads, false);
         Self {
+            type_only: program.stmts.iter().all(|s| matches!(&s.kind, StmtKind::TypeDecl(_)) || matches!(&s.kind, StmtKind::Export(inner) if matches!(inner.kind, StmtKind::TypeDecl(_)))),
             addon_name: "Addon".into(),
             key,
             imports,
@@ -239,6 +241,9 @@ impl Lowerer<'_> {
         for s in &self.module.declarations {
             self.emit_import(s, out);
         }
+        if self.module.type_only {
+            return;
+        }
         out.push(LStmt {
             kind: LStmtKind::Assign(vec![table(&self.module.key)], vec![LExpr::Table(vec![])]),
             span: None,
@@ -247,9 +252,15 @@ impl Lowerer<'_> {
     pub(crate) fn import_stmt(&mut self, _s: &Stmt, _out: &mut LBlock) {}
     fn emit_import(&self, s: &Stmt, out: &mut LBlock) {
         if let StmtKind::Import { names, from, .. } = &s.kind
-            && let Some((key, _)) = self.module.imports.get(from)
+            && let Some((key, exports)) = self.module.imports.get(from)
         {
             for (remote, local, _, _) in names {
+                if exports
+                    .get(remote)
+                    .is_some_and(|e| e.aliases.contains_key(remote))
+                {
+                    continue;
+                }
                 out.push(LStmt::new(
                     LStmtKind::Local(
                         vec![local.clone()],

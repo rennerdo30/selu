@@ -5,6 +5,7 @@ use selu_syntax::{Stmt, StmtKind};
 use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct ModuleExport {
+    pub aliases: std::collections::HashMap<String, selu_syntax::TypeDecl>,
     pub ty: Type,
     pub mutable: bool,
     pub saved: bool,
@@ -14,6 +15,7 @@ pub struct ModuleExport {
 impl Default for ModuleExport {
     fn default() -> Self {
         Self {
+            aliases: Default::default(),
             ty: Type::Untyped,
             mutable: false,
             classes: Default::default(),
@@ -51,6 +53,15 @@ impl Ctx<'_> {
                 return;
             }
             for (remote, local, span, _) in names {
+                if self
+                    .module
+                    .imports
+                    .get(from)
+                    .and_then(|m| m.get(remote))
+                    .is_some_and(|e| e.aliases.contains_key(remote))
+                {
+                    continue;
+                }
                 let ty = self
                     .module
                     .imports
@@ -137,6 +148,16 @@ impl Ctx<'_> {
             return;
         }
         self.stmt(inner);
+        if let StmtKind::TypeDecl(d) = &inner.kind {
+            self.module.exports.insert(
+                d.name.clone(),
+                ModuleExport {
+                    aliases: self.aliases.declarations.clone(),
+                    ..Default::default()
+                },
+            );
+            return;
+        }
         let (name, mutable) = match &inner.kind {
             StmtKind::VarDecl { name, is_const, .. } => (name, !is_const),
             StmtKind::Saved { name, .. } => (name, true),
@@ -149,6 +170,7 @@ impl Ctx<'_> {
             self.module.exports.insert(
                 name.clone(),
                 ModuleExport {
+                    aliases: Default::default(),
                     ty,
                     mutable,
                     classes: self.classes.infos.clone(),

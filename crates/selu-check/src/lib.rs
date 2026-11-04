@@ -18,6 +18,7 @@ use selu_manifest::Manifest;
 use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind, TypeExpr};
 use std::collections::HashMap;
 
+mod aliases;
 mod api;
 mod classes;
 mod modules;
@@ -80,6 +81,7 @@ pub fn check_program_with_options(
         returns: Vec::new(),
         loops: Vec::new(),
         function_expected: Vec::new(),
+        aliases: Default::default(),
         classes: Default::default(),
         types: TypeTable::default(),
     };
@@ -144,6 +146,7 @@ pub fn check_module_targets_with_options(
         returns: Vec::new(),
         loops: Vec::new(),
         function_expected: Vec::new(),
+        aliases: Default::default(),
         classes,
         types: TypeTable::default(),
     };
@@ -202,6 +205,7 @@ type Narrowings = Vec<(String, Type)>;
 struct Ctx<'a> {
     options: CheckOptions,
     module: ModuleBindings,
+    aliases: aliases::Aliases,
     classes: classes::ClassContext,
     loops: Vec<loops::LoopCtx>,
     manifest: &'a Manifest,
@@ -346,6 +350,7 @@ impl Ctx<'_> {
             self.declare(&p.name, &p.span, Kind::Param, ty.clone());
         }
         self.declare_block_imports(stmts);
+        self.predeclare_aliases(stmts);
         self.predeclare_class_names(stmts);
         let top = self.scopes.len() == 1;
         for s in stmts {
@@ -614,6 +619,7 @@ impl Ctx<'_> {
             | StmtKind::Continue => self.loop_stmt(s),
             StmtKind::ForOf { .. } => self.for_of(s),
             StmtKind::Destructure { .. } => self.destructure(s),
+            StmtKind::TypeDecl(d) => self.check_alias(d),
             StmtKind::Import { .. } => self.import_stmt(s),
             StmtKind::Export(inner) => self.export_stmt(s, inner),
             StmtKind::Class(c) => self.class_decl(s, c),
@@ -896,6 +902,9 @@ impl Ctx<'_> {
 
     /// What a true or false condition says about optional names.
     fn narrowings(&self, e: &Expr) -> (Narrowings, Narrowings) {
+        if let Some(n) = self.alias_narrowings(e) {
+            return n;
+        }
         if let Some(n) = self.has_narrowings(e) {
             return n;
         }
@@ -903,7 +912,7 @@ impl Ctx<'_> {
             let ExprKind::Ident(n) = &x.kind else {
                 return None;
             };
-            match self.type_of(n)? {
+            match self.alias_shape(self.type_of(n)?) {
                 Type::Optional(inner) => Some((n.clone(), *inner)),
                 _ => None,
             }
@@ -946,6 +955,7 @@ impl Ctx<'_> {
 
     fn expr(&mut self, e: &Expr) -> Type {
         let t = self.expr_inner(e);
+        let t = self.alias_shape(t);
         let t = self.refresh_class_type(t);
         self.types.set(e.id, t.clone());
         t
@@ -963,7 +973,10 @@ impl Ctx<'_> {
             }
             ExprKind::Call { callee, args } => self.call(e, callee, args),
             ExprKind::Unary { op, expr } => {
-                if op == "!" {
+                if op == "typeof" {
+                    self.value(expr);
+                    Type::String
+                } else if op == "!" {
                     let t = self.expr(expr);
                     self.check_condition_type(expr, &t);
                     Type::Boolean
@@ -1289,6 +1302,7 @@ impl Ctx<'_> {
             }
             _ => self.value(callee),
         };
+        let callee_type = self.alias_shape(callee_type);
         self.types.set(callee.id, callee_type.clone());
         let arg_types = self.function_arguments(args, &callee_type);
         if self.api_check_call(e, args, &arg_types, &callee_type)

@@ -31,8 +31,48 @@ impl PartialEq for ApiSemantics {
     }
 }
 
+#[derive(Clone)]
+pub enum NamedShape {
+    Definition(std::sync::Arc<std::sync::OnceLock<Type>>),
+    Reference(std::sync::Weak<std::sync::OnceLock<Type>>),
+}
+impl NamedShape {
+    pub(crate) fn new() -> Self {
+        Self::Definition(Default::default())
+    }
+    pub(crate) fn reference(&self) -> Self {
+        match self {
+            Self::Definition(a) => Self::Reference(std::sync::Arc::downgrade(a)),
+            Self::Reference(w) => Self::Reference(w.clone()),
+        }
+    }
+    pub(crate) fn get(&self) -> Option<Type> {
+        match self {
+            Self::Definition(a) => a.get().cloned(),
+            Self::Reference(w) => w.upgrade().and_then(|a| a.get().cloned()),
+        }
+    }
+    pub(crate) fn set(&self, t: Type) {
+        if let Self::Definition(a) = self {
+            let _ = a.set(t);
+        }
+    }
+}
+
+impl std::fmt::Debug for NamedShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("NamedShape")
+    }
+}
+impl PartialEq for NamedShape {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
+    Unknown,
+    Named(String, NamedShape),
     /// Nominal identity, base identities, and the checked instance member shape.
     Class(String, Vec<String>, BTreeMap<String, Type>),
     ClassObject(String),
@@ -107,6 +147,7 @@ impl Type {
     /// The `T` of a `T?` (and `T` itself otherwise).
     pub fn non_null(&self) -> Type {
         match self {
+            Type::Named(_, _) => crate::aliases::shape_of(self).non_null(),
             Type::Optional(t) => (**t).clone(),
             t => t.clone(),
         }
@@ -125,11 +166,21 @@ impl Type {
     }
 
     pub fn is_optional(&self) -> bool {
-        matches!(self, Type::Optional(_) | Type::Null)
+        matches!(
+            crate::aliases::shape_of(self),
+            Type::Optional(_) | Type::Null
+        )
     }
 
     /// Whether a value of type `self` may be stored where `to` is expected.
     pub fn assignable_to(&self, to: &Type) -> bool {
+        self.assignable_seen(to, &mut std::collections::HashSet::new())
+    }
+    fn assignable_seen(
+        &self,
+        to: &Type,
+        seen: &mut std::collections::HashSet<(String, String)>,
+    ) -> bool {
         if matches!(self, Type::Function { .. })
             && matches!(
                 to,
@@ -141,6 +192,26 @@ impl Type {
         {
             return true;
         }
+        if matches!(to, Type::Unknown) {
+            return true;
+        }
+        if let (Type::Named(a, _), Type::Named(b, _)) = (self, to)
+            && a == b
+        {
+            return true;
+        }
+        if let Type::Named(n, t) = self {
+            let key = (n.clone(), to.to_string());
+            if !seen.insert(key.clone()) {
+                return true;
+            }
+            let result = t.get().is_some_and(|t| t.assignable_seen(to, seen));
+            seen.remove(&key);
+            return result;
+        }
+        if let Type::Named(_, t) = to {
+            return t.get().is_some_and(|t| self.assignable_seen(&t, seen));
+        }
         if self.is_open() || to.is_open() || self == to {
             return true;
         }
@@ -151,33 +222,40 @@ impl Type {
             (Type::Class(_, _, have), Type::Object(want)) => want.iter().all(|(k, w)| {
                 !matches!(w.non_null(), Type::Function { .. })
                     && match have.get(k) {
-                        Some(h) => h.assignable_to(w),
+                        Some(h) => h.assignable_seen(w, seen),
                         None => w.is_optional(),
                     }
             }),
             (Type::ApiOpaque(_, members), target) if !members.is_empty() => {
-                members.iter().all(|t| t.assignable_to(target))
+                members.iter().all(|t| t.assignable_seen(target, seen))
             }
             (source, Type::ApiOpaque(_, members)) if !members.is_empty() => {
-                members.iter().any(|t| source.assignable_to(t))
+                members.iter().any(|t| source.assignable_seen(t, seen))
             }
             (Type::Widget(a, bases), Type::Widget(b, _)) => a == b || bases.contains(b),
             (Type::Null, Type::Optional(_)) => true,
-            (Type::Optional(a), Type::Optional(b)) => a.assignable_to(b),
-            (t, Type::Optional(inner)) => t.assignable_to(inner),
+            (Type::Optional(a), Type::Optional(b)) => a.assignable_seen(b, seen),
+            (t, Type::Optional(inner)) => t.assignable_seen(inner, seen),
             // Arrays and tables are mutable, so their element types must
             // match exactly (`number[]` is not a `number?[]`).
-            (Type::Array(a), Type::Array(b)) | (Type::Set(a), Type::Set(b)) => a.same(b),
+            (Type::Array(a), Type::Array(b)) | (Type::Set(a), Type::Set(b)) => {
+                a.assignable_seen(b, seen) && b.assignable_seen(a, seen)
+            }
             (Type::Map(k1, v1), Type::Map(k2, v2))
-            | (Type::WeakMap(k1, v1), Type::WeakMap(k2, v2)) => k1.same(k2) && v1.same(v2),
+            | (Type::WeakMap(k1, v1), Type::WeakMap(k2, v2)) => {
+                k1.assignable_seen(k2, seen)
+                    && k2.assignable_seen(k1, seen)
+                    && v1.assignable_seen(v2, seen)
+                    && v2.assignable_seen(v1, seen)
+            }
             (Type::Tuple(a), Type::Tuple(b)) => {
-                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.assignable_to(y))
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.assignable_seen(y, seen))
             }
             // Structural: every field `to` needs must be there and fit; a
             // missing field is fine when `to` allows null for it.
             (Type::Object(have), Type::Object(want)) => {
                 want.iter().all(|(k, w)| match have.get(k) {
-                    Some(h) => h.assignable_to(w),
+                    Some(h) => h.assignable_seen(w, seen),
                     None => w.is_optional(),
                 })
             }
@@ -204,16 +282,16 @@ impl Type {
                         params
                             .get(i)
                             .or(rest.as_deref())
-                            .is_some_and(|b| a.assignable_to(b))
+                            .is_some_and(|b| a.assignable_seen(b, seen))
                     })
                     && to_rest.as_deref().is_none_or(|a| {
                         params
                             .iter()
                             .skip(to_params.len())
-                            .all(|b| a.assignable_to(b))
-                            && rest.as_deref().is_some_and(|b| a.assignable_to(b))
+                            .all(|b| a.assignable_seen(b, seen))
+                            && rest.as_deref().is_some_and(|b| a.assignable_seen(b, seen))
                     })
-                    && (ret.assignable_to(to_ret) || **to_ret == Type::Void)
+                    && (ret.assignable_seen(to_ret, seen) || **to_ret == Type::Void)
             }
             _ => false,
         }
@@ -247,6 +325,8 @@ impl fmt::Display for Type {
             | Type::ApiOpaque(n, _) => {
                 write!(f, "{}", n.split('@').next().unwrap_or(n))
             }
+            Type::Unknown => write!(f, "unknown"),
+            Type::Named(n, _) => write!(f, "{n}"),
             Type::Number => write!(f, "number"),
             Type::String => write!(f, "string"),
             Type::Boolean => write!(f, "boolean"),
@@ -333,7 +413,7 @@ pub fn resolve_classes(
                 .collect();
             let rest = if *rest {
                 let last = fixed.pop().expect("a rest type has a parameter");
-                Some(Box::new(match last {
+                Some(Box::new(match crate::aliases::shape_of(&last) {
                     Type::Array(t) if !t.is_optional() => *t,
                     _ => {
                         out.push(
@@ -387,7 +467,7 @@ pub fn is_void(t: &TypeExpr) -> bool {
 
 fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>) -> Type {
     let want = match name {
-        "number" | "string" | "boolean" | "null" => 0,
+        "unknown" | "number" | "string" | "boolean" | "null" => 0,
         "Set" => 1,
         "Map" | "WeakMap" => 2,
         _ => {
@@ -415,6 +495,7 @@ fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>
     }
     let mut next = || Box::new(args.remove(0));
     match name {
+        "unknown" => Type::Unknown,
         "number" => Type::Number,
         "string" => Type::String,
         "boolean" => Type::Boolean,
@@ -429,6 +510,7 @@ fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>
 /// Anything else stays untyped until manifests carry full types.
 pub fn manifest_type(name: &str) -> Type {
     match name {
+        "unknown" => Type::Unknown,
         "number" => Type::Number,
         "string" => Type::String,
         "boolean" => Type::Boolean,
@@ -445,6 +527,7 @@ pub fn resolve_quiet(t: &TypeExpr) -> Type {
 /// uses it to pick the Lua operator (`+` or `..`) and similar choices.
 #[derive(Debug, Clone, Default)]
 pub struct TypeTable {
+    pub(crate) named_roots: Vec<NamedShape>,
     types: HashMap<ExprId, Type>,
     stable: std::collections::HashSet<ExprId>,
     method_calls: std::collections::HashSet<ExprId>,

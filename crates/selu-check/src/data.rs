@@ -143,6 +143,8 @@ impl Ctx<'_> {
 
 impl Ctx<'_> {
     pub(crate) fn data_initializer(&mut self, e: &Expr, expected: Option<&Type>) -> Type {
+        let shaped = expected.map(|t| self.alias_shape(t.clone()));
+        let expected = shaped.as_ref();
         if matches!(&e.kind, ExprKind::Array(v) if v.is_empty()) {
             if let Some(Type::Array(t)) = expected {
                 let ty = Type::Array(t.clone());
@@ -433,7 +435,7 @@ impl Ctx<'_> {
             }
         }
         validate(t, self.out);
-        self.class_resolve(t)
+        self.alias_annotation(t)
     }
 }
 

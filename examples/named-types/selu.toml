@@ -1,0 +1,3 @@
+[addon]
+name = "NamedTypes"
+targets = ["forever@1.0"]

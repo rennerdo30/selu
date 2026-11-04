@@ -72,6 +72,7 @@ pub enum ForBinding {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StmtKind {
+    TypeDecl(TypeDecl),
     Saved {
         name: String,
         name_span: Span,
@@ -167,6 +168,15 @@ pub enum StmtKind {
     /// `global`).
     Export(Box<Stmt>),
     Class(ClassDecl),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypeDecl {
+    pub name: String,
+    pub name_span: Span,
+    pub params: Vec<(String, Option<TypeExpr>)>,
+    pub bases: Vec<TypeExpr>,
+    pub body: TypeExpr,
 }
 
 /// `class Name extends Base { ... }`

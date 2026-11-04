@@ -420,6 +420,12 @@ impl Parser {
     fn stmt(&mut self) -> PResult<Stmt> {
         let start = self.peek_span().start;
         let kind = match self.peek().clone() {
+            Tok::Ident(ref w)
+                if (w == "type" || w == "interface")
+                    && matches!(self.peek_at(1), Some(Tok::Ident(_))) =>
+            {
+                self.type_decl()?
+            }
             Tok::Ident(ref w) if w == "saved" && matches!(self.peek_at(1), Some(Tok::Ident(_))) => {
                 self.bump();
                 let adopted = self.at_ident("global");
@@ -566,7 +572,8 @@ impl Parser {
                 self.bump();
                 let inner = self.stmt()?;
                 match inner.kind {
-                    StmtKind::Saved { .. }
+                    StmtKind::TypeDecl(_)
+                    | StmtKind::Saved { .. }
                     | StmtKind::VarDecl { .. }
                     | StmtKind::FuncDecl { .. }
                     | StmtKind::Class(_)
@@ -912,9 +919,92 @@ impl Parser {
             &[(Tok::Star, "*"), (Tok::Slash, "/"), (Tok::Percent, "%")],
         )
     }
+    fn type_decl(&mut self) -> PResult<StmtKind> {
+        let interface = self.at_ident("interface");
+        self.bump();
+        let (name, name_span) = self.ident("a type name")?;
+        let mut params = Vec::new();
+        if self.eat(&Tok::Lt) {
+            loop {
+                let (n, _) = self.ident("a type parameter")?;
+                let bound = if self.eat(&Tok::Extends) {
+                    Some(self.ty()?)
+                } else {
+                    None
+                };
+                params.push((n, bound));
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::Gt, "`>`")?;
+        }
+        let mut bases = Vec::new();
+        if interface && self.eat(&Tok::Extends) {
+            loop {
+                bases.push(self.ty()?);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+        }
+        let body = if interface {
+            let start = self.expect(&Tok::LBrace, "`{`")?.span.start;
+            let mut fields = Vec::new();
+            while !self.at(&Tok::RBrace) {
+                let (name, _) = self.field_name("a field or method")?;
+                let optional = self.eat(&Tok::Question);
+                let ty = if self.at(&Tok::LParen) {
+                    let ps = self.params()?;
+                    self.expect(&Tok::Colon, "`:`")?;
+                    let ret = self.ty()?;
+                    TypeExpr {
+                        span: self.span_from(start),
+                        kind: TypeExprKind::Function {
+                            params: ps
+                                .into_iter()
+                                .map(|p| p.ty.ok_or_else(|| self.unexpected("a parameter type")))
+                                .collect::<PResult<_>>()?,
+                            ret: Box::new(ret),
+                            rest: false,
+                        },
+                    }
+                } else {
+                    self.expect(&Tok::Colon, "`:`")?;
+                    self.ty()?
+                };
+                fields.push(FieldType { name, optional, ty });
+                if !self.at(&Tok::RBrace) {
+                    self.expect(&Tok::Semi, "`;`")?;
+                } else {
+                    self.eat(&Tok::Semi);
+                }
+            }
+            self.expect(&Tok::RBrace, "`}`")?;
+            self.eat(&Tok::Semi);
+            TypeExpr {
+                kind: TypeExprKind::Object(fields),
+                span: self.span_from(start),
+            }
+        } else {
+            self.expect(&Tok::Eq, "`=`")?;
+            let t = self.ty()?;
+            self.semi(name_span.start)?;
+            t
+        };
+        Ok(StmtKind::TypeDecl(TypeDecl {
+            name,
+            name_span,
+            params,
+            bases,
+            body,
+        }))
+    }
+
     fn unary(&mut self) -> PResult<Expr> {
         let start = self.peek_span().start;
         let op = match self.peek() {
+            Tok::Ident(w) if w == "typeof" => "typeof",
             Tok::Bang => "!",
             Tok::Minus => "-",
             Tok::PlusPlus => "++",

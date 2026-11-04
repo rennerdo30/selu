@@ -1,5 +1,5 @@
 //! Function checking and contextual typing (package C).
-use crate::{Ctx, Kind, Type, err, types};
+use crate::{Ctx, Kind, Type, err};
 use selu_syntax::{Expr, ExprKind, FnBody, Param, Pattern, Stmt, StmtKind};
 
 impl Ctx<'_> {
@@ -10,8 +10,8 @@ impl Ctx<'_> {
             .rposition(|p| !p.rest && p.default.is_none())
             .map_or(0, |i| i + 1);
         let rest = params.iter().zip(&ts).find(|(p, _)| p.rest).map(|(_, t)| {
-            Box::new(match t {
-                Type::Array(t) => (**t).clone(),
+            Box::new(match self.alias_shape(t.clone()) {
+                Type::Array(t) => *t,
                 _ => Type::Error,
             })
         });
@@ -32,11 +32,16 @@ impl Ctx<'_> {
         }
     }
     pub(crate) fn params_with_extras(&mut self, p: &Param) {
+        let rest_type = if p.rest {
+            p.ty.as_ref()
+                .map(|t| self.alias_annotation(t))
+                .map(|t| self.alias_shape(t))
+        } else {
+            None
+        };
         if p.rest
-            && (!matches!(
-                p.ty.as_ref().map(types::resolve_quiet),
-                Some(Type::Array(t)) if !t.is_optional()
-            ) || p.default.is_some())
+            && (!matches!(rest_type, Some(Type::Array(t)) if !t.is_optional())
+                || p.default.is_some())
         {
             self.out.push(
                 err(
@@ -54,7 +59,8 @@ impl Ctx<'_> {
         params: &[(Param, Type)],
         expected: Option<&Type>,
     ) {
-        self.function_expected.push(expected.cloned());
+        self.function_expected
+            .push(expected.map(|t| self.alias_shape(t.clone())));
         let mut params = params.to_vec();
         // Defaults execute in parameter scope, before the user's body.
         self.scopes.push(Default::default());
@@ -118,6 +124,8 @@ impl Ctx<'_> {
     }
     /// Package B can use this for callbacks: records the expression's type.
     pub(crate) fn value_expected(&mut self, e: &Expr, expected: Option<&Type>) -> Type {
+        let shaped = expected.map(|t| self.alias_shape(t.clone()));
+        let expected = shaped.as_ref();
         if matches!(e.kind, ExprKind::Function { .. }) {
             let t = self.contextual_function(e, expected);
             self.types.set(e.id, t.clone());
@@ -203,8 +211,8 @@ impl Ctx<'_> {
             .rposition(|p| !p.rest && p.default.is_none())
             .map_or(0, |i| i + 1);
         let rest = ps.iter().zip(&ts).find(|(p, _)| p.rest).map(|(_, t)| {
-            Box::new(match t {
-                Type::Array(t) => (**t).clone(),
+            Box::new(match self.alias_shape(t.clone()) {
+                Type::Array(t) => *t,
                 _ => Type::Error,
             })
         });
