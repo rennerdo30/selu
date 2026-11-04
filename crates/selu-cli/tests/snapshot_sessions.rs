@@ -85,7 +85,7 @@ fn shared_snapshots_select_and_validate_the_session_target() {
     );
     let path = selu_manifest::resolution::compiled_manifest_path(&addon);
     let snapshots: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        selu_manifest::format::decode(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(snapshots["manifests"].as_array().unwrap().len(), 2);
     assert!(selu_manifest::resolution::load_checked_manifest(&path, Some("retail@2")).is_err());
     for (target, yes, no) in [
@@ -157,7 +157,7 @@ fn multiple_addon_snapshots_merge_reject_conflicts_and_reload_together() {
     assert_eq!(s.prints(), vec!["true", "true"]);
     let path = selu_manifest::resolution::compiled_manifest_path(&b);
     let original = std::fs::read(&path).unwrap();
-    let mut wrong: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    let mut wrong: serde_json::Value = selu_manifest::format::decode(&original).unwrap();
     wrong["flavour"] = "classic".into();
     std::fs::write(&path, serde_json::to_vec(&wrong).unwrap()).unwrap();
     assert!(s.reload().is_err());

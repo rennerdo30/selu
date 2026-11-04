@@ -12,7 +12,7 @@ fn manifests() -> Vec<Manifest> {
         .map(|(f, b)| {
             load_manifest(
                 &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join(format!("../../manifests/{f}/{b}.json")),
+                    .join(format!("../../manifests/{f}/{b}.selum")),
             )
             .unwrap()
         })

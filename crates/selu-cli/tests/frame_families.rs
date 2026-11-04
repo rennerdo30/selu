@@ -3,7 +3,7 @@ use selu_manifest::Manifest;
 fn manifest() -> Manifest {
     selu_manifest::load_manifest(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/retail/12.1.5.70391.json"),
+            .join("../../manifests/retail/12.1.5.70391.selum"),
     )
     .unwrap()
 }

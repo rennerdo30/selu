@@ -228,7 +228,7 @@ end"#,
 fn protected_queue_is_one_registry_piece_with_cross_module_fifo() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut m =
-        selu_manifest::load_manifest(&root.join("manifests/retail/12.1.5.70391.json")).unwrap();
+        selu_manifest::load_manifest(&root.join("manifests/retail/12.1.5.70391.selum")).unwrap();
     for name in [
         "RestrictedOne",
         "RestrictedTwo",

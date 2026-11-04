@@ -3,8 +3,8 @@
 Regenerate from the owner-maintained source clone without fetching or changing it:
 
 ```powershell
-cargo run -p selu-manifest-gen -- retail 18c6d677b605b312f3d813d498404631fb941977 manifests/retail/12.1.5.70391.json E:/Development/wow-ui-source
-cargo run -p selu-manifest-gen -- forever ca8368f2f2380cbe696854f7f2646387c278a61b manifests/forever/1.60.1.70532.json E:/Development/wow-ui-source
+cargo run -p selu-manifest-gen -- retail 18c6d677b605b312f3d813d498404631fb941977 manifests/retail/12.1.5.70391.selum E:/Development/wow-ui-source
+cargo run -p selu-manifest-gen -- forever ca8368f2f2380cbe696854f7f2646387c278a61b manifests/forever/1.60.1.70532.selum E:/Development/wow-ui-source
 ```
 
 The ref may be any local ref or commit. For reproducibility use immutable hashes,
@@ -34,7 +34,7 @@ are retained. Parameter, field and return order is significant. Top-level entrie
 are sorted; attributes use sorted maps. Enum members are represented losslessly
 as a `values` map from member name to value; the declaration preserves the enum
 type, bounds and cardinality. Default-valued legacy fields are omitted (the loader
-defaults them), while false and zero API policies remain explicit in attributes. JSON is compact UTF-8 with one LF terminator.
+defaults them), while false and zero API policies remain explicit in attributes. The readable schema is JSON; generated files use the compiled container below.
 Top-level `source` records the exact commit, version and interface provenance.
 `predicates` retains named preconditions and failure modes; their names define
 additional recognized policy attributes, including `TransliteratorAllowed`.
@@ -126,7 +126,7 @@ evidence, not a live probe. Retail and Forever retain their existing pins.
 For example:
 
 ```powershell
-cargo run -p selu-manifest-gen -- classic-era 4192ac60067fc55566182291bc67c85dd9b6794d manifests/classic-era/1.15.9.70576.json E:/Development/wow-ui-source
+cargo run -p selu-manifest-gen -- classic-era 4192ac60067fc55566182291bc67c85dd9b6794d manifests/classic-era/1.15.9.70576.selum E:/Development/wow-ui-source
 ```
 
 For PTR/beta on demand, resolve `origin/<branch>` with
@@ -225,3 +225,43 @@ Scalar entries with values retain the individual object form. The manifest
 loader expands both forms into the same GlobalEntry list; existing manifests
 and fixtures remain readable. This lossless grouping keeps inherited child
 names below the 40 MB package cap. XML EOF with open elements is an error.
+
+## Compiled container (package Z)
+
+Generated client manifests are committed only as `.selum`; handmade fixtures stay
+JSON. All shared loaders accept both by content. Studio discovers both extensions.
+New build snapshots use `dist/.selu/<addon>/manifest.selum`, including shared-target
+bundles; existing `manifest.json` snapshots remain readable as a fallback.
+
+The 12-byte header is `SELUMAN\0` (8 bytes), format version 1 (u16 little endian),
+and schema version 1 (u16 little endian). The payload is zstd level 3 containing
+MessagePack named maps with the same JSON field names and omission rules. Both older
+and newer versions are rejected explicitly. Decoding is limited to 256 MiB.
+Generator sorting and ordered maps make identical inputs produce identical bytes;
+keep the locked encoder versions when reproducing bytes. Schema changes require
+an explicit schema version decision. No extraction behavior changes in package Z.
+
+The existing generator `encode` function remains the single writer entry point.
+Package W should retain that call and change generated filenames to `.selum`.
+After W and Z merge, regenerate the six pinned clients once.
+
+Dump for inspection or a textual diff:
+
+```powershell
+cargo run -p selu-manifest-gen -- dump manifests/retail/12.1.5.70391.selum
+```
+
+Short warm-cache measurements on the six current files: minified JSON 41,133,429
+bytes, MessagePack+zstd 5,460,382 bytes including headers. Release load+parse
+276 ms for the original loader versus 236 ms compiled; debug 278 ms versus 225 ms (single pass, disk-cache noise
+applies). Pretty JSON would be 68,185,718 bytes. A simulated one-field regeneration
+produced a combined compressed prefix/suffix delta estimate of 38,901 bytes for
+MessagePack+zstd versus 596,827 for JSON+zstd and 982,829 for gzip. Raw JSON deltas
+were only 199 bytes; compressed artifacts trade some delta locality for an 87%
+checkout reduction. We choose compiled-only commits because estimated updates
+remain small. This proxy is not a measurement of Git's pack delta algorithm.
+
+Reproduce the short comparison with `cargo run -p selu-manifest --example formats`
+(and `--release`). It uses a one-field interface increment, a prefix/suffix delta
+compressed with zlib plus 24 bytes of metadata, and one load+parse per file/format.
+The full per-file measurements and gate evidence are in the package Z report.
