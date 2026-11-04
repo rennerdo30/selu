@@ -333,11 +333,17 @@ fn build(
         validate_saved(&old_saved, &saved_shapes, &sources, &project.name)?;
         let mut lowered_files: Vec<_> = compiled.iter().map(|(_, l)| l.clone()).collect();
         if let Some(runtime) = selu_lower::runtime::share(&mut lowered_files) {
-            std::fs::write(out_dir.join("Selu.lua"), runtime).map_err(|e| {
+            // __selu module paths are reserved, so the fallback cannot collide.
+            let runtime_name = if sources.iter().any(|m| m.key.eq_ignore_ascii_case("Selu")) {
+                "__selu_runtime.lua"
+            } else {
+                "Selu.lua"
+            };
+            std::fs::write(out_dir.join(runtime_name), runtime).map_err(|e| {
                 eprintln!("selu: cannot write runtime: {e}");
                 ExitCode::FAILURE
             })?;
-            lua_files.push("Selu.lua".to_string());
+            lua_files.push(runtime_name.to_string());
         }
         for ((module, _), lowered) in compiled.into_iter().zip(lowered_files) {
             let lua_name = format!("{}.lua", module.key);

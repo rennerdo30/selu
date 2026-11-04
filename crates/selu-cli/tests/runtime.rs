@@ -110,3 +110,46 @@ fn hooks_need_no_localisation_runtime() {
     let mut files = vec![selu_lower::lower(&p, &manifest, &c.types)];
     assert!(selu_lower::runtime::share(&mut files).is_none());
 }
+#[test]
+fn runtime_name_cannot_overwrite_a_source_module() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = std::env::temp_dir().join(format!("selu-k-collision-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"Collision\"\ntargets = [\"forever@1.0\"]\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/Selu.selu"), "export const value = 7;").unwrap();
+    std::fs::write(
+        dir.join("src/main.selu"),
+        "import { value } from \"./Selu\"; on PLAYER_LOGIN() { print(value); }",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("build")
+        .arg(&dir)
+        .arg("--manifest-dir")
+        .arg(root.join("manifests"))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let dist = dir.join("dist/Collision");
+    let toc = std::fs::read_to_string(dist.join("Collision.toc")).unwrap();
+    let names: Vec<_> = toc.lines().filter(|s| s.ends_with(".lua")).collect();
+    let unique: std::collections::HashSet<_> = names.iter().map(|s| s.to_lowercase()).collect();
+    assert_eq!(names.len(), unique.len());
+    let files: Vec<_> = names
+        .iter()
+        .map(|s| {
+            (
+                s.to_string(),
+                std::fs::read_to_string(dist.join(s)).unwrap(),
+            )
+        })
+        .collect();
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_addon("Collision", &files).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), ["7"]);
+}

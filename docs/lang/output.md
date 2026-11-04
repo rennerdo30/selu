@@ -64,7 +64,9 @@ formatting when no arguments exist.
 ## Shared addon runtime
 
 Project builds emit `Selu.lua` first in the `.toc` whenever any module needs
-runtime helpers, followed by source modules in dependency order. Even a one-module
+runtime helpers, followed by source modules in dependency order. If a source
+module is named Selu (case-insensitively), the runtime uses the reserved filename
+`__selu_runtime.lua` instead, so it cannot overwrite authored output. Even a one-module
 addon uses this arrangement: consistent debugging and a short main file take
 precedence over saving a few wrapper lines. There is no installed runtime library.
 Standalone lowering APIs remain self-contained; addon builders call `runtime::share`
