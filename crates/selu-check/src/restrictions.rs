@@ -7,7 +7,9 @@ pub(crate) fn secret_results(m: &Manifest, d: &Declaration) -> Vec<bool> {
         .as_ref()
         .map(|n| format!("{n}.{}", d.name))
         .unwrap_or_else(|| d.name.clone());
-    let entry = m.function(&full);
+    raw_secret_results(d, m.function(&full).is_some_and(|f| f.returns_secret))
+}
+fn raw_secret_results(d: &Declaration, returns_secret: bool) -> Vec<bool> {
     let per_result = d.returns.iter().any(|r| {
         ["SecretValue", "ConditionalSecret"]
             .iter()
@@ -15,23 +17,23 @@ pub(crate) fn secret_results(m: &Manifest, d: &Declaration) -> Vec<bool> {
     });
     let all = !per_result
         && (d.attributes.get("SecretReturns").and_then(|v| v.as_bool()) == Some(true)
-            || entry.is_some_and(|f| {
-                (f.returns_secret && !per_result)
-                    || f.restrictions
-                        .iter()
-                        .any(|r| r.starts_with("SecretWhen") || r.starts_with("SecretIn"))
-            })
+            || returns_secret
             || d.attributes
                 .keys()
                 .any(|r| r.starts_with("SecretWhen") || r.starts_with("SecretIn")));
     d.returns
         .iter()
-        .map(|r| {
-            r.attributes.get("NeverSecret").and_then(|v| v.as_bool()) != Some(true)
-                && (all
-                    || ["SecretValue", "ConditionalSecret"]
-                        .iter()
-                        .any(|k| r.attributes.get(*k).and_then(|v| v.as_bool()) == Some(true)))
+        .enumerate()
+        .map(|(index, r)| {
+            d.attributes
+                .get(&format!("SeluSecretResult{index}"))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+                || r.attributes.get("NeverSecret").and_then(|v| v.as_bool()) != Some(true)
+                    && (all
+                        || ["SecretValue", "ConditionalSecret"]
+                            .iter()
+                            .any(|k| r.attributes.get(*k).and_then(|v| v.as_bool()) == Some(true)))
         })
         .collect()
 }
@@ -78,5 +80,70 @@ pub(crate) fn check_uses(
     }
     for s in &program.stmts {
         walk(visit::Child::Stmt(s), None, types, out);
+    }
+}
+
+/// Merge restriction policies without changing any target's API signatures.
+pub(crate) fn strictest_policies(manifest: &mut Manifest, targets: &[Manifest]) {
+    if targets.len() < 2 {
+        return;
+    }
+    use std::collections::HashMap;
+    let mut policies: HashMap<String, (Vec<bool>, bool)> = HashMap::new();
+    fn record(
+        policies: &mut HashMap<String, (Vec<bool>, bool)>,
+        key: String,
+        d: &Declaration,
+        secret: bool,
+    ) {
+        let mask = raw_secret_results(d, secret);
+        let entry = policies.entry(key).or_default();
+        entry.0.resize(entry.0.len().max(mask.len()), false);
+        for (into, value) in entry.0.iter_mut().zip(mask) {
+            *into |= value;
+        }
+        entry.1 |= d
+            .attributes
+            .get("IsProtectedFunction")
+            .and_then(|v| v.as_bool())
+            == Some(true);
+    }
+    for target in targets {
+        for f in &target.functions {
+            if f.available
+                && let Some(d) = &f.signature
+            {
+                record(&mut policies, f.name.clone(), d, f.returns_secret);
+            }
+        }
+        for w in &target.widgets {
+            for d in &w.methods {
+                record(&mut policies, format!("@{}.{}", w.name, d.name), d, false);
+            }
+        }
+    }
+    fn apply(d: &mut Declaration, policy: Option<&(Vec<bool>, bool)>) {
+        if let Some((mask, protected)) = policy {
+            for (i, secret) in mask.iter().enumerate() {
+                if *secret {
+                    d.attributes
+                        .insert(format!("SeluSecretResult{i}"), true.into());
+                }
+            }
+            if *protected {
+                d.attributes
+                    .insert("IsProtectedFunction".into(), true.into());
+            }
+        }
+    }
+    for f in &mut manifest.functions {
+        if let Some(d) = &mut f.signature {
+            apply(d, policies.get(&f.name));
+        }
+    }
+    for w in &mut manifest.widgets {
+        for d in &mut w.methods {
+            apply(d, policies.get(&format!("@{}.{}", w.name, d.name)));
+        }
     }
 }

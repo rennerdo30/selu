@@ -133,3 +133,25 @@ fn conditional_function_values_keep_the_stricter_policy() {
     sim.set_combat(false).unwrap();
     assert_eq!(sim.prints(), ["free"]);
 }
+
+#[test]
+fn several_targets_keep_secret_guards_regardless_of_primary_order() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+    let retail = selu_manifest::load_manifest(&root.join("retail/12.1.5.70391.json")).unwrap();
+    let classic =
+        selu_manifest::load_manifest(&root.join("classic-era/1.15.9.70576.json")).unwrap();
+    let targets = [classic, retail];
+    for primary in &targets {
+        let p = selu_syntax::parse("test.selu", "print(UnitHealth(\"player\") ?? 0);").unwrap();
+        let (c, _) = selu_check::check_module_targets(&p, primary, Default::default(), &targets);
+        assert!(!c.has_errors(), "{:?}", c.diagnostics);
+        let universe = selu_check::targets::with_fallbacks(primary, &targets);
+        let lua = selu_lower::lower(&p, &universe, &c.types).lua;
+        let sim = Sim::new().unwrap();
+        sim.set_secret_global("hidden").unwrap();
+        sim.eval("function UnitHealth() return hidden end").unwrap();
+        sim.load_files(&[("test.lua".into(), lua)]).unwrap();
+        assert_eq!(sim.prints(), ["0"]);
+        assert!(c.diagnostics.is_empty(), "{:?}", c.diagnostics);
+    }
+}

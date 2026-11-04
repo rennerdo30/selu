@@ -7,10 +7,14 @@ Untyped results remain untyped. False is preserved; inaccessible values become n
 before Selu tests, compares or computes with them.
 
 `UnitName` returns two optional strings on retail and Forever, whose manifests
-mark SecretWhenUnitNameIdentityRestricted. The four classic flavours retain two
+mark SecretWhenUnitNameIdentityRestricted. Single-target builds of the four classic flavours retain two
 ordinary strings. `UnitHealth` is optional on retail and Forever too. Builds check
 every selected target: a secret result on any target requires handling it.
 `has(UnitName)` only proves availability, never accessibility of its results.
+Restriction policies are merged before signature checking and lowering, so shared
+output and per-target output retain the strictest policy independently of target
+order. This merge changes only internal restriction attributes, never manifests
+on disk or unrelated API signature metadata.
 
 A function-level SecretReturns, SecretWhen... or SecretIn... policy applies to
 all results unless individual SecretValue/ConditionalSecret positions specify the
