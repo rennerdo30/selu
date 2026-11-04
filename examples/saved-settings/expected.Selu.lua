@@ -102,16 +102,7 @@ do
       __selu_ns.__selu_saved = nil
     end)
   end
-  __selu_ns.__selu_saved__G = __selu_saved__G
-  __selu_ns.__selu_saved_type = __selu_saved_type
-  __selu_ns.__selu_saved_pairs = __selu_saved_pairs
-  __selu_ns.__selu_saved_ipairs = __selu_saved_ipairs
-  __selu_ns.__selu_saved_CreateFrame = __selu_saved_CreateFrame
-  __selu_ns.__selu_saved_rawget = __selu_saved_rawget
-  __selu_ns.__selu_saved_pcall = __selu_saved_pcall
-  __selu_ns.__selu_saved_print = __selu_saved_print
-  __selu_ns.__selu_saved_tostring = __selu_saved_tostring
-  __selu_ns.__selu_saved_runtime = __selu_saved_runtime
+  __selu_ns.__selu_saved = __selu_saved_runtime
 end
 -- Selu: events
 do

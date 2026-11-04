@@ -98,7 +98,9 @@ Saved declarations and migrations still register loaders while modules execute.
 The saved runtime frame is created before the user dispatcher; `ADDON_LOADED`
 runs saved loaders before user handlers. The simulator receives every TOC file
 before firing that event. Existing rollback, newer-schema and character isolation
-checks remain unchanged. The proof harness also reads the TOC and uses
+checks remain unchanged. The saved init table is exported only through
+`__selu_saved`, which that event clears; primitive captures stay private so the
+cold init helpers can be collected even if the namespace remains alive. The proof harness also reads the TOC and uses
 `Sim::load_addon`, rather than evaluating just main.lua.
 
 Temporary elimination is deliberately small: literal left operands of `??` are
@@ -122,13 +124,13 @@ module scaffolding, not a claim that tiny addons have fewer total lines.
 | modules | 32 | 11 | 22 | expected.counter.lua: 13 -> 12 |
 | multi-target | 31 | 10 | 22 | - |
 | named-types | 37 | 16 | 22 | - |
-| saved-settings | 148 | 27 | 136 | - |
+| saved-settings | 148 | 27 | 127 | - |
 | shared-runtime | new | 7 | 99 | expected.worker.lua: new -> 20 |
 | slash-and-hooks | 106 | 26 | 86 | - |
 | timers | 30 | 9 | 22 | - |
 
 The proof's checked-in baseline `reference.lua` has 439 lines. Its CLI shared
-output now has 259 main lines and 200 runtime lines (459 total): the main file
+output now has 259 main lines and 191 runtime lines (450 total): the main file
 shrinks by 180 lines (41%). The in-process proof test's standalone baseline had
 432 lines; its new shared main omits the CLI module export table and can differ
 from the CLI count. The checked-in reference is retained as historical evidence.

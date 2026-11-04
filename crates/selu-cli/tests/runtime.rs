@@ -25,7 +25,7 @@ fn project_runtime_is_first_and_helpers_leave_modules() {
         Some("Selu.lua")
     );
     let main = std::fs::read_to_string(dist.join("main.lua")).unwrap();
-    assert!(main.contains("local __selu_saved_runtime = __selu_ns.__selu_saved_runtime"));
+    assert!(main.contains("local __selu_saved_runtime = __selu_ns.__selu_saved"));
     assert!(!main.contains("RegisterEvent(\"ADDON_LOADED\")"));
 }
 mod common;
@@ -150,6 +150,80 @@ fn runtime_name_cannot_overwrite_a_source_module() {
         .collect();
     let sim = selu_sim::Sim::new().unwrap();
     sim.load_addon("Collision", &files).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), ["7"]);
+}
+
+#[test]
+fn saved_init_helpers_are_collectible_after_loading() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = std::env::temp_dir().join(format!("selu-k-saved-gc-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"SavedGc\"\ntargets = [\"forever@1.0\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/state.selu"),
+        "export saved settings = { count: 7 };",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.selu"),
+        "import { settings } from \"./state\"; on PLAYER_LOGIN() { print(settings.count); }",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("build")
+        .arg(&dir)
+        .arg("--manifest-dir")
+        .arg(root.join("manifests"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let dist = dir.join("dist/SavedGc");
+    // A final ordinary Lua file captures the init table before ADDON_LOADED.
+    std::fs::write(
+        dist.join("observe.lua"),
+        r#"local _, ns = ...
+keptNamespace = ns
+savedInitWeak = setmetatable({ ns.__selu_saved }, { __mode = "v" })
+assert(savedInitWeak[1] ~= nil)
+"#,
+    )
+    .unwrap();
+    let toc_path = dist.join("SavedGc.toc");
+    let mut toc = std::fs::read_to_string(&toc_path).unwrap();
+    toc.push_str("observe.lua\n");
+    std::fs::write(toc_path, &toc).unwrap();
+    let files: Vec<_> = toc
+        .lines()
+        .filter(|s| s.ends_with(".lua"))
+        .map(|s| {
+            (
+                s.to_string(),
+                std::fs::read_to_string(dist.join(s)).unwrap(),
+            )
+        })
+        .collect();
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_addon("SavedGc", &files).unwrap();
+    sim.eval(
+        r#"assert(keptNamespace ~= nil)
+assert(keptNamespace.__selu_saved == nil)
+collectgarbage("collect")
+collectgarbage("collect")
+assert(savedInitWeak[1] == nil, "saved init helpers retained after loading")
+for key in pairs(keptNamespace) do
+  assert(not key:match("^__selu_saved_"), "saved primitive capture exported: " .. key)
+end"#,
+    )
+    .unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), ["7"]);
 }

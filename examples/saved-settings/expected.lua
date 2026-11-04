@@ -1,6 +1,6 @@
 local __selu_addon, __selu_ns = ...
 local __selu_on = __selu_ns.__selu_events
-local __selu_saved_runtime = __selu_ns.__selu_saved_runtime
+local __selu_saved_runtime = __selu_ns.__selu_saved
 __selu_ns["main"] = {}
 local settings
 __selu_saved_runtime.entries["SavedSettings_settings"] = {}

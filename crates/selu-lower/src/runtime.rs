@@ -133,23 +133,11 @@ impl Lowerer<'_> {
         if saved::has_saved(program) {
             let mut b = saved::captures(program);
             b.extend(saved::setup(program));
-            pieces.push(piece(
-                "19-saved",
-                b,
-                &[
-                    "__selu_saved__G",
-                    "__selu_saved_type",
-                    "__selu_saved_pairs",
-                    "__selu_saved_ipairs",
-                    "__selu_saved_CreateFrame",
-                    "__selu_saved_rawget",
-                    "__selu_saved_pcall",
-                    "__selu_saved_print",
-                    "__selu_saved_tostring",
-                    "__selu_saved_runtime",
-                ],
-                &[],
-            ));
+            let mut p = piece("19-saved", b, &["__selu_saved_runtime"], &[]);
+            // Reuse the slot the ADDON_LOADED cleanup clears. Captures stay
+            // private to this piece so the cold init helpers can be collected.
+            p.exports[0].1 = "__selu_saved".into();
+            pieces.push(p);
         }
         if self.wow.used {
             pieces.push(piece(
