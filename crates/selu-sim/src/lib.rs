@@ -2,6 +2,14 @@
 //! runs in a Lua 5.1 VM with a simulated clock, captured `print`, a minimal
 //! `CreateFrame`, and event firing from Rust. Anything the sim does not
 //! model logs `not simulated: X` once; it never fails silently.
+//!
+//! Timers use exact positive deadlines plus a persistent 60 Hz OnUpdate grid.
+//! Zero/negative delays wait 1/60 second; advance_time(0) runs nothing.
+//! Timers precede OnUpdate on ties and callback errors go to `Sim::logs`.
+//! The client API documentation in wow-ui-source at commit 17ed2c3 confirms
+//! callback arguments. Table handles, explicit-only IsCancelled state, positive
+//! integer iterations and this hybrid scheduling model are simulator assumptions;
+//! native timing internals are not provided by that source.
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
 use std::collections::HashSet;
