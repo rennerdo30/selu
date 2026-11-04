@@ -800,10 +800,8 @@ impl Studio {
                         "World of Warcraft is already running: type /reload in game to load the new version",
                     );
                 } else {
-                    match crate::game::launch(client) {
-                        Ok(()) => {
-                            self.line(LineKind::Build, format!("starting {}", client.label()))
-                        }
+                    match crate::game::launch(client, self.game_settings.launch_direct) {
+                        Ok(how) => self.line(LineKind::Build, how),
                         Err(e) => self.line(LineKind::Error, e),
                     }
                 }
@@ -975,6 +973,23 @@ impl Studio {
                         rescan = true;
                     }
                 });
+                ui.add_space(6.0);
+                let mut via_bnet = !self.game_settings.launch_direct;
+                if ui
+                    .checkbox(&mut via_bnet, "Start through Battle.net (keeps you logged in)")
+                    .on_hover_text("Otherwise Studio starts the game's executable directly")
+                    .changed()
+                {
+                    self.game_settings.launch_direct = !via_bnet;
+                    changed = true;
+                }
+                if via_bnet && crate::game::battlenet_exe().is_none() {
+                    ui.label(
+                        egui::RichText::new("Battle.net wasn't found; the game will be started directly.")
+                            .small()
+                            .color(palette::WARNING),
+                    );
+                }
                 if let Some(f) = self.game_flavour() {
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(format!("This project runs on {f}.")).small().color(palette::FAINT));

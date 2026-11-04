@@ -68,6 +68,55 @@ pub fn flavour_of(folder: &str) -> Option<&'static str> {
     }
 }
 
+/// Battle.net's product code for a client folder (`_retail_` -> `wow`,
+/// `_classic_era_` -> `wow_classic_era`), as in the install's `.build.info`
+/// and Battle.net's `battlenet://game/<code>` launch addresses.
+pub fn product_code(folder: &str) -> Option<String> {
+    let f = folder.trim_matches('_').to_ascii_lowercase();
+    if f.is_empty() {
+        return None;
+    }
+    Some(match f.as_str() {
+        "retail" => "wow".into(),
+        "forever" => "wowf".into(),
+        "ptr" => "wowt".into(),
+        "xptr" => "wowxptr".into(),
+        "beta" => "wow_beta".into(),
+        other => format!("wow_{other}"),
+    })
+}
+
+/// Battle.net's executable, from its registered `battlenet://` handler
+/// (read-only `reg query`), else the default install location.
+pub fn battlenet_exe() -> Option<PathBuf> {
+    if let Ok(out) = std::process::Command::new("reg")
+        .args(["query", r"HKCR\battlenet\shell\open\command", "/ve"])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Some(rest) = line.trim().split("REG_SZ").nth(1) {
+                let rest = rest.trim();
+                let exe = match rest.strip_prefix('"') {
+                    Some(r) => r.split('"').next().unwrap_or(""),
+                    None => rest.split_whitespace().next().unwrap_or(""),
+                };
+                let p = PathBuf::from(exe);
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    [
+        r"C:\Program Files (x86)\Battle.net\Battle.net.exe",
+        r"C:\Program Files\Battle.net\Battle.net.exe",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .find(|p| p.is_file())
+}
+
 /// User settings for game testing, kept in `%APPDATA%\Selu\studio.toml`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -80,6 +129,10 @@ pub struct Settings {
     /// The client last used for each flavour: flavour -> client folder.
     #[serde(default)]
     pub chosen: BTreeMap<String, String>,
+    /// Start the game's executable directly instead of through Battle.net
+    /// (which keeps the login).
+    #[serde(default)]
+    pub launch_direct: bool,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -320,8 +373,24 @@ pub fn is_running(client: &Client) -> bool {
         .unwrap_or(false)
 }
 
-/// Start the client. The game opens its own window; Studio doesn't wait.
-pub fn launch(client: &Client) -> Result<(), String> {
+/// Start the client: through Battle.net (logged in) unless `direct`. The
+/// game opens its own window; Studio doesn't wait. Returns how it started.
+pub fn launch(client: &Client, direct: bool) -> Result<String, String> {
+    if !direct
+        && let (Some(code), Some(bnet)) = (product_code(&client.folder_name()), battlenet_exe())
+    {
+        let uri = format!("battlenet://game/{code}");
+        return std::process::Command::new(&bnet)
+            .arg(format!("--uri={uri}"))
+            .spawn()
+            .map(|_| format!("asked Battle.net to start {} ({uri})", client.label()))
+            .map_err(|e| format!("cannot start Battle.net ({}): {e}", bnet.display()));
+    }
+    launch_exe(client).map(|()| format!("started {} directly", client.label()))
+}
+
+/// Start the client's executable directly (no Battle.net login).
+fn launch_exe(client: &Client) -> Result<(), String> {
     let exe = client
         .exe
         .as_ref()
@@ -361,6 +430,27 @@ pub fn built_folder(project: &Path, flavour: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn product_codes_from_folder_names() {
+        // As in the install's .build.info `Product` column.
+        assert_eq!(product_code("_retail_").as_deref(), Some("wow"));
+        assert_eq!(product_code("_classic_").as_deref(), Some("wow_classic"));
+        assert_eq!(
+            product_code("_classic_era_").as_deref(),
+            Some("wow_classic_era")
+        );
+        assert_eq!(
+            product_code("_anniversary_").as_deref(),
+            Some("wow_anniversary")
+        );
+        assert_eq!(product_code("_forever_").as_deref(), Some("wowf"));
+        assert_eq!(product_code("_ptr_").as_deref(), Some("wowt"));
+        assert_eq!(
+            product_code("_classic_beta_").as_deref(),
+            Some("wow_classic_beta")
+        );
+    }
 
     #[test]
     fn flavours_from_folder_names() {

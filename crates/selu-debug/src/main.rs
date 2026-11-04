@@ -56,14 +56,20 @@ fn main() -> ExitCode {
             "--list-games" => {
                 // Diagnostics: the game clients Run in Game would use.
                 let settings = game::Settings::load();
+                match game::battlenet_exe() {
+                    Some(b) => println!("Battle.net: {}", b.display()),
+                    None => println!("Battle.net: not found (games start directly)"),
+                }
                 for c in game::detect(&settings) {
                     println!(
-                        "{:<22} {:<16} {}",
+                        "{:<22} {:<16} {:<34} {}",
                         c.flavour.as_deref().unwrap_or("unknown"),
                         c.exe
                             .as_ref()
                             .and_then(|e| e.file_name())
                             .map_or_else(|| "-".to_string(), |n| n.to_string_lossy().into_owned()),
+                        game::product_code(&c.folder_name())
+                            .map_or_else(|| "-".to_string(), |p| format!("battlenet://game/{p}")),
                         c.folder.display()
                     );
                 }
