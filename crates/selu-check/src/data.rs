@@ -171,9 +171,6 @@ impl Ctx<'_> {
     pub(crate) fn data_write(&mut self, target: &Expr, value: &Type) {
         let ty = if let ExprKind::Member { object, name } = &target.kind {
             let t = crate::shape_of(&self.value(object));
-            if matches!(t, Type::Widget(..)) {
-                return;
-            }
             if name == "length" && matches!(t, Type::Array(_) | Type::String) {
                 self.out.push(
                     err("SELU0355", "length is read-only", &target.span)

@@ -111,6 +111,7 @@ struct VmState {
     generation: Generation,
     ui_size: Option<(f64, f64)>,
     frame_families: std::collections::BTreeSet<(String, String)>,
+    manual_frame_families: std::collections::BTreeSet<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -256,13 +257,10 @@ fn discover_manifest(
     let Ok(spec) = selu_manifest::TargetSpec::parse(target) else {
         return Ok(None);
     };
-    for root in from.ancestors() {
-        let dir = root.join("manifests");
-        if dir.is_dir() {
-            let all = selu_manifest::load_manifest_dir(&dir).map_err(|e| runtime(e.to_string()))?;
-            // Synthetic simulator targets need not have installed manifests.
-            return Ok(selu_manifest::resolve(&spec, &all).ok().cloned());
-        }
+    if let Ok(all) =
+        selu_manifest::resolution::discover(None, from, Some(std::slice::from_ref(&spec.flavour)))
+    {
+        return Ok(selu_manifest::resolve(&spec, &all).ok().cloned());
     }
     Ok(None)
 }
@@ -392,8 +390,24 @@ impl Session {
     /// Load an addon folder through its `.toc` and fire `ADDON_LOADED`.
     /// Returns the addon name.
     pub fn load_addon_dir(&mut self, dir: &Path) -> SimResult<String> {
-        if self.config.manifest.is_none() {
-            self.config.manifest = discover_manifest(&self.config, dir)?;
+        {
+            if let Some(manifest) = selu_manifest::resolution::compiled_manifest(dir)
+                .map_err(|e| runtime(e.to_string()))?
+            {
+                self.config.manifest = Some(manifest);
+                // A checked build takes precedence over ambient discovery.
+                lock(&self.sim.state).frame_families.clear();
+                self.sim
+                    .lua
+                    .globals()
+                    .raw_set("__selu_frame_families", self.sim.lua.create_table()?)?;
+                let manual = lock(&self.sim.state).manual_frame_families.clone();
+                for (prefix, suffix) in manual {
+                    register_family(&self.sim, &prefix, &suffix)?;
+                }
+            } else if self.config.manifest.is_none() {
+                self.config.manifest = discover_manifest(&self.config, dir)?;
+            }
             if let Some(manifest) = &self.config.manifest {
                 for family in &manifest.frame_families {
                     register_family(&self.sim, &family.prefix, &family.suffix)?;
@@ -524,9 +538,21 @@ impl Session {
                 crate::saved::capture(self.sim.lua.globals().raw_get(name)?, &mut HashSet::new())?,
             ));
         }
+        let loaded = lock(&self.sim.state).loaded.clone();
+        for dir in loaded {
+            if let Some(manifest) = selu_manifest::resolution::compiled_manifest(&dir)
+                .map_err(|e| runtime(e.to_string()))?
+            {
+                self.config.manifest = Some(manifest);
+                break;
+            }
+        }
         let replacement = Self::start_vm(&self.config)?;
-        for (prefix, suffix) in &lock(&self.sim.state).frame_families {
+        for (prefix, suffix) in &lock(&self.sim.state).manual_frame_families {
             register_family(&replacement, prefix, suffix)?;
+            lock(&replacement.state)
+                .manual_frame_families
+                .insert((prefix.clone(), suffix.clone()));
         }
         *lock(&replacement.clock) = self.now();
         {
@@ -586,7 +612,11 @@ impl Session {
     /// Register a manifest family whose absent members must behave as nil,
     /// rather than the simulator's fallback for unmodelled API functions.
     pub fn register_frame_family(&self, prefix: &str, suffix: &str) -> SimResult<()> {
-        register_family(&self.sim, prefix, suffix)
+        register_family(&self.sim, prefix, suffix)?;
+        lock(&self.sim.state)
+            .manual_frame_families
+            .insert((prefix.into(), suffix.into()));
+        Ok(())
     }
 
     pub fn eval(&self, source: &str) -> SimResult<()> {

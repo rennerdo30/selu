@@ -125,6 +125,7 @@ impl Report {
 /// What a run needs from the CLI.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
+    pub manifest_dir: Option<PathBuf>,
     pub project_dir: PathBuf,
     pub target: Option<String>,
     /// Only tests whose joined path contains this text.
@@ -167,6 +168,7 @@ mod tests {
         std::fs::write(root.join("tests/boot.test.selu"), "").unwrap();
         let found = discover(&root).unwrap();
         let err = run(&RunOptions {
+            manifest_dir: None,
             project_dir: root.clone(),
             target: None,
             filter: None,

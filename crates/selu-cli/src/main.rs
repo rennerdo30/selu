@@ -37,6 +37,8 @@ enum Command {
     Test {
         path: Option<PathBuf>,
         #[arg(long)]
+        manifest_dir: Option<PathBuf>,
+        #[arg(long)]
         target: Option<String>,
         /// Only tests whose name contains this text.
         #[arg(long)]
@@ -88,6 +90,7 @@ fn main() -> ExitCode {
         Command::Fmt { paths, check } => fmt(paths, *check),
         Command::Test {
             path,
+            manifest_dir,
             target,
             filter,
             json,
@@ -96,6 +99,7 @@ fn main() -> ExitCode {
             target.clone(),
             filter.clone(),
             *json,
+            manifest_dir.clone(),
         ),
         Command::Debug {
             path,
@@ -233,8 +237,10 @@ fn test(
     target: Option<String>,
     filter: Option<String>,
     json: bool,
+    manifest_dir: Option<PathBuf>,
 ) -> Result<(), ExitCode> {
     let options = selu_test::RunOptions {
+        manifest_dir,
         project_dir: project_dir.to_path_buf(),
         target,
         filter,
@@ -279,6 +285,11 @@ fn debug(
         ExitCode::FAILURE
     })?;
     let mut cmd = std::process::Command::new(&studio);
+    cmd.arg("--manifest")
+        .arg(selu_manifest::resolution::compiled_manifest_path(&addon));
+    if let Some(dir) = manifest_dir {
+        cmd.arg("--manifest-dir").arg(dir);
+    }
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
     }

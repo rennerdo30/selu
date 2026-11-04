@@ -5,13 +5,13 @@ members from every comma-separated template (whitespace is ignored):
 
 ```selu
 const panel = CreateFrame("Frame", null, UIParent, "BackdropTemplate");
-panel.SetBackdrop({ bgFile: "Interface/Tooltips/UI-Tooltip-Background" });
+panel.SetSize(260, 100);
 const button = CreateFrame("Button", null, panel, "UIPanelButtonTemplate");
 button.SetText("Sell junk");
 ```
 
 Template inheritance and mixin inheritance are followed transitively with cycle
-protection. M3 fields and methods are names only and remain untyped. Existing
+protection. M3 fields and methods are names only and cannot authorize a checked member access without a signature. Existing
 widget signatures still apply, including strict_api's usual signature checks.
 Unknown template literals warn (SELU0580) even in strict mode, since addon XML
 and incomplete manifests are valid sources of templates. Dynamic template
@@ -19,20 +19,22 @@ strings retain the plain widget type without a warning.
 
 A member known through a template on one selected target but absent on another
 is an error naming the missing target (SELU0581). This availability rule applies
-in both layouts and both strict modes. Open widget fields remain open; an unknown
-member is not evidence of a missing API. Merely naming an unknown template does
-not turn open widget calls into errors.
+in both layouts and both strict modes. Widget members must be declared: unknown
+reads, writes and calls report SELU0582 in both modes. An annotation, parameter,
+return type or conditional cannot grant additional members.
 
 Named XML globals retain their template members. M3 records global child names,
 but not parentKey relationships. A global-only child has no implied parent
 field: use MerchantFrameTab1 directly, rather than MerchantFrame.Tab1. A suffix
 access matching a recorded global is rejected with SELU0582 and a help line
-naming that global. GameTooltipTexture1 follows the same rule. Other open addon
-fields keep the usual T1 policy. Parent fields can be modeled when manifests
+naming that global. GameTooltipTexture1 follows the same rule. Store addon state
+in typed Selu classes or objects instead of attaching undeclared frame fields.
+Parent fields can be modeled when manifests
 record actual parentKey relationships; this package does not invent them.
 
 Template and mixin lists apply in order: later definitions override earlier
-ones, including untyped definitions overriding typed members. Documented widget
+ones. An untyped override blocks access rather than falling back to an earlier
+typed definition. Documented widget
 methods keep precedence. Cycle detection is per traversal path so repeated
 applications of an ancestor still participate in order. Template identities
 survive aliases and module exports without a Lua wrapper.
@@ -46,7 +48,10 @@ Manifest widget names are also valid written types, for example
 Frame, and derived widgets retain their existing nominal assignability.
 Widget declarations, class names and type aliases retain their usual precedence.
 
-The templated-frames example runs offline. The simulator models BackdropTemplate
+The templated-frames example runs offline using declared Texture methods for
+its background and UIPanelButtonTemplate for the button. SetBackdrop and
+SetBackdropColor are source-only mixin names in the shipped manifests and cannot
+be called from checked Selu. The simulator's Lua fixtures still model BackdropTemplate
 SetBackdrop/GetBackdrop and SetBackdropColor/GetBackdropColor as stored data (getters return no colour without a backdrop, clearing removes
 colour, and GetBackdrop returns a deep copy);
 UIPanelButtonTemplate uses the existing button text and geometry model. XML
@@ -122,3 +127,11 @@ same checked data. Otherwise Session resolves its target from the nearest
 installed before addon evaluation and retained across reload/replay, including
 manually registered families. Unrelated missing APIs keep their existing
 callable fallback and log-once behavior.
+
+Compiler builds save the exact checked manifest in
+`dist/.selu/<addon>/manifest.json`, outside the installed addon. Studio receives
+that snapshot from `selu debug`; direct Session addon loads and reloads read it
+as well. `selu test --manifest-dir ...` builds and checks tests against that same
+selection and passes it into Session. Compiler and Session discovery share the
+precedence: explicit directory, `SELU_MANIFEST_DIR`, project ancestors, then cwd
+ancestors. Rebuilds preserve an explicit Studio manifest-directory override.

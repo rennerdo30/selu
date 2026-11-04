@@ -2,11 +2,13 @@ local __selu_addon, __selu_ns = ...
 local __selu_read = __selu_ns.__selu_read
 local __selu_on = __selu_ns.__selu_events
 __selu_ns["main"] = {}
-local panel = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+local panel = CreateFrame("Frame", nil, UIParent)
 panel:SetSize(260, 100)
 panel:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-panel:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background" })
-panel:SetBackdropColor(0.1, 0.2, 0.3, 1)
+local backdrop = panel:CreateTexture(nil, "BACKGROUND")
+backdrop:SetTexture("Interface/Tooltips/UI-Tooltip-Background")
+backdrop:SetAllPoints(panel)
+backdrop:SetVertexColor(0.1, 0.2, 0.3, 1)
 local label = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 label:SetPoint("TOP", panel, "TOP", 0, -16)
 label:SetText("Review grey items at a merchant.")

@@ -27,6 +27,8 @@ const USAGE: &str = "usage: selu-studio [--target flavour@version] [--project di
 
 fn main() -> ExitCode {
     let mut target = None;
+    let mut manifest_path = None;
+    let mut manifest_dir = None;
     let mut headless = false;
     let mut project = None;
     let mut selu = None;
@@ -38,6 +40,20 @@ fn main() -> ExitCode {
                 Some(t) => target = Some(t),
                 None => {
                     eprintln!("selu-studio: --target needs a value\n{USAGE}");
+                    return ExitCode::from(2);
+                }
+            },
+            "--manifest-dir" => match args.next() {
+                Some(p) => manifest_dir = Some(PathBuf::from(p)),
+                None => {
+                    eprintln!("--manifest-dir needs a path");
+                    return ExitCode::from(2);
+                }
+            },
+            "--manifest" => match args.next() {
+                Some(p) => manifest_path = Some(PathBuf::from(p)),
+                None => {
+                    eprintln!("--manifest needs a path");
                     return ExitCode::from(2);
                 }
             },
@@ -92,9 +108,21 @@ fn main() -> ExitCode {
         eprintln!("selu-studio: no addon folder given\n{USAGE}");
         return ExitCode::from(2);
     }
+    let manifest = match manifest_path {
+        Some(path) => match selu_manifest::load_manifest(&path) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
     if !headless {
         let options = app::Options {
             addons,
+            manifest,
+            manifest_dir,
             target,
             project,
             selu,
@@ -130,6 +158,7 @@ fn main() -> ExitCode {
     }
 
     let worker = Worker::spawn(SessionConfig {
+        manifest,
         target,
         trace: true,
         ..SessionConfig::default()

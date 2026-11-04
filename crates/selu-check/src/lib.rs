@@ -1370,7 +1370,9 @@ impl Ctx<'_> {
         if let ExprKind::Ident(name) = &callee.kind
             && self.test_intrinsic_error(name, &callee.span)
         {
-            for arg in args { self.value(arg); }
+            for arg in args {
+                self.value(arg);
+            }
             return Type::Error;
         }
         if let Some(t) = self.frame_family(e, callee, args) {

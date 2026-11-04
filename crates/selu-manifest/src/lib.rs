@@ -4,6 +4,7 @@
 //! matching known manifest; an unknown build is an error listing the
 //! closest known builds (DESIGN.md section 2).
 
+pub mod resolution;
 use selu_diagnostics::Diagnostic;
 use serde::{Deserialize, Serialize};
 use std::fmt;

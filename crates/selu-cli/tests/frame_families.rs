@@ -251,3 +251,167 @@ fn review_loaded_project_manifest_and_manual_family_survive_reload() {
         1
     );
 }
+
+#[test]
+fn recheck_widget_members_stay_closed_through_widening_and_joins() {
+    let m = manifest();
+    for src in [
+        r#"const f: Frame?=frameFamily("MailItem",1);if(f!=null){const value:number=f.Subject;print(value+1);}"#,
+        r#"const a=frameFamily("MerchantItem",1);const b=frameFamily("MailItem",1);if(a!=null && b!=null){const f=false?a:b;const value:number=f.Subject;print(value+1);}"#,
+        r#"function get(){return frameFamily("MailItem",1);}const f=get();if(f!=null){const value:number=f.Subject;print(value+1);}"#,
+        r#"function get():Frame?{return frameFamily("MailItem",1);}const f=get();if(f!=null){const value:number=f.Subject;print(value+1);}"#,
+        r#"function read(f:Frame){const n:number=f.Subject;print(n+1);}const f=frameFamily("MailItem",1);if(f!=null){read(f);}"#,
+        "function f(frame: Frame) { frame.NonexistentMethod(); }",
+        "function f(frame: Frame) { frame.Subject = 42; }",
+    ] {
+        for strict_api in [false, true] {
+            let p = selu_syntax::parse("recheck.selu", src).unwrap();
+            let c = check_module_targets_with_options(
+                &p,
+                &m,
+                Default::default(),
+                std::slice::from_ref(&m),
+                CheckOptions { strict_api },
+            )
+            .0;
+            assert!(
+                c.diagnostics.iter().any(|d| d.code == "SELU0582"),
+                "{src}: {:?}",
+                c.diagnostics
+            );
+        }
+    }
+    let mut declared = m.clone();
+    declared
+        .widgets
+        .iter_mut()
+        .find(|w| w.name == "Frame")
+        .unwrap()
+        .fields
+        .push(serde_json::from_str(r#"{"name":"declaredFlag","type":"bool"}"#).unwrap());
+    assert!(
+        !check(
+            "function f(frame: Frame) { frame.declaredFlag = true; print(frame.declaredFlag); }",
+            std::slice::from_ref(&declared)
+        )
+        .1
+        .has_errors()
+    );
+    assert!(
+        check(
+            "function f(frame: Frame) { frame.declaredFlag = 42; }",
+            &[declared]
+        )
+        .1
+        .has_errors()
+    );
+}
+#[test]
+fn recheck_external_manifest_build_runs_and_tests_with_exact_manifest() {
+    let root = std::env::temp_dir().join(format!("selu-f2-external-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(root.clone());
+    let project = root.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::create_dir(project.join("tests")).unwrap();
+    let dir = root.join("override");
+    std::fs::create_dir(&dir).unwrap();
+    let mut m = manifest();
+    m.functions.retain(|f| f.name == "print");
+    m.globals.clear();
+    m.templates.clear();
+    m.data_globals.clear();
+    m.tables.clear();
+    m.enums.clear();
+    m.events.clear();
+    m.frame_families
+        .retain(|f| f.prefix == "MerchantItem" && f.suffix.is_empty());
+    m.frame_families[0].prefix = "OverrideOnly".into();
+    std::fs::write(dir.join("retail.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    std::fs::write(
+        project.join("selu.toml"),
+        "[addon]\nname=\"External\"\ntargets=[\"retail\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src/main.selu"),
+        r#"print(frameFamily("OverrideOnly",2)==null);"#,
+    )
+    .unwrap();
+    std::fs::write(project.join("tests/family.test.selu"),r#"test("missing",()=>{expect(frameFamily("OverrideOnly",2)).toBeNull();sim.reload();expect(frameFamily("OverrideOnly",2)).toBeNull();});"#).unwrap();
+    for flag in [true, false] {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_selu"));
+        cmd.current_dir(&root).arg("build").arg(&project);
+        if flag {
+            cmd.arg("--manifest-dir").arg(&dir);
+        } else {
+            cmd.env("SELU_MANIFEST_DIR", &dir);
+        }
+        let out = bounded_cli(&mut cmd);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let mut session = selu_sim::Session::new(Default::default()).unwrap();
+        session
+            .load_addon_dir(&project.join("dist/External"))
+            .unwrap();
+        assert_eq!(session.prints(), vec!["true"]);
+        session.reload().unwrap();
+        assert_eq!(session.prints(), vec!["true"]);
+    }
+    std::fs::create_dir(project.join("manifests")).unwrap();
+    std::fs::copy(
+        dir.join("retail.json"),
+        project.join("manifests/retail.json"),
+    )
+    .unwrap();
+    for mode in 0..3 {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_selu"));
+        cmd.current_dir(&root)
+            .arg("test")
+            .arg(&project)
+            .env_remove("SELU_MANIFEST_DIR");
+        match mode {
+            0 => {
+                cmd.arg("--manifest-dir").arg(&dir);
+            }
+            1 => {
+                cmd.env("SELU_MANIFEST_DIR", &dir);
+            }
+            _ => {}
+        }
+        let out = bounded_cli(&mut cmd);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+fn bounded_cli(cmd: &mut std::process::Command) -> std::process::Output {
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    eprintln!("CLI PID={}", child.id());
+    let start = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if start.elapsed() > std::time::Duration::from_secs(60) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("CLI timeout");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    child.wait_with_output().unwrap()
+}

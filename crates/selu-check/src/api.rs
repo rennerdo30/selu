@@ -254,6 +254,23 @@ fn method<'a>(
         .find(|f| f.name == name)
         .or_else(|| w.inherits.iter().find_map(|b| method(m, b, name, seen)))
 }
+fn widget_field<'a>(
+    m: &'a Manifest,
+    widget: &str,
+    name: &str,
+    seen: &mut Vec<String>,
+) -> Option<&'a Declaration> {
+    if seen.iter().any(|s| s == widget) {
+        return None;
+    }
+    seen.push(widget.into());
+    let w = widget_decl(m, widget)?;
+    w.fields.iter().find(|f| f.name == name).or_else(|| {
+        w.inherits
+            .iter()
+            .find_map(|b| widget_field(m, b, name, seen))
+    })
+}
 impl Ctx<'_> {
     pub(crate) fn api_global(&self, name: &str) -> Type {
         if let Some(t) = self.frame_global(name) {
@@ -305,8 +322,36 @@ impl Ctx<'_> {
         let Type::Widget(widget, _) = t else {
             return None;
         };
-        if let Some(d) = method(self.manifest, widget, name, &mut Vec::new()) {
-            let mut ty = signature(self.manifest, d, 0);
+        let declared = self
+            .availability
+            .manifests()
+            .iter()
+            .filter(|m| self.target_is_active(m))
+            .find_map(|m| method(m, widget, name, &mut Vec::new()).map(|d| (m, d)));
+        if let Some((m, d)) = declared {
+            if let Some(missing) = self
+                .availability
+                .manifests()
+                .iter()
+                .filter(|m| self.target_is_active(m))
+                .find(|m| method(m, widget, name, &mut Vec::new()).is_none())
+            {
+                self.out.push(err(
+                    "SELU0581",
+                    format!(
+                        "widget member `{name}` is unavailable on {}",
+                        missing.target_string()
+                    ),
+                    &object.span,
+                ));
+                return Some(Type::Error);
+            }
+            // The effective manifest carries combined secret/protection policy.
+            // Use an active target only for declarations absent from that view.
+            let (m, d) = method(self.manifest, widget, name, &mut Vec::new())
+                .map(|d| (self.manifest, d))
+                .unwrap_or((m, d));
+            let mut ty = signature(m, d, 0);
             if let Type::Function { api_semantics, .. } = &mut ty {
                 api_semantics.widget_protected = api_semantics.protected;
                 let receiver = if self.types.is_method_call(object.id) {
@@ -334,37 +379,62 @@ impl Ctx<'_> {
             }
             return Some(ty);
         }
-        if let Some(member) = self.frame_member(t, name, object) {
+        let mut field_type = None;
+        let active: Vec<_> = self
+            .availability
+            .manifests()
+            .iter()
+            .filter(|m| self.target_is_active(m))
+            .collect();
+        if active
+            .iter()
+            .any(|m| widget_field(m, widget, name, &mut Vec::new()).is_some())
+        {
+            for m in active {
+                let Some(field) = widget_field(m, widget, name, &mut Vec::new()) else {
+                    self.out.push(err(
+                        "SELU0581",
+                        format!(
+                            "widget field `{name}` is unavailable on {}",
+                            m.target_string()
+                        ),
+                        &object.span,
+                    ));
+                    return Some(Type::Error);
+                };
+                let ty = map(m, field, 0);
+                if ty.is_open() {
+                    self.out.push(err(
+                        "SELU0582",
+                        format!("widget field `{name}` has no checked type"),
+                        &object.span,
+                    ));
+                    return Some(Type::Error);
+                }
+                field_type = match field_type {
+                    None => Some(ty),
+                    Some(old) => match Type::join(&old, &ty) {
+                        Some(ty) => Some(ty),
+                        None => {
+                            self.out.push(err(
+                                "SELU0581",
+                                format!("widget field `{name}` has incompatible target types"),
+                                &object.span,
+                            ));
+                            return Some(Type::Error);
+                        }
+                    },
+                };
+            }
+            return field_type;
+        }
+        if let Some(member) = self.frame_member(t, name, object)
+            && member != Type::Untyped
+        {
             return Some(member);
         }
-        let mut candidates = Vec::new();
-        fn collect(m: &Manifest, n: &str, out: &mut Vec<String>, seen: &mut Vec<String>) {
-            if seen.iter().any(|s| s == n) {
-                return;
-            }
-            seen.push(n.into());
-            if let Some(w) = widget_decl(m, n) {
-                out.extend(w.methods.iter().map(|m| m.name.clone()));
-                for b in &w.inherits {
-                    collect(m, b, out, seen);
-                }
-            }
-        }
-        collect(self.manifest, widget, &mut candidates, &mut Vec::new());
-        let suggestion = closest(name, candidates.iter().map(String::as_str));
-        if !candidates.is_empty() && (1..=2).contains(&edit_distance(name, &suggestion)) {
-            self.out.push(
-                selu_diagnostics::Diagnostic::warning(
-                    "SELU0482",
-                    format!(
-                        "unknown widget member `{name}` on {}; did you mean `{suggestion}`?",
-                        self.target()
-                    ),
-                )
-                .with_span(object.span.clone()),
-            );
-        }
-        Some(Type::Untyped)
+        self.out.push(err("SELU0582",format!("widget `{widget}` has no declared member `{name}` on {}",self.target()),&object.span).with_help("use a declared widget member or a typed frameFamily suffix lookup for a named child global"));
+        Some(Type::Error)
     }
 
     pub(crate) fn api_call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Option<Type> {
@@ -407,7 +477,7 @@ impl Ctx<'_> {
                 selu_diagnostics::Diagnostic::warning(
                     "SELU0483",
                     format!(
-                        "unknown frame type `{name}` on {}; using open Frame; did you mean `{}`?",
+                        "unknown frame type `{name}` on {}; using Frame; did you mean `{}`?",
                         self.target(),
                         closest(name, self.manifest.widgets.iter().map(|w| w.name.as_str()))
                     ),
@@ -598,19 +668,6 @@ pub(crate) fn mismatch_help(
     crate::classes::mismatch_help(d, have, want)
 }
 
-fn edit_distance(a: &str, b: &str) -> usize {
-    let mut row: Vec<usize> = (0..=b.chars().count()).collect();
-    for (i, x) in a.chars().enumerate() {
-        let mut prev = row[0];
-        row[0] = i + 1;
-        for (j, y) in b.chars().enumerate() {
-            let old = row[j + 1];
-            row[j + 1] = (row[j] + 1).min(old + 1).min(prev + usize::from(x != y));
-            prev = old;
-        }
-    }
-    *row.last().unwrap()
-}
 fn api_argument_assignable(have: &Type, want: &Type, function: &Type) -> bool {
     if matches!(function,Type::Function {api_semantics,..} if api_semantics.accepts_secrets)
         && let Some(inner) = crate::restrictions::secret_inner(have)

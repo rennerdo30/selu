@@ -1,7 +1,7 @@
 use selu_diagnostics::Diagnostic;
 use selu_manifest::{Manifest, TargetSpec};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 #[derive(Debug, Deserialize)]
 struct Project {
@@ -80,53 +80,7 @@ pub fn find_manifests(
     project_dir: &Path,
     flavours: Option<&[String]>,
 ) -> Result<Vec<Manifest>, ExitCode> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(p) = explicit {
-        candidates.push(p.to_path_buf());
-    }
-    if let Ok(p) = std::env::var("SELU_MANIFEST_DIR") {
-        candidates.push(PathBuf::from(p));
-    }
-    for base in [project_dir, Path::new(".")] {
-        let mut dir: Option<PathBuf> = std::fs::canonicalize(base).ok();
-        while let Some(d) = dir {
-            candidates.push(d.join("manifests"));
-            dir = d.parent().map(|p| p.to_path_buf());
-        }
-    }
-    for dir in candidates {
-        if dir.is_dir() {
-            if let Some(flavours) = flavours
-                && !flavours.is_empty()
-                && flavours.iter().all(|f| dir.join(f).is_dir())
-            {
-                let mut out = Vec::new();
-                let mut folders: Vec<PathBuf> = flavours.iter().map(|f| dir.join(f)).collect();
-                folders.push(dir.join("fixtures"));
-                folders.sort();
-                folders.dedup();
-                for folder in folders.iter().filter(|f| f.is_dir()) {
-                    match selu_manifest::load_manifest_dir(folder) {
-                        Ok(m) => out.extend(m),
-                        Err(d) => return Err(fail(&d, "")),
-                    }
-                }
-                if !out.is_empty() {
-                    out.sort_by(|a, b| a.flavour.cmp(&b.flavour).then(a.build.cmp(&b.build)));
-                    return Ok(out);
-                }
-            }
-            match selu_manifest::load_manifest_dir(&dir) {
-                Ok(m) if !m.is_empty() => return Ok(m),
-                Ok(_) => continue,
-                Err(d) => return Err(fail(&d, "")),
-            }
-        }
-    }
-    eprintln!(
-        "selu: no target manifests found (looked for a `manifests/` folder; pass --manifest-dir)"
-    );
-    Err(ExitCode::FAILURE)
+    selu_manifest::resolution::discover(explicit, project_dir, flavours).map_err(|d| fail(&d, ""))
 }
 
 pub fn build(
@@ -140,8 +94,9 @@ pub fn build_tests(
     project_dir: &Path,
     target_override: Option<&str>,
     roots: &[String],
+    manifest_dir: Option<&Path>,
 ) -> Result<(), ExitCode> {
-    build_impl(project_dir, target_override, None, true, roots)
+    build_impl(project_dir, target_override, manifest_dir, true, roots)
 }
 fn build_impl(
     project_dir: &Path,
@@ -455,6 +410,14 @@ fn build_impl(
         }
         std::fs::write(out_dir.join(format!("{}.toc", project.name)), toc).map_err(|e| {
             eprintln!("selu: cannot write .toc: {e}");
+            ExitCode::FAILURE
+        })?;
+        std::fs::write(
+            map_dir.join("manifest.json"),
+            serde_json::to_vec(manifest).expect("manifest serializes"),
+        )
+        .map_err(|e| {
+            eprintln!("selu: cannot write checked manifest: {e}");
             ExitCode::FAILURE
         })?;
         if !quiet {

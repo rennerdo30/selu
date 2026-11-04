@@ -158,15 +158,6 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
                 .map(String::from)
         })
         .ok_or_else(|| build_error("SELU0620: select one target"))?;
-    let manifests = project::find_manifests(
-        None,
-        &options.project_dir,
-        Some(&[target.split('@').next().unwrap().into()]),
-    )
-    .map_err(|_| build_error("manifest discovery failed"))?;
-    let spec = selu_manifest::TargetSpec::parse(&target).map_err(|d| build_error(&d.message))?;
-    let manifest =
-        selu_manifest::resolve(&spec, &manifests).map_err(|d| build_error(&d.message))?;
     let mut roots = Vec::new();
     for file in &files {
         let source =
@@ -182,14 +173,23 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
             }
         }
     }
-    project::build_tests(&options.project_dir, Some(&target), &roots)
-        .map_err(|_| build_error("project build failed"))?;
+    project::build_tests(
+        &options.project_dir,
+        Some(&target),
+        &roots,
+        options.manifest_dir.as_deref(),
+    )
+    .map_err(|_| build_error("project build failed"))?;
     let name = config
         .get("addon")
         .and_then(|a| a.get("name"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| build_error("missing addon name"))?;
     let addon = options.project_dir.join("dist").join(name);
+    let manifest = selu_manifest::resolution::compiled_manifest(&addon)
+        .map_err(|d| build_error(&d.message))?
+        .ok_or_else(|| build_error("missing checked manifest"))?;
+    let manifest = &manifest;
     let modules = project::project_sources_roots(&options.project_dir.join("src"), &roots)
         .map_err(|_| build_error("module discovery failed"))?;
     let mut exports = BTreeMap::<String, selu_check::ModuleExports>::new();
@@ -263,7 +263,8 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
         }
         let session = Rc::new(RefCell::new(
             Session::new(SessionConfig {
-                target: Some(target.clone()),
+                target: Some(manifest.target_string()),
+                manifest: Some(manifest.clone()),
                 ..Default::default()
             })
             .map_err(build_error)?,

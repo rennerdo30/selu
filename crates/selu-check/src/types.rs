@@ -369,6 +369,19 @@ impl Type {
             {
                 result.retain(|b| b != "@selu_plain");
             }
+            if let (Type::Widget(_, left), Type::Widget(_, right), Type::Widget(_, result)) =
+                (a, b, &mut ty)
+            {
+                for marker in left
+                    .iter()
+                    .chain(right)
+                    .filter(|s| s.starts_with("@family:"))
+                {
+                    if !result.contains(marker) {
+                        result.push(marker.clone());
+                    }
+                }
+            }
             if let (
                 Type::Function {
                     api_semantics: left,
