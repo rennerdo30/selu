@@ -1,16 +1,30 @@
+// Show a status panel and share its report with /status and /st.
+// Shows slash aliases, additive hooks, localisation and diagnostic logging.
+// Try: selu build examples/slash-and-hooks, install the addon and log in.
+// Offline: scripts\studio.bat examples\slash-and-hooks, then fire PLAYER_LOGIN.
+
+// Hooks add behavior; they do not replace the original function or script.
 const panel = CreateFrame("Frame");
+
 hookScript(panel, "OnShow", (self) => {
   print(L`Status panel ready`);
 });
+
 hook("GetTime", () => {
   log.info`Clock checked`;
 });
+
+// L marks translatable labels; log.info goes to the diagnostic buffer.
 function showStatus(args: string) {
   log.info`Status requested: ${args}`;
   print(L`${3} tasks ready`);
 }
+
+// Both aliases receive the same trimmed argument string.
 command("/status", "/st", showStatus);
 panel.Hide();
+
+// Register after setup so callbacks see initialized helpers and frames.
 on PLAYER_LOGIN() {
   panel.Show();
   showStatus("login");

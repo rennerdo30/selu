@@ -7,5 +7,6 @@ __selu_ns["main"] = {}
 __selu_on("PLAYER_LOGIN", function()
   print(greeting)
   increment()
-  print(count())
+  increment()
+  print(string.format("Sample quests completed: %s", count()))
 end)

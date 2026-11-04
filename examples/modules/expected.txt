@@ -1,2 +1,2 @@
-Hello from modules!
-1
+Quest journal: sample route complete
+Sample quests completed: 2

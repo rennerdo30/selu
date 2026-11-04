@@ -1,4 +1,24 @@
+// Queue a short reminder, like waiting for a merchant window to settle.
+// Shows a delayed callback and state shared with that callback.
+// Try: scripts\studio.bat examples\timers; fire PLAYER_LOGIN, then advance 0.2s.
+// Or build with selu build examples/timers and log in to see both messages.
+
+// This is a reminder only: it never sells or deletes an item.
+let reminderPending = false;
+
+function queueReminder() {
+  if (reminderPending) {
+    return;
+  }
+  reminderPending = true;
+  print("Bag check queued; no items will be sold.");
+  // After returns immediately. The captured state changes when the timer fires.
+  C_Timer.After(0.2, () => {
+    reminderPending = false;
+    print("Bag check ready: visit a merchant to review your grey items.");
+  });
+}
+
 on PLAYER_LOGIN() {
-  print("Sale queued");
-  C_Timer.After(0.2, () => { print("Sale ready"); });
+  queueReminder();
 }

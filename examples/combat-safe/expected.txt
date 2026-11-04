@@ -1,2 +1,2 @@
-Hello Player
-Panel hidden or queued
+Travel reminder prepared for adventurer
+Protected panel hide requested; combat may defer it.

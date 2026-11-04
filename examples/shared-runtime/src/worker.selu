@@ -1,1 +1,13 @@
-export function ready() { try { return "ready"; } finally { print("cleanup"); } }
+// A second module. Its try/finally needs the same runtime helpers as main's
+// event handler, which is what makes the shared Selu.lua worth it.
+
+// Report that the worker is ready. `finally` always runs, even when the try
+// block returns early, so this prints "cleanup" before the caller prints
+// the returned "ready".
+export function ready(): string {
+  try {
+    return "ready";
+  } finally {
+    print("cleanup");
+  }
+}

@@ -1,7 +1,15 @@
-function greeting() {
-  return "Hello from Selu!";
+// Welcome the player at login and offer a small adventuring reminder.
+// Shows event registration, functions, interpolation and default parameters.
+// Try: scripts\studio.bat examples\hello, then run the PLAYER_LOGIN event.
+// In game, build with selu build examples/hello and log in with the addon enabled.
+
+// A default keeps callers simple; no game API is needed for this first addon.
+function greeting(playerName: string = "adventurer"): string {
+  return `Welcome, ${playerName}!`;
 }
 
+// PLAYER_LOGIN runs after the character has entered the world.
 on PLAYER_LOGIN() {
   print(greeting());
+  print("Before your next quest: check your bags and repair your gear.");
 }

@@ -299,7 +299,13 @@ fn example_builds_and_runs_in_toc_order() {
     sim.load_addon("Modules", &files).unwrap();
     assert_eq!(sim.prints(), Vec::<String>::new());
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
-    assert_eq!(sim.prints(), ["Hello from modules!", "1"]);
+    assert_eq!(
+        sim.prints(),
+        [
+            "Quest journal: sample route complete",
+            "Sample quests completed: 2",
+        ]
+    );
 }
 
 #[test]

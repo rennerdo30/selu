@@ -1,2 +1,3 @@
-123	Silver Sword
-4
+Trade item: Silver Sword (ID 123)
+No item link found; leave the message unchanged.
+Sample trade message: 4 words

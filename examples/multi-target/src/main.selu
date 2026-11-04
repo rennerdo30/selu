@@ -1,7 +1,19 @@
-on PLAYER_LOGIN() {
+// Announce a session clock when the selected client provides it.
+// Shows a shared retail/Forever build and a guarded capability query.
+// Try: selu build examples/multi-target; install on either configured client.
+// Offline: scripts\studio.bat examples\multi-target, then fire PLAYER_LOGIN.
+
+function reportSessionStart() {
+  // has names a manifest capability, not a string or a client version number.
+  // Shared layout checks availability at runtime before calling the API.
   if (has(GetTime)) {
-    print("Client clock available");
+    print(`Session clock: ${GetTime()} seconds since client startup`);
   } else {
-    print("Client clock unavailable");
+    print("Session started; this client has no supported clock API.");
   }
+}
+
+on PLAYER_LOGIN() {
+  print("Adventure journal ready on this client.");
+  reportSessionStart();
 }

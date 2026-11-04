@@ -1,6 +1,14 @@
+// Count sample quest turn-ins using state owned by another source file.
+// Shows named imports, live exports and dependency-ordered Lua modules.
+// Try: selu build examples/modules, install and log in for the sample tally.
+// Offline: scripts\studio.bat examples\modules, then fire PLAYER_LOGIN.
+
 import { count, increment, greeting } from "./counter";
+
 on PLAYER_LOGIN() {
   print(greeting);
   increment();
-  print(count);
+  increment();
+  // This reads the exported cell after both calls, rather than an imported copy.
+  print(`Sample quests completed: ${count}`);
 }

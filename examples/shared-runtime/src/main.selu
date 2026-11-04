@@ -1,2 +1,14 @@
+// Two modules that both need Selu's runtime helpers: the event dispatcher and
+// the error handling behind try/finally.
+// Shows that the compiler writes those helpers once, into a shared Selu.lua,
+// instead of copying them into every module.
+// Try: selu build examples/shared-runtime, then look at dist/SharedRuntime/:
+// main.lua and worker.lua stay short and both use Selu.lua.
+
 import { ready } from "./worker";
-on PLAYER_LOGIN() { print(ready()); }
+
+// Log in: the worker reports its state. Its `finally` block runs first, so
+// "cleanup" prints before "ready".
+on PLAYER_LOGIN() {
+  print(ready());
+}

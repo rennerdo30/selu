@@ -1,14 +1,29 @@
-function readBalance(): number {
-  const failure = new Error("Balance unavailable");
+// Recover from an unavailable sample repair estimate without interrupting login.
+// Shows typed Error values, a fallback return and cleanup with finally.
+// Try: selu build examples/errors, install and log in; the failure is deliberate.
+// Offline: scripts\studio.bat examples\errors, then fire PLAYER_LOGIN.
+
+let estimateInProgress = false;
+
+function repairEstimate(): number {
+  estimateInProgress = true;
   try {
-    throw failure;
-  } catch (e) {
-    print(e.message);
+    // This deliberate failure stands in for a helper that cannot read its data.
+    // Throw an Error, rather than a string, so catch has a typed message field.
+    throw new Error("Repair estimate unavailable away from a merchant");
+  } catch (failure) {
+    print(failure.message);
+    // Zero means no estimate here, rather than permission to spend money.
     return 0;
   } finally {
-    print("Balance check finished");
+    // Cleanup still runs before the fallback return leaves this function.
+    estimateInProgress = false;
+    print("Repair estimate finished");
   }
 }
+
 on PLAYER_LOGIN() {
-  print(readBalance());
+  const estimatedCopper = repairEstimate();
+  print(`Estimated repair: ${estimatedCopper} copper (sample fallback)`);
+  print(`Estimate running: ${estimateInProgress}`);
 }
