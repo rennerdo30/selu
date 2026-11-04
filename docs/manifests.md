@@ -25,7 +25,7 @@ hold typed function arguments and multiple returns, or typed event payloads.
 `inherits` list. Canonical widget aliases in overlays connect `Frame` to
 `SimpleFrameAPI` and the ScriptRegion groups; `CreateFontString` returns
 `SimpleFontString`, which connects to the documented FontString methods.
-All method signatures and policies come from generated documentation. No checker or lowering behavior changes.
+Native method signatures and policies come from generated documentation; source member signatures are described below. The checker consumes these signatures; sourced iterator metadata also guides generic-loop lowering.
 
 Declarations preserve Blizzard `type` names. Their `attributes` preserve metadata
 keys such as `Nilable`, `Default`, `InnerType`, `KeyType`, `EnumValue`,
@@ -226,6 +226,26 @@ loader expands both forms into the same GlobalEntry list; existing manifests
 and fixtures remain readable. This lossless grouping keeps inherited child
 names below the 40 MB package cap. XML EOF with open elements is an error.
 
+## Release updates
+
+The owner fetches `E:/Development/wow-ui-source` first. Then run
+`cargo run -p selu-manifest-gen -- update` (or `scripts/update-manifests.bat`).
+Optional flavour or branch names select a subset; `--keep-old` retains old builds.
+The command reads existing `origin/*` tracking refs without fetching or checking
+out the source clone. A tip older than 14 days prints a fetch reminder; this is
+an age heuristic, not a claim that the remote has no newer commits.
+It regenerates `.selum` through `encode`, updates this pin table, removes superseded
+builds by default, and prints function/event name additions and removals.
+Run the workspace and proof tests, review the diff, then commit the manifests,
+extraction changes and pin table together. No publication is performed.
+
+Source Lua member declarations now emit qualified function signatures, which
+existing template/mixin resolution consumes. Parameter names and variadic tails
+come from the AST; contiguous EmmyLua parameter/return annotations supply types.
+Unannotated types follow the existing untyped game value policy in lang/api.md;
+unannotated parameters permit omission because Lua bodies may supply defaults.
+A missing return annotation remains untyped rather than claiming a void result.
+This does not type the Lua Mixin/CreateFromMixins helpers for Selu consumption.
 ## Compiled container (package Z)
 
 Generated client manifests are committed only as `.selum`; handmade fixtures stay
@@ -242,8 +262,8 @@ keep the locked encoder versions when reproducing bytes. Schema changes require
 an explicit schema version decision. No extraction behavior changes in package Z.
 
 The existing generator `encode` function remains the single writer entry point.
-Package W should retain that call and change generated filenames to `.selum`.
-After W and Z merge, regenerate the six pinned clients once.
+The update command decodes existing `.selum` files for API/event name deltas.
+Superseded `.selum` files are removed unless `--keep-old` is selected.
 
 Dump for inspection or a textual diff:
 
@@ -265,3 +285,43 @@ Reproduce the short comparison with `cargo run -p selu-manifest --example format
 (and `--release`). It uses a one-field interface increment, a prefix/suffix delta
 compressed with zlib plus 24 bytes of metadata, and one load+parse per file/format.
 The full per-file measurements and gate evidence are in the package Z report.
+
+## Checked engine supplements and source factories (W)
+
+Each flavour overlay adds the tooltip's zero-argument `NumLines` and `ClearLines`
+with call-site and XSD citations at its existing pin. NumLines is numeric from
+Blizzard's comparison. ClearLines has an untyped result because no return
+contract is evidenced. Supplementary signatures are source evidence, not live
+client probes. Review overlay citations when intentionally advancing pins.
+
+The generator's optional fifth generation argument writes an engine-gap inventory
+JSON to a report path, for example `E:/AgentData/reports/selu-W-retail-engine.json`.
+It lists absent widget/method pairs for direct typed globals and lexical literal
+CreateFrame receivers, after native inheritance, templates and overlays. Methods
+with named or anonymous Lua implementations are listed separately as source or
+ambiguous pairs, rather than claimed as missing engine APIs. Dynamic receivers,
+fields, `self`, unresolved aliases and branch loading remain explicit limits.
+Unresolved receiver calls are counted separately. This inventory is not a claim
+that all dynamic widget types have been recovered.
+
+A bounded source analysis follows lexical closures, local mixins, public aliases,
+Mixin/CreateFromMixins and CreateAndInitFromMixin construction, and the pinned
+ProxyUtil helpers' explicit exported method lists. It creates nominal checked
+object signatures for proven factory results, including pools, ScrollBox views
+and DataProviders. Private helpers stay private. Analysis never executes Blizzard
+Lua and does not expose Lua construction helpers to Selu. Unresolved operations,
+recursive limits and dynamic return branches supply no factory proof.
+Parameters and results without sufficient evidence retain the existing untyped
+game-value policy. Pool allocator closures prove base Frame/Texture/FontString
+results; Acquire is nullable because a capacity-limited pool can be exhausted.
+Factory objects and mixins are source metadata, not a TOC-loading guarantee.
+
+`SeluIterator` in return attributes records source-proven Lua iterator yields.
+Direct pairs/ipairs results and consistent forwarding signatures preserve this
+contract. Pool proxy enumerators keep their source allocator element type where
+proven. Selu lowers `for (const [first, second] of pool.EnumerateActive())` directly
+to a Lua generic for, preserving iterator/state/control results. Iterators are a
+distinct internal type, not arrays, maps or scalar unions. Call the enumerator in
+the loop expression: saving one result would lose Lua's state/control values.
+The same rule covers ScrollBox EnumerateFrames calls. No array allocation or
+iterator wrapper is generated.

@@ -211,3 +211,31 @@ fn review_enum_compiler_probe() {
         assert!(!selu_lower::lower(&ast, &m, &checked.types).lua.is_empty());
     }
 }
+
+#[test]
+fn generated_mixin_signature_checks_template_arguments() {
+    let mut m = empty();
+    m.widgets.push(
+        serde_json::from_value(serde_json::json!({"name":"Frame","type":"ScriptObject"})).unwrap(),
+    );
+    let mut lua = selu_manifest_gen::source::Sources::default();
+    lua.parse("mixin.lua", "TestMixin = {};\n---@param value number\n---@return boolean\nfunction TestMixin:SetValue(value) return value > 0 end").unwrap();
+    lua.extend_manifest(&mut m);
+    let mut xml = selu_manifest_gen::xml::Xml::default();
+    xml.parse("test.xml", r#"<Ui><Frame name="Base" virtual="true" mixin="TestMixin"/><Frame name="Panel" inherits="Base"/></Ui>"#).unwrap();
+    xml.extend_manifest(&mut m);
+    let good =
+        selu_syntax::parse("good.selu", "const result: boolean = Panel.SetValue(3);").unwrap();
+    assert!(selu_check::check_program(&good, &m).diagnostics.is_empty());
+    let bad = selu_syntax::parse("bad.selu", "Panel.SetValue(\"bad\");").unwrap();
+    assert!(
+        selu_check::check_program_with_options(
+            &bad,
+            &m,
+            selu_check::CheckOptions { strict_api: true }
+        )
+        .diagnostics
+        .iter()
+        .any(|d| d.code == "SELU0481")
+    );
+}

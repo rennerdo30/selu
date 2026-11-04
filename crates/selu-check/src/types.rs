@@ -95,6 +95,7 @@ pub enum Type {
     ClassObject(String),
     Widget(String, Vec<String>),
     ApiOpaque(String, Vec<Type>),
+    ApiIterator(Vec<Type>),
     Number,
     String,
     Boolean,
@@ -436,6 +437,7 @@ impl fmt::Display for Type {
             | Type::ApiOpaque(n, _) => {
                 write!(f, "{}", n.split('@').next().unwrap_or(n))
             }
+            Type::ApiIterator(_) => write!(f, "API iterator"),
             Type::Unknown => write!(f, "unknown"),
             Type::Named(n, _) => write!(f, "{n}"),
             Type::Number => write!(f, "number"),

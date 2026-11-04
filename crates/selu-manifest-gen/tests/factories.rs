@@ -1,0 +1,268 @@
+use selu_manifest::{Manifest, load_manifest};
+fn retail() -> Manifest {
+    load_manifest(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../manifests/retail/12.1.5.70391.selum"),
+    )
+    .unwrap()
+}
+fn check(m: &Manifest, src: &str) -> selu_check::Checked {
+    let p = selu_syntax::parse("factory.selu", src).unwrap();
+    selu_check::check_program_with_options(&p, m, selu_check::CheckOptions { strict_api: true })
+}
+#[test]
+fn toolkit_pool_and_scrollbox_shapes() {
+    let m = retail();
+    for name in [
+        "CreateObjectPool",
+        "CreateFramePool",
+        "CreateTexturePool",
+        "CreateFontStringPool",
+        "CreateDataProvider",
+        "CreateScrollBoxListLinearView",
+    ] {
+        assert!(
+            m.function(name).unwrap().signature.is_some(),
+            "{name} remains untyped"
+        );
+    }
+    // DialogKeys.lua:1066 enumerates a frame pool; :239 enumerates a ScrollBox.
+    let src = r#"
+const create = CreateFramePool;
+const pool = create("Frame", UIParent);
+for (const [first, second] of pool.EnumerateActive()) { const row: Frame = first; row.Hide(); }
+const [frame, isNew] = pool.Acquire();
+if (frame != null) { frame.Hide(); pool.Release(frame); }
+pool.ReleaseAll();
+const view = CreateScrollBoxListLinearView();
+for (const [index, frame] of view.EnumerateFrames()) { const i: number = index; }
+const box = CreateFrame("Frame", null, UIParent, "WowScrollBoxList");
+for (const [first, second] of box.EnumerateFrames()) { }
+const provider = CreateDataProvider(); provider.Insert(42); provider.GetSize();
+GameTooltip.ClearLines(); const count: number = GameTooltip.NumLines();
+"#;
+    let p = selu_syntax::parse("toolkit.selu", src).unwrap();
+    let c = selu_check::check_program_with_options(
+        &p,
+        &m,
+        selu_check::CheckOptions { strict_api: true },
+    );
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    let lua = selu_lower::lower(&p, &m, &c.types).lua;
+    assert!(lua.contains("in pool:EnumerateActive() do"), "{lua}");
+    assert!(lua.contains("in box:EnumerateFrames() do"), "{lua}");
+    assert!(!lua.contains("pairs(pool:EnumerateActive()"));
+    assert!(
+        check(
+            &m,
+            "const p = CreateFramePool(\"Frame\", UIParent); p.Release(42);"
+        )
+        .has_errors()
+    );
+    assert!(check(&m, "GameTooltip.NumLines(42);").has_errors());
+    assert!(check(&m, "GameTooltip.ClearLines(42);").has_errors());
+    assert!(
+        check(
+            &m,
+            "const p = CreateFramePool(\"Frame\", UIParent); p.Undeclared();"
+        )
+        .has_errors()
+    );
+    assert!(
+        check(
+            &m,
+            "const p = CreateFramePool(\"Frame\"); const f: Frame = p.EnumerateActive();"
+        )
+        .has_errors()
+    );
+    // Saving one value would lose Lua's iterator state/control values.
+    assert!(check(&m,"const p = CreateFramePool(\"Frame\", UIParent); const it = p.EnumerateActive(); for (const x of it) {}").has_errors());
+}
+#[test]
+fn region_factories_return_checked_objects() {
+    let m = retail();
+    for (factory, method) in [
+        ("CreateTexturePool", "SetTexture"),
+        ("CreateFontStringPool", "SetText"),
+        ("CreateMaskTexturePool", "SetTexture"),
+    ] {
+        let src = format!(
+            "const p = {factory}(UIParent); const [v, fresh] = p.Acquire(); if (v != null) {{ v.{method}(\"test\"); p.Release(v); }}"
+        );
+        let c = check(&m, &src);
+        assert!(!c.has_errors(), "{factory}: {:?}", c.diagnostics);
+        assert!(
+            check(
+                &m,
+                &format!("const p = {factory}(UIParent); p.Release(42);")
+            )
+            .has_errors()
+        );
+    }
+    let c = check(
+        &m,
+        "const p = CreateObjectPool(() => { return {}; }); const [item, fresh] = p.Acquire(); p.Release(item); p.EnumerateActive();",
+    );
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+}
+#[test]
+fn scoped_aliases_proxy_surface_and_dynamic_results() {
+    let src = r#"
+local Mix = CreateFromMixins;
+local Private = {};
+function Private:Acquire() end
+function Private:Hidden() end
+local Names = {"Acquire"};
+local Proxy = ProxyUtil.CreateProxyMixin(nil, Private, Names);
+local function Build() local p = Mix(Private); local proxy = ProxyUtil.CreateProxy(p, Proxy); return p; end
+function CreateScoped() return Build():ToProxy(); end
+-- A leading comment must not become part of the alias token.
+CreateAlias = CreateScoped;
+do local CreateAlias = function() return {} end end
+function CreateCycle() return CreateCycle(); end
+function CreateDynamic() if flag then return Mix(Private); else return {}; end end
+function CreateReassigned() local result = Mix(Private); if flag then result = {}; end; return result; end
+"#;
+    let mut m:Manifest=serde_json::from_value(serde_json::json!({"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1})).unwrap();
+    let mut s = selu_manifest_gen::source::Sources::default();
+    s.parse("scoped.lua", src).unwrap();
+    s.extend_manifest(&mut m);
+    selu_manifest_gen::factory::extend(&mut m, &[("scoped.lua".into(), src.into())]);
+    for name in ["CreateScoped", "CreateAlias"] {
+        let f = m.function(name).unwrap();
+        let ty = f.signature.as_ref().unwrap().returns[0]
+            .ty
+            .as_ref()
+            .unwrap();
+        let w = m.widgets.iter().find(|w| &w.name == ty).unwrap();
+        assert!(w.methods.iter().any(|m| m.name == "Acquire"));
+        assert!(!w.methods.iter().any(|m| m.name == "Hidden"));
+    }
+    assert!(m.function("CreateCycle").unwrap().signature.is_none());
+    assert!(m.function("CreateDynamic").unwrap().signature.is_none());
+    assert!(m.function("CreateReassigned").unwrap().signature.is_none());
+}
+
+#[test]
+fn iterator_lowering_preserves_state_and_control_values() {
+    let m = retail();
+    let src = r#"const pool = CreateFramePool("Frame"); let total = 0; for (const [frame, active] of pool.EnumerateActive()) { frame.Hide(); total += 1; } const view = CreateScrollBoxListLinearView(); for (const [index, frame] of view.EnumerateFrames()) { total += index; } print(total);"#;
+    let p = selu_syntax::parse("iterator.selu", src).unwrap();
+    let c = check(&m, src);
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    let generated = selu_lower::lower(&p, &m, &c.types).lua;
+    let lua = mlua::Lua::new();
+    lua.set_hook(
+        mlua::HookTriggers::new().every_nth_instruction(100_000),
+        |_, _| Err(mlua::Error::RuntimeError("test instruction limit".into())),
+    );
+    lua.load(r#"
+function InCombatLockdown() return false end
+function CreateFrame() return {RegisterEvent=function()end, UnregisterEvent=function()end, SetScript=function()end} end
+local a, b = {Hide=function()end}, {Hide=function()end}
+function CreateFramePool() return {EnumerateActive=function() return pairs({[a]=true,[b]=true}) end} end
+function CreateScrollBoxListLinearView() return {EnumerateFrames=function() return ipairs({a,b}) end} end
+function print(value) result = value end
+"#).exec().unwrap();
+    lua.load(&generated).exec().unwrap();
+    assert_eq!(lua.globals().get::<i32>("result").unwrap(), 5);
+    let broken = generated.replace(
+        "in pool:EnumerateActive() do",
+        "in (pool:EnumerateActive()) do",
+    );
+    assert_ne!(broken, generated);
+    assert!(
+        lua.load(&broken).exec().is_err(),
+        "truncating the triple must fail"
+    );
+}
+
+#[test]
+fn engine_inventory_respects_shadowing_and_reassignment() {
+    let mut m:Manifest=serde_json::from_value(serde_json::json!({"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1,"widgets":[{"name":"Frame","type":"ScriptObject"},{"name":"GameTooltip","type":"ScriptObject"}],"globals":[{"name":"GameTooltip","type":"GameTooltip","evidence":"source"}]})).unwrap();
+    let mut source = selu_manifest_gen::source::Sources::default();
+    source.parse("calls.lua",r#"local f = CreateFrame("Frame"); f:Missing(); f = Other(); f:NotProven(); function Probe(GameTooltip) GameTooltip:Shadowed(); end; GameTooltip:ClearLines();"#).unwrap();
+    let report =
+        selu_manifest_gen::coverage::inventory(&m, &source.widget_calls, &source.source_methods);
+    assert_eq!(report["remainingEnginePairs"], 2);
+    assert!(report["widgets"]["Frame"].get("NotProven").is_none());
+    assert!(report["widgets"]["GameTooltip"].get("Shadowed").is_none());
+    m.widgets[1].methods.push(
+        serde_json::from_value(serde_json::json!({"name":"ClearLines","type":"Function"})).unwrap(),
+    );
+    assert_eq!(
+        selu_manifest_gen::coverage::inventory(&m, &source.widget_calls, &source.source_methods)["remainingEnginePairs"],
+        1
+    );
+}
+
+#[test]
+fn reset_callback_does_not_determine_allocator_type() {
+    let source = r#"
+local Private = {};
+function Private:Init(createFunc, resetFunc) self.createFunc = createFunc; self.resetFunc = resetFunc; end
+function Private:CallCreate() return self.createFunc(); end
+function Private:Acquire() return self:CallCreate(), true; end
+function Private:Release(object) end
+local function Reset() return CreateFrame("Frame"); end
+function CreateUnknown(createFunc) local pool=CreateFromMixins(Private); pool:Init(createFunc,Reset); return pool; end
+local function Choice() local create = flag and OtherFactory or CreateFrame; return create(); end
+function CreateUnknownChoice() local pool=CreateFromMixins(Private); pool:Init(Choice,Reset); return pool; end
+local function FrameChoice() local create = flag and CreateForbiddenFrame or CreateFrame; return create(); end
+function CreateKnownChoice() local pool=CreateFromMixins(Private); pool:Init(FrameChoice,Reset); return pool; end
+function CreateKnown() local function Allocate() return CreateFrame("Frame"); end; local pool=CreateFromMixins(Private); pool:Init(Allocate,Reset); return pool; end
+"#;
+    let mut m:Manifest=serde_json::from_value(serde_json::json!({"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1})).unwrap();
+    let mut s = selu_manifest_gen::source::Sources::default();
+    s.parse("callbacks.lua", source).unwrap();
+    s.extend_manifest(&mut m);
+    selu_manifest_gen::factory::extend(&mut m, &[("callbacks.lua".into(), source.into())]);
+    let unknown = m
+        .widgets
+        .iter()
+        .find(|w| w.name == "SourceObject_CreateUnknown")
+        .unwrap();
+    assert_ne!(
+        unknown
+            .methods
+            .iter()
+            .find(|m| m.name == "Release")
+            .unwrap()
+            .arguments[0]
+            .ty
+            .as_deref(),
+        Some("Frame")
+    );
+    let known = m
+        .widgets
+        .iter()
+        .find(|w| w.name == "SourceObject_CreateKnown")
+        .unwrap();
+    assert_eq!(
+        known
+            .methods
+            .iter()
+            .find(|m| m.name == "Release")
+            .unwrap()
+            .arguments[0]
+            .ty
+            .as_deref(),
+        Some("Frame")
+    );
+    for (name, expected) in [
+        ("SourceObject_CreateUnknownChoice", None),
+        ("SourceObject_CreateKnownChoice", Some("Frame")),
+    ] {
+        let w = m.widgets.iter().find(|w| w.name == name).unwrap();
+        let ty = w
+            .methods
+            .iter()
+            .find(|d| d.name == "Release")
+            .unwrap()
+            .arguments[0]
+            .ty
+            .as_deref()
+            .filter(|s| !s.is_empty());
+        assert_eq!(ty, expected, "{name}");
+    }
+}

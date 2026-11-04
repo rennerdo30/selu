@@ -50,8 +50,8 @@ Widget declarations, class names and type aliases retain their usual precedence.
 
 The templated-frames example runs offline using declared Texture methods for
 its background and UIPanelButtonTemplate for the button. SetBackdrop and
-SetBackdropColor are source-only mixin names in the shipped manifests and cannot
-be called from checked Selu. The simulator's Lua fixtures still model BackdropTemplate
+SetBackdropColor have source signatures in the shipped manifests; unannotated
+parameter and result types follow the untyped game value policy in api.md. The simulator's Lua fixtures still model BackdropTemplate
 SetBackdrop/GetBackdrop and SetBackdropColor/GetBackdropColor as stored data (getters return no colour without a backdrop, clearing removes
 colour, and GetBackdrop returns a deep copy);
 UIPanelButtonTemplate uses the existing button text and geometry model. XML
@@ -157,3 +157,22 @@ Missing, incompatible or wrong-target snapshots fail without replacing that VM.
 The new VM receives the complete validated registry before any addon executes,
 and uses that same checked set throughout loading. Rebuilds publish snapshots
 only after all target compilations succeed.
+
+Pool and view factories carry generated checked object types. For example:
+
+```selu
+const pool = CreateFramePool("Frame", UIParent);
+for (const [frame, active] of pool.EnumerateActive()) {
+  frame.Hide();
+}
+const [frame, fresh] = pool.Acquire();
+if (frame != null) { pool.Release(frame); }
+```
+
+Acquire may return null at capacity. Texture and font-string pool allocators
+retain their respective base widget types. ObjectPool's arbitrary element data
+and source results without a determined type use the existing API untyped rule.
+ScrollBox views and DataProviders also retain their generated method surfaces.
+Call an enumerator directly in `for ... of` so its Lua iterator triple survives;
+saving just its first result and iterating it is rejected. NumLines and ClearLines
+are supplied by pin-cited engine overlays; NumLines returns a number.

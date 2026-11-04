@@ -28,11 +28,15 @@ struct Scan {
     definitions: Vec<(String, usize, Vec<String>, bool)>,
     calls: Vec<(String, usize)>,
     frame_calls: Vec<FunctionCall>,
+    method_calls: Vec<FunctionCall>,
+    initializers: Vec<(String, usize, Expression)>,
     numeric_loops: Vec<NumericFor>,
     assignments: Vec<(String, usize)>,
     function_bodies: Vec<(usize, usize)>,
     tables: Vec<(String, usize, TableConstructor)>,
     members: Vec<(String, String, usize)>,
+    implemented_names: BTreeSet<String>,
+    signatures: Vec<(String, usize, FunctionBody)>,
     scalars: Vec<(String, usize, Expression)>,
     mixins: Vec<(String, usize, Vec<String>, String)>,
 }
@@ -71,6 +75,9 @@ impl Visitor for Scan {
         self.blocks.pop();
     }
     fn visit_local_assignment(&mut self, n: &LocalAssignment) {
+        for (t, e) in n.names().iter().zip(n.expressions().iter()) {
+            self.initializers.push((name(t), end(n), e.clone()));
+        }
         let to = self.blocks.last().unwrap().1;
         for t in n.names() {
             self.bind(name(t), end(n), to);
@@ -93,14 +100,27 @@ impl Visitor for Scan {
         self.depth -= 1;
     }
     fn visit_function_declaration(&mut self, n: &FunctionDeclaration) {
+        if let Some(m) = n.name().method_name() {
+            self.implemented_names.insert(name(m));
+        } else if n.name().names().len() > 1 {
+            self.implemented_names
+                .insert(name(n.name().names().iter().last().unwrap()));
+        }
         if self.depth == 0 {
             let names: Vec<_> = n.name().names().iter().map(name).collect();
             if let Some(method) = n.name().method_name() {
                 if names.len() == 1 {
+                    self.signatures.push((
+                        format!("{}.{}", names[0], name(method)),
+                        start(n),
+                        n.body().clone(),
+                    ));
                     self.members
                         .push((names[0].clone(), name(method), start(n)));
                 }
             } else if names.len() == 2 {
+                self.signatures
+                    .push((names.join("."), start(n), n.body().clone()));
                 self.members
                     .push((names[0].clone(), names[1].clone(), start(n)));
             }
@@ -130,6 +150,19 @@ impl Visitor for Scan {
         }
     }
     fn visit_assignment(&mut self, n: &Assignment) {
+        for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
+            if matches!(e, Expression::Function(_))
+                && let Var::Expression(v) = v
+                && let Some(Suffix::Index(Index::Dot { name: t, .. })) = v.suffixes().last()
+            {
+                self.implemented_names.insert(name(t));
+            }
+        }
+        for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
+            if let Var::Name(t) = v {
+                self.initializers.push((name(t), end(n), e.clone()));
+            }
+        }
         for v in n.variables() {
             if let Var::Name(t) = v {
                 self.assignments.push((name(t), start(n)));
@@ -177,6 +210,9 @@ impl Visitor for Scan {
         }
     }
     fn visit_function_call(&mut self, n: &FunctionCall) {
+        if matches!(n.suffixes().next(), Some(Suffix::Call(Call::MethodCall(_)))) {
+            self.method_calls.push(n.clone());
+        }
         if matches!(n.prefix(), Prefix::Name(t) if name(t) == "CreateFrame") {
             self.frame_calls.push(n.clone());
         }
@@ -214,6 +250,9 @@ impl Visitor for Scan {
 }
 #[derive(Default)]
 pub struct Sources {
+    pub widget_calls: Vec<crate::coverage::WidgetCall>,
+    pub source_methods: BTreeSet<String>,
+    signatures: BTreeMap<String, selu_manifest::Declaration>,
     runtime_frames: Vec<(String, String, String, String, String)>,
     definitions: BTreeMap<String, (String, Vec<String>)>,
     all_definitions: BTreeSet<String>,
@@ -227,6 +266,55 @@ impl Sources {
             .map_err(|e| format!("{file}: Lua parse error: {e:?}"))?;
         let mut scan = Scan::default();
         scan.visit_ast(&ast);
+        self.source_methods
+            .extend(scan.implemented_names.iter().cloned());
+        for c in &scan.method_calls {
+            let (Prefix::Name(root), Some(Suffix::Call(Call::MethodCall(method)))) =
+                (c.prefix(), c.suffixes().next())
+            else {
+                continue;
+            };
+            let root = name(root);
+            let pos = start(c);
+            let initializer = scan
+                .initializers
+                .iter()
+                .filter(|(n, p, _)| {
+                    n == &root && *p <= pos && scan.binding(n, *p) == scan.binding(n, pos)
+                })
+                .max_by_key(|(_, p, _)| *p);
+            let mut ty = None;
+            let mut templates = vec![];
+            if let Some((_, p, Expression::FunctionCall(call))) = initializer
+                && matches!(call.prefix(),Prefix::Name(t) if name(t)=="CreateFrame" && !scan.local("CreateFrame",*p))
+                && let Some(Suffix::Call(Call::AnonymousCall(args))) = call.suffixes().next()
+                && let FunctionArgs::Parentheses { arguments, .. } = args.as_ref()
+            {
+                ty = arguments
+                    .iter()
+                    .next()
+                    .and_then(literal)
+                    .and_then(|v| v.as_str().map(str::to_owned));
+                templates = arguments
+                    .iter()
+                    .nth(3)
+                    .and_then(literal)
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(|s| s.split(',').map(|s| s.trim().to_owned()).collect())
+                    })
+                    .unwrap_or_default();
+            }
+            self.widget_calls.push(crate::coverage::WidgetCall {
+                receiver: root.clone(),
+                local: scan.local(&root, pos),
+                ty,
+                templates,
+                method: name(method.name()),
+                file: file.into(),
+                line: c.start_position().map_or(0, |p| p.line()),
+            });
+        }
         for call in &scan.frame_calls {
             if scan.local("CreateFrame", start(call)) {
                 continue;
@@ -349,6 +437,15 @@ impl Sources {
                         }
                     }
                 }
+            }
+        }
+        for (qualified, pos, body) in &scan.signatures {
+            let root = qualified.split('.').next().unwrap();
+            if !scan.local(root, *pos) {
+                let signature = source_signature(qualified, body, &source[..*pos], file);
+                self.signatures
+                    .entry(qualified.clone())
+                    .or_insert(signature);
             }
         }
         for (root, member, pos) in &scan.members {
@@ -494,6 +591,18 @@ impl Sources {
                 m.data_globals.push(entry);
             }
         }
+        for (name, signature) in self.signatures {
+            if !m.functions.iter().any(|f| f.name == name) {
+                let mut f = entry(
+                    name,
+                    String::new(),
+                    "defined",
+                    signature.arguments.iter().map(|a| a.name.clone()).collect(),
+                );
+                f.signature = Some(signature);
+                m.functions.push(f);
+            }
+        }
         let mut known: BTreeSet<String> = m.functions.iter().map(|f| f.name.clone()).collect();
         let mut counts = (0, 0);
         for (n, (file, args)) in self.definitions {
@@ -511,7 +620,112 @@ impl Sources {
         counts
     }
 }
-fn entry(name: String, file: String, kind: &str, params: Vec<String>) -> FunctionEntry {
+#[derive(Default)]
+struct ReturnArity {
+    depth: usize,
+    max: usize,
+}
+impl Visitor for ReturnArity {
+    fn visit_function_body(&mut self, _: &FunctionBody) {
+        self.depth += 1;
+    }
+    fn visit_function_body_end(&mut self, _: &FunctionBody) {
+        self.depth -= 1;
+    }
+    fn visit_return(&mut self, r: &Return) {
+        if self.depth == 1 {
+            self.max = self.max.max(r.returns().len());
+        }
+    }
+}
+// Source-only signatures preserve arity and primitive EmmyLua annotations.
+// Unspecified types use the checker's existing untyped-game-value rule.
+pub(crate) fn source_signature(
+    qualified: &str,
+    body: &FunctionBody,
+    prefix: &str,
+    file: &str,
+) -> selu_manifest::Declaration {
+    let mut d = crate::xml::declaration(qualified.rsplit('.').next().unwrap(), "Function", file);
+    let mut annotations = BTreeMap::new();
+    let mut returns = Vec::new();
+    for line in prefix
+        .lines()
+        .rev()
+        .skip_while(|line| line.trim().is_empty())
+    {
+        let line = line.trim();
+        if !line.starts_with("--") {
+            break;
+        }
+        if let Some(param) = line.strip_prefix("---@param ") {
+            let mut words = param.split_whitespace();
+            if let (Some(n), Some(t)) = (words.next(), words.next()) {
+                annotations.insert(n.to_owned(), t.to_owned());
+            }
+        }
+        if let Some(ret) = line.strip_prefix("---@return ")
+            && let Some(t) = ret.split_whitespace().next()
+        {
+            returns.push(t.to_owned());
+        }
+    }
+    for param in body.parameters() {
+        let n = match param {
+            Parameter::Name(t) => name(t),
+            _ => "...".into(),
+        };
+        let mut a = crate::xml::declaration(
+            &n,
+            annotations.get(&n).map(String::as_str).unwrap_or(""),
+            "",
+        );
+        a.attributes.clear();
+        if a.ty.as_deref() == Some("") {
+            a.attributes.insert("Nilable".into(), true.into());
+        }
+        d.arguments.push(a);
+    }
+    if returns.is_empty() {
+        let mut arity = ReturnArity::default();
+        full_moon::visitors::Visit::visit(body, &mut arity);
+        returns.resize(arity.max.max(1), String::new());
+    }
+    returns.reverse();
+    for ty in returns {
+        let mut r = crate::xml::declaration("result", &ty, "");
+        r.attributes.clear();
+        d.returns.push(r);
+    }
+    if let Some(LastStmt::Return(r)) = body.block().last_stmt()
+        && r.returns().len() == 1
+        && let Some(Expression::FunctionCall(call)) = r.returns().iter().next()
+    {
+        let builtin = match call.prefix() {
+            Prefix::Name(t) => name(t),
+            _ => String::new(),
+        };
+        if ["pairs", "ipairs"].contains(&builtin.as_str()) {
+            let types = if builtin == "ipairs" {
+                vec!["number", ""]
+            } else {
+                vec!["", ""]
+            };
+            let mut ret = crate::xml::declaration("result", "Function", "");
+            ret.attributes.clear();
+            ret.attributes
+                .insert("SeluIterator".into(), serde_json::json!(types));
+            d.returns = vec![ret];
+        } else if let Some(Suffix::Call(Call::MethodCall(m))) = call.suffixes().last()
+            && name(m.name()) == d.name
+        {
+            d.attributes
+                .insert("SeluIteratorForward".into(), true.into());
+        }
+    }
+    d
+}
+pub(crate) fn entry(name: String, file: String, kind: &str, params: Vec<String>) -> FunctionEntry {
     FunctionEntry {
         name,
         params,
@@ -653,6 +867,25 @@ impl Scalar {
 mod tests {
     use super::*;
     #[test]
+    fn member_signature_preserves_annotations_and_shadowing() {
+        let mut sources = Sources::default();
+        sources.parse("mixin.lua", "WidgetMixin = {};\n---@param value number\n---@return boolean\nfunction WidgetMixin:SetValue(value) return value > 0 end\ndo local Hidden = {}; function Hidden:Nope() end end").unwrap();
+        let mut m: Manifest = serde_json::from_str(
+            r#"{"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1}"#,
+        )
+        .unwrap();
+        sources.extend_manifest(&mut m);
+        let d = m
+            .function("WidgetMixin.SetValue")
+            .unwrap()
+            .signature
+            .as_ref()
+            .unwrap();
+        assert_eq!(d.arguments[0].ty.as_deref(), Some("number"));
+        assert_eq!(d.returns[0].ty.as_deref(), Some("boolean"));
+        assert!(m.function("Hidden.Nope").is_none());
+    }
+    #[test]
     fn lexical_globals_and_first_provenance() {
         let mut s = Sources::default();
         s.parse(
@@ -729,7 +962,7 @@ mod tests {
     }
 }
 
-fn literal(e: &Expression) -> Option<serde_json::Value> {
+pub(crate) fn literal(e: &Expression) -> Option<serde_json::Value> {
     match e {
         Expression::Number(t) => mlua::Lua::new()
             .load(format!("return {}", t.token()))
