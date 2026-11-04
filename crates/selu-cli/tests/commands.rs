@@ -53,24 +53,21 @@ fn selu_test_discovers_files_and_says_the_runner_is_not_there_yet() {
 fn selu_debug_builds_then_hands_over_to_studio() {
     let dir = hello_project("debug");
     let manifests = repo().join("manifests");
-    let (code, err) = selu(&[
-        "debug",
-        dir.to_str().unwrap(),
-        "--manifest-dir",
-        manifests.to_str().unwrap(),
-    ]);
+    // Point at a missing Studio so the test never opens a window.
+    let out = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .args([
+            "debug",
+            dir.to_str().unwrap(),
+            "--manifest-dir",
+            manifests.to_str().unwrap(),
+        ])
+        .env("SELU_STUDIO", dir.join("no-such-studio.exe"))
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
     let built = dir.join("dist/Hello/Hello.toc").is_file();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(built, "selu debug builds first: {err}");
-    // `selu-studio` sits beside `selu` when the whole workspace is built;
-    // either way the message says what happens next.
-    if err.contains("selu-studio was not found") {
-        assert_eq!(code, Some(1), "{err}");
-    } else {
-        assert_eq!(code, Some(2), "{err}");
-        assert!(
-            err.contains("Studio window is not implemented yet"),
-            "{err}"
-        );
-    }
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("selu-studio was not found"), "{err}");
 }

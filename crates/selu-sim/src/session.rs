@@ -157,6 +157,7 @@ impl Session {
     pub fn snapshot(&self) -> SimResult<Snapshot> {
         let model = LuaTableModel {
             generation: self.generation.0 as u32,
+            ui_size: self.config.ui_size,
         };
         snapshot::take(
             self.sim.lua(),

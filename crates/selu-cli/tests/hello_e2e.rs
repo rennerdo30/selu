@@ -75,15 +75,13 @@ fn hello_builds_runs_and_prints_on_login() {
 #[test]
 fn stubs_exit_nonzero_with_a_clear_message() {
     // `test` and `debug` are wired now (tests/commands.rs).
-    for cmd in ["probe"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_selu"))
-            .arg(cmd)
-            .output()
-            .unwrap();
-        assert!(!output.status.success(), "{cmd} must exit non-zero");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("not implemented yet"), "{cmd}: {stderr}");
-    }
+    let output = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("probe")
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "probe must exit non-zero");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not implemented yet"), "probe: {stderr}");
 }
 
 #[test]

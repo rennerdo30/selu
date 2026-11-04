@@ -111,7 +111,7 @@ impl Sim {
                 "CreateFrame",
                 lua.create_function(
                     move |lua,
-                          (kind, _name, parent, templates): (
+                          (kind, name, parent, templates): (
                         Option<String>,
                         Option<String>,
                         Option<Table>,
@@ -123,6 +123,11 @@ impl Sim {
                         frame.set("__scripts", lua.create_table()?)?;
                         frame.set("__shown", true)?;
                         frame.set("__parent", parent)?;
+                        // Named frames become globals, as in the client.
+                        if let Some(name) = &name {
+                            frame.set("__name", name.as_str())?;
+                            lua.globals().raw_set(name.as_str(), frame.clone())?;
+                        }
                         regions::attach(lua, &frame)?;
                         regions::templates(lua, &frame, templates.as_deref())?;
                         frame.set(
@@ -360,7 +365,10 @@ impl Sim {
     /// The region tree through the core's snapshot view (generation 0; a
     /// [`Session`] stamps its own).
     pub fn snapshot(&self) -> SimResult<Snapshot> {
-        let model = frames::LuaTableModel { generation: 0 };
+        let model = frames::LuaTableModel {
+            generation: 0,
+            ui_size: snapshot::DEFAULT_UI_SIZE,
+        };
         snapshot::take(
             &self.lua,
             &self.ctx,
