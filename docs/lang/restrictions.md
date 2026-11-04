@@ -111,3 +111,12 @@ The simulator exposes set_combat(bool), firing transition events only when the
 state changes, InCombatLockdown, canaccessvalue, issecretvalue and opaque secret
 sentinels through set_secret_global/secret_value. It models accessibility for
 these sentinels, not the client's taint engine or all forbidden secret operations.
+
+One secret function has no result shape to guard: C_CombatText.GetCurrentEventInfo.
+In both manifests/retail/12.1.5.70391.json and
+manifests/forever/1.60.1.70532.json its signature has no return declarations.
+The corresponding pinned refs above agree: Interface/AddOns/
+Blizzard_APIDocumentationGenerated/CombatTextDocumentation.lua:21-27 records
+SecretReturns = true with an empty Returns table. No result count or types are
+invented, and no guard is emitted for that function. This gap accounts for one
+flagged global in each flavour's metadata count.
