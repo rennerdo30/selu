@@ -24,8 +24,9 @@ cargo test --manifest-path proof/junksell/tests/Cargo.toml gap_reproductions -- 
 ```
 
 The isolated Rust test crate is under proof/ to respect ownership. Root cargo test
-does not discover it. Its merchant test builds the CLI, then builds the retail
-proof with a bounded invocation before reading generated Lua.
+does not discover it. Its merchant test compiles the proof source in-process
+using the compiler crates and the retail manifest, writing ignored dist output.
+It needs no prior CLI build and starts no child processes.
 JUNKSELL_BREAK changes only an in-memory copy of that Lua, replacing the count
 increment with zero. The observed assertion failure included
 `Sold 0 junk item(s) for 20c.`. Restored tests pass. The test stubs merchant,

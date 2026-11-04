@@ -6,10 +6,13 @@
 //! Timers use exact positive deadlines plus a persistent 60 Hz OnUpdate grid.
 //! Zero/negative delays wait 1/60 second; advance_time(0) runs nothing.
 //! Timers precede OnUpdate on ties and callback errors go to `Sim::logs`.
-//! The client API documentation in wow-ui-source at commit 17ed2c3 confirms
-//! callback arguments. Table handles, explicit-only IsCancelled state, positive
-//! integer iterations and this hybrid scheduling model are simulator assumptions;
-//! native timing internals are not provided by that source.
+//! Historical ticker semantics follow wow-ui-source
+//! `1.13.2:SharedXML/C_TimerAugment.lua`: callback errors stop tickers and
+//! iteration counts may be zero, negative or fractional. Natural-completion
+//! IsCancelled and the hybrid frame/deadline model remain unverified against
+//! current native clients. Advances have a 100,000 step/callback budget;
+//! exhaustion is logged, leaving the clock at its last dispatch point.
+//! Endpoint comparisons allow an absolute 1 ns rounding tolerance.
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
 use std::collections::HashSet;
@@ -306,7 +309,7 @@ impl Sim {
         *self.clock.lock().unwrap()
     }
     pub fn advance_time(&self, seconds: f64) {
-        timers::advance(&self.lua, &self.clock, seconds);
+        timers::advance(&self.lua, &self.clock, &self.logs, seconds);
     }
     pub fn lua(&self) -> &Lua {
         &self.lua

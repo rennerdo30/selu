@@ -104,45 +104,28 @@ fn gap_reproductions() {
     }
 }
 
-// Build with the real CLI from a clean checkout. dist/ is ignored.
+// Build the proof source in-process. No child processes or prior CLI build.
 #[cfg(test)]
 fn build_proof() {
-    use std::process::Command;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let mut build = Command::new("cargo");
-    build.current_dir(&root).args(["build", "-p", "selu-cli"]);
-    wait_bounded(build);
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(std::path::PathBuf::from)
-        .map(|p| if p.is_absolute() { p } else { root.join(p) })
-        .unwrap_or_else(|| root.join("target"));
-    let mut cli = Command::new(
-        target
-            .join("debug")
-            .join(format!("selu{}", std::env::consts::EXE_SUFFIX)),
-    );
-    cli.current_dir(&root)
-        .args(["build", "proof/junksell", "--target", "retail"]);
-    wait_bounded(cli);
-}
-
-#[cfg(test)]
-fn wait_bounded(mut command: std::process::Command) {
-    use std::time::{Duration, Instant};
-    let mut child = command.spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(180);
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(status.success(), "proof build failed");
-            break;
-        }
-        if Instant::now() >= deadline {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            panic!("proof build timed out (PID {})", child.id());
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    let project = root.join("proof/junksell");
+    let source = std::fs::read_to_string(project.join("src/main.selu")).unwrap();
+    // This proof is one source module; fail if its structure changes.
+    assert_eq!(std::fs::read_dir(project.join("src")).unwrap().count(), 1);
+    let manifests = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
+    let manifest = selu_manifest::resolve(
+        &selu_manifest::TargetSpec::parse("retail").unwrap(),
+        &manifests,
+    )
+    .unwrap();
+    let program = selu_syntax::parse("main.selu", &source).unwrap();
+    let checked = selu_check::check_program(&program, manifest);
+    assert!(!checked.has_errors(), "{:?}", checked.diagnostics);
+    let compiled =
+        selu_lower::lower_with_addon(&program, manifest, &checked.types, "JunkSellProof");
+    let output = project.join("dist/JunkSellProof");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("main.lua"), compiled.lua).unwrap();
 }
 
 #[test]
@@ -153,4 +136,9 @@ fn gap_7_simulator_timers() {
     assert!(sim.prints().is_empty());
     sim.advance_time(0.2);
     assert_eq!(sim.prints(), ["sold"]);
+}
+
+#[test]
+fn review_build_has_no_processes() {
+    assert!(!include_str!("lib.rs").contains(&["std::process", "::Command"].concat()));
 }

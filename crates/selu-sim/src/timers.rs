@@ -3,14 +3,17 @@
 //! advance_time(0) does no work. Partial advances preserve the frame grid.
 //! Timers precede OnUpdate on ties; equal deadlines retain insertion order.
 //! Nested due timers run in the same advance. Tickers reschedule from their
-//! previous deadline, so advancing a large interval does not lose ticks.
+//! origin plus tick index times period, so advancing a large interval does not lose ticks.
 //!
-//! Checked read-only wow-ui-source HEAD UITimerDocumentation.lua: After has
-//! no callback arguments; NewTimer/NewTicker supply the callback object.
-//! Native scheduling and cancellation internals are not in that document.
-//! Assumptions: table handles, explicit cancellation only in IsCancelled,
-//! finished Cancel harmless, nonpositive delay clamped to one frame, positive
-//! integer iterations required. This is not a renderer or native frame model.
+//! Client evidence: wow-ui-source `1.13.2:SharedXML/C_TimerAugment.lua`:
+//! callback errors stop tickers; counts decrement after the first call, so
+//! 0/negative counts run once and positive fractions run ceil(count) times.
+//! Current native natural-completion IsCancelled and hybrid frame/deadline
+//! scheduling remain unverified. Explicit cancellation is idempotent.
+//! Endpoints use an absolute 1 ns tolerance. Each advance permits at most
+//! 100,000 scheduler steps and callbacks, reporting exhaustion in Sim::logs
+//! and leaving time at the last dispatched point. Nonprogressing periods
+//! fall back to a frame (or the smallest safe scale at very large clocks).
 use crate::{Shared, SimResult};
 use mlua::{Function, Lua};
 
@@ -27,29 +30,141 @@ pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
     lua.load(include_str!("timers.lua")).exec()
 }
 
-pub(crate) fn advance(lua: &Lua, clock: &Shared<f64>, seconds: f64) {
-    assert!(
-        seconds.is_finite() && seconds >= 0.0,
-        "invalid time advance"
-    );
-    let target = *clock.lock().unwrap() + seconds;
-    assert!(target.is_finite(), "clock overflow");
-    let next: Function = lua.globals().get("__selu_sim_next_step").unwrap();
-    let step: Function = lua.globals().get("__selu_sim_step").unwrap();
-    loop {
-        let time: f64 = next.call(()).unwrap();
-        if time > target {
-            break;
+// Admission tolerance is one nanosecond, absolute, only at the advance endpoint.
+// Deadlines themselves remain exact f64 origin + index * period values.
+pub(crate) fn advance(lua: &Lua, clock: &Shared<f64>, logs: &Shared<Vec<String>>, seconds: f64) {
+    advance_bounded(lua, clock, logs, seconds, 100_000);
+}
+
+fn advance_bounded(
+    lua: &Lua,
+    clock: &Shared<f64>,
+    logs: &Shared<Vec<String>>,
+    seconds: f64,
+    limit: usize,
+) {
+    let result = (|| -> SimResult<()> {
+        if !seconds.is_finite() || seconds < 0.0 {
+            return Err(mlua::Error::runtime("invalid time advance"));
         }
-        *clock.lock().unwrap() = time;
-        step.call::<()>(()).unwrap();
+        let start = *clock.lock().unwrap_or_else(|e| e.into_inner());
+        let target = start + seconds;
+        if !target.is_finite() {
+            return Err(mlua::Error::runtime("clock overflow"));
+        }
+        if seconds == 0.0 {
+            return Ok(());
+        }
+        lua.globals().set("__selu_sim_budget", limit)?;
+        let next: Function = lua.globals().get("__selu_sim_next_step")?;
+        let step: Function = lua.globals().get("__selu_sim_step")?;
+        let mut steps = 0;
+        loop {
+            let time: f64 = next.call(())?;
+            if time > target && time - target > 1e-9 {
+                break;
+            }
+            if !time.is_finite() || time < *clock.lock().unwrap_or_else(|e| e.into_inner()) {
+                return Err(mlua::Error::runtime("scheduler deadline did not progress"));
+            }
+            steps += 1;
+            if steps > limit {
+                return Err(mlua::Error::runtime("dispatch budget exceeded"));
+            }
+            *clock.lock().unwrap_or_else(|e| e.into_inner()) = time;
+            step.call::<()>(())?;
+        }
+        let mut now = clock.lock().unwrap_or_else(|e| e.into_inner());
+        *now = now.max(target);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        logs.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(format!("scheduler error: {error}"));
     }
-    *clock.lock().unwrap() = target;
 }
 
 #[cfg(test)]
 mod tests {
     use crate::Sim;
+    #[test]
+    fn review_partitioned_after() {
+        let s = Sim::new().unwrap();
+        s.eval("C_Timer.After(1, function() print(GetTime()) end)")
+            .unwrap();
+        for _ in 0..10 {
+            s.advance_time(0.1);
+        }
+        assert_eq!(s.prints(), ["1"]);
+    }
+    #[test]
+    fn review_error_stops_ticker() {
+        let s = Sim::new().unwrap();
+        s.eval("C_Timer.NewTicker(.1, function() error('stop') end)")
+            .unwrap();
+        s.advance_time(0.5);
+        assert_eq!(s.logs().len(), 1);
+    }
+    #[test]
+    fn review_dispatch_budget() {
+        let s = Sim::new().unwrap();
+        s.eval("local n=0; local function again() n=n+1; if n<100 then C_Timer.After(0, again) end end; C_Timer.After(0, again)").unwrap();
+        super::advance_bounded(s.lua(), &s.clock, &s.logs, 10.0, 5);
+        assert!(s.logs().iter().any(|l| l.contains("dispatch budget")));
+    }
+    #[test]
+    fn review_tiny_period_progress() {
+        let s = Sim::new().unwrap();
+        s.advance_time(1.0);
+        s.eval("local n=0; C_Timer.NewTicker(1e-20, function(t) n=n+1; print(GetTime()); if n==3 then t:Cancel() end end)").unwrap();
+        s.advance_time(0.1);
+        assert!(s.prints().iter().all(|t| t.parse::<f64>().unwrap() > 1.0));
+    }
+    #[test]
+    fn review_rounding_and_partitioning() {
+        let s = Sim::new().unwrap();
+        s.eval("n=0; C_Timer.NewTicker(.1, function() n=n+1 end, 10000)")
+            .unwrap();
+        s.advance_time(1000.0);
+        s.eval("assert(n==10000)").unwrap();
+        let s = Sim::new().unwrap();
+        s.eval("C_Timer.After(1, function() print(GetTime()) end)")
+            .unwrap();
+        for _ in 0..10 {
+            s.advance_time(0.1);
+        }
+        assert_eq!(s.prints(), ["1"]);
+    }
+    #[test]
+    fn review_hidden_ancestors() {
+        let s = Sim::new().unwrap();
+        s.eval("p=CreateFrame('Frame'); c=CreateFrame('Frame', nil, p); c:SetScript('OnUpdate', function() print('child') end); p:Hide()").unwrap();
+        s.advance_time(1.0 / 60.0);
+        assert!(s.prints().is_empty());
+        s.eval("p:Show()").unwrap();
+        s.advance_time(1.0 / 60.0);
+        assert_eq!(s.prints(), ["child"]);
+        s.eval("C_Timer.After(.001, function() p:Hide() end)")
+            .unwrap();
+        s.advance_time(0.1);
+        assert_eq!(s.prints(), ["child"]);
+    }
+    #[test]
+    fn review_error_formatting_and_ticker_failure() {
+        let s = Sim::new().unwrap();
+        s.eval("C_Timer.NewTicker(.1, function() error(setmetatable({}, {__tostring=function() error('format failed') end})) end); C_Timer.After(.1, function() print('survived') end)").unwrap();
+        s.advance_time(0.5);
+        assert_eq!(s.prints(), ["survived"]);
+        assert_eq!(s.logs().len(), 1);
+    }
+    #[test]
+    fn review_historical_iterations() {
+        let s = Sim::new().unwrap();
+        s.eval("for _, count in ipairs({0, -2, 2.5}) do C_Timer.NewTicker(.1, function() print(count) end, count) end").unwrap();
+        s.advance_time(0.5);
+        assert_eq!(s.prints(), ["0", "-2", "2.5", "2.5", "2.5"]);
+    }
     #[test]
     fn timers_order_nested_cancel_and_errors() {
         let s = Sim::new().unwrap();

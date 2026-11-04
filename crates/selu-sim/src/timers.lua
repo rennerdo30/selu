@@ -1,20 +1,45 @@
 local queue, frame = {}, 1
 local frameTime = 1 / 60
 local function safe(fn, ...)
+ __selu_sim_budget = __selu_sim_budget - 1
+ if __selu_sim_budget < 0 then error('dispatch budget exceeded') end
  local ok, err = pcall(fn, ...)
- if not ok then __selu_sim_error(tostring(err)) end
+ if not ok then
+  local converted, message = pcall(tostring, err)
+  __selu_sim_error(converted and message or 'error object could not be formatted')
+ end
+ return ok
+end
+local function deadline(origin, index, period, now)
+ local due = origin + index * period
+ if due <= now then
+  origin, index = now, 1
+  period = math.max(period, frameTime, math.abs(now) * 2^-51)
+  due = origin + period
+ end
+ return due, origin, index, period
+end
+local function visible(f)
+ local seen = {}
+ while f do
+  if seen[f] or not rawget(f, '__shown') then return false end
+  seen[f] = true; f = rawget(f, '__parent')
+ end
+ return true
 end
 local function create(delay, callback, iterations, after)
  assert(type(delay) == 'number' and delay == delay and delay < math.huge, 'invalid timer delay')
  assert(type(callback) == 'function', 'invalid timer callback')
- assert(iterations == nil or (iterations > 0 and iterations < math.huge and iterations == math.floor(iterations)), 'invalid iterations')
+ assert(iterations == nil or type(iterations) == 'number', 'invalid iterations')
  local handle = {cancelled=false}
  function handle:Cancel() self.cancelled = true end
  function handle:IsCancelled() return self.cancelled end
  local period = math.max(delay, frameTime)
  -- Positive delays retain exact deadlines, even shorter than a frame.
  if delay > 0 then period = delay end
- queue[#queue+1] = {due=GetTime()+period, period=period, fn=callback, handle=handle, remaining=iterations, after=after}
+ local due, origin, index
+ due, origin, index, period = deadline(GetTime(), 1, period, GetTime())
+ queue[#queue+1] = {due=due, origin=origin, index=index, period=period, fn=callback, handle=handle, remaining=iterations, after=after}
  return handle
 end
 C_Timer = {}
@@ -39,10 +64,12 @@ function __selu_sim_step()
  end
  for _, t in ipairs(due) do
   if not t.handle.cancelled then
-   if t.after then safe(t.fn) else safe(t.fn, t.handle) end
+   local ok
+   if t.after then ok = safe(t.fn) else ok = safe(t.fn, t.handle) end
    if t.remaining then t.remaining = t.remaining - 1 end
-   if not t.handle.cancelled and (not t.remaining or t.remaining > 0) then
-    t.due = t.due + t.period; queue[#queue+1] = t
+   if ok and not t.handle.cancelled and (not t.remaining or t.remaining > 0) then
+    t.due, t.origin, t.index, t.period = deadline(t.origin, t.index + 1, t.period, now)
+    queue[#queue+1] = t
    end
   end
  end
@@ -52,7 +79,7 @@ function __selu_sim_step()
   for i, f in ipairs(__selu_sim_frames) do frames[i] = f end
   for _, f in ipairs(frames) do
    local fn = f.__scripts.OnUpdate
-   if f.__shown and fn then safe(fn, f, frameTime) end
+   if visible(f) and fn then safe(fn, f, frameTime) end
   end
  end
 end

@@ -89,6 +89,7 @@ name = "junksell-proof-test"
 version = "0.1.0"
 dependencies = [
  "selu-check",
+ "selu-lower",
  "selu-manifest",
  "selu-sim",
  "selu-syntax",
@@ -279,6 +280,18 @@ version = "0.1.0"
 dependencies = [
  "codespan-reporting",
  "serde",
+]
+
+[[package]]
+name = "selu-lower"
+version = "0.1.0"
+dependencies = [
+ "selu-check",
+ "selu-diagnostics",
+ "selu-manifest",
+ "selu-syntax",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
