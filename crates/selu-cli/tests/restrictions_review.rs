@@ -308,3 +308,50 @@ fn review_unspecified_callbacks_can_refer_to_widget_operations_on_classic() {
     sim.set_combat(false).unwrap();
     assert_eq!(sim.prints(), ["hidden"]);
 }
+
+#[test]
+fn review_secret_category_survives_untyped_joins() {
+    let mut m = manifest();
+    let mut f = m.function("GetTime").unwrap().clone();
+    f.name = "UnknownSecret".into();
+    f.returns_secret = true;
+    let d = f.signature.as_mut().unwrap();
+    d.name = "UnknownSecret".into();
+    d.returns[0].ty = Some("UndocumentedEngineValue".into());
+    d.attributes.insert("SecretReturns".into(), true.into());
+    m.functions.push(f);
+    let sources = [
+        r#"const value=UnitExists("player") ? UnitName("player") : GetUnitName("player"); print(value);"#,
+        r#"const value=UnknownSecret() ?? UnitName("player"); print(value);"#,
+    ];
+    let rejected: Vec<_> = sources
+        .iter()
+        .map(|source| {
+            checked(source, &m)
+                .1
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "SELU0601")
+        })
+        .collect();
+    assert_eq!(rejected, [true, true]);
+    let lua = compile(
+        r#"const name=UnitName("player"); const value=UnitExists("player") ? name : GetUnitName("player"); global label=CreateFrame("Frame").CreateFontString(); label.SetText(value); print(value ?? "read"); const alternative=UnknownSecret() ?? name; label.SetText(alternative); print(alternative ?? "read");"#,
+        &m,
+    );
+    assert!(
+        !lua.contains("and name or"),
+        "opaque branches must not be tested for truthiness: {lua}"
+    );
+    for choose in [true, false] {
+        let sim = Sim::new().unwrap();
+        sim.set_secret_global("hidden").unwrap();
+        sim.eval(&format!("function UnitName() return hidden end; function UnknownSecret() return hidden end; function UnitExists() return {choose} end; function GetUnitName() return 'public' end")).unwrap();
+        sim.load_files(&[("test.lua".into(), lua.clone())]).unwrap();
+        assert_eq!(
+            sim.prints(),
+            [if choose { "read" } else { "public" }, "read"]
+        );
+        sim.eval("assert(issecretvalue(label:GetText()))").unwrap();
+    }
+}

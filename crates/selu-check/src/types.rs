@@ -350,6 +350,13 @@ impl Type {
     /// The narrowest type both `a` and `b` fit in, if there is one.
     pub fn join(a: &Type, b: &Type) -> Option<Type> {
         if a.is_open() || b.is_open() {
+            if !matches!(crate::shape_of(a), Type::Error)
+                && !matches!(crate::shape_of(b), Type::Error)
+                && (crate::restrictions::secret_inner(a).is_some()
+                    || crate::restrictions::secret_inner(b).is_some())
+            {
+                return Some(Type::secret(Type::Untyped));
+            }
             return Some(Type::Untyped);
         }
         // A conditional function value may select either API. Preserve the
