@@ -1,6 +1,7 @@
 //! Host input in screen pixels, bottom-left origin. Session may forward these Sim methods.
 use super::{arena::*, layout, widgets::callback};
-use crate::{RegionId, Sim, SimResult, core::dispatch};
+use crate::session::Vm as Sim;
+use crate::{RegionId, SimResult, core::dispatch};
 use mlua::{Function, MultiValue, Value};
 fn invoke(sim: &Sim, i: usize, name: &str, args: Vec<Value>) -> SimResult<()> {
     let t = store(sim.lua()).borrow().regions[i].table.clone();
@@ -10,7 +11,9 @@ fn invoke(sim: &Sim, i: usize, name: &str, args: Vec<Value>) -> SimResult<()> {
     {
         let mut args = MultiValue::from_vec(args);
         args.push_front(Value::Table(t));
-        let result = crate::core::script_callback(sim.lua(), sim.ctx(), || f.call::<()>(args));
+        let result = crate::core::script_callback(sim.lua(), sim.ctx(), || {
+            crate::core::call_lua::<()>(sim.lua(), f, args)
+        });
         crate::core::flush(sim.lua(), sim.ctx());
         result?;
     }
@@ -45,7 +48,7 @@ fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
         .max_by_key(|(i, r)| (r.strata, r.level, r.layer, *i))
         .map(|(i, _)| i)
 }
-impl Sim {
+impl crate::session::Vm {
     pub fn hover(&self, x: f64, y: f64) -> SimResult<Option<RegionId>> {
         dispatch(self.lua(), self.ctx(), || {
             let target = hit(self, x, y);

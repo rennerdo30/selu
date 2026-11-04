@@ -379,9 +379,8 @@ impl Default for Ctx {
 /// debugger (round 10) join this hook here, in one place, because Lua has a
 /// single hook per thread.
 ///
-/// Limitation: Lua 5.1 hooks are per coroutine; code running inside a
-/// coroutine the addon created is not budgeted yet (S2 wraps
-/// `coroutine.create` to install the hook on new threads).
+/// Coroutine resume wrappers coordinate the VM's single mlua hook target;
+/// instruction usage remains shared with synchronous and queued scripts.
 pub fn install_hooks(lua: &Lua, ctx: &Ctx) {
     set_count_hook(lua, ctx.budget.clone(), HOOK_INTERVAL);
 }
@@ -391,32 +390,34 @@ pub fn install_hooks(lua: &Lua, ctx: &Ctx) {
 /// That way the error surfaces in every frame up the stack: a `pcall`
 /// around a runaway loop catches it, but its caller's next instruction
 /// fails again, so `while true do pcall(f) end` can't keep running either.
-fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
-    lua.set_hook(
-        HookTriggers::new().every_nth_instruction(interval),
-        move |lua, _| {
-            let mut b = lock(&budget);
-            if !b.exhausted {
-                b.used += 1;
-                if b.used <= b.limit {
-                    return Ok(VmState::Continue);
-                }
-                b.exhausted = true;
-                drop(b);
-                // Safe inside a hook: mlua keeps the running callback alive
-                // and `lua_sethook` may be called at any time.
-                set_count_hook(lua, budget.clone(), 1);
-                b = lock(&budget);
-            }
-            if let Some(reason) = b.failure {
-                return Err(mlua::Error::runtime(reason));
-            }
-            let limit = b.limit.saturating_mul(u64::from(HOOK_INTERVAL));
-            Err(mlua::Error::RuntimeError(format!(
-                "{BUDGET_ERROR} (more than {limit} instructions in one dispatch)"
-            )))
-        },
-    );
+fn budget_instruction(budget: &Shared<Budget>) -> mlua::Result<VmState> {
+    let mut b = lock(budget);
+    b.used = b.used.saturating_add(1);
+    if b.exhausted || b.used > b.limit.saturating_mul(u64::from(HOOK_INTERVAL)) {
+        b.exhausted = true;
+        return Err(mlua::Error::runtime(b.failure.unwrap_or(BUDGET_ERROR)));
+    }
+    Ok(VmState::Continue)
+}
+
+// mlua 0.10 has one hook target per VM. Switch that target only at native
+// resume boundaries, restoring the caller before executing more Lua. Count
+// every instruction so repeated short coroutine resumes cannot lose credit.
+fn set_count_hook(lua: &Lua, budget: Shared<Budget>, _interval: u32) {
+    lua.set_hook(HookTriggers::new().every_nth_instruction(1), move |_, _| {
+        budget_instruction(&budget)
+    });
+}
+
+pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) {
+    let budget = ctx.budget.clone();
+    if let Some(thread) = thread {
+        thread.set_hook(HookTriggers::new().every_nth_instruction(1), move |_, _| {
+            budget_instruction(&budget)
+        });
+    } else {
+        set_count_hook(lua, budget, 1);
+    }
 }
 
 /// Reset the budget for a new dispatch, restoring the normal hook interval
@@ -433,6 +434,133 @@ fn reset_budget(lua: &Lua, ctx: &Ctx) {
         drop(b);
         set_count_hook(lua, ctx.budget.clone(), HOOK_INTERVAL);
     }
+}
+
+#[derive(Clone, Copy)]
+struct CallbackInstructions {
+    limit: u64,
+    used: u64,
+}
+/// One outer timer dispatch retains S1 callback/nesting/task accounting.
+/// Scheduler instructions have their own allowance; all addon callbacks and
+/// their queued continuations share the configured instruction allowance.
+pub(crate) fn scheduler_dispatch<R>(
+    lua: &Lua,
+    ctx: &Ctx,
+    call: impl FnOnce() -> mlua::Result<R>,
+) -> mlua::Result<R> {
+    let limit = lock(&ctx.budget).limit;
+    let previous = lua.remove_app_data::<CallbackInstructions>();
+    lua.set_app_data(CallbackInstructions { limit, used: 0 });
+    lock(&ctx.budget).limit = DEFAULT_BUDGET;
+    let result = dispatch(lua, ctx, call);
+    let instructions = lua.remove_app_data::<CallbackInstructions>().unwrap();
+    {
+        let mut b = lock(&ctx.budget);
+        b.limit = limit;
+        b.used = instructions.used;
+    }
+    if let Some(previous) = previous {
+        lua.set_app_data(previous);
+    }
+    result
+}
+pub(crate) fn callback_dispatch<R>(
+    lua: &Lua,
+    ctx: &Ctx,
+    call: impl FnOnce() -> mlua::Result<R>,
+) -> mlua::Result<R> {
+    let Some(instructions) = lua.app_data_ref::<CallbackInstructions>().map(|v| *v) else {
+        return call();
+    };
+    let (limit, used) = {
+        let mut b = lock(&ctx.budget);
+        let saved = (b.limit, b.used);
+        b.limit = instructions.limit;
+        b.used = instructions.used;
+        saved
+    };
+    let result = call();
+    flush(lua, ctx);
+    let callback_used = {
+        let mut b = lock(&ctx.budget);
+        let callback_used = b.used;
+        b.limit = limit;
+        b.used = used;
+        callback_used
+    };
+    lua.app_data_mut::<CallbackInstructions>().unwrap().used = callback_used;
+    result
+}
+
+/// Protect Lua calls *before* mlua stringifies non-string error objects.
+/// The handler is only at the host boundary: addon pcall/coroutine code
+/// continues to receive the original error value unchanged.
+pub(crate) fn call_lua<R: mlua::FromLuaMulti>(
+    lua: &Lua,
+    function: mlua::Function,
+    args: impl mlua::IntoLuaMulti,
+) -> mlua::Result<R> {
+    const KEY: &str = "selu.host_boundary";
+    let protected = match lua.named_registry_value::<Option<mlua::Function>>(KEY)? {
+        Some(function) => function,
+        None => {
+            let render = lua.create_function(|lua, error: mlua::Value| {
+                if let mlua::Value::String(text) = error {
+                    return Ok(text.to_string_lossy());
+                }
+                let fallback = error.type_name().to_string();
+                let mut text = lua
+                    .globals()
+                    .get::<mlua::Function>("tostring")
+                    .and_then(|format| format.call::<mlua::Value>(error))
+                    .ok()
+                    .and_then(|v| {
+                        if let mlua::Value::String(s) = v {
+                            Some(s.to_string_lossy())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(fallback);
+                // xpcall invokes its handler before unwinding the failing stack.
+                text.push_str("\nstack traceback:");
+                for level in 0..128 {
+                    let Some(frame) = lua.inspect_stack(level) else {
+                        break;
+                    };
+                    let source = frame.source();
+                    if source.what == "C" {
+                        continue;
+                    }
+                    let name = source.short_src.as_deref().unwrap_or("?");
+                    text.push_str(&format!("\n\t{name}:{}", frame.curr_line()));
+                }
+                Ok(text)
+            })?;
+            let factory: mlua::Function = lua
+                .load(
+                    r#"
+local xpcall, error, unpack, select = xpcall, error, unpack, select
+return function(render)
+ return function(fn, ...)
+  local args, count = {...}, select('#', ...)
+  local function result(ok, ...) if not ok then error((...),0) end; return ... end
+  return result(xpcall(function() return fn(unpack(args,1,count)) end,render))
+ end
+end
+"#,
+                )
+                .set_name("=selu host boundary")
+                .eval()?;
+            let function: mlua::Function = factory.call(render)?;
+            lua.set_named_registry_value(KEY, function.clone())?;
+            function
+        }
+    };
+    let mut args = args.into_lua_multi(lua)?;
+    args.push_front(mlua::Value::Function(function));
+    protected.call(args)
 }
 
 /// Run one host-initiated call (an event, a timer advance, a script call, an

@@ -14,7 +14,7 @@
 //! exhaustion is logged, leaving the clock at its last dispatch point.
 //! Endpoint comparisons allow an absolute 1 ns rounding tolerance.
 
-use mlua::{Function, Lua, MultiValue, Table, Value};
+use mlua::Value;
 use std::collections::HashSet;
 
 // Module ownership for round 8 (docs/WORK-PACKAGES.md): `core` is S0's
@@ -29,7 +29,7 @@ pub mod session;
 pub mod snapshot;
 mod timers;
 mod trace;
-mod world;
+pub mod world;
 mod wow_api;
 
 pub use core::{
@@ -40,20 +40,23 @@ pub use mlua::Value as SimValue;
 pub use session::{Session, SessionConfig};
 pub type SimResult<T> = Result<T, mlua::Error>;
 
-use crate::core::{Shared, dispatch, lock};
+use crate::core::Shared;
 
-fn value_string(v: &Value) -> String {
+pub(crate) fn value_string(v: &Value) -> String {
     match v {
         Value::Nil => "nil".into(),
         Value::Boolean(b) => b.to_string(),
         Value::Integer(i) => i.to_string(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
-        other => format!("{other:?}"),
+        Value::Table(_) => "table".into(),
+        Value::Function(_) => "function".into(),
+        Value::Thread(_) => "thread".into(),
+        _ => "userdata".into(),
     }
 }
 
-fn log_once(logs: &Shared<Vec<String>>, warned: &Shared<HashSet<String>>, what: &str) {
+pub(crate) fn log_once(logs: &Shared<Vec<String>>, warned: &Shared<HashSet<String>>, what: &str) {
     let mut w = warned.lock().unwrap();
     if w.insert(what.to_string()) {
         logs.lock().unwrap().push(format!("not simulated: {what}"));
@@ -61,252 +64,19 @@ fn log_once(logs: &Shared<Vec<String>>, warned: &Shared<HashSet<String>>, what: 
 }
 
 pub struct Sim {
-    lua: Lua,
-    ctx: Ctx,
-    prints: Shared<Vec<String>>,
-    logs: Shared<Vec<String>>,
-    clock: Shared<f64>,
+    session: Session,
 }
-
 impl Sim {
-    pub fn new() -> SimResult<Sim> {
-        let lua = Lua::new();
-        let ctx = Ctx::new();
-        core::install_hooks(&lua, &ctx);
-        regions::install(&lua)?;
-        let prints = ctx.prints.clone();
-        let logs = ctx.logs.clone();
-        let warned = ctx.warned.clone();
-        let clock = ctx.clock.clone();
-        let globals = lua.globals();
-
-        {
-            let ctx = ctx.clone();
-            globals.set(
-                "print",
-                lua.create_function(move |_, args: MultiValue| {
-                    let parts: Vec<String> = args.iter().map(value_string).collect();
-                    let line = parts.join("\t");
-                    ctx.record(TraceKind::Print, "print", vec![line.clone()]);
-                    lock(&ctx.prints).push(line);
-                    Ok(())
-                })?,
-            )?;
-        }
-        {
-            let clock = clock.clone();
-            globals.set(
-                "GetTime",
-                lua.create_function(move |_, ()| Ok(*clock.lock().unwrap()))?,
-            )?;
-        }
-
-        {
-            let logs = logs.clone();
-            let handler = lua.create_function(move |_, error: Value| {
-                logs.lock()
-                    .unwrap()
-                    .push(format!("error: {}", value_string(&error)));
-                Ok(())
-            })?;
-            globals.set(
-                "geterrorhandler",
-                lua.create_function(move |_, ()| Ok(handler.clone()))?,
-            )?;
-        }
-        globals.set("__selu_sim_combat", false)?;
-        globals.set(
-            "InCombatLockdown",
-            lua.create_function(|lua, ()| lua.globals().get::<bool>("__selu_sim_combat"))?,
-        )?;
-        globals.set(
-            "canaccessvalue",
-            lua.create_function(|_, value: Value| Ok(!matches!(value, Value::LightUserData(_))))?,
-        )?;
-        globals.set(
-            "issecretvalue",
-            lua.create_function(|_, value: Value| Ok(matches!(value, Value::LightUserData(_))))?,
-        )?;
-
-        // Registry of every created frame, so `fire` can find them.
-        globals.set("__selu_sim_frames", lua.create_table()?)?;
-
-        frames::install(&lua, &ctx)?;
-
-        let create: Function = globals.get("CreateFrame")?;
-        globals.set("UIParent", create.call::<Table>("Frame")?)?;
-        // UIParent belongs to the engine, not the addon's created-frame registry.
-        let frames: Table = globals.get("__selu_sim_frames")?;
-        frames.raw_set(frames.raw_len(), Value::Nil)?;
-        // Unknown globals: log once, hand back a callable no-op so the
-        // addon keeps running and the gap is visible.
-        {
-            let mt = lua.create_table()?;
-            let logs = logs.clone();
-            let warned = warned.clone();
-            mt.set(
-                "__index",
-                lua.create_function(move |lua, (_t, key): (Value, String)| {
-                    log_once(&logs, &warned, &key);
-                    let noop = lua.create_function(|_, _: MultiValue| Ok(Value::Nil))?;
-                    Ok(Value::Function(noop))
-                })?,
-            )?;
-            globals.set_metatable(Some(mt));
-        }
-        wow_api::install(&lua)?;
-        timers::install(&lua, logs.clone())?;
-
-        Ok(Sim {
-            lua,
-            ctx,
-            prints,
-            logs,
-            clock,
+    pub fn new() -> SimResult<Self> {
+        Ok(Self {
+            session: Session::new(SessionConfig::default())?,
         })
     }
-
-    /// Toggle combat and dispatch the matching transition event once.
-    pub fn set_combat(&self, combat: bool) -> SimResult<()> {
-        let old = self.lua.globals().get::<bool>("__selu_sim_combat")?;
-        self.lua.globals().set("__selu_sim_combat", combat)?;
-        if old != combat {
-            self.fire(
-                if combat {
-                    "PLAYER_REGEN_DISABLED"
-                } else {
-                    "PLAYER_REGEN_ENABLED"
-                },
-                vec![],
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Make a named test value inaccessible to the simulated client predicates.
-    pub fn set_secret_global(&self, name: &str) -> SimResult<()> {
-        self.lua.globals().set(name, self.secret_value())
-    }
-
-    /// Opaque sentinel; only the secret predicates may inspect it.
-    pub fn secret_value(&self) -> Value {
-        Value::LightUserData(mlua::LightUserData(std::ptr::null_mut()))
-    }
-
-    /// Load generated Lua files in TOC order: `(file name, source)` pairs.
-    pub fn load_files(&self, files: &[(String, String)]) -> SimResult<()> {
-        for (name, source) in files {
-            dispatch(&self.lua, &self.ctx, || {
-                self.lua.load(source).set_name(name).exec()
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Load an addon's files in TOC order the way the client does: every
-    /// file receives `...` = the addon's name and one table shared by all of
-    /// its files.
-    pub fn load_addon(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
-        let ns = self.lua.create_table()?;
-        for (name, source) in files {
-            dispatch(&self.lua, &self.ctx, || {
-                self.lua
-                    .load(source)
-                    .set_name(name)
-                    .call::<()>((addon, ns.clone()))
-            })?;
-        }
-        self.fire(
-            "ADDON_LOADED",
-            vec![Value::String(self.lua.create_string(addon)?)],
-        )?;
-        Ok(())
-    }
-
-    pub fn slash(&self, line: &str) -> SimResult<()> {
-        self.ctx
-            .record(TraceKind::Host, "slash", vec![line.to_string()]);
-        dispatch(&self.lua, &self.ctx, || {
-            self.lua
-                .globals()
-                .get::<Function>("__selu_sim_slash")?
-                .call(line)
-        })
-    }
-
-    pub fn eval(&self, source: &str) -> SimResult<()> {
-        dispatch(&self.lua, &self.ctx, || self.lua.load(source).exec())
-    }
-
-    /// Fire an event at every frame that registered for it.
-    pub fn fire(&self, event: &str, args: Vec<Value>) -> SimResult<usize> {
-        let rendered = args.iter().map(value_string).collect();
-        self.ctx.record(TraceKind::Event, event, rendered);
-        dispatch(&self.lua, &self.ctx, || self.fire_now(event, &args))
-    }
-
-    fn fire_now(&self, event: &str, args: &[Value]) -> SimResult<usize> {
-        let registry = self.lua.globals().get::<Table>("__selu_sim_frames")?;
-        let mut delivered = 0;
-        for pair in registry.pairs::<i64, Table>() {
-            let (_, frame) = pair?;
-            let registered: Value = frame.get::<Table>("__events")?.get(event)?;
-            if matches!(registered, Value::Nil) {
-                continue;
-            }
-            let on_event: Value = frame.get::<Table>("__scripts")?.get("OnEvent")?;
-            if let Value::Function(func) = on_event {
-                let mut call = MultiValue::new();
-                call.push_back(Value::Table(frame));
-                call.push_back(Value::String(self.lua.create_string(event)?));
-                for a in args {
-                    call.push_back(a.clone());
-                }
-                let result = core::script_callback(&self.lua, &self.ctx, || func.call::<()>(call));
-                core::flush(&self.lua, &self.ctx);
-                result?;
-                delivered += 1;
-            }
-        }
-        Ok(delivered)
-    }
-
-    pub fn prints(&self) -> Vec<String> {
-        self.prints.lock().unwrap().clone()
-    }
-    pub fn logs(&self) -> Vec<String> {
-        self.logs.lock().unwrap().clone()
-    }
-    pub fn now(&self) -> f64 {
-        *self.clock.lock().unwrap()
-    }
-    pub fn advance_time(&self, seconds: f64) {
-        let _ = dispatch(&self.lua, &self.ctx, || {
-            timers::advance(&self.lua, &self.clock, &self.logs, seconds);
-            Ok(())
-        });
-    }
-    pub fn lua(&self) -> &Lua {
-        &self.lua
-    }
-    /// The install context: logs, clock, trace, budget and flush queue.
-    pub fn ctx(&self) -> &Ctx {
-        &self.ctx
-    }
-    /// The region tree through the core's snapshot view (generation 0; a
-    /// [`Session`] stamps its own).
-    pub fn snapshot(&self) -> SimResult<Snapshot> {
-        let model = frames::LuaTableModel {
-            generation: 0,
-            ui_size: snapshot::DEFAULT_UI_SIZE,
-        };
-        snapshot::take(
-            &self.lua,
-            &self.ctx,
-            &model,
-            Generation::default(),
-            snapshot::DEFAULT_UI_SIZE,
-        )
+}
+impl std::ops::Deref for Sim {
+    type Target = Session;
+    fn deref(&self) -> &Session {
+        &self.session
     }
 }
 

@@ -29,7 +29,7 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
             ctx2.record(crate::TraceKind::Script, &name, vec![]);
             let mut call = MultiValue::from_vec(vec![Value::Table(t)]);
             call.extend(args);
-            crate::core::script_callback(lua, &ctx2, || f.call::<()>(call))?;
+            crate::core::script_callback(lua, &ctx2, || crate::core::call_lua::<()>(lua, f, call))?;
         }
         Ok(())
     }));
@@ -283,12 +283,13 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                     lua.create_function(move |lua, args: MultiValue| {
                         if let Some(old) = &old {
                             crate::core::script_callback(lua, &context, || {
-                                old.call::<()>(args.clone())
+                                crate::core::call_lua::<()>(lua, old.clone(), args.clone())
                             })?;
                             crate::core::flush(lua, &context);
                         }
-                        let result =
-                            crate::core::script_callback(lua, &context, || hook.call::<()>(args));
+                        let result = crate::core::script_callback(lua, &context, || {
+                            crate::core::call_lua::<()>(lua, hook.clone(), args)
+                        });
                         crate::core::flush(lua, &context);
                         result
                     })?,
@@ -580,7 +581,9 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             .raw_get::<Table>("__scripts")?
             .raw_get::<Option<Function>>(if new.visible { "OnShow" } else { "OnHide" })?
     {
-        let result = crate::core::script_callback(lua, ctx, || f.call::<()>(t.clone()));
+        let result = crate::core::script_callback(lua, ctx, || {
+            crate::core::call_lua::<()>(lua, f, t.clone())
+        });
         crate::core::flush(lua, ctx);
         result?;
     }

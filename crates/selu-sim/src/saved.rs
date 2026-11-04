@@ -12,7 +12,7 @@ pub enum SavedValue {
 }
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SavedSnapshot(pub BTreeMap<String, SavedValue>);
-fn capture(v: Value, active: &mut HashSet<usize>) -> SimResult<SavedValue> {
+pub(crate) fn capture(v: Value, active: &mut HashSet<usize>) -> SimResult<SavedValue> {
     Ok(match v {
         Value::Nil => SavedValue::Nil,
         Value::Boolean(b) => SavedValue::Boolean(b),
@@ -46,7 +46,7 @@ fn capture(v: Value, active: &mut HashSet<usize>) -> SimResult<SavedValue> {
         }
     })
 }
-fn restore(lua: &Lua, v: &SavedValue) -> SimResult<Value> {
+pub(crate) fn restore(lua: &Lua, v: &SavedValue) -> SimResult<Value> {
     Ok(match v {
         SavedValue::Nil => Value::Nil,
         SavedValue::Boolean(b) => Value::Boolean(*b),
