@@ -1,0 +1,4 @@
+version = 1
+
+[targets]
+wow = "wow@12.1.5.70783"

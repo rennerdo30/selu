@@ -23,7 +23,7 @@ pub const MARKER: &str = ".selu-studio";
 pub struct Client {
     /// e.g. `E:\Games\World of Warcraft\_retail_`
     pub folder: PathBuf,
-    /// Selu flavour (`retail`, `classic-era`, ...), when known.
+    /// TACT product (`wow`, `wow_classic_era`, ...), when known.
     pub flavour: Option<String>,
     /// `Wow.exe`, `WowClassic.exe`, ...
     pub exe: Option<PathBuf>,
@@ -49,44 +49,30 @@ impl Client {
     }
 }
 
-/// Selu flavour for a client folder name. Test realms map to their base
-/// flavour; unknown folders return `None` and can be set by the user.
+/// TACT product for a client folder. Test products retain their own identities;
+/// unknown folders return `None` and can be set by the user.
 pub fn flavour_of(folder: &str) -> Option<&'static str> {
-    let f = folder.trim_matches('_').to_ascii_lowercase();
-    let base = f
-        .trim_end_matches("_ptr")
-        .trim_end_matches("_beta")
-        .trim_end_matches("_xptr");
-    match base {
-        "retail" | "ptr" | "xptr" | "beta" => Some("retail"),
-        "forever" => Some("forever"),
-        "classic" => Some("classic"),
-        "classic_era" | "era" => Some("classic-era"),
-        "anniversary" | "classic_anniversary" => Some("classic-anniversary"),
-        "titan" | "classic_titan" => Some("classic-titan"),
+    match folder.trim_matches('_').to_ascii_lowercase().as_str() {
+        "retail" => Some("wow"),
+        "ptr" => Some("wowt"),
+        "xptr" => Some("wowxptr"),
+        "beta" => Some("wow_beta"),
+        "forever" => Some("wowf"),
+        "classic" => Some("wow_classic"),
+        "classic_ptr" => Some("wow_classic_ptr"),
+        "classic_beta" => Some("wow_classic_beta"),
+        "classic_era" => Some("wow_classic_era"),
+        "classic_era_ptr" => Some("wow_classic_era_ptr"),
+        "anniversary" | "classic_anniversary" => Some("wow_anniversary"),
+        "anniversary_ptr" => Some("wow_anniversary_ptr"),
+        "titan" | "classic_titan" => Some("wow_classic_titan"),
         _ => None,
     }
 }
 
-/// Battle.net's game id for a client folder, as Battle.net lists its
-/// installed games (`_retail_` -> `wow`, `_classic_era_` -> `wow_classic_era`,
-/// `_anniversary_` -> `wow_classic_anniversary`).
+/// Blizzard TACT product for a known client folder.
 pub fn product_code(folder: &str) -> Option<String> {
-    let f = folder.trim_matches('_').to_ascii_lowercase();
-    if f.is_empty() {
-        return None;
-    }
-    Some(match f.as_str() {
-        "retail" => "wow".into(),
-        // Not in Battle.net's list on the owner's PC; the install's
-        // .build.info names the product `wowf`.
-        "forever" => "wowf".into(),
-        "ptr" => "wowt".into(),
-        "xptr" => "wowxptr".into(),
-        "beta" => "wow_beta".into(),
-        "anniversary" => "wow_classic_anniversary".into(),
-        other => format!("wow_{other}"),
-    })
+    flavour_of(folder).map(String::from)
 }
 
 /// The code Battle.net's `--exec="launch <code>"` takes for a client
@@ -98,9 +84,9 @@ pub fn product_code(folder: &str) -> Option<String> {
 pub fn launch_code(folder: &str) -> Option<&'static str> {
     match flavour_of(folder)? {
         _ if folder.contains("ptr") || folder.contains("beta") => None,
-        "retail" => Some("WoW"),
-        "forever" => Some("WoWF"),
-        "classic" | "classic-era" | "classic-anniversary" | "classic-titan" => Some("WoWC"),
+        "wow" => Some("WoW"),
+        "wowf" => Some("WoWF"),
+        "wow_classic" | "wow_classic_era" | "wow_anniversary" | "wow_classic_titan" => Some("WoWC"),
         _ => None,
     }
 }
@@ -297,6 +283,7 @@ pub fn clients_in(root: &Path, settings: &Settings) -> Vec<Client> {
             .flavours
             .get(&key)
             .cloned()
+            .map(|f| selu_manifest::product(&f).into())
             .or_else(|| flavour_of(&name).map(String::from));
         out.push(Client {
             folder,
@@ -332,7 +319,7 @@ pub fn detect(settings: &Settings) -> Vec<Client> {
 pub fn pick<'a>(clients: &'a [Client], flavour: &str, settings: &Settings) -> Option<&'a Client> {
     let matching: Vec<&Client> = clients
         .iter()
-        .filter(|c| c.flavour.as_deref() == Some(flavour))
+        .filter(|c| c.flavour.as_deref() == Some(selu_manifest::product(flavour)))
         .collect();
     if let Some(chosen) = settings.chosen.get(flavour)
         && let Some(c) = matching
@@ -374,13 +361,35 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A generated output has one TOC; its basename is the client's addon identity.
+fn toc_addon_name(built: &Path) -> Option<std::ffi::OsString> {
+    let mut tocs = std::fs::read_dir(built)
+        .ok()?
+        .collect::<std::io::Result<Vec<_>>>()
+        .ok()?
+        .into_iter()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("toc"))
+        });
+    let first = tocs.next()?;
+    if tocs.next().is_some() {
+        return None;
+    }
+    first.file_stem().map(std::ffi::OsStr::to_os_string)
+}
+
 /// Copy the built addon folder `built` into the client's AddOns folder.
 /// `force` replaces a folder Studio didn't create (after the user agreed).
 /// Returns the destination.
 pub fn install_addon(built: &Path, client: &Client, force: bool) -> Result<PathBuf, CopyError> {
-    let name = built
-        .file_name()
-        .ok_or_else(|| CopyError::Io("the built folder has no name".into()))?;
+    let name = toc_addon_name(built).ok_or_else(|| {
+        CopyError::Io("the built addon must contain exactly one generated TOC".into())
+    })?;
     let addons = client.addons_dir();
     std::fs::create_dir_all(&addons).map_err(|e| CopyError::Io(e.to_string()))?;
     let dest = addons.join(name);
@@ -485,29 +494,60 @@ fn launch_exe(client: &Client) -> Result<(), String> {
         .map_err(|e| format!("cannot start {}: {e}", exe.display()))
 }
 
-/// The built addon folder for `flavour` under the project's `dist/`: the
-/// only one, or the `<Name>-<flavour>` one when the project builds several.
-pub fn built_folder(project: &Path, flavour: &str) -> Option<PathBuf> {
-    let dist = project.join("dist");
-    let mut found: Vec<PathBuf> = std::fs::read_dir(&dist)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| !n.starts_with('.') && p.join(format!("{n}.toc")).is_file())
-        })
-        .collect();
-    if found.len() > 1 {
-        found.retain(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with(&format!("-{flavour}")))
+/// Select the current build layout, including target overrides, without using stale siblings.
+pub fn built_folder(
+    project: &Path,
+    product: &str,
+    target_override: Option<&str>,
+) -> Option<PathBuf> {
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(project.join("selu.toml")).ok()?).ok()?;
+    let addon = config.get("addon")?;
+    let name = addon.get("name")?.as_str()?;
+    let count = target_override
+        .map(|targets| targets.split(',').filter(|t| !t.trim().is_empty()).count())
+        .unwrap_or_else(|| {
+            addon
+                .get("targets")
+                .and_then(toml::Value::as_array)
+                .map_or(0, Vec::len)
         });
+    let shared = config
+        .get("build")
+        .and_then(|build| build.get("layout"))
+        .and_then(toml::Value::as_str)
+        == Some("shared");
+    let folder = if count > 1 && !shared {
+        format!("{name}-{}", selu_manifest::product(product))
+    } else {
+        name.to_owned()
+    };
+    let built = project.join("dist").join(folder);
+    (toc_addon_name(&built)? == name).then_some(built)
+}
+
+/// Version from the install root's pipe-separated Blizzard metadata, read only.
+pub fn installed_build(client: &Client) -> Option<selu_manifest::Build> {
+    let product = client.flavour.as_deref()?;
+    let text = std::fs::read_to_string(client.folder.parent()?.join(".build.info")).ok()?;
+    let mut lines = text.lines();
+    let columns: Vec<_> = lines
+        .next()?
+        .split('|')
+        .map(|s| s.split('!').next().unwrap_or(s))
+        .collect();
+    let p = columns.iter().position(|c| *c == "Product")?;
+    let v = columns.iter().position(|c| *c == "Version")?;
+    let active = columns.iter().position(|c| *c == "Active");
+    for line in lines {
+        let fields: Vec<_> = line.split('|').collect();
+        if fields.get(p).copied() == Some(product)
+            && active.is_none_or(|i| fields.get(i).copied() == Some("1"))
+        {
+            return selu_manifest::Build::parse(fields.get(v)?).ok();
+        }
     }
-    found.sort();
-    found.into_iter().next()
+    None
 }
 
 #[cfg(test)]
@@ -536,7 +576,7 @@ mod tests {
         );
         assert_eq!(
             product_code("_anniversary_").as_deref(),
-            Some("wow_classic_anniversary")
+            Some("wow_anniversary")
         );
         assert_eq!(product_code("_forever_").as_deref(), Some("wowf"));
         assert_eq!(product_code("_ptr_").as_deref(), Some("wowt"));
@@ -548,14 +588,14 @@ mod tests {
 
     #[test]
     fn flavours_from_folder_names() {
-        assert_eq!(flavour_of("_retail_"), Some("retail"));
-        assert_eq!(flavour_of("_ptr_"), Some("retail"));
-        assert_eq!(flavour_of("_classic_"), Some("classic"));
-        assert_eq!(flavour_of("_classic_era_"), Some("classic-era"));
-        assert_eq!(flavour_of("_classic_era_ptr_"), Some("classic-era"));
-        assert_eq!(flavour_of("_anniversary_"), Some("classic-anniversary"));
-        assert_eq!(flavour_of("_classic_beta_"), Some("classic"));
-        assert_eq!(flavour_of("_forever_"), Some("forever"));
+        assert_eq!(flavour_of("_retail_"), Some("wow"));
+        assert_eq!(flavour_of("_ptr_"), Some("wowt"));
+        assert_eq!(flavour_of("_classic_"), Some("wow_classic"));
+        assert_eq!(flavour_of("_classic_era_"), Some("wow_classic_era"));
+        assert_eq!(flavour_of("_classic_era_ptr_"), Some("wow_classic_era_ptr"));
+        assert_eq!(flavour_of("_anniversary_"), Some("wow_anniversary"));
+        assert_eq!(flavour_of("_classic_beta_"), Some("wow_classic_beta"));
+        assert_eq!(flavour_of("_forever_"), Some("wowf"));
         assert_eq!(flavour_of("_something_new_"), None);
     }
 
@@ -575,6 +615,74 @@ mod tests {
     }
 
     #[test]
+    fn generated_toc_identity_for_all_output_layouts() {
+        let root = fake_install("output-layouts");
+        let project = root.join("project");
+        for folder in ["Demo", "Demo-wow", "Demo-wow_classic"] {
+            let output = project.join("dist").join(folder);
+            std::fs::create_dir_all(&output).unwrap();
+            std::fs::write(
+                output.join("Demo.toc"),
+                "## Interface: 120105, 50504\nmain.lua\n",
+            )
+            .unwrap();
+            std::fs::write(output.join("main.lua"), folder).unwrap();
+        }
+        for (layout, product, override_target, expected) in [
+            ("single", "wow", None, "Demo"),
+            ("per-target", "wow_classic", None, "Demo-wow_classic"),
+            ("shared", "wow_classic", None, "Demo"),
+            ("override", "wow", Some("wow"), "Demo"),
+        ] {
+            let targets = if layout == "single" {
+                "[\"wow\"]"
+            } else {
+                "[\"wow\", \"wow_classic\"]"
+            };
+            let mode = if layout == "shared" {
+                "shared"
+            } else {
+                "per-target"
+            };
+            std::fs::write(
+                project.join("selu.toml"),
+                format!("[addon]\nname=\"Demo\"\ntargets={targets}\n[build]\nlayout=\"{mode}\"\n"),
+            )
+            .unwrap();
+            let built = built_folder(&project, product, override_target).unwrap();
+            assert_eq!(built.file_name().unwrap(), expected, "{layout}");
+            let client = Client {
+                folder: root.join("clients").join(layout).join("_client_"),
+                flavour: Some(product.into()),
+                exe: None,
+            };
+            let installed = install_addon(&built, &client, false).unwrap();
+            assert_eq!(installed, client.addons_dir().join("Demo"), "{layout}");
+            assert!(installed.join("Demo.toc").is_file());
+            assert_eq!(
+                std::fs::read_to_string(installed.join("main.lua")).unwrap(),
+                expected
+            );
+        }
+        assert!(
+            std::fs::canonicalize(&root)
+                .unwrap()
+                .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap())
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn installed_version_uses_the_active_product_row() {
+        let root = fake_install("metadata");
+        std::fs::write(root.join(".build.info"), "Product!STRING:0|Version!STRING:0|Active!DEC:1\nwow|12.1.5.1|0\nwow_classic|5.5.4.3|1\nwow|12.1.5.2|1\n").unwrap();
+        let client = clients_in(&root, &Settings::default())
+            .into_iter()
+            .find(|c| c.folder_name() == "_retail_")
+            .unwrap();
+        assert_eq!(installed_build(&client).unwrap().build, 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn finds_clients_and_picks_the_live_one() {
         let root = fake_install("clients");
         let mut settings = Settings::default();
@@ -593,6 +701,10 @@ mod tests {
         );
         assert_eq!(
             pick(&clients, "retail", &settings).unwrap().folder_name(),
+            "_retail_"
+        );
+        assert_eq!(
+            pick(&clients, "wowt", &settings).unwrap().folder_name(),
             "_ptr_"
         );
         assert!(pick(&clients, "forever", &settings).is_none());

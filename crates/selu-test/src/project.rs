@@ -141,21 +141,23 @@ fn build_impl(
         eprintln!("selu: no targets (set `targets` under [addon] in selu.toml or pass --target)");
         return Err(ExitCode::FAILURE);
     }
-    // Only the flavours this build targets (`retail@12.0` -> `retail`).
-    let flavours: Vec<String> = target_strings
-        .iter()
-        .map(|t| t.split('@').next().unwrap_or(t).trim().to_string())
-        .collect();
-    let manifests = find_manifests(manifest_dir, project_dir, Some(&flavours))?;
-    let selected: Vec<Manifest> = target_strings
-        .iter()
-        .map(|t| {
-            let spec = TargetSpec::parse(t).map_err(|d| fail(&d, ""))?;
-            selu_manifest::resolve(&spec, &manifests)
-                .cloned()
-                .map_err(|d| fail(&d, ""))
-        })
-        .collect::<Result<_, _>>()?;
+    let mut lock = selu_manifest::lock::Lock::read(project_dir).map_err(|e| {
+        eprintln!("selu: {e}");
+        ExitCode::FAILURE
+    })?;
+    let discovery = lock.discovery_targets(&target_strings).map_err(|e| {
+        eprintln!("selu: {e}");
+        ExitCode::FAILURE
+    })?;
+    let manifests = find_manifests(manifest_dir, project_dir, Some(&discovery))?;
+    let selected = lock.resolve(&target_strings, &manifests).map_err(|e| {
+        eprintln!("selu: {e}");
+        ExitCode::FAILURE
+    })?;
+    lock.write(project_dir).map_err(|e| {
+        eprintln!("selu: {e}");
+        ExitCode::FAILURE
+    })?;
     if shared
         && selected.iter().any(|m| {
             m.lua_dialects
@@ -186,17 +188,19 @@ fn build_impl(
         }
     };
     let mut snapshots = std::collections::BTreeMap::<std::path::PathBuf, Vec<&Manifest>>::new();
-    for target_str in &target_strings {
+    for (target_str, manifest) in target_strings.iter().zip(&selected) {
         let spec = TargetSpec::parse(target_str).map_err(|d| fail(&d, ""))?;
-        let manifest = selu_manifest::resolve(&spec, &manifests).map_err(|d| fail(&d, ""))?;
+
         if !quiet {
             println!("target {spec} -> {}", manifest.build);
         }
 
         let out_dir = if multi && !shared {
-            project_dir
-                .join("dist")
-                .join(format!("{}-{}", project.name, manifest.flavour))
+            project_dir.join("dist").join(format!(
+                "{}-{}",
+                project.name,
+                selu_manifest::product(&manifest.flavour)
+            ))
         } else {
             project_dir.join("dist").join(&project.name)
         };

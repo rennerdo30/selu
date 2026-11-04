@@ -5,7 +5,7 @@ fn retail() -> Manifest {
     cached_manifests()
         .clone()
         .into_iter()
-        .find(|m| m.flavour == "retail" && !m.fixture)
+        .find(|m| m.flavour == "wow" && !m.fixture)
         .unwrap()
 }
 fn check(src: &str, targets: &[Manifest], strict: bool) -> selu_check::Checked {
@@ -159,7 +159,7 @@ fn review_scoped_guards_filter_named_and_created_frames() {
     let other = cached_manifests()
         .clone()
         .into_iter()
-        .find(|m| m.flavour == "classic-era" && !m.fixture)
+        .find(|m| m.flavour == "wow_classic_era" && !m.fixture)
         .unwrap();
     let targets = [m, other];
     for src in [
@@ -190,7 +190,7 @@ fn review_scoped_guards_filter_named_and_created_frames() {
                 )
                 .lua;
                 let sim = selu_sim::Sim::new().unwrap();
-                let active = primary.flavour == "retail";
+                let active = primary.flavour == "wow";
                 sim.eval(&format!("setmetatable(_G, nil); AbandonHouseConfirmationDialog = {}; GameTooltip = {{ RefreshDataNextUpdate = function() print('refresh') end }}; local create = CreateFrame; CreateFrame = function(...) local f = create(...); f.RefreshDataNextUpdate = function() print('refresh') end; return f end", if active { "{}" } else { "nil" })).unwrap();
                 sim.load_addon("Frames", &[("frames.lua".into(), lua)])
                     .unwrap();

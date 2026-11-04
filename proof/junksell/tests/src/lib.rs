@@ -48,7 +48,13 @@ fn gap_reproductions() {
     // gap must keep compiling on every real flavour; an open one must still
     // fail, so the document can't drift from the compiler.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let manifests = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
+    let all = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
+    let project = root.join("proof/junksell");
+    let targets = selu_manifest::lock::project_targets(&project).unwrap();
+    let manifests = selu_manifest::lock::Lock::read(&project)
+        .unwrap()
+        .resolve(&targets, &all)
+        .unwrap();
     // (source, open on these flavours; empty = closed everywhere)
     let cases: [(&str, &[&str]); 8] = [
         // Gap 1, closed: structured error handling.
@@ -69,10 +75,10 @@ fn gap_reproductions() {
         (
             "const y = NUM_TOTAL_EQUIPPED_BAG_SLOTS;",
             &[
-                "classic-era",
-                "classic-anniversary",
-                "classic-titan",
-                "classic",
+                "wow_classic_era",
+                "wow_anniversary",
+                "wow_classic_titan",
+                "wow_classic",
             ],
         ),
     ];
@@ -121,9 +127,15 @@ fn build_proof() {
     let source = std::fs::read_to_string(project.join("src/main.selu")).unwrap();
     // This proof is one source module; fail if its structure changes.
     assert_eq!(std::fs::read_dir(project.join("src")).unwrap().count(), 1);
-    let manifests = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
+    let all = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
+    let project = root.join("proof/junksell");
+    let targets = selu_manifest::lock::project_targets(&project).unwrap();
+    let manifests = selu_manifest::lock::Lock::read(&project)
+        .unwrap()
+        .resolve(&targets, &all)
+        .unwrap();
     let manifest = selu_manifest::resolve(
-        &selu_manifest::TargetSpec::parse("retail").unwrap(),
+        &selu_manifest::TargetSpec::parse("wow").unwrap(),
         &manifests,
     )
     .unwrap();

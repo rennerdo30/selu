@@ -72,7 +72,7 @@ fn saved_initializes_before_user_addon_loaded_handler() {
     let manifests = cached_manifests();
     let manifest = manifests
         .iter()
-        .find(|m| m.flavour == "forever" && !m.fixture)
+        .find(|m| m.flavour == "wowf" && !m.fixture)
         .unwrap();
     let p = selu_syntax::parse(
         "t.selu",
@@ -114,7 +114,7 @@ fn runtime_name_cannot_overwrite_a_source_module() {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"Collision\"\ntargets = [\"forever@1.0\"]\n",
+        "[addon]\nname = \"Collision\"\ntargets = [\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     std::fs::write(dir.join("src/Selu.selu"), "export const value = 7;").unwrap();
@@ -158,7 +158,7 @@ fn saved_init_helpers_are_collectible_after_loading() {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"SavedGc\"\ntargets = [\"forever@1.0\"]\n",
+        "[addon]\nname = \"SavedGc\"\ntargets = [\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     std::fs::write(
@@ -227,8 +227,8 @@ end"#,
 #[test]
 fn protected_queue_is_one_registry_piece_with_cross_module_fifo() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut m =
-        selu_manifest::load_manifest(&root.join("manifests/retail/12.1.5.70391.selum")).unwrap();
+    let mut m = selu_manifest::store::load_build(&root.join("manifests/store"), "wow@12.1.5.70391")
+        .unwrap();
     for name in [
         "RestrictedOne",
         "RestrictedTwo",

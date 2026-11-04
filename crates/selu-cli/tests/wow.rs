@@ -189,7 +189,7 @@ fn modules_share_wow_runtime_in_toc_order() {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"SharedWow\"\ntargets = [\"forever@1.0\"]\n",
+        "[addon]\nname = \"SharedWow\"\ntargets = [\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     for (file, src) in [

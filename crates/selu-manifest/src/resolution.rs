@@ -23,6 +23,21 @@ pub fn discover(
     }
     for dir in candidates {
         if dir.is_dir() {
+            if dir.join("store").is_dir() {
+                let cache = dir
+                    .parent()
+                    .unwrap_or(&dir)
+                    .join("target/selu-manifest-cache");
+                let mut manifests =
+                    crate::store::load_cached_selected(&dir.join("store"), &cache, flavours)
+                        .map_err(|e| Diagnostic::error("SELU0202", e.to_string()))?;
+                if dir.join("fixtures").is_dir() {
+                    manifests.extend(load_manifest_dir(&dir.join("fixtures"))?);
+                }
+                if !manifests.is_empty() {
+                    return Ok(manifests);
+                }
+            }
             if let Some(flavours) = flavours
                 && !flavours.is_empty()
                 && flavours.iter().all(|f| dir.join(f).is_dir())

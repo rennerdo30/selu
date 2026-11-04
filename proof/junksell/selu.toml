@@ -1,5 +1,5 @@
 [addon]
 name = "JunkSellProof"
-targets = ["retail", "forever", "classic-era", "classic-anniversary", "classic-titan", "classic"]
+targets = ["wow", "wowf", "wow_classic_era", "wow_anniversary", "wow_classic_titan", "wow_classic"]
 [build]
 layout = "shared"

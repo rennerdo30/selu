@@ -1,8 +1,8 @@
-use selu_manifest::{Manifest, load_manifest};
+use selu_manifest::{Manifest, store::load_build};
 fn retail() -> Manifest {
-    load_manifest(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/retail/12.1.5.70391.selum"),
+    load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wow@12.1.5.70391",
     )
     .unwrap()
 }

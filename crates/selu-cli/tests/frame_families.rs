@@ -1,9 +1,9 @@
 use selu_check::{CheckOptions, ModuleBindings, check_module_targets_with_options};
 use selu_manifest::Manifest;
 fn manifest() -> Manifest {
-    selu_manifest::load_manifest(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/retail/12.1.5.70391.selum"),
+    selu_manifest::store::load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wow@12.1.5.70391",
     )
     .unwrap()
 }

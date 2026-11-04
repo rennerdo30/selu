@@ -4,7 +4,13 @@ mod tests {
     fn files() -> Vec<(String, String)> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let source = include_str!("../../src/main.selu");
-        let manifests = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
+        let all = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
+        let project = root.join("proof/xpeta");
+        let targets = selu_manifest::lock::project_targets(&project).unwrap();
+        let manifests = selu_manifest::lock::Lock::read(&project)
+            .unwrap()
+            .resolve(&targets, &all)
+            .unwrap();
         let program = selu_syntax::parse("main.selu", source).unwrap();
         let mut result = vec![];
         for manifest in manifests.iter().filter(|m| !m.fixture) {
@@ -15,7 +21,7 @@ mod tests {
                 manifest.target_string(),
                 checked.diagnostics
             );
-            if manifest.flavour == "retail" {
+            if manifest.flavour == "wow" {
                 let compiled =
                     selu_lower::lower_with_addon(&program, manifest, &checked.types, "XPETAProof");
                 let lua = if std::env::var_os("XPETA_BREAK").is_some() {

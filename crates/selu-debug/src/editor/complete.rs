@@ -369,13 +369,18 @@ pub fn find_manifests(project: &Path) -> Option<PathBuf> {
 pub fn project_target(project: &Path) -> Option<String> {
     let text = std::fs::read_to_string(project.join("selu.toml")).ok()?;
     let value: toml::Value = toml::from_str(&text).ok()?;
-    value
+    let target = value
         .get("addon")?
         .get("targets")?
         .as_array()?
         .first()?
         .as_str()
-        .map(String::from)
+        .map(String::from)?;
+    selu_manifest::lock::Lock::read(project)
+        .ok()?
+        .discovery_targets(&[target])
+        .ok()?
+        .pop()
 }
 
 /// Load the API index for `target` from the manifests folder. Slow (the
@@ -383,7 +388,7 @@ pub fn project_target(project: &Path) -> Option<String> {
 pub fn load_api(manifests: &Path, target: &str) -> Result<ApiIndex, String> {
     let spec = selu_manifest::TargetSpec::parse(target).map_err(|d| d.to_string())?;
     let flavour_dir = manifests.join(&spec.flavour);
-    let dir = if flavour_dir.is_dir() {
+    let dir = if flavour_dir.is_dir() && !manifests.join("store").is_dir() {
         flavour_dir
     } else {
         manifests.to_path_buf()

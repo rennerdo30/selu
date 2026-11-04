@@ -1,6 +1,6 @@
 [addon]
 name = "MultiTarget"
-targets = ["retail", "forever"]
+targets = ["wow", "wowf"]
 
 [build]
 layout = "shared"

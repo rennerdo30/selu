@@ -1,0 +1,5 @@
+version = 1
+
+[targets]
+wow = "wow@12.1.5.70783"
+wowf = "wowf@1.60.1.70790"

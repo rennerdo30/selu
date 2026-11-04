@@ -360,7 +360,7 @@ fn discover_manifest(
         return Ok(None);
     };
     if let Ok(all) =
-        selu_manifest::resolution::discover(None, from, Some(std::slice::from_ref(&spec.flavour)))
+        selu_manifest::resolution::discover(None, from, Some(std::slice::from_ref(target)))
     {
         return Ok(selu_manifest::resolve(&spec, &all).ok().cloned());
     }

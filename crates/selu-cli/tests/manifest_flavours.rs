@@ -4,13 +4,13 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-const FLAVOURS: [&str; 6] = [
-    "retail",
-    "forever",
-    "classic-era",
-    "classic-anniversary",
-    "classic-titan",
-    "classic",
+const PRIMARY_PRODUCTS: [&str; 6] = [
+    "wow",
+    "wowf",
+    "wow_classic_era",
+    "wow_anniversary",
+    "wow_classic_titan",
+    "wow_classic",
 ];
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -46,10 +46,12 @@ fn cli(args: &[&str]) -> String {
 fn targets_lists_every_client() {
     let dir = root().join("manifests");
     let out = cli(&["targets", "--manifest-dir", dir.to_str().unwrap()]);
-    for flavour in FLAVOURS {
+    let store = selu_manifest::store::Store::open(&dir.join("store")).unwrap();
+    for target in store.builds() {
         assert!(
-            out.lines().any(|l| l.starts_with(&format!("{flavour}@"))),
-            "missing {flavour}: {out}"
+            out.lines()
+                .any(|line| line.starts_with(&format!("{target} "))),
+            "missing {target}: {out}"
         );
     }
 }
@@ -92,33 +94,18 @@ fn every_example_builds_for_every_client() {
         jobs.push(project);
     }
     let count = jobs.len();
-    // Each example builds in its own folder, so examples can build in
-    // parallel; the flavours of one example share it and stay sequential.
-    // Half the cores keeps the machine usable while the suite runs.
-    let workers = std::thread::available_parallelism()
-        .map_or(2, |n| (n.get() / 2).max(1))
-        .min(jobs.len().max(1));
-    let queue = std::sync::Mutex::new(jobs);
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    let Some(project) = queue.lock().unwrap().pop() else {
-                        break;
-                    };
-                    for flavour in FLAVOURS {
-                        cli(&[
-                            "build",
-                            project.to_str().unwrap(),
-                            "--target",
-                            flavour,
-                            "--manifest-dir",
-                            manifests.to_str().unwrap(),
-                        ]);
-                    }
-                }
-            });
+    // Keep the original six-product coverage and serialize builds on the owner's PC.
+    for project in jobs {
+        for product in PRIMARY_PRODUCTS {
+            cli(&[
+                "build",
+                project.to_str().unwrap(),
+                "--target",
+                product,
+                "--manifest-dir",
+                manifests.to_str().unwrap(),
+            ]);
         }
-    });
+    }
     assert!(count >= 2);
 }
