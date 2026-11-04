@@ -1,3 +1,5 @@
+# Text files use LF in the repository, whatever the editor writes.
+* text=auto eol=lf
 # Batch files need CRLF line endings to run reliably in cmd.exe.
 *.bat text eol=crlf
 
