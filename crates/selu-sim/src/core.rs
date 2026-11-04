@@ -279,6 +279,10 @@ pub struct Budget {
     /// Hook calls allowed per dispatch.
     pub limit: u64,
     used: u64,
+    callbacks: usize,
+    pending_tasks: usize,
+    callback_depth: usize,
+    failure: Option<&'static str>,
     /// The limit was hit in this dispatch; the hook now fails on every
     /// instruction.
     exhausted: bool,
@@ -322,6 +326,10 @@ impl Ctx {
             budget: shared(Budget {
                 limit: DEFAULT_BUDGET,
                 used: 0,
+                callbacks: 0,
+                pending_tasks: 0,
+                callback_depth: 0,
+                failure: None,
                 exhausted: false,
             }),
             pending: shared(VecDeque::new()),
@@ -400,7 +408,10 @@ fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
                 set_count_hook(lua, budget.clone(), 1);
                 b = lock(&budget);
             }
-            let limit = b.limit * u64::from(HOOK_INTERVAL);
+            if let Some(reason) = b.failure {
+                return Err(mlua::Error::runtime(reason));
+            }
+            let limit = b.limit.saturating_mul(u64::from(HOOK_INTERVAL));
             Err(mlua::Error::RuntimeError(format!(
                 "{BUDGET_ERROR} (more than {limit} instructions in one dispatch)"
             )))
@@ -413,6 +424,10 @@ fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
 fn reset_budget(lua: &Lua, ctx: &Ctx) {
     let mut b = lock(&ctx.budget);
     b.used = 0;
+    b.callbacks = 0;
+    b.pending_tasks = 0;
+    b.callback_depth = 0;
+    b.failure = None;
     if b.exhausted {
         b.exhausted = false;
         drop(b);
@@ -454,14 +469,84 @@ pub fn dispatch<R>(
     result
 }
 
-/// Run queued callbacks until the queue is empty. Each gets a fresh budget;
+/// Every script entry, including synchronous visibility and Lua-side timers,
+/// shares these limits. A small depth cap protects the native Rust/C stack.
+pub(crate) fn begin_callback(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    let (reason, new_failure) = {
+        let mut b = lock(&ctx.budget);
+        let reason = if b.exhausted {
+            Some(b.failure.unwrap_or(BUDGET_ERROR))
+        } else if b.callbacks >= 10_000 {
+            Some("dispatch callback budget exhausted")
+        } else if b.callback_depth >= 32 {
+            Some("script callbacks nested too deeply")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            let fresh = !b.exhausted;
+            b.exhausted = true;
+            b.failure = Some(reason);
+            (Some(reason), fresh)
+        } else {
+            b.callbacks += 1;
+            b.callback_depth += 1;
+            (None, false)
+        }
+    };
+    if let Some(reason) = reason {
+        if new_failure {
+            ctx.log(format!("error: {reason}"));
+            ctx.record(TraceKind::Error, "callback", vec![reason.into()]);
+            set_count_hook(lua, ctx.budget.clone(), 1);
+        }
+        return Err(mlua::Error::runtime(reason));
+    }
+    Ok(())
+}
+pub(crate) fn end_callback(ctx: &Ctx) {
+    let mut b = lock(&ctx.budget);
+    b.callback_depth = b.callback_depth.saturating_sub(1);
+}
+struct CallbackGuard<'a>(&'a Ctx);
+impl Drop for CallbackGuard<'_> {
+    fn drop(&mut self) {
+        end_callback(self.0);
+    }
+}
+/// Account before entering Lua; unwind the nesting count even on an error.
+pub(crate) fn script_callback<R>(
+    lua: &Lua,
+    ctx: &Ctx,
+    call: impl FnOnce() -> mlua::Result<R>,
+) -> mlua::Result<R> {
+    begin_callback(lua, ctx)?;
+    let _guard = CallbackGuard(ctx);
+    call()
+}
+
+/// Run queued callbacks until the queue is empty. Callbacks share the outer dispatch instruction and callback budgets;
 /// callbacks a callback queues run in the same flush.
-fn flush(lua: &Lua, ctx: &Ctx) {
+pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
     loop {
         let Some(next) = lock(&ctx.pending).pop_front() else {
             break;
         };
-        reset_budget(lua, ctx);
+        let stop = {
+            let mut b = lock(&ctx.budget);
+            b.pending_tasks += 1;
+            b.exhausted || b.pending_tasks > 10_000
+        };
+        if stop {
+            lock(&ctx.pending).clear();
+            ctx.log("error: dispatch callback/instruction budget exhausted");
+            ctx.record(
+                TraceKind::Error,
+                "flush",
+                vec!["dispatch budget exhausted".into()],
+            );
+            break;
+        }
         if let Err(e) = next(lua) {
             let text = e.to_string();
             ctx.log(format!("error: {text}"));
@@ -588,5 +673,67 @@ mod tests {
         assert!(json.contains("\"FULLSCREEN_DIALOG\""), "{json}");
         let back: Snapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(back, snap);
+    }
+}
+
+/// Fixed-width metric shared with Studio: Unicode characters have width
+/// `0.5 * font_size`, lines have height `font_size`. WoW markup is ignored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextMeasurement {
+    pub width: f64,
+    pub height: f64,
+}
+pub fn measure_text(text: &str, font_size: f64) -> TextMeasurement {
+    let mut chars = text.chars().peekable();
+    let (mut width, mut longest, mut lines) = (0usize, 0usize, 1usize);
+    while let Some(c) = chars.next() {
+        if c == '|' {
+            match chars.peek().copied() {
+                Some('c') => {
+                    chars.next();
+                    for _ in 0..8 {
+                        chars.next();
+                    }
+                    continue;
+                }
+                Some('r') | Some('h') => {
+                    chars.next();
+                    continue;
+                }
+                Some('T') | Some('H') => {
+                    let end = if chars.next() == Some('T') { 't' } else { 'h' };
+                    while let Some(c) = chars.next() {
+                        if c == '|' && chars.peek() == Some(&end) {
+                            chars.next();
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                Some('|') => {
+                    chars.next();
+                }
+                _ => {}
+            }
+        }
+        if c == '\n' {
+            longest = longest.max(width);
+            width = 0;
+            lines += 1;
+        } else {
+            width += 1;
+        }
+    }
+    TextMeasurement {
+        width: longest.max(width) as f64 * 0.5 * font_size,
+        height: lines as f64 * font_size,
+    }
+}
+#[cfg(test)]
+mod text_tests {
+    #[test]
+    fn unicode_and_markup() {
+        let m = super::measure_text("|cffffffff\u{732b}\u{e9}|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
+        assert_eq!((m.width, m.height), (12.0, 24.0));
     }
 }

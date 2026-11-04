@@ -67,6 +67,7 @@ impl Session {
 
     fn start_vm(config: &SessionConfig) -> SimResult<Sim> {
         let sim = Sim::new()?;
+        crate::frames::configure_ui_size(sim.lua(), config.ui_size)?;
         lock(&sim.ctx().trace).enabled = config.trace;
         sim.lua()
             .load(format!("math.randomseed({})", config.seed))

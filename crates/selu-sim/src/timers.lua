@@ -1,13 +1,18 @@
 local queue, frame = {}, 1
+local flush = __selu_sim_flush
+local beginCallback, endCallback = __selu_sim_begin_callback, __selu_sim_end_callback
 local frameTime = 1 / 60
 local function safe(fn, ...)
  __selu_sim_budget = __selu_sim_budget - 1
  if __selu_sim_budget < 0 then error('dispatch budget exceeded') end
+ beginCallback()
  local ok, err = pcall(fn, ...)
+ endCallback()
  if not ok then
   local converted, message = pcall(tostring, err)
   __selu_sim_error(converted and message or 'error object could not be formatted')
  end
+ flush()
  return ok
 end
 local function deadline(origin, index, period, now)
@@ -19,14 +24,7 @@ local function deadline(origin, index, period, now)
  end
  return due, origin, index, period
 end
-local function visible(f)
- local seen = {}
- while f do
-  if seen[f] or not rawget(f, '__shown') then return false end
-  seen[f] = true; f = rawget(f, '__parent')
- end
- return true
-end
+local visible = __selu_sim_visible
 local function create(delay, callback, iterations, after)
  assert(type(delay) == 'number' and delay == delay and delay < math.huge, 'invalid timer delay')
  assert(type(callback) == 'function', 'invalid timer callback')
