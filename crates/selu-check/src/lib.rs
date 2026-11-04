@@ -29,6 +29,7 @@ mod rules;
 // One file per language area. The central `stmt`/`expr_inner` matches only
 // dispatch; each area's checks live in its own file (docs/WORK-PACKAGES.md).
 mod data;
+mod errors;
 mod functions;
 mod loops;
 pub mod targets;
@@ -509,6 +510,7 @@ impl Ctx<'_> {
 
     fn stmt(&mut self, s: &Stmt) {
         match &s.kind {
+            StmtKind::Try { .. } | StmtKind::Throw { .. } => self.error_stmt(s),
             StmtKind::Saved { .. } | StmtKind::Migrate { .. } => self.saved_stmt(s),
             StmtKind::VarDecl {
                 is_const,
@@ -1080,6 +1082,9 @@ impl Ctx<'_> {
         if let Some(t) = self.api_member(t, name, api_object) {
             return t;
         }
+        if *t == errors::error_type() && name == "message" {
+            return Type::String;
+        }
         if let Some(t) = self.class_member(t, name, object) {
             return t;
         }
@@ -1410,7 +1415,9 @@ fn pattern_names(p: &selu_syntax::Pattern) -> Vec<(&String, &Span)> {
 
 fn always_exits(stmts: &[Stmt]) -> bool {
     match stmts.last().map(|s| &s.kind) {
-        Some(StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue) => true,
+        Some(
+            StmtKind::Return(_) | StmtKind::Throw { .. } | StmtKind::Break | StmtKind::Continue,
+        ) => true,
         Some(StmtKind::Block(b)) => always_exits(b),
         Some(StmtKind::If {
             then_branch,

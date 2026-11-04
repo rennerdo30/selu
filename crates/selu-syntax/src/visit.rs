@@ -62,6 +62,20 @@ pub fn child_stmts_and_exprs<'a>(s: &'a Stmt, f: &mut impl FnMut(Child<'a>)) {
             params(ps, f);
             stmts(body, f);
         }
+        StmtKind::Throw { value, .. } => f(Child::Expr(value)),
+        StmtKind::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            stmts(body, f);
+            if let Some((_, b)) = catch {
+                stmts(b, f);
+            }
+            if let Some(b) = finally {
+                stmts(b, f);
+            }
+        }
         StmtKind::Return(e) => {
             if let Some(e) = e {
                 f(Child::Expr(e));

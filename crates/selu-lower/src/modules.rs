@@ -139,6 +139,22 @@ fn walk_stmt(s: &Stmt, active: &HashSet<String>, out: &mut HashSet<u32>) {
             }
             return;
         }
+        StmtKind::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            walk_block(body, &active, out, true);
+            if let Some((p, b)) = catch {
+                let mut caught = active.clone();
+                caught.remove(&p.name);
+                walk_block(b, &caught, out, true);
+            }
+            if let Some(b) = finally {
+                walk_block(b, &active, out, true);
+            }
+            return;
+        }
         StmtKind::Block(ss) => {
             walk_block(ss, &active, out, true);
             return;

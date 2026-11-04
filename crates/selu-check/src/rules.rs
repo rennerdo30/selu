@@ -96,6 +96,10 @@ impl Rules {
                     self.name(local, span);
                 }
             }
+            StmtKind::Try {
+                catch: Some((p, _)),
+                ..
+            } => self.params(std::slice::from_ref(p)),
             StmtKind::OnHandler { params, .. } => self.params(params),
             StmtKind::Destructure { pattern, .. } => self.pattern(pattern),
             StmtKind::ForOf { binding, .. } => match binding {

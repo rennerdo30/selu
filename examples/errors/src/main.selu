@@ -1,0 +1,13 @@
+function readBalance(): number {
+  try {
+    throw new Error("Balance unavailable");
+  } catch (e) {
+    print(e.message);
+    return 0;
+  } finally {
+    print("Balance check finished");
+  }
+}
+on PLAYER_LOGIN() {
+  print(readBalance());
+}

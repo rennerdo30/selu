@@ -20,6 +20,7 @@ pub mod lua;
 // One file per language area; see docs/WORK-PACKAGES.md.
 mod classes;
 mod data;
+mod errors;
 mod functions;
 mod loops;
 mod modules;
@@ -349,6 +350,7 @@ impl Lowerer<'_> {
     fn stmt(&mut self, s: &Stmt, forward: bool, out: &mut LBlock) {
         let span = &s.span;
         match &s.kind {
+            StmtKind::Try { .. } | StmtKind::Throw { .. } => self.error_stmt(s, out),
             StmtKind::Saved { .. } | StmtKind::Migrate { .. } => self.saved_stmt(s, forward, out),
             StmtKind::VarDecl { init: None, .. } if forward => {}
             StmtKind::VarDecl {
@@ -413,7 +415,12 @@ impl Lowerer<'_> {
             | StmtKind::DoWhile { .. }
             | StmtKind::For { .. }
             | StmtKind::Break
-            | StmtKind::Continue => self.loop_stmt(s, out),
+            | StmtKind::Continue => {
+                let mut lowered = Vec::new();
+                self.loop_stmt(s, &mut lowered);
+                self.hoist_error_closures(&mut lowered, out);
+                out.extend(lowered);
+            }
             StmtKind::ForOf { .. } => self.for_of(s, out),
             StmtKind::Destructure { .. } => self.destructure(s, forward, out),
             StmtKind::TypeDecl(_) => {}

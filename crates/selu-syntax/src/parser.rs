@@ -9,6 +9,7 @@ pub fn parse(file: &str, src: &str) -> Result<Program, Diagnostic> {
         pos: 0,
         file: file.to_string(),
         next_id: 0,
+        source: src.to_string(),
     };
     let mut stmts = Vec::new();
     while !p.at(&Tok::Eof) {
@@ -18,6 +19,7 @@ pub fn parse(file: &str, src: &str) -> Result<Program, Diagnostic> {
 }
 
 struct Parser {
+    source: String,
     tokens: Vec<Token>,
     pos: usize,
     file: String,
@@ -425,6 +427,52 @@ impl Parser {
     fn stmt(&mut self) -> PResult<Stmt> {
         let start = self.peek_span().start;
         let kind = match self.peek().clone() {
+            Tok::Ident(ref w) if w == "throw" => {
+                self.bump();
+                let value = Box::new(self.expr()?);
+                self.semi(start)?;
+                StmtKind::Throw {
+                    value,
+                    line: self.source[..start].bytes().filter(|b| *b == b'\n').count() + 1,
+                }
+            }
+            Tok::Ident(ref w) if w == "try" => {
+                self.bump();
+                let body = self.block()?;
+                let catch = if self.at_ident("catch") {
+                    self.bump();
+                    self.expect(&Tok::LParen, "`(`")?;
+                    let (name, span) = self.ident("an error name")?;
+                    self.expect(&Tok::RParen, "`)`")?;
+                    Some((
+                        Param {
+                            name,
+                            span,
+                            ty: None,
+                            default: None,
+                            rest: false,
+                        },
+                        self.block()?,
+                    ))
+                } else {
+                    None
+                };
+                let finally = if self.at_ident("finally") {
+                    self.bump();
+                    Some(self.block()?)
+                } else {
+                    None
+                };
+                if catch.is_none() && finally.is_none() {
+                    return Err(self.unexpected("`catch` or `finally`"));
+                }
+                StmtKind::Try {
+                    body,
+                    catch,
+                    finally,
+                }
+            }
+
             Tok::Ident(ref w)
                 if (w == "type" || w == "interface")
                     && matches!(self.peek_at(1), Some(Tok::Ident(_))) =>

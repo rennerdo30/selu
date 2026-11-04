@@ -124,6 +124,15 @@ pub enum StmtKind {
         name_span: Span,
         init: Box<Expr>,
     },
+    Throw {
+        value: Box<Expr>,
+        line: usize,
+    },
+    Try {
+        body: Vec<Stmt>,
+        catch: Option<(Param, Vec<Stmt>)>,
+        finally: Option<Vec<Stmt>>,
+    },
     Return(Option<Box<Expr>>),
     If {
         cond: Box<Expr>,

@@ -37,9 +37,9 @@ and two newly sold locked duplicates bought back from index 2 then 1.
 **Status after round 5 (2026-11-04):** gaps 2 (`type`/`interface`) and 3
 (`typeof`) are closed by package L; gap 5 (`MerchantFrame`) is closed by M3;
 gap 6 (`NUM_TOTAL_EQUIPPED_BAG_SLOTS`) is closed on retail and forever, while
-the classic branches only reference it (guard with `has(...)` there). Gaps 1
-(`try`/`catch`), 4 (string patterns) and 8 (runtime
-scaffolding) are open and planned for round 6. Gap 7 is closed by Q. `tests/src/lib.rs`
+the classic branches only reference it (guard with `has(...)` there). Gap 1
+(`try`/`catch`) is closed by E; gap 7 is closed by Q. Gaps 4 (string patterns)
+and 8 (runtime scaffolding) are open and planned for round 6. `tests/src/lib.rs`
 (`gap_reproductions`) asserts each gap's current status, so this list can't
 drift from the compiler. The port itself still uses its original
 workarounds.
@@ -47,7 +47,7 @@ workarounds.
 Numbered gaps encountered (4 language, 0 checker false errors, 2 manifests,
 1 simulator, 1 readability; 8 total):
 
-1. **Language: structured error handling not parsed.** Minimal reproduction:
+1. **Closed: structured error handling.** Minimal reproduction:
    `try { print(1); } catch (e) { print(2); }` produces SELU0101 at `try`'s
    following space, suggesting a semicolon. Expected SPEC-V1 2.5 structured
    exception handling, or an unsupported-feature diagnostic. Workaround:

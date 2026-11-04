@@ -7,6 +7,7 @@ use selu_syntax::{Expr, ExprKind};
 impl Lowerer<'_> {
     pub(crate) fn data_expr(&mut self, e: &Expr, pre: &mut LBlock) -> LExpr {
         match &e.kind {
+            ExprKind::New { class, args, .. } if class == "Error" => self.error_new(args, pre),
             ExprKind::Array(items) => {
                 let refs: Vec<_> = items.iter().collect();
                 LExpr::Table(

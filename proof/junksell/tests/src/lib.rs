@@ -44,8 +44,8 @@ fn gap_reproductions() {
     let manifests = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
     // (source, open on these flavours; empty = closed everywhere)
     let cases: [(&str, &[&str]); 7] = [
-        // Gap 1, open: `try` doesn't parse yet.
-        ("try { print(1); } catch (e) { print(2); }", &["*"]),
+        // Gap 1, closed: structured error handling.
+        ("try { print(1); } catch (e) { print(2); }", &[]),
         // Gaps 2 and 3, closed by package L.
         ("type Item = { id: number }; const x: Item = {id: 1};", &[]),
         ("function safe(x) { return typeof x == \"number\"; }", &[]),

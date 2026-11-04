@@ -95,6 +95,9 @@ impl Ctx<'_> {
                 type_args,
                 args,
             } => {
+                if class == "Error" {
+                    return self.error_new(e, type_args, args);
+                }
                 if !matches!(class.as_str(), "Map" | "Set" | "WeakMap") {
                     return self.class_new(e, class, type_args, args);
                 }

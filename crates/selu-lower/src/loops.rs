@@ -5,8 +5,8 @@ use selu_diagnostics::Span;
 use selu_syntax::{Expr, ExprKind, Stmt, StmtKind, visit};
 
 pub(crate) struct LoopCtx {
-    wrapped: bool,
-    break_flag: Option<String>,
+    pub(crate) wrapped: bool,
+    pub(crate) break_flag: Option<String>,
 }
 fn stmt(kind: LStmtKind, span: &Span) -> LStmt {
     LStmt::new(kind, span)
@@ -261,6 +261,19 @@ impl Lowerer<'_> {
 
 fn transfers(s: &Stmt, continues: &mut bool, breaks: &mut bool) {
     match &s.kind {
+        StmtKind::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body
+                .iter()
+                .chain(catch.iter().flat_map(|(_, b)| b))
+                .chain(finally.iter().flatten())
+            {
+                transfers(s, continues, breaks);
+            }
+        }
         StmtKind::Continue => *continues = true,
         StmtKind::Break => *breaks = true,
         StmtKind::Block(b) => {

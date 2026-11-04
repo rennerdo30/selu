@@ -488,7 +488,7 @@ pub fn is_void(t: &TypeExpr) -> bool {
 
 fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>) -> Type {
     let want = match name {
-        "unknown" | "number" | "string" | "boolean" | "null" => 0,
+        "Error" | "unknown" | "number" | "string" | "boolean" | "null" => 0,
         "Set" => 1,
         "Map" | "WeakMap" => 2,
         _ => {
@@ -516,6 +516,7 @@ fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>
     }
     let mut next = || Box::new(args.remove(0));
     match name {
+        "Error" => crate::errors::error_type(),
         "unknown" => Type::Unknown,
         "number" => Type::Number,
         "string" => Type::String,
