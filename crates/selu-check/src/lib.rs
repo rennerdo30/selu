@@ -22,6 +22,7 @@ mod aliases;
 pub use aliases::shape_of;
 mod api;
 mod classes;
+mod frames;
 mod modules;
 pub mod saved;
 pub use modules::{ModuleBindings, ModuleExport, ModuleExports, reserved_module_path};

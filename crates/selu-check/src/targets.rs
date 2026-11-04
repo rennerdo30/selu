@@ -8,6 +8,9 @@ pub struct Availability {
     targets: Vec<Manifest>,
 }
 impl Availability {
+    pub(crate) fn manifests(&self) -> &[Manifest] {
+        &self.targets
+    }
     pub fn new(targets: &[Manifest]) -> Self {
         Self {
             targets: targets.to_vec(),
