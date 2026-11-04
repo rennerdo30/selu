@@ -25,3 +25,23 @@ license = "MIT"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
+
+# The test suite runs `selu` hundreds of times; each run parses large manifest
+# JSON files. Optimising dependencies and the manifest crate even in dev and
+# test builds makes that several times faster, while our own crates keep fast
+# incremental compiles.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.selu-manifest]
+opt-level = 3
+
+# The compiler runs over the full game API in many tests.
+[profile.dev.package.selu-check]
+opt-level = 2
+
+[profile.dev.package.selu-lower]
+opt-level = 2
+
+[profile.dev.package.selu-syntax]
+opt-level = 2

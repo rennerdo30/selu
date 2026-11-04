@@ -81,7 +81,7 @@ fn every_example_builds_for_every_client() {
     std::fs::create_dir_all(&temp).unwrap();
     let _cleanup = Cleanup(temp.clone());
     let manifests = root().join("manifests");
-    let mut count = 0;
+    let mut jobs = Vec::new();
     for entry in std::fs::read_dir(root().join("examples")).unwrap() {
         let entry = entry.unwrap();
         if !entry.path().join("selu.toml").is_file() {
@@ -89,17 +89,36 @@ fn every_example_builds_for_every_client() {
         }
         let project = temp.join(entry.file_name());
         copy_project(&entry.path(), &project);
-        for flavour in FLAVOURS {
-            cli(&[
-                "build",
-                project.to_str().unwrap(),
-                "--target",
-                flavour,
-                "--manifest-dir",
-                manifests.to_str().unwrap(),
-            ]);
-        }
-        count += 1;
+        jobs.push(project);
     }
+    let count = jobs.len();
+    // Each example builds in its own folder, so examples can build in
+    // parallel; the flavours of one example share it and stay sequential.
+    // Half the cores keeps the machine usable while the suite runs.
+    let workers = std::thread::available_parallelism()
+        .map_or(2, |n| (n.get() / 2).max(1))
+        .min(jobs.len().max(1));
+    let queue = std::sync::Mutex::new(jobs);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let Some(project) = queue.lock().unwrap().pop() else {
+                        break;
+                    };
+                    for flavour in FLAVOURS {
+                        cli(&[
+                            "build",
+                            project.to_str().unwrap(),
+                            "--target",
+                            flavour,
+                            "--manifest-dir",
+                            manifests.to_str().unwrap(),
+                        ]);
+                    }
+                }
+            });
+        }
+    });
     assert!(count >= 2);
 }

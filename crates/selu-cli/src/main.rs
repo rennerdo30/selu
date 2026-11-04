@@ -422,7 +422,17 @@ fn fail(d: &Diagnostic, source: &str) -> ExitCode {
 
 /// Manifest discovery: `--manifest-dir`, `$SELU_MANIFEST_DIR`, then the
 /// nearest `manifests/` folder walking up from the project and the cwd.
-fn find_manifests(explicit: Option<&Path>, project_dir: &Path) -> Result<Vec<Manifest>, ExitCode> {
+///
+/// With `flavours`, only the folders those flavours need are read
+/// (`<dir>/<flavour>/` plus the small `fixtures/`), instead of every
+/// client's manifest (tens of MB of JSON). If a flavour has no folder of its
+/// own, everything is read, so "unknown target" errors still list every
+/// known flavour.
+fn find_manifests(
+    explicit: Option<&Path>,
+    project_dir: &Path,
+    flavours: Option<&[String]>,
+) -> Result<Vec<Manifest>, ExitCode> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(p) = explicit {
         candidates.push(p.to_path_buf());
@@ -439,6 +449,26 @@ fn find_manifests(explicit: Option<&Path>, project_dir: &Path) -> Result<Vec<Man
     }
     for dir in candidates {
         if dir.is_dir() {
+            if let Some(flavours) = flavours
+                && !flavours.is_empty()
+                && flavours.iter().all(|f| dir.join(f).is_dir())
+            {
+                let mut out = Vec::new();
+                let mut folders: Vec<PathBuf> = flavours.iter().map(|f| dir.join(f)).collect();
+                folders.push(dir.join("fixtures"));
+                folders.sort();
+                folders.dedup();
+                for folder in folders.iter().filter(|f| f.is_dir()) {
+                    match selu_manifest::load_manifest_dir(folder) {
+                        Ok(m) => out.extend(m),
+                        Err(d) => return Err(fail(&d, "")),
+                    }
+                }
+                if !out.is_empty() {
+                    out.sort_by(|a, b| a.flavour.cmp(&b.flavour).then(a.build.cmp(&b.build)));
+                    return Ok(out);
+                }
+            }
             match selu_manifest::load_manifest_dir(&dir) {
                 Ok(m) if !m.is_empty() => return Ok(m),
                 Ok(_) => continue,
@@ -453,7 +483,7 @@ fn find_manifests(explicit: Option<&Path>, project_dir: &Path) -> Result<Vec<Man
 }
 
 fn targets(manifest_dir: Option<&Path>) -> Result<(), ExitCode> {
-    let manifests = find_manifests(manifest_dir, Path::new("."))?;
+    let manifests = find_manifests(manifest_dir, Path::new("."), None)?;
     for m in &manifests {
         println!(
             "{}  (interface {}{})",
@@ -506,7 +536,12 @@ fn build(
         eprintln!("selu: no targets (set `targets` under [addon] in selu.toml or pass --target)");
         return Err(ExitCode::FAILURE);
     }
-    let manifests = find_manifests(manifest_dir, project_dir)?;
+    // Only the flavours this build targets (`retail@12.0` -> `retail`).
+    let flavours: Vec<String> = target_strings
+        .iter()
+        .map(|t| t.split('@').next().unwrap_or(t).trim().to_string())
+        .collect();
+    let manifests = find_manifests(manifest_dir, project_dir, Some(&flavours))?;
     let selected: Vec<Manifest> = target_strings
         .iter()
         .map(|t| {

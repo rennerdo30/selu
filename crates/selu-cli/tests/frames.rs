@@ -1,10 +1,9 @@
 use selu_check::{CheckOptions, ModuleBindings, check_module_targets_with_options};
 use selu_manifest::Manifest;
-use std::path::Path;
 
 fn retail() -> Manifest {
-    selu_manifest::load_manifest_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"))
-        .unwrap()
+    cached_manifests()
+        .clone()
         .into_iter()
         .find(|m| m.flavour == "retail" && !m.fixture)
         .unwrap()
@@ -147,13 +146,11 @@ fn review_global_children_are_not_fields_and_run_as_globals() {
 #[test]
 fn review_scoped_guards_filter_named_and_created_frames() {
     let m = retail();
-    let other = selu_manifest::load_manifest_dir(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
-    )
-    .unwrap()
-    .into_iter()
-    .find(|m| m.flavour == "classic-era" && !m.fixture)
-    .unwrap();
+    let other = cached_manifests()
+        .clone()
+        .into_iter()
+        .find(|m| m.flavour == "classic-era" && !m.fixture)
+        .unwrap();
     let targets = [m, other];
     for src in [
         "if (has(AbandonHouseConfirmationDialog)) { GameTooltip.RefreshDataNextUpdate(); }",
@@ -338,4 +335,16 @@ fn review_widget_annotations_accept_templates_and_preserve_assignability() {
         )
         .has_errors()
     );
+}
+
+/// Every manifest, parsed once per test binary (parsing all clients' JSON
+/// for each test made this file one of the slowest in the suite).
+fn cached_manifests() -> &'static Vec<selu_manifest::Manifest> {
+    static ALL: std::sync::OnceLock<Vec<selu_manifest::Manifest>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        selu_manifest::load_manifest_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
+        )
+        .unwrap()
+    })
 }

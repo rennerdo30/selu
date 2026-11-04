@@ -69,12 +69,9 @@ fn shared_error_widths_and_callback_dispatch_keep_values() {
 }
 #[test]
 fn saved_initializes_before_user_addon_loaded_handler() {
-    let manifests = selu_manifest::load_manifest_dir(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
-    )
-    .unwrap();
+    let manifests = cached_manifests();
     let manifest = manifests
-        .into_iter()
+        .iter()
         .find(|m| m.flavour == "forever" && !m.fixture)
         .unwrap();
     let p = selu_syntax::parse(
@@ -82,9 +79,9 @@ fn saved_initializes_before_user_addon_loaded_handler() {
         "saved settings = { enabled: true }; on ADDON_LOADED(addon) { print(settings.enabled); }",
     )
     .unwrap();
-    let c = selu_check::check_program(&p, &manifest);
+    let c = selu_check::check_program(&p, manifest);
     assert!(!c.has_errors(), "{:?}", c.diagnostics);
-    let mut files = vec![selu_lower::lower(&p, &manifest, &c.types)];
+    let mut files = vec![selu_lower::lower(&p, manifest, &c.types)];
     let runtime = selu_lower::runtime::share(&mut files).unwrap();
     let sim = selu_sim::Sim::new().unwrap();
     sim.load_addon(
@@ -363,4 +360,16 @@ fn shared_queue_debug_toggle_preserves_module_maps_and_line_counts() {
     );
     assert_eq!(outputs[0].0.lines().count(), outputs[1].0.lines().count());
     assert_eq!(outputs[0].1, outputs[1].1);
+}
+
+/// Every manifest, parsed once per test binary (parsing all clients' JSON
+/// for each test made this file one of the slowest in the suite).
+fn cached_manifests() -> &'static Vec<selu_manifest::Manifest> {
+    static ALL: std::sync::OnceLock<Vec<selu_manifest::Manifest>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        selu_manifest::load_manifest_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
+        )
+        .unwrap()
+    })
 }

@@ -1,10 +1,7 @@
 use std::path::Path;
 
 fn codes(src: &str, flavour: &str) -> Vec<String> {
-    let all = selu_manifest::load_manifest_dir(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
-    )
-    .unwrap();
+    let all = cached_manifests();
     let manifest = all
         .iter()
         .find(|m| m.flavour == flavour && !m.fixture)
@@ -74,10 +71,7 @@ fn results_widgets_events_and_namespaces() {
 }
 
 fn compile(src: &str, flavour: &str) -> String {
-    let all = selu_manifest::load_manifest_dir(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
-    )
-    .unwrap();
+    let all = cached_manifests();
     let m = all
         .iter()
         .find(|m| m.flavour == flavour && !m.fixture)
@@ -153,10 +147,7 @@ fn structures_enums_callbacks_and_optional_results() {
 #[test]
 fn imported_multiple_result_function_keeps_its_convention() {
     use std::collections::BTreeMap;
-    let all = selu_manifest::load_manifest_dir(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
-    )
-    .unwrap();
+    let all = cached_manifests();
     for m in all.iter().filter(|m| !m.fixture) {
         let base = selu_syntax::parse("base.selu", "export const nameOf = UnitName;").unwrap();
         let (checked, exports) = selu_check::check_module(&base, m, Default::default());
@@ -236,11 +227,9 @@ fn primitive_aliases_and_scalar_unions() {
 
 #[test]
 fn returned_scalar_unions_require_all_members_to_fit() {
-    let all = selu_manifest::load_manifest_dir(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
-    )
-    .unwrap();
-    for mut m in all.into_iter().filter(|m| !m.fixture) {
+    let all = cached_manifests();
+    // This test edits the manifests, so it works on copies.
+    for mut m in all.iter().filter(|m| !m.fixture).cloned() {
         let modern = matches!(m.flavour.as_str(), "retail" | "forever");
         let api = if modern { "GetBuildInfo" } else { "UnitName" };
         // Model a documented API returning the same scalar union accepted by GetSpellInfo.
@@ -272,10 +261,7 @@ fn returned_scalar_unions_require_all_members_to_fit() {
 
 #[test]
 fn api_origin_is_diagnostic_only_and_survives_aliases() {
-    let all = selu_manifest::load_manifest_dir(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
-    )
-    .unwrap();
+    let all = cached_manifests();
     for m in all.iter().filter(|m| !m.fixture) {
         let diagnose = |src: &str| {
             let p = selu_syntax::parse("origin.selu", src).unwrap();
@@ -446,16 +432,10 @@ undefined_api_type_case!(
 );
 
 fn review_manifest(flavour: &str) -> &'static selu_manifest::Manifest {
-    static ALL: std::sync::OnceLock<Vec<selu_manifest::Manifest>> = std::sync::OnceLock::new();
-    ALL.get_or_init(|| {
-        selu_manifest::load_manifest_dir(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
-        )
+    cached_manifests()
+        .iter()
+        .find(|m| m.flavour == flavour && !m.fixture)
         .unwrap()
-    })
-    .iter()
-    .find(|m| m.flavour == flavour && !m.fixture)
-    .unwrap()
 }
 fn review_checked(src: &str, flavour: &str) -> selu_check::Checked {
     selu_check::check_program(
@@ -753,4 +733,16 @@ fn review_scalar_conditions_and_index_keys() {
 fn review_nonfinal_array_field_is_scalar() {
     let lua = compile(r#"const values = [GetBuildInfo(), "end"];"#, "retail");
     assert_eq!(lua, "local values = { GetBuildInfo(), \"end\" }\n");
+}
+
+/// Every manifest, parsed once per test binary (parsing all clients' JSON
+/// for each test made this file one of the slowest in the suite).
+fn cached_manifests() -> &'static Vec<selu_manifest::Manifest> {
+    static ALL: std::sync::OnceLock<Vec<selu_manifest::Manifest>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        selu_manifest::load_manifest_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
+        )
+        .unwrap()
+    })
 }
