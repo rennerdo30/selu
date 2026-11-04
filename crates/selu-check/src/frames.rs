@@ -1,56 +1,79 @@
 //! Template identities travel with nominal widgets, including aliases/imports.
 use crate::{Ctx, Type, api, err};
-use selu_manifest::Manifest;
+use selu_manifest::{Declaration, Manifest};
 use selu_syntax::{Expr, ExprKind};
 
-fn member(m: &Manifest, template: &str, name: &str, seen: &mut Vec<String>) -> bool {
-    if seen.iter().any(|s| s == template) {
-        return false;
-    }
-    seen.push(template.into());
-    let Some(d) = m
-        .templates
-        .iter()
-        .chain(&m.data_globals)
-        .find(|d| d.name == template)
-    else {
-        return false;
-    };
-    d.fields.iter().chain(&d.methods).any(|s| s == name)
-        || d.inherits
-            .iter()
-            .chain(&d.mixins)
-            .any(|b| member(m, b, name, seen))
-}
-
-fn documented_member<'a>(
+// Outer Some means the member exists. Inner None is an untyped override and
+// must stop lookup just as a documented signature does. Paths, not a global
+// visited set, allow a later application of the same ancestor to override.
+fn effective<'a>(
     m: &'a Manifest,
     template: &str,
     name: &str,
-    seen: &mut Vec<String>,
-) -> Option<&'a selu_manifest::Declaration> {
-    if seen.iter().any(|s| s == template) {
+    path: &mut Vec<String>,
+) -> Option<Option<&'a Declaration>> {
+    if path.iter().any(|s| s == template) {
         return None;
-    }
-    seen.push(template.into());
-    if let Some(d) = m
-        .function(&format!("{template}.{name}"))
-        .and_then(|f| f.signature.as_ref())
-    {
-        return Some(d);
     }
     let d = m
         .templates
         .iter()
         .chain(&m.data_globals)
         .find(|d| d.name == template)?;
-    d.inherits
-        .iter()
-        .chain(&d.mixins)
-        .find_map(|b| documented_member(m, b, name, seen))
+    path.push(template.into());
+    let mut result = None;
+    for base in &d.inherits {
+        if let Some(value) = effective(m, base, name, path) {
+            result = Some(value);
+        }
+    }
+    let mut mixin = None;
+    for base in &d.mixins {
+        if let Some(value) = effective(m, base, name, path) {
+            mixin = Some(value);
+        }
+    }
+    if mixin.is_some() {
+        result = mixin;
+    }
+    let own = m.function(&format!("{template}.{name}"));
+    if let Some(f) = own {
+        result = Some(f.signature.as_ref());
+    } else if d.fields.iter().chain(&d.methods).any(|s| s == name) {
+        // Template name lists include their direct mixin projection. Preserve
+        // that mixin's signature; Lua data entries list their own members.
+        result = if m.templates.iter().any(|t| std::ptr::eq(t, d)) {
+            mixin.or(Some(None))
+        } else {
+            Some(None)
+        };
+    }
+    path.pop();
+    result
 }
-
+fn applied<'a>(m: &'a Manifest, templates: &[&str], name: &str) -> Option<Option<&'a Declaration>> {
+    templates
+        .iter()
+        .rev()
+        .find_map(|t| effective(m, t, name, &mut Vec::new()))
+}
 impl Ctx<'_> {
+    pub(crate) fn frame_type_names(&self) -> std::collections::HashMap<String, Type> {
+        self.manifest
+            .widgets
+            .iter()
+            .flat_map(|w| {
+                let mut names = vec![w.name.clone()];
+                if let Some(n) = w.name.strip_suffix("API") {
+                    names.push(n.into());
+                }
+                names.into_iter().map(|n| {
+                    let ty = api::named(self.manifest, &n, 0);
+                    (n, ty)
+                })
+            })
+            .collect()
+    }
     pub(crate) fn frame_global(&self, name: &str) -> Option<Type> {
         let g = self.manifest.globals.iter().find(|g| g.name == name)?;
         let mut ty = api::named(self.manifest, g.ty.as_deref()?, 0);
@@ -60,29 +83,38 @@ impl Ctx<'_> {
         }
         Some(ty)
     }
-
     pub(crate) fn frame_templates(&mut self, mut base: Type, args: &[Expr]) -> Type {
-        let Some(Expr {
-            kind: ExprKind::Str(list),
-            span,
-            ..
-        }) = args.get(3)
-        else {
+        let Some(arg) = args.get(3) else {
             return base;
         };
-        for name in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let ExprKind::Str(list) = &arg.kind else {
+            return base;
+        };
+        let mut offset = 0;
+        for entry in list.split(',') {
+            let name = entry.trim();
+            let start = offset + entry.len() - entry.trim_start().len();
+            offset += entry.len() + 1;
+            if name.is_empty() {
+                continue;
+            }
             let known = self
                 .availability
                 .manifests()
                 .iter()
                 .any(|m| m.templates.iter().any(|t| t.name == name));
             if !known {
+                let mut span = arg.span.clone();
+                if let Some(map) = &arg.string_offsets {
+                    span.start = map[start];
+                    span.end = map[start + name.len()];
+                }
                 self.out.push(
                     selu_diagnostics::Diagnostic::warning(
                         "SELU0580",
                         format!("unknown frame template `{name}` on {}", self.target()),
                     )
-                    .with_span(span.clone())
+                    .with_span(span)
                     .with_help(
                         "check the template spelling; addon templates may be absent from manifests",
                     ),
@@ -94,7 +126,6 @@ impl Ctx<'_> {
         }
         base
     }
-
     pub(crate) fn frame_member(&mut self, ty: &Type, name: &str, object: &Expr) -> Option<Type> {
         let Type::Widget(_, bases) = ty else {
             return None;
@@ -104,67 +135,66 @@ impl Ctx<'_> {
             .filter_map(|s| s.strip_prefix("@template:"))
             .collect();
         let global = bases.iter().find_map(|s| s.strip_prefix("@global:"));
-        let targets = self.availability.manifests();
-        let present: Vec<_> = targets
+        let present: Vec<_> = self
+            .availability
+            .manifests()
             .iter()
+            .filter(|m| self.target_is_active(m))
             .map(|m| {
-                let child =
-                    global.and_then(|g| m.globals.iter().find(|c| c.name == format!("{g}{name}")));
-                let has = if let Some(global) = global {
+                let names: Vec<_> = if let Some(g) = global {
                     m.globals
                         .iter()
-                        .find(|g| g.name == global)
-                        .is_some_and(|g| {
-                            g.templates
-                                .iter()
-                                .any(|t| member(m, t, name, &mut Vec::new()))
-                        })
+                        .find(|v| v.name == g)
+                        .map(|g| g.templates.iter().map(String::as_str).collect())
+                        .unwrap_or_default()
                 } else {
-                    templates
-                        .iter()
-                        .any(|t| member(m, t, name, &mut Vec::new()))
+                    templates.clone()
                 };
-                (m, child, has)
+                (m, applied(m, &names, name))
             })
             .collect();
-        if !present
-            .iter()
-            .any(|(_, child, has)| child.is_some() || *has)
-        {
+        if !present.iter().any(|(_, member)| member.is_some()) {
+            // M3 records global names, not parentKey relationships. A name
+            // prefix proves only a global exists, never a field on its parent.
+            if let Some(g) = global {
+                let child = format!("{g}{name}");
+                if present
+                    .iter()
+                    .any(|(m, _)| m.globals.iter().any(|g| g.name == child))
+                {
+                    self.out.push(
+                        err(
+                            "SELU0582",
+                            format!("`{child}` is recorded as a global, not a `{name}` field"),
+                            &object.span,
+                        )
+                        .with_help(format!("use the global `{child}` directly")),
+                    );
+                    return Some(Type::Error);
+                }
+            }
             return None;
         }
         let missing: Vec<_> = present
             .iter()
-            .filter(|(_, c, h)| c.is_none() && !h)
-            .map(|(m, _, _)| m.target_string())
+            .filter(|(_, member)| member.is_none())
+            .map(|(m, _)| m.target_string())
             .collect();
         if !missing.is_empty() {
-            self.out.push(
-                err(
-                    "SELU0581",
-                    format!(
-                        "template member `{name}` is unavailable on {}",
-                        missing.join(", ")
-                    ),
-                    &object.span,
-                )
-                .with_help("use templates and members available on every selected target"),
-            );
+            self.out.push(err("SELU0581", format!("template member `{name}` is unavailable on {}", missing.join(", ")), &object.span)
+                .with_help("use templates and members available on every selected target, or guard with has(...)"));
             return Some(Type::Error);
         }
-        if let Some((_, Some(child), _)) = present
+        // Use the active primary's signature, or an active fallback when this
+        // target's branch is unreachable. Untyped overrides remain untyped.
+        let (m, member) = present
             .iter()
-            .find(|(m, _, _)| m.target_string() == self.target())
-        {
-            return self.frame_global(&child.name);
-        }
-        // M3 members carry names only. A separately documented signature is
-        // usable, but source evidence alone never supplies a guessed signature.
-        let full = templates
-            .iter()
-            .find_map(|t| documented_member(self.manifest, t, name, &mut Vec::new()));
+            .find(|(m, _)| m.target_string() == self.target())
+            .unwrap_or(&present[0]);
         Some(
-            full.map(|d| api::signature(self.manifest, d, 0))
+            member
+                .flatten()
+                .map(|d| api::signature(m, d, 0))
                 .unwrap_or(Type::Untyped),
         )
     }

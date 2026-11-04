@@ -23,14 +23,32 @@ in both layouts and both strict modes. Open widget fields remain open; an unknow
 member is not evidence of a missing API. Merely naming an unknown template does
 not turn open widget calls into errors.
 
-Named XML globals retain their template members. Where M3 recorded a concrete
-$parent child, its suffix is accessible as a field, for example
-GameTooltip.TextLeft1 when GameTooltipTextLeft1 is recorded. The child keeps its
-widget type and templates. Template identities survive ordinary aliases and
-module exports, using internal ancestry metadata; no Lua wrapper is emitted.
+Named XML globals retain their template members. M3 records global child names,
+but not parentKey relationships. A global-only child has no implied parent
+field: use MerchantFrameTab1 directly, rather than MerchantFrame.Tab1. A suffix
+access matching a recorded global is rejected with SELU0582 and a help line
+naming that global. GameTooltipTexture1 follows the same rule. Other open addon
+fields keep the usual T1 policy. Parent fields can be modeled when manifests
+record actual parentKey relationships; this package does not invent them.
+
+Template and mixin lists apply in order: later definitions override earlier
+ones, including untyped definitions overriding typed members. Documented widget
+methods keep precedence. Cycle detection is per traversal path so repeated
+applications of an ancestor still participate in order. Template identities
+survive aliases and module exports without a Lua wrapper.
+
+Availability uses T2's scoped has(...) facts, including early-return guards,
+in both layouts. Each unknown template entry has its own diagnostic span;
+escaped string characters retain their original source offsets.
+
+Manifest widget names are also valid written types, for example
+`function style(f: Frame) { f.SetSize(240, 100); }`. A templated Frame fits
+Frame, and derived widgets retain their existing nominal assignability.
+Widget declarations, class names and type aliases retain their usual precedence.
 
 The templated-frames example runs offline. The simulator models BackdropTemplate
-SetBackdrop/GetBackdrop and SetBackdropColor/GetBackdropColor as stored data;
+SetBackdrop/GetBackdrop and SetBackdropColor/GetBackdropColor as stored data (getters return no colour without a backdrop, clearing removes
+colour, and GetBackdrop returns a deep copy);
 UIPanelButtonTemplate uses the existing button text and geometry model. XML
 scripts, border textures, rendering and arbitrary mixins are not simulated.
 Actual client appearance remains an owner check.

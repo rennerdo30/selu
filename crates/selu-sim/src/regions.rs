@@ -55,10 +55,28 @@ pub(crate) fn templates(lua: &Lua, frame: &Table, templates: Option<&str>) -> ml
             .load(
                 r#"
 return function(frame)
-  function frame:SetBackdrop(info) self.__backdrop = info end
-  function frame:GetBackdrop() return self.__backdrop end
-  function frame:SetBackdropColor(r, g, b, a) self.__backdropColor = {r, g, b, a or 1} end
-  function frame:GetBackdropColor() return unpack(self.__backdropColor or {1, 1, 1, 1}) end
+  function frame:SetBackdrop(info)
+    self.__backdrop = info
+    self.__backdropColor = info and {1, 1, 1, 1} or nil
+  end
+  function frame:GetBackdrop()
+    if not self.__backdrop then return nil end
+    local seen = {}
+    local function copy(value)
+      if type(value) ~= 'table' then return value end
+      if seen[value] then return seen[value] end
+      local result = {}; seen[value] = result
+      for key, child in pairs(value) do result[key] = copy(child) end
+      return result
+    end
+    return copy(self.__backdrop)
+  end
+  function frame:SetBackdropColor(r, g, b, a)
+    if self.__backdrop then self.__backdropColor = {r, g, b, a or 1} end
+  end
+  function frame:GetBackdropColor()
+    if self.__backdropColor then return unpack(self.__backdropColor) end
+  end
 end
 "#,
             )

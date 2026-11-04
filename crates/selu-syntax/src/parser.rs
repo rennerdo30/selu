@@ -63,7 +63,28 @@ impl Parser {
         self.next_id
     }
     fn mk(&mut self, kind: ExprKind, span: Span) -> Expr {
+        let string_offsets = if matches!(kind, ExprKind::Str(_)) {
+            let raw = &self.source[span.start..span.end];
+            let mut offsets = Vec::new();
+            let mut i = 1;
+            while i + 1 < raw.len() {
+                let start = i;
+                if raw.as_bytes()[i] == b'\\' {
+                    i += 2;
+                    offsets.push(span.start + start);
+                } else {
+                    let len = raw[i..].chars().next().unwrap().len_utf8();
+                    offsets.extend((0..len).map(|j| span.start + start + j));
+                    i += len;
+                }
+            }
+            offsets.push(span.start + raw.len() - 1);
+            Some(offsets)
+        } else {
+            None
+        };
         Expr {
+            string_offsets,
             id: self.next_id(),
             kind,
             span,
