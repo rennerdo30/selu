@@ -6,7 +6,7 @@ fn catches_and_finally() {
         run(
             r#"try { throw new Error("bad"); } catch (e) { print(e.message); } finally { print("clean"); }"#
         ),
-        ["t.selu:1: bad", "clean"]
+        ["bad", "clean"]
     );
 }
 #[test]
@@ -15,7 +15,7 @@ fn returns_and_overrides() {
         run(
             r#"function f(): number { try { return 1; } finally { print("clean"); return 2; } } print(f()); function g() { try { throw new Error("bad"); } catch (e) { return e.message; } finally { print("done"); } } print(g());"#
         ),
-        ["clean", "2", "done", "t.selu:1: bad"]
+        ["clean", "2", "done", "bad"]
     );
 }
 #[test]
@@ -61,7 +61,7 @@ fn nested_and_tuple() {
         run(
             r#"try { try { throw new Error("one"); } catch (e) { throw new Error("two"); } finally { print("inner"); } } catch (e) { print(e.message); }"#
         ),
-        ["inner", "t.selu:1: two"]
+        ["inner", "two"]
     );
     assert_eq!(
         run(
@@ -104,7 +104,7 @@ fn catch_binding_is_not_a_literal_origin() {
         lua.contains(" = x\n"),
         "missing conservative old-value snapshot:\n{lua}"
     );
-    assert_eq!(run(src), ["startt.selu:1: caught"]);
+    assert_eq!(run(src), ["startcaught"]);
 }
 #[test]
 fn catch_shadows_live_import() {
@@ -139,7 +139,7 @@ fn catch_shadows_live_import() {
         .collect();
     let sim = selu_sim::Sim::new().unwrap();
     sim.load_addon("ErrorsImport", &files).unwrap();
-    assert_eq!(sim.prints(), ["main.selu:1: caught", "7"]);
+    assert_eq!(sim.prints(), ["caught", "7"]);
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn error_aliases_keep_nominal_identity() {
         run(
             r#"type Message = string; type Failure = Error; const message: Message = "alias"; const failure: Failure = new Error(message); try { throw failure; } catch(e) { print(e.message); }"#
         ),
-        ["t.selu:1: alias"]
+        ["alias"]
     );
     assert!(codes(r#"const e: Error = {message: "fake"}; throw e;"#).contains(&"SELU0336".into()));
 }
@@ -187,4 +187,144 @@ fn hoisting_preserves_source_callback_identity() {
         ),
         ["false", "false"]
     );
+}
+
+#[test]
+fn review_error_identity_and_message() {
+    assert_eq!(
+        run(
+            r#"const original = new Error("x"); try { throw original; } catch(e) { print(e == original, e.message); e.message = "changed"; } print(original.message);"#
+        ),
+        ["true\tx", "changed"]
+    );
+}
+#[test]
+fn review_rethrow_formats_once() {
+    let lua = compile(
+        "const original = new Error(\"original\");\non PLAYER_LOGIN() {\n try { throw original; } catch(e) {\n print(e == original, e.message);\n throw e;\n }\n}",
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    let error = sim.fire("PLAYER_LOGIN", vec![]).unwrap_err().to_string();
+    assert_eq!(sim.prints(), ["true\toriginal"]);
+    assert!(error.contains("t.selu:3: original"), "{error}");
+    assert!(!error.contains("t.selu:5:"), "{error}");
+    assert_eq!(error.matches("t.selu:3:").count(), 1, "{error}");
+}
+#[test]
+fn review_unused_self_catch_binding() {
+    assert_eq!(
+        run(
+            r#"class C { value = 7; test() { try { throw new Error("x"); } catch(self) { print(this.value); } } } new C().test();"#
+        ),
+        ["7"]
+    );
+}
+#[test]
+fn review_runtime_primitive_shadowing() {
+    assert_eq!(
+        run(
+            r#"function test() { const error = () => {}; const pcall = () => {}; const tostring = () => "wrong"; const setmetatable = () => {}; const getmetatable = () => {}; try { throw new Error("right"); } catch(e) { print(e.message); } finally { print("finally"); } } test();"#
+        ),
+        ["right", "finally"]
+    );
+}
+#[test]
+fn review_capture_free_loop_allocation() {
+    let lua = compile(
+        "global count = 0; function work() { count++; } global run = () => { for(let i=0;i<1024;i++) { try { work(); } finally {} } };",
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    sim.eval("collectgarbage('collect'); collectgarbage('stop'); before = collectgarbage('count'); run(); print(count); print(collectgarbage('count') - before)")
+        .unwrap();
+    let prints = sim.prints();
+    assert_eq!(prints[0], "1024");
+    let growth: f64 = prints[1].parse().unwrap();
+    eprintln!("Protected loop allocation: {growth} KiB for 1024 iterations");
+    assert!(growth < 16.0, "loop allocated {growth} KiB");
+}
+#[test]
+fn review_optional_catch_binding() {
+    assert_eq!(
+        run(
+            r#"try { throw new Error("x"); } catch { print("caught"); } finally { print("finally"); }"#
+        ),
+        ["caught", "finally"]
+    );
+}
+#[test]
+fn review_empty_error_message() {
+    assert_eq!(
+        run(
+            "const e = new Error(); print(e.message); try { throw e; } catch(caught) { print(caught == e); }"
+        ),
+        ["", "true"]
+    );
+}
+#[test]
+fn review_error_name_is_reserved() {
+    assert!(codes("class Error {} new Error();").contains(&"SELU0542".into()));
+    assert!(codes("function f(Error) {}").contains(&"SELU0542".into()));
+    assert!(codes("function f() { let Error = 1; }").contains(&"SELU0542".into()));
+}
+#[test]
+fn review_protected_conversion_keeps_raw_value() {
+    let lua=compile(r#"global fail = () => {}; try { fail(); } catch(e) { print(e.message); print(e.value == RawFailure); }"#.replace("RawFailure", "fail").as_str());
+    let lua = lua.replace("fail()", "error(fail, 0)");
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[(
+        "t.lua".into(),
+        lua.replace(
+            "fail = function()\nend",
+            "fail = setmetatable({}, {__tostring=function() error('broken conversion') end})",
+        ),
+    )])
+    .unwrap();
+    assert_eq!(sim.prints(), ["<error object>", "true"]);
+}
+#[test]
+fn review_no_cascading_error_diagnostics() {
+    assert_eq!(codes("throw missing;"), ["SELU0310"]);
+    assert_eq!(codes("new Error(missing);"), ["SELU0310"]);
+    assert_eq!(codes("throw new Error(missing, 1);"), ["SELU0310"]);
+}
+
+#[test]
+fn review_cross_module_error_identity() {
+    use std::{fs, path::Path, process::Command};
+    let dir = std::env::temp_dir().join(format!("selu-e-module-{}", std::process::id()));
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"CrossErrors\"\ntargets = [\"forever@1.0\"]\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/fail.selu"),r#"export const original = new Error("module"); export function fail() { throw original; }"#).unwrap();
+    fs::write(dir.join("src/main.selu"),r#"import {original,fail} from "./fail"; try { fail(); } catch(e) { print(e == original, e.message); e.message = "mutated"; } print(original.message); on PLAYER_LOGIN() { try { fail(); } catch(e) { throw e; } }"#).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("build")
+        .arg(&dir)
+        .arg("--manifest-dir")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let dist = dir.join("dist/CrossErrors");
+    let toc = fs::read_to_string(dist.join("CrossErrors.toc")).unwrap();
+    let files: Vec<_> = toc
+        .lines()
+        .filter(|l| l.ends_with(".lua"))
+        .map(|l| (l.to_string(), fs::read_to_string(dist.join(l)).unwrap()))
+        .collect();
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_addon("CrossErrors", &files).unwrap();
+    assert_eq!(sim.prints(), ["true\tmodule", "mutated"]);
+    let error = sim.fire("PLAYER_LOGIN", vec![]).unwrap_err().to_string();
+    assert_eq!(error.matches("fail.selu:1: mutated").count(), 1, "{error}");
+    assert!(!error.contains("main.selu:"), "{error}");
 }

@@ -130,7 +130,7 @@ pub enum StmtKind {
     },
     Try {
         body: Vec<Stmt>,
-        catch: Option<(Param, Vec<Stmt>)>,
+        catch: Option<(Option<Param>, Vec<Stmt>)>,
         finally: Option<Vec<Stmt>>,
     },
     Return(Option<Box<Expr>>),

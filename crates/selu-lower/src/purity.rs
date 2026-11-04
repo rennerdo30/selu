@@ -55,7 +55,7 @@ impl Origins {
                 self.params(params)
             }
             StmtKind::Try {
-                catch: Some((param, _)),
+                catch: Some((Some(param), _)),
                 ..
             } => self.params(std::slice::from_ref(param)),
             StmtKind::Migrate { param, .. } => self.params(std::slice::from_ref(param)),

@@ -1,72 +1,117 @@
 # Structured errors
 
-`try` requires `catch (e)` and/or `finally`. Catch parameters are block scoped
-and have the built-in nominal `Error` type, with a writable `message: string`.
-Construct it with `new Error("message")`. Other thrown values, including
-structural `{message: "..."}` objects and untyped Lua values, are rejected
-(SELU0541). Error construction requires exactly one string (SELU0540).
-There is no stack/name property or inheritance requirement in this minimal type.
+`try` requires `catch (e)`, `catch`, and/or `finally`. A catch binding is
+block scoped and has the nominal built-in `Error` type. `Error` is reserved
+for the built-in: declaring a value, parameter, import binding, class, type,
+interface or type parameter with that name is SELU0542. Object member names
+can still be Error.
 
-Throw emits `error("file.selu:line: " .. value.message, 0)`. The parser records
-the original one-based line; this works with module-relative file names and
-requires neither the generated Lua line number nor the source-map sidecar at
-runtime. Lua errors caught by `pcall` are wrapped as `{message = tostring(value)}`;
-this also handles numeric/table/nil error values. A rethrow adds its own Selu
-position. Uncaught errors are re-raised with level zero and reach WoW's ordinary
-script error handling (`geterrorhandler()`); generated code does not install or
-replace that handler. The simulator exposes escaping event errors as Rust errors.
-Lua-origin text retains the position supplied by Lua; only Selu `throw` creates a
-Selu position.
+`new Error("message")` creates one object with `message: string`.
+`new Error()` uses the empty message. Invalid arguments are SELU0540;
+throwing another type is SELU0541. Structural `{message: "..."}` objects do
+not become Errors. Earlier expression errors suppress follow-on diagnostics.
+There are no name/stack methods or inheritance requirements in this minimal type.
 
-Each protected clause uses `pcall`. Normal completion returns no status;
-returns use `"return", ...values`; a loop exit uses `"break"`. A's loop wrapper
-and break flag distinguish `continue` from a real break. Dispatch occurs after
-cleanup. Nested protected blocks propagate their completion through their parent.
-Scalar and tuple payloads stay in locals, including false and trailing nil;
-there is no tuple table. Functions declared inside a clause retain their own
-return semantics. Catch itself is protected so its errors cannot bypass finally.
+Throw and catch preserve the object. After `throw original`, the caught value
+compares equal to original; its message is unchanged, and mutations affect
+original. A private source position is set once, at that object's first Selu
+throw. Rethrowing leaves it alone. The position is independent of message and
+is rendered exactly once when the Error escapes, as `file.selu:line: message`.
+A shared metatable also gives the Error that textual representation through
+Lua tostring. Source positions use the parser's original one-based line and
+module-relative file name; generated Lua line numbers and source-map sidecars
+are not needed to render an explicit throw.
+
+Non-Error values thrown by Lua are wrapped. The wrapper's `message` comes from
+a protected tostring conversion and retains Lua's own location text. Its
+`value: unknown` field keeps the original value, including null for Lua nil;
+Errors constructed directly in Selu have value null. An Error already created
+by Selu is recognized by shared metatable identity and passes through unchanged.
+The metatable identity probe is protected too; no unfamiliar object's fields
+are read. If tostring raises, the message is `"<error object>"` and value still
+contains the original. tostring's result is validated by concatenating an empty
+string within the same protected conversion.
+
+A game error value may be a secret value. Selu does not inspect its contents:
+conversion is limited to protected tostring, and retaining value does not make
+it safe to inspect or branch on. A successful conversion can itself retain the
+game's secret restrictions. General secret-value checking is a separate feature.
+
+Every protected clause uses captured Lua pcall. The addon namespace shares an
+Error metatable and a protection-depth counter across its modules. Each file's
+fixed-arity `__selu_protect` increments the counter, calls the captured pcall,
+then decrements it on both success and failure. It forwards completion values
+through scalar locals, without a result table. Throw/propagation inside active
+Selu protection passes the Error object to Lua error unchanged. With no active
+Selu protection, `__selu_raise` converts it to safe text before Lua error. Thus
+uncaught event throws and rethrows reach the normal game error path as strings;
+Selu neither replaces geterrorhandler() nor swallows the error. Low-level Lua
+pcall outside Selu protection sees that host-formatted text; use try/catch for
+Selu Error identity.
+
+This explicit boundary conversion avoids assuming every WoW handler accepts
+tables: the read-only source at wow-ui-source commit
+17ed2c3e8471cdc3806ab0d26a082be7c67d3d7c, in
+`Interface/AddOns/Blizzard_ScriptErrors/Blizzard_ScriptErrors.lua` (HandleLuaError),
+uses string.format with `%s`; `Blizzard_ScriptErrorsFrame.lua` also formats the
+message with `%s`. Neither path explicitly calls tostring on the error first.
+The simulator exposes escaping script errors as Rust errors, tested for one
+Selu position even after rethrowing across modules.
+
+Normal protected completion returns no status. Returns use `"return", ...values`;
+a loop exit uses `"break"`. A's repeat wrapper and break flag distinguish
+continue from a real break. Dispatch happens after cleanup. Nested protected
+blocks propagate their completion through their parent; nested source functions
+keep their own return semantics. False and trailing nil tuple values stay in
+locals. Catch itself is protected so a new error cannot bypass finally.
+
 Finally runs on normal completion, throw, return, break and continue. Its abrupt
-completion overrides the previous one, including `return` and `throw`. A pending
-loop break flag is saved while finally executes and restored only on normal
-completion, so a finally-continue can override a pending break.
+completion overrides the previous one, including return and throw. The pending
+loop break flag is saved while finally executes and restored only when finally
+completes normally, so a finally-continue can override a pending break.
 
-For example, `try { work(); } catch(e) { print(e.message); }` has this shape
-(temporary names simplified here):
+The common catch shape (temporary names simplified):
 
 ```lua
-local ok, status = pcall(function() work() end)
+local ok, status = __selu_protect(function() work() end)
 if not ok then
-  ok, status = pcall(function()
-    local e = { message = tostring(status) }
+  ok, status = __selu_protect(function()
+    local e = __selu_wrap_error(status)
     print(e.message)
   end)
 end
-if not ok then error(status, 0) end
+if not ok then __selu_raise(status) end
 ```
 
-`try { return value; } finally { cleanup(); }`:
+A return with cleanup:
 
 ```lua
-local ok, status, value = pcall(function() return "return", value end)
-local finalOk, finalStatus, finalValue = pcall(function() cleanup() end)
+local ok, status, value = __selu_protect(function() return "return", value end)
+local finalOk, finalStatus, finalValue = __selu_protect(function() cleanup() end)
 if not finalOk or finalStatus ~= nil then
   ok, status, value = finalOk, finalStatus, finalValue
 end
-if not ok then error(status, 0) end
+if not ok then __selu_raise(status) end
 if status == "return" then return value end
 ```
 
-Inside a loop, `try { continue; } finally { cleanup(); }` returns `"break"`
-from the protected function, runs cleanup, then dispatches `break` out of the
-single-iteration repeat wrapper. Real breaks additionally set A's break flag.
-`examples/errors/expected.lua` is a complete, executable generated example.
+Inside a loop, continue returns `"break"` from the protected function, runs
+cleanup, then dispatches break out of the single-iteration repeat. Real breaks
+also set A's break flag. `examples/errors/expected.lua` has complete output.
 
-Protection has a cost: a closure for each executed protected clause, plus the
-pcall boundary. Catch allocates its wrapper only on failure; new Error allocates
-one message table. Empty and literal-completion protected closures in ordinary
-loops are moved to the enclosing block, so those allocate once per loop entry.
-Closures reading locals retain per-iteration allocation to preserve lexical
-bindings and mutation. For-of currently keeps its clause closures in the body.
-Keep a try around a whole batch/loop when per-item recovery is unnecessary.
-No idle helper, runtime class registry, traceback construction or hot-path lint
-is added. No Lua source-map runtime is installed.
+Generated protected functions are hoisted before their loop whenever free-name
+analysis proves they capture no bindings created by an iteration. References to
+module functions or cells outside the loop may be shared: their current values
+are still read each time. Local declarations, loop variables, functions and
+parameters within a protected function are tracked lexically, including nested
+closures. The analysis covers all loop forms, including for-of. Source-written
+callbacks are never hoisted by this pass. Functions capturing a loop binding
+retain per-iteration allocation; catch wrappers capturing their pending error
+also retain that cost. Catch allocates a wrapper only for non-Error failures.
+
+The regression measures only execution of a 1,024-iteration loop, with GC stopped
+after loading the module: capture-free try/finally clauses allocate no closures
+per iteration. The initial module parse/setup and the few helper functions are
+outside that measurement. Files using no Error/throw/try emit no error runtime.
+Lua pcall, error, tostring, setmetatable and getmetatable are captured under
+reserved names before source bindings, so local source names cannot replace them.

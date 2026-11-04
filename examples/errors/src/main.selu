@@ -1,6 +1,7 @@
 function readBalance(): number {
+  const failure = new Error("Balance unavailable");
   try {
-    throw new Error("Balance unavailable");
+    throw failure;
   } catch (e) {
     print(e.message);
     return 0;

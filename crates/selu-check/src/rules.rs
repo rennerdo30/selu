@@ -97,7 +97,7 @@ impl Rules {
                 }
             }
             StmtKind::Try {
-                catch: Some((p, _)),
+                catch: Some((Some(p), _)),
                 ..
             } => self.params(std::slice::from_ref(p)),
             StmtKind::OnHandler { params, .. } => self.params(params),

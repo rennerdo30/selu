@@ -139,6 +139,7 @@ fn lower_addon_layout(
     l.file_prelude(program, &mut out);
     let captures_end = out.len();
     out.extend(saved::setup(program));
+    out.extend(l.error_setup(program));
     let has_handlers = program.stmts.iter().any(targets::contains_event);
     if has_handlers {
         out.push(raw(EVENT_PROLOGUE));
@@ -146,7 +147,7 @@ fn lower_addon_layout(
     }
     out.extend(l.block(&program.stmts));
     let wow = l.wow_prologue();
-    if wow.is_some() || saved::has_saved(program) {
+    if wow.is_some() || saved::has_saved(program) || errors::uses_errors(program) {
         out.insert(0, raw("local __selu_addon, __selu_ns = ..."));
         out.insert(captures_end + 1, raw("__selu_ns = __selu_ns or {}"));
         out.splice(
@@ -244,6 +245,7 @@ pub fn lower_module_layout(
     }
     let runtime_index = out.len();
     out.extend(saved::setup(program));
+    out.extend(l.error_setup(program));
     l.module_prologue(&mut out);
     let has_handlers = program.stmts.iter().any(targets::contains_event);
     if has_handlers {
@@ -421,7 +423,12 @@ impl Lowerer<'_> {
                 self.hoist_error_closures(&mut lowered, out);
                 out.extend(lowered);
             }
-            StmtKind::ForOf { .. } => self.for_of(s, out),
+            StmtKind::ForOf { .. } => {
+                let mut lowered = Vec::new();
+                self.for_of(s, &mut lowered);
+                self.hoist_error_closures(&mut lowered, out);
+                out.extend(lowered);
+            }
             StmtKind::Destructure { .. } => self.destructure(s, forward, out),
             StmtKind::TypeDecl(_) => {}
             StmtKind::Import { .. } => self.import_stmt(s, out),
@@ -963,6 +970,7 @@ impl Lowerer<'_> {
                 span: None,
             });
         }
+        self.error_captures(program, out);
         self.target_prelude(program, out);
         self.class_prelude(&program.stmts, out);
         out.extend(saved::captures(program));

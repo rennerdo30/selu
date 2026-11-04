@@ -301,6 +301,7 @@ impl Ctx<'_> {
 
     /// Declares `name` in the innermost scope; only parameters start ready.
     fn declare(&mut self, name: &str, span: &Span, kind: Kind, ty: Type) {
+        self.reserved_error_name(name, span);
         let fn_depth = self.fn_depth;
         let scope = self.scopes.last_mut().expect("a scope is open");
         if scope.names.contains_key(name) {
@@ -509,6 +510,12 @@ impl Ctx<'_> {
     // ---- statements ---------------------------------------------------
 
     fn stmt(&mut self, s: &Stmt) {
+        if let StmtKind::TypeDecl(d) = &s.kind {
+            self.reserved_error_name(&d.name, &d.name_span);
+            for (i, (n, _)) in d.params.iter().enumerate() {
+                self.reserved_error_name(n, &d.param_spans[i]);
+            }
+        }
         match &s.kind {
             StmtKind::Try { .. } | StmtKind::Throw { .. } => self.error_stmt(s),
             StmtKind::Saved { .. } | StmtKind::Migrate { .. } => self.saved_stmt(s),
@@ -1082,8 +1089,13 @@ impl Ctx<'_> {
         if let Some(t) = self.api_member(t, name, api_object) {
             return t;
         }
-        if *t == errors::error_type() && name == "message" {
-            return Type::String;
+        if *t == errors::error_type() {
+            if name == "message" {
+                return Type::String;
+            }
+            if name == "value" {
+                return Type::Unknown;
+            }
         }
         if let Some(t) = self.class_member(t, name, object) {
             return t;

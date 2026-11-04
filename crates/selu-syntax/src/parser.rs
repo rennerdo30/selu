@@ -441,19 +441,20 @@ impl Parser {
                 let body = self.block()?;
                 let catch = if self.at_ident("catch") {
                     self.bump();
-                    self.expect(&Tok::LParen, "`(`")?;
-                    let (name, span) = self.ident("an error name")?;
-                    self.expect(&Tok::RParen, "`)`")?;
-                    Some((
-                        Param {
+                    let param = if self.eat(&Tok::LParen) {
+                        let (name, span) = self.ident("an error name")?;
+                        self.expect(&Tok::RParen, "`)`")?;
+                        Some(Param {
                             name,
                             span,
                             ty: None,
                             default: None,
                             rest: false,
-                        },
-                        self.block()?,
-                    ))
+                        })
+                    } else {
+                        None
+                    };
+                    Some((param, self.block()?))
                 } else {
                     None
                 };

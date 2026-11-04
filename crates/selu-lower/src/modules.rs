@@ -147,7 +147,9 @@ fn walk_stmt(s: &Stmt, active: &HashSet<String>, out: &mut HashSet<u32>) {
             walk_block(body, &active, out, true);
             if let Some((p, b)) = catch {
                 let mut caught = active.clone();
-                caught.remove(&p.name);
+                if let Some(p) = p {
+                    caught.remove(&p.name);
+                }
                 walk_block(b, &caught, out, true);
             }
             if let Some(b) = finally {

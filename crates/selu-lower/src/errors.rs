@@ -9,9 +9,6 @@ use selu_syntax::{Expr, Stmt, StmtKind};
 fn st(k: LStmtKind, s: &Span) -> LStmt {
     LStmt::new(k, s)
 }
-fn field(e: LExpr, n: &str) -> LExpr {
-    LExpr::Field(Box::new(e), n.into())
-}
 fn eq(n: &str, v: &str) -> LExpr {
     bin(BinOp::Eq, name(n), LExpr::Str(v.into()))
 }
@@ -56,26 +53,23 @@ fn completions(
 }
 impl Lowerer<'_> {
     pub(crate) fn error_new(&mut self, args: &[Expr], pre: &mut LBlock) -> LExpr {
-        LExpr::Table(vec![LField::Named(
-            "message".into(),
-            self.expr(&args[0], pre),
-        )])
+        let message = args
+            .first()
+            .map(|e| self.expr(e, pre))
+            .unwrap_or_else(|| LExpr::Str(String::new()));
+        lua::call(name("__selu_new_error"), vec![message])
     }
+
     pub(crate) fn error_stmt(&mut self, s: &Stmt, out: &mut LBlock) {
         let sp = &s.span;
         match &s.kind {
             StmtKind::Throw { value, line } => {
                 let mut pre = vec![];
                 let v = self.expr(value, &mut pre);
-                let message = bin(
-                    BinOp::Concat,
-                    LExpr::Str(format!("{}:{line}: ", sp.file)),
-                    field(v, "message"),
-                );
                 pre.push(st(
                     LStmtKind::Call(lua::call(
-                        name("error"),
-                        vec![message, LExpr::Number("0".into())],
+                        name("__selu_throw"),
+                        vec![v, LExpr::Str(format!("{}:{line}: ", sp.file))],
                     )),
                     sp,
                 ));
@@ -105,7 +99,7 @@ impl Lowerer<'_> {
                 names.extend(values.clone());
                 let protect = |body| {
                     lua::call(
-                        name("pcall"),
+                        name("__selu_protect"),
                         vec![LExpr::Function(LFunction {
                             params: vec![],
                             vararg: false,
@@ -115,19 +109,18 @@ impl Lowerer<'_> {
                 };
                 let mut b = vec![st(LStmtKind::Local(names.clone(), vec![protect(body)]), sp)];
                 if let (Some((p, _)), Some(mut cb)) = (catch, catch_body) {
-                    cb.insert(
-                        0,
-                        st(
-                            LStmtKind::Local(
-                                vec![p.name.clone()],
-                                vec![LExpr::Table(vec![LField::Named(
-                                    "message".into(),
-                                    lua::call(name("tostring"), vec![name(&status)]),
-                                )])],
+                    if let Some(p) = p {
+                        cb.insert(
+                            0,
+                            st(
+                                LStmtKind::Local(
+                                    vec![p.name.clone()],
+                                    vec![lua::call(name("__selu_wrap_error"), vec![name(&status)])],
+                                ),
+                                sp,
                             ),
-                            sp,
-                        ),
-                    );
+                        );
+                    }
                     b.push(st(
                         LStmtKind::If(
                             vec![(
@@ -201,8 +194,8 @@ impl Lowerer<'_> {
                             not(name(&ok)),
                             vec![st(
                                 LStmtKind::Call(lua::call(
-                                    name("error"),
-                                    vec![name(&status), LExpr::Number("0".into())],
+                                    name("__selu_raise"),
+                                    vec![name(&status)],
                                 )),
                                 sp,
                             )],
@@ -267,54 +260,306 @@ fn return_width(s: &Stmt, types: &selu_check::TypeTable) -> usize {
 }
 
 impl Lowerer<'_> {
-    // Literal completions have no lexical captures. Move their protected
-    // function to the loop's enclosing block, preserving all other closures.
+    // A helper may share references to cells outside this loop. It must stay
+    // inside the loop if it captures any binding created by an iteration.
     pub(crate) fn hoist_error_closures(&mut self, block: &mut LBlock, out: &mut LBlock) {
+        let mut varying = std::collections::HashSet::new();
+        iteration_bindings(block, &mut varying);
+        self.hoist_protected(block, out, &varying);
+    }
+    fn hoist_protected(
+        &mut self,
+        block: &mut LBlock,
+        out: &mut LBlock,
+        varying: &std::collections::HashSet<String>,
+    ) {
         for s in block {
-            let protected = match &s.kind {
-                LStmtKind::Local(names, _) => {
-                    names.len() >= 2 && names.iter().all(|n| n.starts_with("__selu_"))
-                }
-                LStmtKind::Assign(targets, _) => {
-                    targets.len() >= 2
-                        && targets
-                            .iter()
-                            .all(|e| matches!(e, LExpr::Name(n) if n.starts_with("__selu_")))
-                }
-                _ => false,
-            };
             match &mut s.kind {
                 LStmtKind::Local(_, values) | LStmtKind::Assign(_, values) => {
                     for v in values {
-                        if !protected {
-                            continue;
-                        }
                         if let LExpr::Call(callee, args) = v
-                            && matches!(callee.as_ref(), LExpr::Name(n) if n == "pcall")
+                            && matches!(callee.as_ref(), LExpr::Name(n) if n == "__selu_protect")
                             && let [LExpr::Function(f)] = args.as_mut_slice()
-                            && f.body.iter().all(|s| matches!(&s.kind,LStmtKind::Return(v) if v.iter().all(|e| matches!(e,LExpr::Nil|LExpr::Bool(_)|LExpr::Number(_)|LExpr::Str(_)))))
+                            && !free_names(f)
+                                .iter()
+                                .any(|n| varying.contains(n) || n == "<raw>")
                         {
                             let n = self.temp();
-                            out.push(LStmt {kind:LStmtKind::LocalFunction(n.clone(),f.clone()),span:s.span.clone()});
+                            out.push(LStmt {
+                                kind: LStmtKind::LocalFunction(n.clone(), f.clone()),
+                                span: s.span.clone(),
+                            });
                             args[0] = name(&n);
                         }
                     }
                 }
                 LStmtKind::If(arms, other) => {
                     for (_, b) in arms {
-                        self.hoist_error_closures(b, out);
+                        self.hoist_protected(b, out, varying);
                     }
                     if let Some(b) = other {
-                        self.hoist_error_closures(b, out);
+                        self.hoist_protected(b, out, varying);
                     }
                 }
                 LStmtKind::Do(b)
                 | LStmtKind::While(_, b)
                 | LStmtKind::Repeat(b, _)
                 | LStmtKind::NumFor { body: b, .. }
-                | LStmtKind::GenFor { body: b, .. } => self.hoist_error_closures(b, out),
+                | LStmtKind::GenFor { body: b, .. } => self.hoist_protected(b, out, varying),
                 _ => {}
             }
         }
     }
 }
+type Names = std::collections::HashSet<String>;
+fn iteration_bindings(block: &LBlock, names: &mut Names) {
+    for s in block {
+        match &s.kind {
+            LStmtKind::Local(ns, _) => names.extend(ns.iter().cloned()),
+            LStmtKind::LocalFunction(n, _) => {
+                names.insert(n.clone());
+            }
+            LStmtKind::NumFor { var, body, .. } => {
+                names.insert(var.clone());
+                iteration_bindings(body, names);
+            }
+            LStmtKind::GenFor {
+                names: ns, body, ..
+            } => {
+                names.extend(ns.iter().cloned());
+                iteration_bindings(body, names);
+            }
+            LStmtKind::If(arms, other) => {
+                for (_, b) in arms {
+                    iteration_bindings(b, names);
+                }
+                if let Some(b) = other {
+                    iteration_bindings(b, names);
+                }
+            }
+            LStmtKind::Do(b) | LStmtKind::While(_, b) | LStmtKind::Repeat(b, _) => {
+                iteration_bindings(b, names)
+            }
+            _ => {}
+        }
+    }
+}
+fn free_names(f: &LFunction) -> Names {
+    fn expr(e: &LExpr, bound: &Names, free: &mut Names) {
+        match e {
+            LExpr::Name(n) => {
+                if !bound.contains(n) {
+                    free.insert(n.clone());
+                }
+            }
+            LExpr::Field(e, _) | LExpr::Paren(e) | LExpr::Unary(_, e) => expr(e, bound, free),
+            LExpr::Index(a, b) | LExpr::Binary(_, a, b) => {
+                expr(a, bound, free);
+                expr(b, bound, free);
+            }
+            LExpr::Call(e, args) | LExpr::Method(e, _, args) => {
+                expr(e, bound, free);
+                for a in args {
+                    expr(a, bound, free);
+                }
+            }
+            LExpr::Function(f) => {
+                let mut inner = bound.clone();
+                inner.extend(f.params.iter().cloned());
+                block(&f.body, &inner, free);
+            }
+            LExpr::Table(fields) => {
+                for f in fields {
+                    match f {
+                        LField::Pos(v) | LField::Named(_, v) => expr(v, bound, free),
+                        LField::Keyed(k, v) => {
+                            expr(k, bound, free);
+                            expr(v, bound, free);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    fn block(b: &LBlock, outer: &Names, free: &mut Names) {
+        let mut bound = outer.clone();
+        for s in b {
+            match &s.kind {
+                LStmtKind::Local(ns, vs) => {
+                    for v in vs {
+                        expr(v, &bound, free);
+                    }
+                    bound.extend(ns.iter().cloned());
+                }
+                LStmtKind::Assign(ts, vs) => {
+                    for v in ts.iter().chain(vs) {
+                        expr(v, &bound, free);
+                    }
+                }
+                LStmtKind::Call(e) => expr(e, &bound, free),
+                LStmtKind::Return(vs) => {
+                    for v in vs {
+                        expr(v, &bound, free);
+                    }
+                }
+                LStmtKind::If(arms, other) => {
+                    for (c, b) in arms {
+                        expr(c, &bound, free);
+                        block(b, &bound, free);
+                    }
+                    if let Some(b) = other {
+                        block(b, &bound, free);
+                    }
+                }
+                LStmtKind::While(c, b) | LStmtKind::Repeat(b, c) => {
+                    expr(c, &bound, free);
+                    block(b, &bound, free);
+                }
+                LStmtKind::Do(b) => block(b, &bound, free),
+                LStmtKind::NumFor {
+                    var,
+                    start,
+                    stop,
+                    step,
+                    body,
+                } => {
+                    expr(start, &bound, free);
+                    expr(stop, &bound, free);
+                    if let Some(s) = step {
+                        expr(s, &bound, free);
+                    }
+                    let mut inner = bound.clone();
+                    inner.insert(var.clone());
+                    block(body, &inner, free);
+                }
+                LStmtKind::GenFor { names, exprs, body } => {
+                    for e in exprs {
+                        expr(e, &bound, free);
+                    }
+                    let mut inner = bound.clone();
+                    inner.extend(names.iter().cloned());
+                    block(body, &inner, free);
+                }
+                LStmtKind::LocalFunction(n, f) => {
+                    bound.insert(n.clone());
+                    expr(&LExpr::Function(f.clone()), &bound, free);
+                }
+                LStmtKind::Function(n, f) => {
+                    expr(&name(n.split(['.', ':']).next().unwrap()), &bound, free);
+                    expr(&LExpr::Function(f.clone()), &bound, free);
+                }
+                LStmtKind::Raw(_) => {
+                    free.insert("<raw>".into());
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut free = Names::new();
+    block(&f.body, &f.params.iter().cloned().collect(), &mut free);
+    free
+}
+
+pub(crate) fn uses_errors(program: &selu_syntax::Program) -> bool {
+    fn inspect(c: selu_syntax::visit::Child<'_>, found: &mut bool) {
+        use selu_syntax::visit::{self, Child};
+        match c {
+            Child::Stmt(s) => {
+                *found |= matches!(s.kind, StmtKind::Try { .. } | StmtKind::Throw { .. });
+                visit::child_stmts_and_exprs(s, &mut |c| inspect(c, found));
+            }
+            Child::Expr(e) => {
+                *found |=
+                    matches!(&e.kind, selu_syntax::ExprKind::New {class,..} if class=="Error");
+                visit::child_exprs_and_stmts(e, &mut |c| inspect(c, found));
+            }
+        }
+    }
+    let mut found = false;
+    for s in &program.stmts {
+        inspect(selu_syntax::visit::Child::Stmt(s), &mut found);
+    }
+    found
+}
+impl Lowerer<'_> {
+    pub(crate) fn error_captures(&mut self, program: &selu_syntax::Program, out: &mut LBlock) {
+        if uses_errors(program) {
+            out.push(crate::raw("local __selu_pcall, __selu_error, __selu_tostring = pcall, error, tostring\nlocal __selu_error_setmetatable, __selu_error_getmetatable = setmetatable, getmetatable"));
+        }
+    }
+    pub(crate) fn error_setup(&mut self, program: &selu_syntax::Program) -> LBlock {
+        if !uses_errors(program) {
+            return vec![];
+        }
+        let mut width = 0;
+        fn inspect(
+            c: selu_syntax::visit::Child<'_>,
+            types: &selu_check::TypeTable,
+            width: &mut usize,
+        ) {
+            use selu_syntax::visit::{self, Child};
+            match c {
+                Child::Stmt(s) => {
+                    if matches!(s.kind, StmtKind::Return(_)) {
+                        *width = (*width).max(return_width(s, types));
+                    }
+                    visit::child_stmts_and_exprs(s, &mut |c| inspect(c, types, width));
+                }
+                Child::Expr(e) => {
+                    visit::child_exprs_and_stmts(e, &mut |c| inspect(c, types, width))
+                }
+            }
+        }
+        for s in &program.stmts {
+            inspect(selu_syntax::visit::Child::Stmt(s), self.types, &mut width);
+        }
+        let mut results = vec!["ok".to_string(), "status".to_string()];
+        results.extend((1..=width).map(|i| format!("value{i}")));
+        let results = results.join(", ");
+        vec![
+            crate::raw(ERROR_RUNTIME),
+            crate::raw(&format!(
+                "local function __selu_protect(fn, ...)\n  __selu_errors.depth = __selu_errors.depth + 1\n  local {results} = __selu_pcall(fn, ...)\n  __selu_errors.depth = __selu_errors.depth - 1\n  return {results}\nend"
+            )),
+        ]
+    }
+}
+const ERROR_RUNTIME: &str = r#"if not __selu_ns.__selu_errors then
+  __selu_ns.__selu_errors = { depth = 0, meta = {} }
+  __selu_ns.__selu_errors.meta.__tostring = function(value)
+    return (value.__selu_position or "") .. value.message
+  end
+end
+local __selu_errors = __selu_ns.__selu_errors
+local function __selu_error_text(value)
+  return __selu_tostring(value) .. ""
+end
+local function __selu_safe_error_text(value)
+  local ok, message = __selu_pcall(__selu_error_text, value)
+  if ok then return message end
+  return "<error object>"
+end
+local function __selu_new_error(message, value)
+  return __selu_error_setmetatable({ message = message, value = value }, __selu_errors.meta)
+end
+local function __selu_is_error(value)
+  if __selu_error_getmetatable(value) == __selu_errors.meta then return true end
+  return false
+end
+local function __selu_wrap_error(value)
+  local ok, isError = __selu_pcall(__selu_is_error, value)
+  if ok and isError then return value end
+  return __selu_new_error(__selu_safe_error_text(value), value)
+end
+local function __selu_raise(value)
+  if __selu_errors.depth == 0 then
+    __selu_error(__selu_safe_error_text(value), 0)
+  else
+    __selu_error(value, 0)
+  end
+end
+local function __selu_throw(value, position)
+  if value.__selu_position == nil then value.__selu_position = position end
+  __selu_raise(value)
+end"#;
