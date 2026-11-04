@@ -153,3 +153,35 @@ existing widget, preserving its other methods. `Declaration.overloads` is an
 additive list of complete argument/return declarations; omitted lists default
 empty. Every overlay keeps a pinned source citation. `SeluAliasOf` in widget
 attributes records an equivalent canonical identity.
+
+## M3 XML and Lua data
+
+`quick-xml` 0.42.0 (crates.io newest stable when implemented) parses XML;
+addon Lua is still parsed with full_moon and never executed. Widget tag identities
+and intrinsic aliases are also read from the pinned UI.xsd schema. Named nonvirtual
+widgets become globals with name, widget type, template list (`templates`), and
+source evidence. `$parent` uses the nearest enclosing named widget through layout
+containers; unresolved template-parent names are omitted. Virtual frame descendants
+are not globals. Named Font/FontFamily objects remain globals even when virtual,
+because their definitions create reusable font objects. Their type is `Font`.
+
+`dataGlobals` and `templates` use compact source metadata: `name`, `source` (index
+into the shared `sourceFiles` array), `evidence`, optional `type`, and optional
+`fields`, `methods`, `inherits`, `mixins`, `values`. Fields and methods are name
+lists, with no invented signatures. Templates record direct mixin members plus
+inheritance links; consumers must traverse inherited templates. XML and Lua variants
+are scanned without claiming TOC loading or live availability. Existing overlays
+still take precedence. No checker changes are included.
+
+Literal global table assignments outside functions exclude lexical locals. Named
+top-level table method declarations supply mixin member names. Tables exceeding
+2,048 constructor fields are omitted entirely: large generated map, quest and locale
+payloads are datasets rather than addon API metadata. Literal assignments in paths
+containing localization/localisation, GlobalStrings, QuestData or MapData
+(case insensitive) are also skipped. Nested table contents and
+positional array payloads are never projected. Only all-uppercase constant-table
+names retain literal number/string values, and only when their compact value map
+is at most 65,536 bytes. Other tables retain names only. This keeps SOUNDKIT-like
+constants while excluding bulky payloads and prose. Booleans, expressions and
+functions never become values; comments, XML and documentation text are excluded.
+Shared provenance and string name lists avoid repeating file paths on every member.

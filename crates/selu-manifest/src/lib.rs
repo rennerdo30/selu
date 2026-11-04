@@ -106,6 +106,8 @@ fn yes() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalEntry {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<String>,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub ty: Option<String>,
     pub name: String,
@@ -134,6 +136,12 @@ pub struct EventEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<DataEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_globals: Vec<DataEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub predicates: Vec<Declaration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -443,4 +451,25 @@ pub struct Source {
     pub interface_basis: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface_evidence: Option<Evidence>,
+}
+
+/// Compact source-only metadata; source indexes Manifest.source_files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DataEntry {
+    pub name: String,
+    pub source: usize,
+    pub evidence: Evidence,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherits: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mixins: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub values: std::collections::BTreeMap<String, serde_json::Value>,
 }

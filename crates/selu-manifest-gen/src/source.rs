@@ -27,6 +27,8 @@ struct Scan {
     locals: Vec<(String, usize, usize)>,
     definitions: Vec<(String, usize, Vec<String>, bool)>,
     calls: Vec<(String, usize)>,
+    tables: Vec<(String, usize, TableConstructor)>,
+    members: Vec<(String, String, usize)>,
 }
 impl Scan {
     fn bind(&mut self, n: String, from: usize, to: usize) {
@@ -76,6 +78,18 @@ impl Visitor for Scan {
         self.depth -= 1;
     }
     fn visit_function_declaration(&mut self, n: &FunctionDeclaration) {
+        if self.depth == 0 {
+            let names: Vec<_> = n.name().names().iter().map(name).collect();
+            if let Some(method) = n.name().method_name() {
+                if names.len() == 1 {
+                    self.members
+                        .push((names[0].clone(), name(method), start(n)));
+                }
+            } else if names.len() == 2 {
+                self.members
+                    .push((names[0].clone(), names[1].clone(), start(n)));
+            }
+        }
         if n.name().method_name().is_some() {
             self.bind(
                 "self".into(),
@@ -101,6 +115,11 @@ impl Visitor for Scan {
     }
     fn visit_assignment(&mut self, n: &Assignment) {
         for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
+            if self.depth == 0
+                && let (Var::Name(t), Expression::TableConstructor(table)) = (v, e)
+            {
+                self.tables.push((name(t), start(n), (**table).clone()));
+            }
             if let (Var::Name(t), Expression::Function(f)) = (v, e) {
                 self.definitions.push((
                     name(t),
@@ -142,6 +161,7 @@ pub struct Sources {
     definitions: BTreeMap<String, (String, Vec<String>)>,
     all_definitions: BTreeSet<String>,
     calls: BTreeMap<String, String>,
+    tables: BTreeMap<String, selu_manifest::Declaration>,
 }
 impl Sources {
     pub fn parse(&mut self, file: &str, source: &str) -> Result<(), String> {
@@ -149,6 +169,62 @@ impl Sources {
             .map_err(|e| format!("{file}: Lua parse error: {e:?}"))?;
         let mut scan = Scan::default();
         scan.visit_ast(&ast);
+        for (n, pos, table) in &scan.tables {
+            let lower = file.to_ascii_lowercase();
+            if table.fields().len() > 2048
+                || [
+                    "localization",
+                    "localisation",
+                    "globalstrings",
+                    "questdata",
+                    "mapdata",
+                ]
+                .iter()
+                .any(|part| lower.contains(part))
+            {
+                continue;
+            }
+            if !scan.local(n, *pos) {
+                let d = self
+                    .tables
+                    .entry(n.clone())
+                    .or_insert_with(|| crate::xml::declaration(n, "table", file));
+                for field in table.fields().iter() {
+                    let (key, value) = match field {
+                        Field::NameKey { key, value, .. } => (Some(name(key)), value.as_ref()),
+                        Field::ExpressionKey { key, value, .. } => (
+                            literal(key).and_then(|v| v.as_str().map(str::to_owned)),
+                            value.as_ref(),
+                        ),
+                        _ => continue,
+                    };
+                    if let Some(key) = key {
+                        if matches!(value, Expression::Function(_))
+                            && !d.methods.iter().any(|f| f.name == key)
+                        {
+                            d.methods.push(crate::xml::declaration(&key, "", file));
+                        }
+                        if !d.fields.iter().any(|f| f.name == key) {
+                            d.fields.push(crate::xml::declaration(&key, "", file));
+                        }
+                        if let Some(value) = literal(value) {
+                            d.values.insert(key, value);
+                        }
+                    }
+                }
+            }
+        }
+        for (root, member, pos) in &scan.members {
+            if !scan.local(root, *pos) {
+                let d = self
+                    .tables
+                    .entry(root.clone())
+                    .or_insert_with(|| crate::xml::declaration(root, "table", file));
+                if !d.methods.iter().any(|m| m.name == *member) {
+                    d.methods.push(crate::xml::declaration(member, "", file));
+                }
+            }
+        }
         for (n, pos, args, top) in &scan.definitions {
             if !scan.local(n, *pos) {
                 self.all_definitions.insert(n.clone());
@@ -167,6 +243,31 @@ impl Sources {
         Ok(())
     }
     pub fn extend_manifest(self, m: &mut Manifest) -> (usize, usize) {
+        for (_, mut d) in self.tables {
+            if d.fields.len() > 2048 {
+                continue;
+            }
+            d.fields.sort_by(|a, b| a.name.cmp(&b.name));
+            d.methods.sort_by(|a, b| a.name.cmp(&b.name));
+            if !m.globals.iter().any(|g| g.name == d.name) {
+                m.globals.push(selu_manifest::GlobalEntry {
+                    name: d.name.clone(),
+                    ty: None,
+                    evidence: Evidence::Source,
+                    templates: vec![],
+                });
+            }
+            // Large generated datasets are not API metadata.
+            if d.fields.len() <= 2048 {
+                if !d.name.chars().all(|c| !c.is_ascii_lowercase())
+                    || serde_json::to_vec(&d.values).unwrap().len() > 65536
+                {
+                    d.values.clear();
+                }
+                let entry = crate::xml::compact(d, m);
+                m.data_globals.push(entry);
+            }
+        }
         let mut known: BTreeSet<String> = m.functions.iter().map(|f| f.name.clone()).collect();
         let mut counts = (0, 0);
         for (n, (file, args)) in self.definitions {
@@ -279,5 +380,50 @@ mod tests {
             "defined"
         );
         assert!(Sources::default().parse("bad.lua", "function (").is_err());
+    }
+}
+
+fn literal(e: &Expression) -> Option<serde_json::Value> {
+    match e {
+        Expression::Number(t) => t
+            .token()
+            .to_string()
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(serde_json::Value::Number),
+        Expression::String(t) => match t.token().token_type() {
+            TokenType::StringLiteral { .. } => mlua::Lua::new()
+                .load(format!("return {}", t.token()))
+                .eval::<String>()
+                .ok()
+                .map(serde_json::Value::String),
+            _ => None,
+        },
+        Expression::UnaryOperator { unop, expression } if unop.to_string().trim() == "-" => {
+            literal(expression)?
+                .as_f64()
+                .and_then(|n| serde_json::Number::from_f64(-n))
+                .map(serde_json::Value::Number)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod data_tests {
+    use super::*;
+    #[test]
+    fn literal_data_and_mixin_members() {
+        let mut s = Sources::default();
+        s.parse("data.lua", r#"SOUNDKIT = { CLICK = 12, LABEL = "click", FLAG = true, DYNAMIC = Make(), ["OTHER"] = -2 }; local Hidden = {}; function Factory() Nested = {} end; Mixin = {}; function Mixin:Apply() end"#).unwrap();
+        assert!(!s.tables.contains_key("Hidden"));
+        assert!(!s.tables.contains_key("Nested"));
+        let d = &s.tables["SOUNDKIT"];
+        assert_eq!(d.fields.len(), 5);
+        assert_eq!(d.values["CLICK"], 12.0);
+        assert_eq!(d.values["OTHER"], -2.0);
+        assert!(!d.values.contains_key("FLAG"));
+        assert_eq!(s.tables["Mixin"].methods[0].name, "Apply");
     }
 }

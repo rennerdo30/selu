@@ -1,3 +1,4 @@
+pub mod xml;
 use mlua::{Lua, LuaOptions, StdLib, Table, Value};
 use selu_manifest::{Declaration, EventEntry, EventParam, Evidence, FunctionEntry, Manifest};
 use std::collections::{BTreeMap, BTreeSet};
@@ -524,8 +525,15 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
     for g in overlay.globals {
         note(&g.note)?;
         evidence(g.evidence, &g.live_probe)?;
+        let templates = m
+            .globals
+            .iter()
+            .find(|v| v.name == g.name)
+            .map(|v| v.templates.clone())
+            .unwrap_or_default();
         m.globals.retain(|v| v.name != g.name);
         m.globals.push(selu_manifest::GlobalEntry {
+            templates,
             name: g.name,
             ty: g.ty,
             evidence: g.evidence,
@@ -543,6 +551,8 @@ pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
     for list in [&mut m.tables, &mut m.enums, &mut m.widgets] {
         list.sort_by(|a, b| a.name.cmp(&b.name));
     }
+    m.templates.sort_by(|a, b| a.name.cmp(&b.name));
+    m.data_globals.sort_by(|a, b| a.name.cmp(&b.name));
     let mut bytes = serde_json::to_vec(m)?;
     bytes.push(b'\n');
     Ok(bytes)

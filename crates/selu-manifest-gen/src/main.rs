@@ -100,13 +100,21 @@ fn run() -> Result<()> {
         ],
     )?;
     let mut source_globals = selu_manifest_gen::source::Sources::default();
+    let mut xml = selu_manifest_gen::xml::Xml::default();
+    xml.schema(&git(
+        repo,
+        &[
+            "show",
+            &format!("{commit}:Interface/AddOns/Blizzard_SharedXML/UI.xsd"),
+        ],
+    )?)?;
     let mut sources = vec![];
     let mut files = 0;
     for entry in tar::Archive::new(std::fs::File::open(archive)?).entries()? {
         use std::io::Read;
         let mut entry = entry?;
         let path = entry.path()?.to_string_lossy().replace('\\', "/");
-        if !path.ends_with(".lua") {
+        if !path.ends_with(".lua") && !path.ends_with(".xml") {
             continue;
         }
         let mut bytes = vec![];
@@ -118,6 +126,10 @@ fn run() -> Result<()> {
                 e.into_bytes().into_iter().map(char::from).collect()
             }
         };
+        if path.ends_with(".xml") {
+            xml.parse(&path, &text)?;
+            continue;
+        }
         source_globals.parse(&path, &text)?;
         files += 1;
         if path.starts_with("Interface/AddOns/Blizzard_APIDocumentationGenerated/") {
@@ -133,6 +145,7 @@ fn run() -> Result<()> {
     }
     let (defined, called) = source_globals.extend_manifest(&mut m);
     eprintln!("source globals: {defined} defined, {called} called; parsed {files} Lua files");
+    xml.extend_manifest(&mut m);
     let overlay = output
         .parent()
         .ok_or("output needs parent directory")?
