@@ -160,6 +160,7 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         multiple_results: d.ty.as_deref() != Some("CallbackType"),
         unspecified_callback: false,
         api_semantics: crate::types::ApiSemantics {
+            untyped_return_tail: flag(d, "SeluUntypedReturnTail"),
             frame_factory: false,
             secret_results: crate::restrictions::secret_results(m, d),
             protected: flag(d, "IsProtectedFunction"),

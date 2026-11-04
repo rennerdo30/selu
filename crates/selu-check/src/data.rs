@@ -362,7 +362,15 @@ impl Ctx<'_> {
         else {
             unreachable!()
         };
-        let t = crate::shape_of(&self.value(iter));
+        let iter_type = self.expr(iter);
+        let mut t = crate::shape_of(&iter_type);
+        if let Type::Tuple(items) = &t
+            && items.len() == 1
+            && crate::game_iterator(&items[0]).is_some()
+        {
+            t = items[0].clone();
+            self.types.set(iter.id, t.clone());
+        }
         if self.pattern_for_of(s, &t) {
             return;
         }

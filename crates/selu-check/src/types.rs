@@ -22,6 +22,7 @@ impl PartialEq for ApiOrigin {
 
 #[derive(Debug, Clone, Default)]
 pub struct ApiSemantics {
+    pub untyped_return_tail: bool,
     pub frame_factory: bool,
     pub secret_results: Vec<bool>,
     pub protected: bool,

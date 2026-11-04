@@ -51,10 +51,26 @@ fn branch_effects(b: &Block, names: &mut Vec<String>) -> bool {
             Stmt::Assignment(a) => {
                 for v in a.variables() {
                     if let Var::Name(n) = v {
-                        names.push(n.token().to_string());
+                        names.push(n.token().to_string().trim().into());
+                    } else if let Var::Expression(e) = v
+                        && let Prefix::Name(n) = e.prefix()
+                    {
+                        names.push(format!(
+                            "{}.{}",
+                            n.token().to_string().trim(),
+                            match e.suffixes().last() {
+                                Some(Suffix::Index(Index::Dot { name, .. })) =>
+                                    name.token().to_string().trim().to_owned(),
+                                _ => "*".into(),
+                            }
+                        ));
                     }
                 }
             }
+            Stmt::NumericFor(f) => returns |= branch_effects(f.block(), names),
+            Stmt::GenericFor(f) => returns |= branch_effects(f.block(), names),
+            Stmt::While(f) => returns |= branch_effects(f.block(), names),
+            Stmt::Repeat(f) => returns |= branch_effects(f.block(), names),
             Stmt::Do(d) => returns |= branch_effects(d.block(), names),
             Stmt::If(i) => {
                 returns |= branch_effects(i.block(), names);
@@ -73,6 +89,33 @@ fn branch_effects(b: &Block, names: &mut Vec<String>) -> bool {
     returns
 }
 impl Analysis {
+    fn invalidate(&mut self, scope: usize, n: &str) {
+        if let Some((root, key)) = n.split_once('.') {
+            if let Value::Object(o) = self.get(scope, root) {
+                let mut o = o.borrow_mut();
+                if key == "*" {
+                    for v in o.members.values_mut() {
+                        *v = Value::Unknown;
+                    }
+                    o.signatures.clear();
+                } else {
+                    o.members.insert(key.into(), Value::Unknown);
+                    o.signatures.remove(key);
+                }
+                o.element = None;
+            }
+        } else {
+            self.assign(scope, n, Value::Unknown);
+        }
+    }
+    fn invalidate_block(&mut self, b: &Block, scope: usize) -> bool {
+        let mut writes = vec![];
+        let returns = branch_effects(b, &mut writes);
+        for n in writes {
+            self.invalidate(scope, &n);
+        }
+        returns
+    }
     fn scope(&mut self, parent: usize) -> usize {
         let id = self.scopes.len();
         self.scopes.push(Scope {
@@ -119,6 +162,15 @@ impl Analysis {
     fn function(&mut self, body: &FunctionBody, scope: usize, name: &str, method: bool) -> Value {
         let id = self.functions.len();
         let mut signature = super::source::source_signature(name, body, "", &self.file);
+        // Factory methods obtain iterator proof from lexical evaluation below.
+        for result in &mut signature.returns {
+            if result.attributes.remove("SeluIterator").is_some() {
+                result.ty = Some(String::new());
+                signature
+                    .attributes
+                    .insert("SeluUntypedReturnTail".into(), true.into());
+            }
+        }
         if !method
             && signature
                 .arguments
@@ -299,6 +351,12 @@ impl Analysis {
                                     .borrow_mut()
                                     .signatures
                                     .extend(source.signatures.clone());
+                            } else {
+                                let mut object = target.borrow_mut();
+                                object.members.clear();
+                                object.signatures.clear();
+                                object.element = None;
+                                return Value::Unknown;
                             }
                         }
                         return Value::Object(target.clone());
@@ -326,6 +384,8 @@ impl Analysis {
                             let a = a.borrow();
                             obj.members.extend(a.members.clone());
                             obj.signatures.extend(a.signatures.clone());
+                        } else {
+                            return Value::Unknown;
                         }
                     }
                     Value::Object(Rc::new(RefCell::new(obj)))
@@ -559,13 +619,24 @@ impl Analysis {
                         returns |= branch_effects(b, &mut writes);
                     }
                     for n in writes {
-                        self.assign(scope, &n, Value::Unknown);
+                        self.invalidate(scope, &n);
                     }
                     if returns {
                         return Some(Value::Unknown);
                     }
                 }
-                // Loops are not executed or used as factory proof.
+                Stmt::NumericFor(f) if self.invalidate_block(f.block(), scope) => {
+                    return Some(Value::Unknown);
+                }
+                Stmt::GenericFor(f) if self.invalidate_block(f.block(), scope) => {
+                    return Some(Value::Unknown);
+                }
+                Stmt::While(f) if self.invalidate_block(f.block(), scope) => {
+                    return Some(Value::Unknown);
+                }
+                Stmt::Repeat(f) if self.invalidate_block(f.block(), scope) => {
+                    return Some(Value::Unknown);
+                }
                 _ => {}
             }
         }
@@ -724,7 +795,11 @@ pub fn extend(m: &mut Manifest, files: &[(String, String)]) {
                         0,
                     );
                     if let Some(ret) = return_type(value) {
-                        sig.returns = vec![ret];
+                        if sig.returns.is_empty() {
+                            sig.returns.push(ret);
+                        } else {
+                            sig.returns[0] = ret;
+                        }
                     }
                     methods.insert(n.clone(), sig);
                 }
@@ -756,7 +831,12 @@ pub fn extend(m: &mut Manifest, files: &[(String, String)]) {
             };
             let mut signature = a.functions[id].signature.clone();
             signature.name = name.clone();
-            signature.returns = vec![declaration("result", &type_name)];
+            let first = declaration("result", &type_name);
+            if signature.returns.is_empty() {
+                signature.returns.push(first);
+            } else {
+                signature.returns[0] = first;
+            }
             if let Some(entry) = m.functions.iter_mut().find(|f| f.name == name) {
                 if entry.signature.is_none() {
                     entry.signature = Some(signature);

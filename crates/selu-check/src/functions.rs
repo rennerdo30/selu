@@ -263,6 +263,17 @@ impl Ctx<'_> {
         } else {
             self.value(init)
         };
+        if crate::game_iterator(&t).is_some()
+            || matches!(&t, Type::Tuple(ts) if ts.iter().any(|t| crate::game_iterator(t).is_some()))
+        {
+            self.check_tuple_value(init, t);
+            return;
+        }
+        let open_tail = if let ExprKind::Call { callee, .. } = &init.kind {
+            matches!(self.types.get(callee.id), Some(Type::Function { api_semantics, .. }) if api_semantics.untyped_return_tail)
+        } else {
+            false
+        };
         let t = crate::shape_of(&t);
         match pattern {
             Pattern::Array(items) => {
@@ -270,6 +281,9 @@ impl Ctx<'_> {
                     if let Some((n, span)) = item {
                         let ty = match &t {
                             Type::Tuple(ts) => ts.get(i).cloned().unwrap_or_else(|| {
+                                if open_tail {
+                                    return Type::Untyped;
+                                }
                                 self.out.push(
                                     err(
                                         "SELU0373",
@@ -336,6 +350,16 @@ impl Ctx<'_> {
     pub(crate) fn check_tuple_value(&mut self, e: &Expr, t: Type) -> Type {
         let original = t.clone();
         let t = crate::shape_of(&t);
+        if crate::game_iterator(&t).is_some()
+            || matches!(&t, Type::Tuple(ts) if ts.iter().any(|t| crate::game_iterator(t).is_some()))
+        {
+            self.out.push(err(
+                "SELU0357",
+                "an API iterator triple must be called directly in a for ... of loop",
+                &e.span,
+            ));
+            return Type::Error;
+        }
         if matches!(e.kind, ExprKind::Call { .. }) {
             self.types.mark_single_value(e.id);
         }
