@@ -10,6 +10,8 @@ pub struct ModuleBindings {
     pub key: String,
     pub(crate) type_only: bool,
     pub addon_name: String,
+    /// Some module of the addon uses try/throw (see `uses_errors`).
+    pub addon_errors: bool,
     pub imports: BTreeMap<String, (String, selu_check::ModuleExports)>,
     live_reads: HashSet<u32>,
     declarations: Vec<Stmt>,
@@ -35,6 +37,7 @@ impl ModuleBindings {
         let mut live_reads = HashSet::new();
         walk_block(&program.stmts, &live, &mut live_reads, false);
         Self {
+            addon_errors: false,
             type_only: program.stmts.iter().all(|s| match &s.kind {
                 StmtKind::TypeDecl(_) => true,
                 StmtKind::Export(inner) => matches!(inner.kind, StmtKind::TypeDecl(_)),
@@ -136,6 +139,24 @@ fn walk_stmt(s: &Stmt, active: &HashSet<String>, out: &mut HashSet<u32>) {
                     }
                     _ => {}
                 }
+            }
+            return;
+        }
+        StmtKind::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            walk_block(body, &active, out, true);
+            if let Some((p, b)) = catch {
+                let mut caught = active.clone();
+                if let Some(p) = p {
+                    caught.remove(&p.name);
+                }
+                walk_block(b, &caught, out, true);
+            }
+            if let Some(b) = finally {
+                walk_block(b, &active, out, true);
             }
             return;
         }

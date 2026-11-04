@@ -1,0 +1,14 @@
+function readBalance(): number {
+  const failure = new Error("Balance unavailable");
+  try {
+    throw failure;
+  } catch (e) {
+    print(e.message);
+    return 0;
+  } finally {
+    print("Balance check finished");
+  }
+}
+on PLAYER_LOGIN() {
+  print(readBalance());
+}

@@ -54,6 +54,10 @@ impl Origins {
             StmtKind::FuncDecl { params, .. } | StmtKind::OnHandler { params, .. } => {
                 self.params(params)
             }
+            StmtKind::Try {
+                catch: Some((Some(param), _)),
+                ..
+            } => self.params(std::slice::from_ref(param)),
             StmtKind::Migrate { param, .. } => self.params(std::slice::from_ref(param)),
             StmtKind::Global { name, .. } => self.binding(name),
             StmtKind::Import { names, default, .. } => {

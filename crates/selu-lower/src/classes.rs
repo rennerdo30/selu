@@ -166,6 +166,20 @@ impl ClassAnalysis<'_> {
             S::FuncDecl { params, body, .. } | S::OnHandler { params, body, .. } => {
                 self.function(params, body, scope)
             }
+            S::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                self.block(body, scope);
+                if let Some((p, b)) = catch {
+                    let params: Vec<_> = p.iter().cloned().collect();
+                    self.function(&params, b, scope);
+                }
+                if let Some(b) = finally {
+                    self.block(b, scope);
+                }
+            }
             S::Block(ss) => self.block(ss, scope),
             S::If {
                 cond,
@@ -661,6 +675,10 @@ fn binds_self_stmt(s: &Stmt) -> bool {
             ForBinding::Name(n, _) => n == "self",
             ForBinding::Pattern(p) => pat(p),
         },
+        S::Try {
+            catch: Some((Some(p), _)),
+            ..
+        } => p.name == "self",
         S::Class(c) => c.name == "self",
         _ => false,
     } || match &s.kind {

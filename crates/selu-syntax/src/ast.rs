@@ -124,6 +124,14 @@ pub enum StmtKind {
         name_span: Span,
         init: Box<Expr>,
     },
+    Throw {
+        value: Box<Expr>,
+    },
+    Try {
+        body: Vec<Stmt>,
+        catch: Option<(Option<Param>, Vec<Stmt>)>,
+        finally: Option<Vec<Stmt>>,
+    },
     Return(Option<Box<Expr>>),
     If {
         cond: Box<Expr>,
@@ -320,6 +328,8 @@ pub enum ExprKind {
         class: String,
         type_args: Vec<TypeExpr>,
         args: Vec<Expr>,
+        /// One-based source line of `new`; `new Error` records it.
+        line: usize,
     },
     /// `(a, b) => a + b`, `x => { ... }`, `function (a) { ... }`.
     Function {

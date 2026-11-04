@@ -20,12 +20,14 @@ pub mod lua;
 // One file per language area; see docs/WORK-PACKAGES.md.
 mod classes;
 mod data;
+mod errors;
 mod functions;
 mod loops;
 mod modules;
 mod patterns;
 mod purity;
 pub mod saved;
+pub use errors::uses_errors;
 pub use modules::ModuleBindings;
 pub mod targets;
 mod wow;
@@ -83,11 +85,23 @@ local function __selu_on(event, fn)
   handlers[#handlers + 1] = fn
 end"#;
 
+// With try/throw in the addon, an event is a callback entry: handlers run
+// with no active Selu protection, even when fired inside a try.
+fn event_prologue(errors: bool) -> String {
+    if !errors {
+        return EVENT_PROLOGUE.into();
+    }
+    EVENT_PROLOGUE.replace(
+        "  for i = 1, #handlers do handlers[i](...) end\n",
+        "  local depth = __selu_errors.depth\n  __selu_errors.depth = 0\n  for i = 1, #handlers do handlers[i](...) end\n  __selu_errors.depth = depth\n",
+    )
+}
+
 // The shared function closes over its handler table and frame, created once.
-fn module_event_prologue() -> String {
+fn module_event_prologue(errors: bool) -> String {
     format!(
         "if not __selu_ns.__selu_events then\n{}\n  __selu_ns.__selu_events = __selu_on\nend\nlocal __selu_on = __selu_ns.__selu_events",
-        EVENT_PROLOGUE
+        event_prologue(errors)
             .lines()
             .map(|l| format!("  {l}"))
             .collect::<Vec<_>>()
@@ -105,7 +119,10 @@ pub fn lower_with_addon(
     types: &TypeTable,
     addon_name: &str,
 ) -> Lowered {
-    lower_addon_layout(program, manifest, types, addon_name, false, manifest)
+    let errors = errors::uses_errors(program);
+    lower_addon_layout(
+        program, manifest, types, addon_name, false, manifest, errors,
+    )
 }
 fn lower_addon_layout(
     program: &Program,
@@ -114,6 +131,7 @@ fn lower_addon_layout(
     addon_name: &str,
     shared: bool,
     availability: &Manifest,
+    addon_errors: bool,
 ) -> Lowered {
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
     let mut module = ModuleBindings::default();
@@ -134,19 +152,26 @@ fn lower_addon_layout(
         class_receiver: "self".into(),
         classes: Default::default(),
         loops: Vec::new(),
+        addon_errors,
+        error_entry: false,
     };
     let mut out: LBlock = Vec::new();
     l.file_prelude(program, &mut out);
     let captures_end = out.len();
     out.extend(saved::setup(program));
+    out.extend(l.error_setup(program));
+    let errors_index = out.len();
     let has_handlers = program.stmts.iter().any(targets::contains_event);
     if has_handlers {
-        out.push(raw(EVENT_PROLOGUE));
+        out.push(raw(&event_prologue(addon_errors)));
         out.push(raw(""));
     }
     out.extend(l.block(&program.stmts));
+    let entry = l.error_entry_setup(program, has_handlers);
+    let entry_state = !entry.is_empty();
+    out.splice(errors_index..errors_index, entry);
     let wow = l.wow_prologue();
-    if wow.is_some() || saved::has_saved(program) {
+    if wow.is_some() || saved::has_saved(program) || errors::uses_errors(program) || entry_state {
         out.insert(0, raw("local __selu_addon, __selu_ns = ..."));
         out.insert(captures_end + 1, raw("__selu_ns = __selu_ns or {}"));
         out.splice(
@@ -204,8 +229,10 @@ pub fn lower_module_layout(
             &module.addon_name,
             shared,
             availability,
+            module.addon_errors || errors::uses_errors(program),
         );
     }
+    let addon_errors = module.addon_errors || errors::uses_errors(program);
     let known: HashSet<String> = manifest.functions.iter().map(|f| f.name.clone()).collect();
     let mut l = Lowerer {
         saved_globals: saved::globals(program, &module.addon_name),
@@ -223,6 +250,8 @@ pub fn lower_module_layout(
         classes: Default::default(),
         wow: wow::WowState::default(),
         loops: Vec::new(),
+        addon_errors,
+        error_entry: false,
     };
     let mut out: LBlock = vec![LStmt {
         kind: LStmtKind::Local(
@@ -244,13 +273,17 @@ pub fn lower_module_layout(
     }
     let runtime_index = out.len();
     out.extend(saved::setup(program));
+    out.extend(l.error_setup(program));
+    let errors_index = out.len();
     l.module_prologue(&mut out);
     let has_handlers = program.stmts.iter().any(targets::contains_event);
     if has_handlers {
-        out.push(raw(&module_event_prologue()));
+        out.push(raw(&module_event_prologue(addon_errors)));
         out.push(raw(""));
     }
     out.extend(l.block(&program.stmts));
+    let entry = l.error_entry_setup(program, has_handlers);
+    out.splice(errors_index..errors_index, entry);
     if let Some(prologue) = l.wow_prologue() {
         out.splice(runtime_index..runtime_index, prologue);
     }
@@ -290,6 +323,10 @@ pub(crate) struct Lowerer<'a> {
     known: &'a HashSet<String>,
     types: &'a TypeTable,
     temps: u32,
+    /// Some file of the addon uses try/throw: callback entries reset depth.
+    addon_errors: bool,
+    /// This file wrapped a callback in `__selu_entry`.
+    error_entry: bool,
 }
 
 impl Lowerer<'_> {
@@ -350,6 +387,7 @@ impl Lowerer<'_> {
     fn stmt(&mut self, s: &Stmt, forward: bool, out: &mut LBlock) {
         let span = &s.span;
         match &s.kind {
+            StmtKind::Try { .. } | StmtKind::Throw { .. } => self.error_stmt(s, out),
             StmtKind::Saved { .. } | StmtKind::Migrate { .. } => self.saved_stmt(s, forward, out),
             StmtKind::VarDecl { init: None, .. } if forward => {}
             StmtKind::VarDecl {
@@ -414,8 +452,18 @@ impl Lowerer<'_> {
             | StmtKind::DoWhile { .. }
             | StmtKind::For { .. }
             | StmtKind::Break
-            | StmtKind::Continue => self.loop_stmt(s, out),
-            StmtKind::ForOf { .. } => self.for_of(s, out),
+            | StmtKind::Continue => {
+                let mut lowered = Vec::new();
+                self.loop_stmt(s, &mut lowered);
+                self.hoist_error_closures(&mut lowered, out);
+                out.extend(lowered);
+            }
+            StmtKind::ForOf { .. } => {
+                let mut lowered = Vec::new();
+                self.for_of(s, &mut lowered);
+                self.hoist_error_closures(&mut lowered, out);
+                out.extend(lowered);
+            }
             StmtKind::Destructure { .. } => self.destructure(s, forward, out),
             StmtKind::TypeDecl(_) => {}
             StmtKind::Import { .. } => self.import_stmt(s, out),
@@ -959,6 +1007,7 @@ impl Lowerer<'_> {
                 span: None,
             });
         }
+        self.error_captures(program, out);
         self.target_prelude(program, out);
         self.class_prelude(&program.stmts, out);
         out.extend(saved::captures(program));

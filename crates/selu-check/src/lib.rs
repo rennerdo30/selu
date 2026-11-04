@@ -29,6 +29,7 @@ mod rules;
 // One file per language area. The central `stmt`/`expr_inner` matches only
 // dispatch; each area's checks live in its own file (docs/WORK-PACKAGES.md).
 mod data;
+mod errors;
 mod functions;
 mod loops;
 pub mod patterns;
@@ -301,6 +302,7 @@ impl Ctx<'_> {
 
     /// Declares `name` in the innermost scope; only parameters start ready.
     fn declare(&mut self, name: &str, span: &Span, kind: Kind, ty: Type) {
+        self.reserved_error_name(name, span);
         let fn_depth = self.fn_depth;
         let scope = self.scopes.last_mut().expect("a scope is open");
         if scope.names.contains_key(name) {
@@ -509,7 +511,14 @@ impl Ctx<'_> {
     // ---- statements ---------------------------------------------------
 
     fn stmt(&mut self, s: &Stmt) {
+        if let StmtKind::TypeDecl(d) = &s.kind {
+            self.reserved_error_name(&d.name, &d.name_span);
+            for (i, (n, _)) in d.params.iter().enumerate() {
+                self.reserved_error_name(n, &d.param_spans[i]);
+            }
+        }
         match &s.kind {
+            StmtKind::Try { .. } | StmtKind::Throw { .. } => self.error_stmt(s),
             StmtKind::Saved { .. } | StmtKind::Migrate { .. } => self.saved_stmt(s),
             StmtKind::VarDecl {
                 is_const,
@@ -1081,6 +1090,14 @@ impl Ctx<'_> {
         if let Some(t) = self.api_member(t, name, api_object) {
             return t;
         }
+        if *t == errors::error_type() {
+            if name == "message" {
+                return Type::String;
+            }
+            if name == "value" {
+                return Type::Unknown;
+            }
+        }
         if let Some(t) = self.class_member(t, name, object) {
             return t;
         }
@@ -1411,7 +1428,9 @@ fn pattern_names(p: &selu_syntax::Pattern) -> Vec<(&String, &Span)> {
 
 fn always_exits(stmts: &[Stmt]) -> bool {
     match stmts.last().map(|s| &s.kind) {
-        Some(StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue) => true,
+        Some(
+            StmtKind::Return(_) | StmtKind::Throw { .. } | StmtKind::Break | StmtKind::Continue,
+        ) => true,
         Some(StmtKind::Block(b)) => always_exits(b),
         Some(StmtKind::If {
             then_branch,
