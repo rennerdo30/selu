@@ -34,7 +34,7 @@ container and item functions with Sim::eval; it checks junk 101 sold,
 quest 102, locked 103 and quality-2 item 104 skipped, repair using own funds,
 and two newly sold locked duplicates bought back from index 2 then 1.
 
-**Status after round 5 (2026-11-04):** gaps 2 (`type`/`interface`) and 3
+**Status after round 6 (2026-11-04):** gaps 2 (`type`/`interface`) and 3
 (`typeof`) are closed by package L; gap 5 (`MerchantFrame`) is closed by M3;
 gap 6 (`NUM_TOTAL_EQUIPPED_BAG_SLOTS`) is closed on retail and forever, while
 the classic branches only reference it (guard with `has(...)` there). Round 6
