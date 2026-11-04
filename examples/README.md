@@ -39,4 +39,5 @@ module fixtures) and checks source-map coverage. It does not advance time or
 click buttons, so the timers fixture contains only the immediate queued message.
 Source-map regressions also run in `cargo test -p selu-cli --test sourcemap`.
 
+The hello and classes examples also contain tests/: run selu test examples/hello or selu test examples/classes. See docs/lang/testing.md for the test API.
 - `keybindings`: a localised panel binding with a shared action callback.

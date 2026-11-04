@@ -1,13 +1,5 @@
-//! `selu test`: the `*.test.selu` runner (docs/SIMULATOR.md decisions 11
-//! and 22, SPEC-V1.md section 8). Owner: package S4 (round 9).
-//!
-//! Groundwork (round 8): test discovery, the report model with human and
-//! JSON output, exit codes, and the replay record a failing test keeps.
-//! Not here yet (S4): compiling test files with the project's modules, the
-//! `describe`/`test`/`beforeEach`/`expect` intrinsics and the `sim`/`perf`
-//! test manifest overlay, spies, and running each file in a fresh
-//! [`selu_sim::Session`]. [`run`] says so instead of pretending.
-
+//! Deterministic test runner and reports shared by the CLI and future Studio integration.
+pub mod project;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -142,7 +134,7 @@ pub struct RunOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunError {
     NoTests,
-    NotImplemented { files: Vec<String> },
+    Build(String),
     Io(String),
 }
 
@@ -150,25 +142,15 @@ impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RunError::NoTests => write!(f, "no *.test.selu files under src/ or tests/"),
-            RunError::NotImplemented { files } => write!(
-                f,
-                "found {} test file(s), but the test runner is not implemented yet (round 9, package S4): {}",
-                files.len(),
-                files.join(", ")
-            ),
+            RunError::Build(e) => write!(f, "{e}"),
             RunError::Io(e) => write!(f, "{e}"),
         }
     }
 }
 
-/// Run the project's tests. Groundwork: discovery only.
-pub fn run(options: &RunOptions) -> Result<Report, RunError> {
-    let files = discover(&options.project_dir).map_err(|e| RunError::Io(e.to_string()))?;
-    if files.is_empty() {
-        return Err(RunError::NoTests);
-    }
-    Err(RunError::NotImplemented { files })
-}
+mod bridge;
+mod runner;
+pub use runner::run;
 
 #[cfg(test)]
 mod tests {
@@ -192,7 +174,7 @@ mod tests {
         .unwrap_err();
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(found, ["src/ui/list.test.selu", "tests/boot.test.selu"]);
-        assert!(matches!(err, RunError::NotImplemented { .. }));
+        assert!(matches!(err, RunError::Io(_) | RunError::Build(_)));
     }
 
     #[test]

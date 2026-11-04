@@ -20,7 +20,10 @@ use mlua::{Function, Lua};
 pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
     lua.globals().set(
         "__selu_sim_error",
-        lua.create_function(move |_, error: String| {
+        lua.create_function(move |lua, error: String| {
+            lua.app_data_ref::<crate::Ctx>()
+                .unwrap()
+                .runtime_failure("callback", error.clone());
             logs.lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(format!("callback error: {error}"));
@@ -109,6 +112,9 @@ fn advance_bounded(
         Ok(())
     })();
     if let Err(error) = result {
+        lua.app_data_ref::<crate::Ctx>()
+            .unwrap()
+            .runtime_failure("scheduler", error.to_string());
         logs.lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(format!("scheduler error: {error}"));

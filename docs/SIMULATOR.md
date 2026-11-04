@@ -33,9 +33,9 @@ So round 8 starts from compiling, tested code, not from prose:
 | `selu-sim/src/world.rs`, `trace.rs` | owner notes only | S2 |
 | `selu-sim/tests/addons/Hello/` | plain Lua test addon with a `.toc` | everyone adds addons here |
 | `crates/selu-sourcemap` | decision 23's format, reader and writer, both lookups, `map_lua_error` | S3 makes the lowering and `selu build` emit it |
-| `crates/selu-test` | discovery of `*.test.selu`, the report model (human, `--json`), exit codes, replay record; `run` reports "not implemented" | S4 |
+| `crates/selu-test` | discovery, project compilation, test manifest overlay, Rust registrations and hooks, assertions, spies, Session helpers, source-mapped reports and replay; limitations in `docs/lang/testing.md` | S4 |
 | `crates/selu-debug` | binary `selu-studio`; `Worker` owns a `Session` on its own thread; JSON `Command`/`Update` protocol; `--headless` mode; **the Studio window (S5's first version, built by the parent on the owner's request, 2026-11-04)**: eframe/egui on wgpu, toolbar (/reload, rebuild and rebuild on save by polling `src/`, play/pause, time steps, screenshot), frame tree, game screen drawn from snapshots with hit-testing, inspector, console (Lua and slash commands), event trace with "fire event"; `SELU_STUDIO_SCREENSHOT=file.png` saves one screenshot and closes, for checks; **the code editor** (owner, 2026-11-04: Studio is the place to write code): file list, tabs, syntax colours, line numbers, errors while typing from the real compiler (a background `selu build` of a mirror under `dist/.selu/check/` with the unsaved text), Problems list, completion and hover from the target manifest and the project, save with rebuild and reload | S5 polishes (strata/level draw order once S1 lands, real textures and fonts, anchors drawn, timeline scrubbing), S6 the debugger |
-| `selu test`, `selu debug` | wired: `selu test` calls `selu_test::run`; `selu debug` builds, finds the built folder, starts `selu-studio` beside `selu` or on the path | S4, S5 |
+| `selu test`, `selu debug` | `selu test` calls `selu_test::run`, with filtering and JSON reports; `selu debug` builds, finds the built folder, starts `selu-studio` beside `selu` or on the path | S4, S5 |
 
 ## Decisions
 

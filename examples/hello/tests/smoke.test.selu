@@ -1,0 +1,9 @@
+describe("login", () => {
+  test("welcomes the player", () => {
+    expect(sim.prints()).toContain("Welcome, adventurer!");
+  });
+  test("can reload the addon", () => {
+    sim.reload();
+    expect(sim.prints()).toContain("Welcome, adventurer!");
+  });
+});
