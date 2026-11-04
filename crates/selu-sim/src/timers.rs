@@ -22,7 +22,7 @@ pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
         "__selu_sim_error",
         lua.create_function(move |_, error: String| {
             logs.lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .push(format!("callback error: {error}"));
             Ok(())
         })?,
