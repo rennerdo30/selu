@@ -49,7 +49,19 @@ The window is laid out like a code editor:
   indent width and format on save. Saving edits `selu.toml` in place and
   keeps its comments.
 
-Shortcuts: Ctrl+P open a file, Ctrl+S save all (rebuilds and reloads),
+- **Run in Game** (Ctrl+F5, Run menu, or the controller button in the title
+  bar): builds the project, copies the built addon into the matching game
+  client's `Interface\AddOns` and starts that client (or, if it's already
+  running, tells you to type `/reload` in game). Studio finds the installs
+  through Windows' uninstall entries and the usual folders on every drive;
+  **Run > Game Installs** shows them, lets you choose the client per
+  flavour, override a flavour and add an install folder by hand. Studio only
+  replaces addon folders it copied itself (they hold a `.selu-studio`
+  marker); for any other folder of the same name it asks, and the old folder
+  goes to the Recycle Bin. `selu-studio --list-games` prints what it finds.
+  Choices are saved in `%APPDATA%\Selu\studio.toml`.
+
+Shortcuts: Ctrl+F5 run in game, Ctrl+P open a file, Ctrl+S save all (rebuilds and reloads),
 Shift+Alt+F format, Ctrl+, project settings,
 Ctrl+W close the tab, Ctrl+F find, Ctrl+= / Ctrl+- / Ctrl+0 zoom, F5 run or
 pause, Ctrl+R /reload, Ctrl+B build, Ctrl+J bottom panel, Ctrl+Shift+E side

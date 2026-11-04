@@ -108,6 +108,14 @@ pub struct Studio {
     event_filter: EventFilter,
     event_search: String,
     logo: Option<egui::TextureHandle>,
+    game_settings: crate::game::Settings,
+    game_clients: Vec<crate::game::Client>,
+    game_scanned: bool,
+    games_open: bool,
+    game_new_root: String,
+    /// Copy into this client after the running build succeeds.
+    pending_deploy: Option<(String, crate::game::Client)>,
+    confirm_replace: Option<(String, crate::game::Client, PathBuf)>,
     /// The running background build, if any.
     build: Option<Receiver<BuildMsg>>,
     build_failed: bool,
@@ -166,6 +174,13 @@ impl Studio {
             event_search: String::new(),
             build: None,
             build_failed: false,
+            game_settings: crate::game::Settings::load(),
+            game_clients: Vec::new(),
+            game_scanned: false,
+            games_open: false,
+            game_new_root: String::new(),
+            pending_deploy: None,
+            confirm_replace: None,
             repaint: Some(ctx.clone()),
             logo: crate::theme::logo_image()
                 .map(|img| ctx.load_texture("selu-logo", img, egui::TextureOptions::LINEAR)),
@@ -193,6 +208,10 @@ impl Studio {
             editor: crate::editor::Editor::new(opts_project, opts_selu, opts_target, ctx),
             confirm_close: false,
         };
+        // For screenshots in checks: open the Game Installs window.
+        if std::env::var_os("SELU_STUDIO_OPEN_GAMES").is_some() {
+            studio.games_open = true;
+        }
         // For screenshots in checks: pick the bottom tab.
         match std::env::var("SELU_STUDIO_TAB").as_deref() {
             Ok("console") => studio.tab = Tab::Console,
@@ -378,7 +397,11 @@ impl Studio {
                     self.build_failed = !ok;
                     if ok {
                         self.act(Command::Reload);
+                        if let Some((flavour, client)) = self.pending_deploy.take() {
+                            self.deploy(&flavour, &client, false);
+                        }
                     } else {
+                        self.pending_deploy = None;
                         self.line(
                             LineKind::Error,
                             "build failed; the running addon is unchanged",
@@ -567,6 +590,8 @@ impl eframe::App for Studio {
         self.close_guard(&ctx);
         self.edge_resize(&ctx);
         self.editor.ui_quick_open(&ctx);
+        self.ui_games(&ctx);
+        self.ui_confirm_replace(&ctx);
         if self.editor.take_settings_request() {
             self.open_settings();
         }
@@ -689,10 +714,291 @@ impl Studio {
         }
     }
 
+    /// The flavour the project is tested on in game: `--target`, else the
+    /// first target in `selu.toml`.
+    fn game_flavour(&self) -> Option<String> {
+        let target = self.opts.target.clone().or_else(|| {
+            self.opts
+                .project
+                .as_deref()
+                .and_then(crate::editor::complete::project_target)
+        })?;
+        Some(
+            target
+                .split('@')
+                .next()
+                .unwrap_or(&target)
+                .trim()
+                .to_string(),
+        )
+    }
+
+    fn ensure_clients(&mut self) {
+        if !self.game_scanned {
+            self.game_clients = crate::game::detect(&self.game_settings);
+            self.game_scanned = true;
+        }
+    }
+
+    /// Run in Game (Ctrl+F5): build, copy into the client's AddOns, start it.
+    fn run_in_game(&mut self) {
+        if self.opts.project.is_none() || self.opts.selu.is_none() {
+            self.line(
+                LineKind::Error,
+                "Run in Game needs a project (start Studio with `selu debug`)",
+            );
+            return;
+        }
+        let Some(flavour) = self.game_flavour() else {
+            self.line(LineKind::Error, "the project has no target in selu.toml");
+            return;
+        };
+        self.ensure_clients();
+        let Some(client) =
+            crate::game::pick(&self.game_clients, &flavour, &self.game_settings).cloned()
+        else {
+            self.line(
+                LineKind::Error,
+                format!("no {flavour} game install found; add it under Run > Game Installs"),
+            );
+            self.games_open = true;
+            return;
+        };
+        self.line(
+            LineKind::Build,
+            format!(
+                "Run in Game: {} ({})",
+                client.label(),
+                client.folder.display()
+            ),
+        );
+        self.pending_deploy = Some((flavour, client));
+        self.rebuild();
+    }
+
+    /// After a successful build: copy the addon and start the game.
+    fn deploy(&mut self, flavour: &str, client: &crate::game::Client, force: bool) {
+        let Some(project) = self.opts.project.clone() else {
+            return;
+        };
+        let Some(built) = crate::game::built_folder(&project, flavour) else {
+            self.line(
+                LineKind::Error,
+                format!(
+                    "no built {flavour} addon under {}",
+                    project.join("dist").display()
+                ),
+            );
+            return;
+        };
+        match crate::game::install_addon(&built, client, force) {
+            Ok(dest) => {
+                self.line(LineKind::Build, format!("copied to {}", dest.display()));
+                if crate::game::is_running(client) {
+                    self.line(
+                        LineKind::Build,
+                        "World of Warcraft is already running: type /reload in game to load the new version",
+                    );
+                } else {
+                    match crate::game::launch(client) {
+                        Ok(()) => {
+                            self.line(LineKind::Build, format!("starting {}", client.label()))
+                        }
+                        Err(e) => self.line(LineKind::Error, e),
+                    }
+                }
+            }
+            Err(crate::game::CopyError::NotOurs(dest)) => {
+                self.confirm_replace = Some((flavour.to_string(), client.clone(), dest));
+            }
+            Err(crate::game::CopyError::Io(e)) => self.line(LineKind::Error, e),
+        }
+    }
+
+    /// Asked before replacing an addon folder Studio didn't create.
+    fn ui_confirm_replace(&mut self, ctx: &egui::Context) {
+        let Some((flavour, client, dest)) = self.confirm_replace.clone() else {
+            return;
+        };
+        let mut done = None;
+        egui::Modal::new(egui::Id::unique("confirm-replace")).show(ctx, |ui| {
+            ui.set_width(460.0);
+            ui.label(
+                egui::RichText::new("Replace this addon folder?")
+                    .size(16.0)
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(dest.display().to_string())
+                    .monospace()
+                    .color(palette::TEXT),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "A folder with this name already exists and Selu Studio didn't create it. \
+                     Replacing it moves it to the Recycle Bin.",
+                )
+                .color(palette::MUTED),
+            );
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let replace =
+                    egui::Button::new(egui::RichText::new("Replace").color(Color32::WHITE))
+                        .fill(palette::ERROR.gamma_multiply(0.8));
+                if ui.add(replace).clicked() {
+                    done = Some(true);
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                    done = Some(false);
+                }
+            });
+        });
+        match done {
+            Some(true) => {
+                self.confirm_replace = None;
+                self.deploy(&flavour, &client, true);
+            }
+            Some(false) => {
+                self.confirm_replace = None;
+                self.line(
+                    LineKind::Log,
+                    "Run in Game cancelled; the existing folder is unchanged",
+                );
+            }
+            None => {}
+        }
+    }
+
+    /// Game Installs: the clients found, which one each flavour uses, and
+    /// folders added by hand.
+    fn ui_games(&mut self, ctx: &egui::Context) {
+        if !self.games_open {
+            return;
+        }
+        self.ensure_clients();
+        let mut open = true;
+        let mut changed = false;
+        let mut rescan = false;
+        egui::Window::new(egui::RichText::new("Game Installs").size(15.0).strong())
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(720.0)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Run in Game copies the built addon into the chosen client's Interface\\AddOns and starts it.",
+                    )
+                    .color(palette::MUTED),
+                );
+                ui.add_space(8.0);
+                if self.game_clients.is_empty() {
+                    ui.label(egui::RichText::new("No World of Warcraft install found. Add its folder below.").color(palette::WARNING));
+                }
+                let flavours = ["retail", "forever", "classic", "classic-era", "classic-anniversary", "classic-titan"];
+                egui::Grid::new("clients").num_columns(5).spacing([14.0, 8.0]).striped(true).show(ui, |ui| {
+                    for h in ["USE", "CLIENT", "FLAVOUR", "GAME", "ADDONS FOLDER"] {
+                        ui.label(egui::RichText::new(h).size(10.5).strong().color(palette::FAINT));
+                    }
+                    ui.end_row();
+                    for i in 0..self.game_clients.len() {
+                        let c = self.game_clients[i].clone();
+                        let key = c.folder.to_string_lossy().into_owned();
+                        let chosen = c.flavour.as_ref().and_then(|f| {
+                            crate::game::pick(&self.game_clients, f, &self.game_settings)
+                                .map(|p| p.folder == c.folder)
+                        });
+                        let mut use_it = chosen.unwrap_or(false);
+                        if ui
+                            .add_enabled(c.flavour.is_some(), egui::Checkbox::without_text(&mut use_it))
+                            .on_hover_text("Run in Game uses this client for its flavour")
+                            .changed()
+                            && use_it
+                            && let Some(f) = &c.flavour
+                        {
+                            self.game_settings.chosen.insert(f.clone(), key.clone());
+                            changed = true;
+                        }
+                        ui.label(egui::RichText::new(c.folder_name()).monospace());
+                        let mut flavour = c.flavour.clone().unwrap_or_default();
+                        egui::ComboBox::from_id_salt(("client-flavour", i))
+                            .width(170.0)
+                            .selected_text(if flavour.is_empty() { "unknown" } else { &flavour })
+                            .show_ui(ui, |ui| {
+                                for f in flavours {
+                                    if ui.selectable_value(&mut flavour, f.to_string(), f).clicked() {
+                                        self.game_settings.flavours.insert(key.clone(), f.to_string());
+                                        changed = true;
+                                        rescan = true;
+                                    }
+                                }
+                            });
+                        match &c.exe {
+                            Some(e) => ui.label(e.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned())),
+                            None => ui.label(egui::RichText::new("no game executable").color(palette::WARNING)),
+                        };
+                        let addons = c.addons_dir();
+                        if ui
+                            .add(egui::Label::new(egui::RichText::new(addons.display().to_string()).small().color(palette::MUTED)).sense(Sense::click()))
+                            .on_hover_text("Open in File Explorer")
+                            .clicked()
+                        {
+                            let _ = std::process::Command::new("explorer").arg(&addons).spawn();
+                        }
+                        ui.end_row();
+                    }
+                });
+                ui.add_space(10.0);
+                crate::theme::rule(ui);
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("Add install folder");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.game_new_root)
+                            .hint_text(r"C:\Program Files (x86)\World of Warcraft")
+                            .desired_width(360.0),
+                    );
+                    if ui.button("Add").clicked() {
+                        let p = std::path::PathBuf::from(self.game_new_root.trim());
+                        if p.is_dir() {
+                            self.game_settings.extra_roots.push(p);
+                            self.game_new_root.clear();
+                            changed = true;
+                            rescan = true;
+                        } else {
+                            self.line(LineKind::Error, format!("{} is not a folder", p.display()));
+                        }
+                    }
+                    if ui.button("Rescan").clicked() {
+                        rescan = true;
+                    }
+                });
+                if let Some(f) = self.game_flavour() {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(format!("This project runs on {f}.")).small().color(palette::FAINT));
+                }
+            });
+        if changed && let Err(e) = self.game_settings.save() {
+            self.line(LineKind::Error, format!("cannot save game settings: {e}"));
+        }
+        if rescan {
+            self.game_scanned = false;
+            self.ensure_clients();
+        }
+        if !open {
+            self.games_open = false;
+        }
+    }
+
     fn global_shortcuts(&mut self, ctx: &egui::Context) {
         self.editor.shortcuts(ctx);
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Comma)) {
             self.open_settings();
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::F5)) {
+            self.run_in_game();
         }
         let (run, reload, build, panel, side, preview) = ctx.input_mut(|i| {
             (
@@ -795,6 +1101,7 @@ impl Studio {
                             ("Ctrl+Space", "Complete a name"),
                             ("Ctrl+= / Ctrl+- / Ctrl+0", "Zoom the code"),
                             ("F5", "Run or pause the game clock"),
+                            ("Ctrl+F5", "Run in Game: build, copy and start WoW"),
                             ("Ctrl+R", "/reload the addon"),
                             ("Ctrl+B", "Build"),
                             ("Ctrl+J", "Show or hide the bottom panel"),
@@ -1019,6 +1326,22 @@ impl Studio {
                     }
                 });
                 ui.menu_button("Run", |ui| {
+                    if ui
+                        .add_enabled(
+                            self.editor.has_project(),
+                            egui::Button::new("Run in Game").shortcut_text("Ctrl+F5"),
+                        )
+                        .on_hover_text(
+                            "Build, copy into the game's AddOns folder and start the game",
+                        )
+                        .clicked()
+                    {
+                        self.run_in_game();
+                    }
+                    if ui.button("Game Installs...").clicked() {
+                        self.games_open = true;
+                    }
+                    ui.separator();
                     let label = if self.playing { "Pause" } else { "Run" };
                     if ui
                         .add(egui::Button::new(label).shortcut_text("F5"))
@@ -1114,6 +1437,17 @@ impl Studio {
             {
                 self.rebuild();
             }
+        }
+        if child
+            .add_enabled(
+                can_build,
+                egui::Button::new(icon_text(icon::GAME, 13.0).color(palette::ACCENT))
+                    .min_size(egui::vec2(32.0, 26.0)),
+            )
+            .on_hover_text("Run in Game (Ctrl+F5): build, copy into the game's AddOns and start it")
+            .clicked()
+        {
+            self.run_in_game();
         }
         let time = self.snapshot.as_ref().map_or(0.0, |s| s.time);
         child.add_space(6.0);

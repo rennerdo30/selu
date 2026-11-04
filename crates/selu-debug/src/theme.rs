@@ -55,6 +55,7 @@ pub mod icon {
     pub const NEW_FILE: &str = "\u{E8A5}";
     pub const NEW_FOLDER: &str = "\u{E8F4}";
     pub const FOLDER: &str = "\u{E8B7}";
+    pub const GAME: &str = "\u{E7FC}";
     pub const WIN_MINIMIZE: &str = "\u{E921}";
     pub const WIN_MAXIMIZE: &str = "\u{E922}";
     pub const WIN_RESTORE: &str = "\u{E923}";

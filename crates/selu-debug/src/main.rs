@@ -12,6 +12,7 @@
 
 mod app;
 mod editor;
+mod game;
 mod png;
 mod settings;
 mod theme;
@@ -52,6 +53,22 @@ fn main() -> ExitCode {
                 }
             },
             "--headless" => headless = true,
+            "--list-games" => {
+                // Diagnostics: the game clients Run in Game would use.
+                let settings = game::Settings::load();
+                for c in game::detect(&settings) {
+                    println!(
+                        "{:<22} {:<16} {}",
+                        c.flavour.as_deref().unwrap_or("unknown"),
+                        c.exe
+                            .as_ref()
+                            .and_then(|e| e.file_name())
+                            .map_or_else(|| "-".to_string(), |n| n.to_string_lossy().into_owned()),
+                        c.folder.display()
+                    );
+                }
+                return ExitCode::SUCCESS;
+            }
             "--help" | "-h" => {
                 println!("{USAGE}");
                 return ExitCode::SUCCESS;
