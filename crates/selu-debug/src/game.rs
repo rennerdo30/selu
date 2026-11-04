@@ -89,6 +89,22 @@ pub fn product_code(folder: &str) -> Option<String> {
     })
 }
 
+/// The code Battle.net's `--exec="launch <code>"` takes for a client
+/// folder. Sources: Blizzard's forum and Lutris' installers use `WoW` for
+/// retail, `WoWC` for Classic and `WoWF` for Forever. Battle.net groups
+/// Classic Era, Progression and Anniversary under one Classic entry, so
+/// `WoWC` starts whichever Classic version is selected in its dropdown.
+/// Test realms have no known code.
+pub fn launch_code(folder: &str) -> Option<&'static str> {
+    match flavour_of(folder)? {
+        _ if folder.contains("ptr") || folder.contains("beta") => None,
+        "retail" => Some("WoW"),
+        "forever" => Some("WoWF"),
+        "classic" | "classic-era" | "classic-anniversary" | "classic-titan" => Some("WoWC"),
+        _ => None,
+    }
+}
+
 /// How Run in Game starts the client.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -402,16 +418,40 @@ pub fn is_running(client: &Client) -> bool {
 /// Start the client the chosen way. The game opens its own window; Studio
 /// doesn't wait. Returns what was done, for the console.
 pub fn launch(client: &Client, mode: LaunchMode) -> Result<String, String> {
+    let folder = client.folder_name();
     if mode != LaunchMode::Direct
-        && let (Some(id), Some(bnet)) = (product_code(&client.folder_name()), battlenet_exe())
+        && let Some(bnet) = battlenet_exe()
     {
         let mut cmd = std::process::Command::new(&bnet);
-        let what = if mode == LaunchMode::Battlenet {
-            cmd.arg(format!("--exec=launch {id}"));
-            format!("asked Battle.net to start {} (launch {id})", client.label())
-        } else {
-            cmd.arg(format!("--uri=battlenet://game/{id}"));
-            format!("opened {} in Battle.net", client.label())
+        let what = match mode {
+            LaunchMode::Battlenet => {
+                let Some(code) = launch_code(&folder) else {
+                    return launch_exe(client).map(|()| {
+                        format!(
+                            "started {} directly (Battle.net has no launch code for this client)",
+                            client.label()
+                        )
+                    });
+                };
+                // Battle.net reads the raw command line and wants exactly
+                // --exec="launch WoW"; normal argument quoting would wrap
+                // the whole argument instead.
+                exec_arg(&mut cmd, code);
+                let note = if code == "WoWC" {
+                    "; Battle.net starts the Classic version selected in its Classic dropdown"
+                } else {
+                    ""
+                };
+                format!(
+                    "asked Battle.net to start {} (launch {code}){note}",
+                    client.label()
+                )
+            }
+            _ => {
+                let id = product_code(&folder).unwrap_or_else(|| "wow".into());
+                cmd.arg(format!("--uri=battlenet://game/{id}"));
+                format!("opened {} in Battle.net", client.label())
+            }
         };
         return cmd
             .spawn()
@@ -419,6 +459,17 @@ pub fn launch(client: &Client, mode: LaunchMode) -> Result<String, String> {
             .map_err(|e| format!("cannot start Battle.net ({}): {e}", bnet.display()));
     }
     launch_exe(client).map(|()| format!("started {} directly", client.label()))
+}
+
+#[cfg(windows)]
+fn exec_arg(cmd: &mut std::process::Command, code: &str) {
+    use std::os::windows::process::CommandExt;
+    cmd.raw_arg(format!("--exec=\"launch {code}\""));
+}
+
+#[cfg(not(windows))]
+fn exec_arg(cmd: &mut std::process::Command, code: &str) {
+    cmd.arg(format!("--exec=launch {code}"));
 }
 
 /// Start the client's executable directly (no Battle.net login).
@@ -462,6 +513,17 @@ pub fn built_folder(project: &Path, flavour: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_codes_from_folder_names() {
+        assert_eq!(launch_code("_retail_"), Some("WoW"));
+        assert_eq!(launch_code("_forever_"), Some("WoWF"));
+        assert_eq!(launch_code("_classic_"), Some("WoWC"));
+        assert_eq!(launch_code("_classic_era_"), Some("WoWC"));
+        assert_eq!(launch_code("_anniversary_"), Some("WoWC"));
+        assert_eq!(launch_code("_ptr_"), None);
+        assert_eq!(launch_code("_classic_beta_"), None);
+    }
 
     #[test]
     fn product_codes_from_folder_names() {

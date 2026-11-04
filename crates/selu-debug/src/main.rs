@@ -68,8 +68,10 @@ fn main() -> ExitCode {
                             .as_ref()
                             .and_then(|e| e.file_name())
                             .map_or_else(|| "-".to_string(), |n| n.to_string_lossy().into_owned()),
-                        game::product_code(&c.folder_name())
-                            .map_or_else(|| "-".to_string(), |p| format!("launch {p}")),
+                        game::launch_code(&c.folder_name()).map_or_else(
+                            || "start directly".to_string(),
+                            |p| format!("--exec=\"launch {p}\"")
+                        ),
                         c.folder.display()
                     );
                 }
