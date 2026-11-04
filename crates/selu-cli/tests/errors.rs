@@ -178,3 +178,13 @@ fn error_aliases_keep_nominal_identity() {
     );
     assert!(codes(r#"const e: Error = {message: "fake"}; throw e;"#).contains(&"SELU0336".into()));
 }
+
+#[test]
+fn hoisting_preserves_source_callback_identity() {
+    assert_eq!(
+        run(
+            r#"global pcall = (f) => f; let previous = () => 0; for(let i=0;i<2;i++) { const current = pcall(() => 1); print(current == previous); previous = current; }"#
+        ),
+        ["false", "false"]
+    );
+}

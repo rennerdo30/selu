@@ -271,9 +271,24 @@ impl Lowerer<'_> {
     // function to the loop's enclosing block, preserving all other closures.
     pub(crate) fn hoist_error_closures(&mut self, block: &mut LBlock, out: &mut LBlock) {
         for s in block {
+            let protected = match &s.kind {
+                LStmtKind::Local(names, _) => {
+                    names.len() >= 2 && names.iter().all(|n| n.starts_with("__selu_"))
+                }
+                LStmtKind::Assign(targets, _) => {
+                    targets.len() >= 2
+                        && targets
+                            .iter()
+                            .all(|e| matches!(e, LExpr::Name(n) if n.starts_with("__selu_")))
+                }
+                _ => false,
+            };
             match &mut s.kind {
                 LStmtKind::Local(_, values) | LStmtKind::Assign(_, values) => {
                     for v in values {
+                        if !protected {
+                            continue;
+                        }
                         if let LExpr::Call(callee, args) = v
                             && matches!(callee.as_ref(), LExpr::Name(n) if n == "pcall")
                             && let [LExpr::Function(f)] = args.as_mut_slice()
