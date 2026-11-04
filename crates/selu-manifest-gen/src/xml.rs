@@ -5,11 +5,13 @@ use std::collections::BTreeMap;
 pub fn declaration(name: &str, ty: &str, file: &str) -> Declaration {
     serde_json::from_value(serde_json::json!({"name":name,"type":ty,"evidence":"source","attributes":{"file":file.strip_prefix("Interface/AddOns/").unwrap_or(file)}})).unwrap()
 }
+type ChildDefinitions = BTreeMap<String, Vec<(String, String, Vec<String>)>>;
 #[derive(Default)]
 pub struct Xml {
     globals: BTreeMap<String, (String, Vec<String>)>,
     templates: BTreeMap<String, Declaration>,
     types: BTreeMap<String, String>,
+    children: ChildDefinitions,
 }
 impl Xml {
     /// Read widget tag identities from this pin's schema, including intrinsic aliases.
@@ -47,7 +49,7 @@ impl Xml {
     }
     pub fn parse(&mut self, file: &str, text: &str) -> Result<(), String> {
         let mut reader = Reader::from_str(text.trim_start_matches('\u{feff}'));
-        let mut stack: Vec<(Option<String>, bool)> = vec![];
+        let mut stack: Vec<(Option<String>, bool, Option<String>)> = vec![];
         loop {
             let event = reader.read_event().map_err(|e| format!("{file}: {e}"))?;
             match event {
@@ -65,8 +67,11 @@ impl Xml {
                     }
                     let parent = stack.last().cloned().unwrap_or_default();
                     let font = tag == "Font" || tag == "FontFamily";
-                    let virtual_node =
-                        !font && (parent.1 || attrs.get("virtual").is_some_and(|v| v == "true"));
+                    let virtual_node = parent.1
+                        || (!font
+                            && ["virtual", "intrinsic"]
+                                .iter()
+                                .any(|key| attrs.get(*key).is_some_and(|v| v == "true")));
                     let resolved = attrs.get("name").and_then(|n| {
                         if n.contains("$parent") {
                             parent.0.as_ref().map(|p| n.replace("$parent", p))
@@ -101,14 +106,19 @@ impl Xml {
                                 | "ModelScene"
                                 | "Browser"
                         );
+                    let mut inherits: Vec<String> = attrs
+                        .get("inherits")
+                        .map(|v| v.split(',').map(|s| s.trim().to_owned()).collect())
+                        .unwrap_or_default();
+                    if self.types.get(&tag).is_some_and(|ty| ty != &tag) && !inherits.contains(&tag)
+                    {
+                        inherits.insert(0, tag.clone());
+                    }
                     if widget && let Some(n) = &resolved {
                         if virtual_node {
                             if !parent.1 {
                                 let mut d = declaration(n, &tag, file);
-                                d.inherits = attrs
-                                    .get("inherits")
-                                    .map(|v| v.split(',').map(|s| s.trim().to_owned()).collect())
-                                    .unwrap_or_default();
+                                d.inherits = inherits.clone();
                                 if let Some(mixins) = attrs.get("mixin") {
                                     d.attributes.insert(
                                         "mixins".into(),
@@ -118,6 +128,16 @@ impl Xml {
                                     );
                                 }
                                 self.templates.entry(n.clone()).or_insert(d);
+                            } else if let Some(root) = &parent.2 {
+                                let pattern = n
+                                    .strip_prefix(root)
+                                    .map(|suffix| format!("$parent{suffix}"))
+                                    .unwrap_or_else(|| n.clone());
+                                self.children.entry(root.clone()).or_default().push((
+                                    pattern,
+                                    self.types.get(&tag).cloned().unwrap_or(tag.clone()),
+                                    inherits.clone(),
+                                ));
                             }
                         } else {
                             self.globals.entry(n.clone()).or_insert((
@@ -126,27 +146,51 @@ impl Xml {
                                 } else {
                                     self.types.get(&tag).cloned().unwrap_or(tag)
                                 },
-                                attrs
-                                    .get("inherits")
-                                    .map(|v| v.split(',').map(|s| s.trim().to_owned()).collect())
-                                    .unwrap_or_default(),
+                                inherits,
                             ));
                         }
                     }
                     if matches!(event, Event::Start(_)) {
-                        stack.push((if widget { resolved } else { parent.0 }, virtual_node));
+                        let root = if virtual_node && !parent.1 {
+                            resolved.clone()
+                        } else {
+                            parent.2
+                        };
+                        stack.push((if widget { resolved } else { parent.0 }, virtual_node, root));
                     }
                 }
                 Event::End(_) => {
                     stack.pop();
                 }
-                Event::Eof => break,
+                Event::Eof => {
+                    if !stack.is_empty() {
+                        return Err(format!("{file}: unclosed XML elements at EOF"));
+                    }
+                    break;
+                }
                 _ => {}
             }
         }
         Ok(())
     }
-    pub fn extend_manifest(self, m: &mut Manifest) {
+    pub fn extend_manifest(mut self, m: &mut Manifest) {
+        let instances: Vec<_> = self
+            .globals
+            .iter()
+            .map(|(n, (ty, parents))| (n.clone(), ty.clone(), parents.clone()))
+            .collect();
+        for (name, ty, parents) in instances {
+            for template in parents.iter().chain(std::iter::once(&ty)) {
+                expand_children(
+                    template,
+                    &name,
+                    &self.templates,
+                    &self.children,
+                    &mut self.globals,
+                    &mut Vec::new(),
+                );
+            }
+        }
         if self.globals.values().any(|(ty, _)| ty == "Font")
             && !m.widgets.iter().any(|w| w.name == "Font")
         {
@@ -195,6 +239,37 @@ impl Xml {
         }
     }
 }
+// A template cycle terminates per traversal path, including child inheritance cycles.
+fn expand_children(
+    template: &str,
+    instance: &str,
+    definitions: &BTreeMap<String, Declaration>,
+    children: &ChildDefinitions,
+    globals: &mut BTreeMap<String, (String, Vec<String>)>,
+    path: &mut Vec<String>,
+) {
+    if path.iter().any(|t| t == template) {
+        return;
+    }
+    path.push(template.into());
+    if let Some(definition) = definitions.get(template) {
+        for parent in &definition.inherits {
+            expand_children(parent, instance, definitions, children, globals, path);
+        }
+    }
+    if let Some(children_of_template) = children.get(template) {
+        for (pattern, ty, parents) in children_of_template {
+            let name = pattern.replace("$parent", instance);
+            globals
+                .entry(name.clone())
+                .or_insert((ty.clone(), parents.clone()));
+            for parent in parents.iter().chain(std::iter::once(ty)) {
+                expand_children(parent, &name, definitions, children, globals, path);
+            }
+        }
+    }
+    path.pop();
+}
 pub fn compact(d: Declaration, m: &mut Manifest) -> selu_manifest::DataEntry {
     let file = d
         .attributes
@@ -235,6 +310,63 @@ pub fn compact(d: Declaration, m: &mut Manifest) -> selu_manifest::DataEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn manifest() -> Manifest {
+        serde_json::from_value(serde_json::json!({"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1})).unwrap()
+    }
+    #[test]
+    fn review_grouped_globals_roundtrip() {
+        let mut xml = Xml::default();
+        xml.parse(
+            "groups.xml",
+            r#"<Ui><Frame name="A"/><Frame name="B"/></Ui>"#,
+        )
+        .unwrap();
+        let mut m = manifest();
+        xml.extend_manifest(&mut m);
+        let bytes = crate::encode(&mut m).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["globals"][0]["names"], serde_json::json!(["A", "B"]));
+        let loaded: Manifest = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(loaded, m);
+    }
+    #[test]
+    fn review_intrinsic_definitions() {
+        let mut xml = Xml::default();
+        xml.parse("intrinsic.xml", r#"<Ui><Frame name="EventFrame" intrinsic="true"><Button name="$parentChild"/></Frame><Frame name="Concrete"/></Ui>"#).unwrap();
+        let mut m = manifest();
+        xml.extend_manifest(&mut m);
+        assert!(!m.has_global("EventFrame"));
+        assert!(!m.has_global("EventFrameChild"));
+        assert!(m.templates.iter().any(|t| t.name == "EventFrame"));
+        assert!(m.has_global("Concrete"));
+    }
+    #[test]
+    fn review_inherited_parent_children() {
+        let mut xml = Xml::default();
+        xml.parse("children.xml", r#"<Ui><Frame name="Base" virtual="true"><Frames><Button name="$parentItemButton" inherits="ButtonBase"/><FontString name="$parentName"/></Frames></Frame><Button name="ButtonBase" virtual="true"><Texture name="$parentIcon"/></Button><Frame name="Derived" virtual="true" inherits="Base"/><Frame name="MerchantItem1" inherits="Derived"/></Ui>"#).unwrap();
+        let mut m = manifest();
+        xml.extend_manifest(&mut m);
+        for n in [
+            "MerchantItem1Name",
+            "MerchantItem1ItemButton",
+            "MerchantItem1ItemButtonIcon",
+        ] {
+            assert!(m.has_global(n), "{n}");
+        }
+        for n in ["Base", "Derived", "BaseName", "ButtonBaseIcon"] {
+            assert!(!m.has_global(n), "{n}");
+        }
+    }
+    #[test]
+    fn review_truncated_xml() {
+        let error = Xml::default()
+            .parse("truncated.xml", r#"<Ui><Frame name="X">"#)
+            .unwrap_err();
+        assert!(
+            error.contains("truncated.xml") && error.contains("unclosed"),
+            "{error}"
+        );
+    }
     #[test]
     fn xml_names() {
         let mut xml = Xml::default();

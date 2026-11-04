@@ -161,8 +161,10 @@ addon Lua is still parsed with full_moon and never executed. Widget tag identiti
 and intrinsic aliases are also read from the pinned UI.xsd schema. Named nonvirtual
 widgets become globals with name, widget type, template list (`templates`), and
 source evidence. `$parent` uses the nearest enclosing named widget through layout
-containers; unresolved template-parent names are omitted. Virtual frame descendants
-are not globals. Named Font/FontFamily objects remain globals even when virtual,
+containers; unresolved template-parent names are omitted. Virtual and intrinsic definitions and their descendants are not definition-time
+globals. Concrete instances receive named children inherited through template
+chains, including nested child template inheritance. Cycles stop per traversal
+path. Named Font/FontFamily objects remain globals even when virtual,
 because their definitions create reusable font objects. Their type is `Font`.
 
 `dataGlobals` and `templates` use compact source metadata: `name`, `source` (index
@@ -177,8 +179,8 @@ Literal global table assignments outside functions exclude lexical locals. Named
 top-level table method declarations supply mixin member names. Tables exceeding
 2,048 constructor fields are omitted entirely: large generated map, quest and locale
 payloads are datasets rather than addon API metadata. Literal assignments in paths
-containing localization/localisation, GlobalStrings, QuestData or MapData
-(case insensitive) are also skipped. Nested table contents and
+containing QuestData or MapData (case insensitive) are also skipped. Localisation
+tables retain field names but no values. Nested table contents and
 positional array payloads are never projected. Only all-uppercase constant-table
 names retain literal number/string values, and only when their compact value map
 is at most 65,536 bytes. Other tables retain names only. This keeps SOUNDKIT-like
@@ -191,7 +193,12 @@ Shared provenance and string name lists avoid repeating file paths on every memb
 Global entries may carry an optional `value` (JSON number/string); omitted values
 remain backward compatible. The Lua AST scan also records bare global scalar
 assignments outside functions, excluding lexical locals and table fields. Literal
-numbers (including hex and negative numbers) and strings retain their values.
+numbers (including hex and negative numbers) retain their values. String values
+are retained only for nonempty ASCII identifier-like tokens of at most 64
+characters (`A-Z`, `a-z`, digits, `_`, `-`, `.`, `:`). Markup, prose, spaces and
+control characters are excluded. Paths containing localization/localisation,
+locale or GlobalStrings retain no scalar or table values, including numeric
+values. Names and types remain available.
 References and arithmetic derive number/string types from other discovered scalars
 and documented Constants fields; concatenation is string. These expressions carry
 no invented evaluated value. Unknown call results and other unproven scalar types
@@ -200,3 +207,21 @@ all source variants, rather than a claim about runtime initialisation. The first
 available scalar type and first literal value in deterministic file/source order
 are retained; scalar globals do not receive repeated per-entry provenance. Unlike
 large table datasets, scalar assignments are scanned in every addon Lua path.
+
+## Reviewed XML and mixin metadata
+
+Intrinsic XML definitions are templates, including their definition-time children.
+The generator expands inherited `$parent` child names for concrete instances;
+child patterns remain internal to generation and no XML markup is emitted.
+Top-level static `CreateFromMixins(A, B, ...)` and `Mixin(Target, A, B, ...)`
+definitions record `dataGlobals[].inherits` links in argument order. Template
+`mixins` links to these entries and their transitive inheritance remains
+traversable without duplicating members. Local/shadowed helpers and dependencies,
+dynamic arguments and function-body definitions are excluded.
+
+Generated `globals` may contain groups: `{names: [...], type?, evidence,
+templates?}`. All names share that metadata and no value is stored on a group.
+Scalar entries with values retain the individual object form. The manifest
+loader expands both forms into the same GlobalEntry list; existing manifests
+and fixtures remain readable. This lossless grouping keeps inherited child
+names below the 40 MB package cap. XML EOF with open elements is an error.

@@ -30,6 +30,7 @@ struct Scan {
     tables: Vec<(String, usize, TableConstructor)>,
     members: Vec<(String, String, usize)>,
     scalars: Vec<(String, usize, Expression)>,
+    mixins: Vec<(String, usize, Vec<String>, String)>,
 }
 impl Scan {
     fn bind(&mut self, n: String, from: usize, to: usize) {
@@ -120,6 +121,19 @@ impl Visitor for Scan {
                 && let Var::Name(t) = v
             {
                 self.scalars.push((name(t), start(n), e.clone()));
+                if let Expression::FunctionCall(call) = e
+                    && let Some((_, parents)) = mixin_call(call, Some(name(t)))
+                {
+                    self.mixins.push((
+                        name(t),
+                        start(n),
+                        parents,
+                        match call.prefix() {
+                            Prefix::Name(t) => name(t),
+                            _ => unreachable!(),
+                        },
+                    ));
+                }
             }
             if self.depth == 0
                 && let (Var::Name(t), Expression::TableConstructor(table)) = (v, e)
@@ -144,6 +158,19 @@ impl Visitor for Scan {
         }
     }
     fn visit_function_call(&mut self, n: &FunctionCall) {
+        if self.depth == 0
+            && let Some((target, parents)) = mixin_call(n, None)
+        {
+            self.mixins.push((
+                target,
+                start(n),
+                parents,
+                match n.prefix() {
+                    Prefix::Name(t) => name(t),
+                    _ => unreachable!(),
+                },
+            ));
+        }
         if let Prefix::Name(t) = n.prefix()
             && matches!(
                 n.suffixes().next(),
@@ -168,7 +195,7 @@ pub struct Sources {
     all_definitions: BTreeSet<String>,
     calls: BTreeMap<String, String>,
     tables: BTreeMap<String, selu_manifest::Declaration>,
-    scalars: BTreeMap<String, Vec<Scalar>>,
+    scalars: BTreeMap<String, Vec<(Scalar, bool)>>,
 }
 impl Sources {
     pub fn parse(&mut self, file: &str, source: &str) -> Result<(), String> {
@@ -180,21 +207,34 @@ impl Sources {
             if !scan.local(n, *pos)
                 && let Some(expr) = Scalar::from_ast(e, &scan, *pos)
             {
-                self.scalars.entry(n.clone()).or_default().push(expr);
+                self.scalars
+                    .entry(n.clone())
+                    .or_default()
+                    .push((expr, !localisation(file)));
+            }
+        }
+        for (target, pos, parents, callee) in &scan.mixins {
+            if !scan.local(callee, *pos)
+                && !scan.local(target, *pos)
+                && parents.iter().all(|p| !scan.local(p, *pos))
+            {
+                let d = self
+                    .tables
+                    .entry(target.clone())
+                    .or_insert_with(|| crate::xml::declaration(target, "table", file));
+                for parent in parents {
+                    if !d.inherits.contains(parent) {
+                        d.inherits.push(parent.clone());
+                    }
+                }
             }
         }
         for (n, pos, table) in &scan.tables {
             let lower = file.to_ascii_lowercase();
             if table.fields().len() > 2048
-                || [
-                    "localization",
-                    "localisation",
-                    "globalstrings",
-                    "questdata",
-                    "mapdata",
-                ]
-                .iter()
-                .any(|part| lower.contains(part))
+                || ["questdata", "mapdata"]
+                    .iter()
+                    .any(|part| lower.contains(part))
             {
                 continue;
             }
@@ -207,7 +247,9 @@ impl Sources {
                     let (key, value) = match field {
                         Field::NameKey { key, value, .. } => (Some(name(key)), value.as_ref()),
                         Field::ExpressionKey { key, value, .. } => (
-                            literal(key).and_then(|v| v.as_str().map(str::to_owned)),
+                            literal(key)
+                                .filter(safe_value)
+                                .and_then(|v| v.as_str().map(str::to_owned)),
                             value.as_ref(),
                         ),
                         _ => continue,
@@ -221,7 +263,9 @@ impl Sources {
                         if !d.fields.iter().any(|f| f.name == key) {
                             d.fields.push(crate::xml::declaration(&key, "", file));
                         }
-                        if let Some(value) = literal(value) {
+                        if let Some(value) =
+                            literal(value).filter(|v| !localisation(file) && safe_value(v))
+                        {
                             d.values.insert(key, value);
                         }
                     }
@@ -274,7 +318,7 @@ impl Sources {
             let mut changed = false;
             for (name, expressions) in &self.scalars {
                 if !types.contains_key(name)
-                    && let Some(ty) = expressions.iter().find_map(|e| e.ty(&types))
+                    && let Some(ty) = expressions.iter().find_map(|(e, _)| e.ty(&types))
                 {
                     types.insert(name.clone(), ty);
                     changed = true;
@@ -290,8 +334,8 @@ impl Sources {
                 .filter(|t| t.as_str() == "number" || t.as_str() == "string")
                 && !m.globals.iter().any(|g| &g.name == name)
             {
-                let value = expressions.iter().find_map(|e| match e {
-                    Scalar::Literal(v) => Some(v.clone()),
+                let value = expressions.iter().find_map(|(e, values)| match e {
+                    Scalar::Literal(v) if *values && safe_value(v) => Some(v.clone()),
                     _ => None,
                 });
                 m.globals.push(selu_manifest::GlobalEntry {
@@ -365,6 +409,60 @@ fn entry(name: String, file: String, kind: &str, params: Vec<String>) -> Functio
     }
 }
 
+fn localisation(file: &str) -> bool {
+    let file = file.to_ascii_lowercase();
+    ["localization", "localisation", "locale", "globalstrings"]
+        .iter()
+        .any(|p| file.contains(p))
+}
+fn safe_value(v: &serde_json::Value) -> bool {
+    v.is_number()
+        || v.as_str().is_some_and(|s| {
+            !s.is_empty()
+                && s.len() <= 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-.:".contains(&b))
+        })
+}
+fn mixin_call(call: &FunctionCall, destination: Option<String>) -> Option<(String, Vec<String>)> {
+    let Prefix::Name(callee) = call.prefix() else {
+        return None;
+    };
+    let mut suffixes = call.suffixes();
+    let Suffix::Call(Call::AnonymousCall(args)) = suffixes.next()? else {
+        return None;
+    };
+    let FunctionArgs::Parentheses { arguments, .. } = args.as_ref() else {
+        return None;
+    };
+    if suffixes.next().is_some() {
+        return None;
+    }
+    let args: Vec<_> = arguments.iter().collect();
+    let (target, parents) = match (name(callee).as_str(), destination) {
+        ("CreateFromMixins", Some(target)) => (target, args.as_slice()),
+        ("Mixin", Some(target)) => match args.first()? {
+            Expression::TableConstructor(t) if t.fields().is_empty() => (target, args.get(1..)?),
+            Expression::Var(Var::Name(_)) => (target, args.as_slice()),
+            _ => return None,
+        },
+        ("Mixin", None) => {
+            let Expression::Var(Var::Name(target)) = args.first()? else {
+                return None;
+            };
+            (name(target), args.get(1..)?)
+        }
+        _ => return None,
+    };
+    let parents: Option<Vec<_>> = parents
+        .iter()
+        .map(|e| match e {
+            Expression::Var(Var::Name(n)) => Some(name(n)),
+            _ => None,
+        })
+        .collect();
+    Some((target, parents?))
+}
 #[derive(Clone)]
 enum Scalar {
     Literal(serde_json::Value),
@@ -539,6 +637,77 @@ fn literal(e: &Expression) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod data_tests {
     use super::*;
+    fn manifest() -> Manifest {
+        serde_json::from_value(serde_json::json!({"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1})).unwrap()
+    }
+    #[test]
+    fn review_mixin_inheritance() {
+        let mut sources = Sources::default();
+        sources.parse("mixins.lua", "A = {}; function A:Inherited() end; B = CreateFromMixins(A); C = {}; Mixin(C, B); function F() Hidden = CreateFromMixins(A) end; local Private = {}; LocalAlias = CreateFromMixins(Private)").unwrap();
+        let mut m = manifest();
+        sources.extend_manifest(&mut m);
+        assert_eq!(
+            m.data_globals
+                .iter()
+                .find(|d| d.name == "B")
+                .unwrap()
+                .inherits,
+            ["A"]
+        );
+        assert_eq!(
+            m.data_globals
+                .iter()
+                .find(|d| d.name == "C")
+                .unwrap()
+                .inherits,
+            ["B"]
+        );
+        assert!(
+            !m.data_globals
+                .iter()
+                .any(|d| d.name == "Hidden" || d.name == "LocalAlias")
+        );
+    }
+    #[test]
+    fn review_string_value_policy() {
+        let mut sources = Sources::default();
+        sources.parse("constants.lua", r#"HTML_START = "<html>"; SAFE = "Token:1-a.b"; CONSTANTS = { HTML = "<body>", PROSE = "PRIVATE SENTENCE never copy", SAFE = "Token" }"#).unwrap();
+        sources.parse("Localization/enUS.lua", r#"LOCAL_TOKEN = "Token"; LOCAL_SENTENCE = "LOCALISATION SENTINEL sentence"; LOCALE_CONSTANTS = { TOKEN = "Token", SENTENCE = "TABLE LOCALISATION SENTINEL sentence" }"#).unwrap();
+        let mut m = manifest();
+        sources.extend_manifest(&mut m);
+        let html = m.globals.iter().find(|g| g.name == "HTML_START").unwrap();
+        assert_eq!(html.ty.as_deref(), Some("string"));
+        assert_eq!(html.value, None);
+        assert_eq!(
+            m.globals.iter().find(|g| g.name == "SAFE").unwrap().value,
+            Some(serde_json::json!("Token:1-a.b"))
+        );
+        assert_eq!(
+            m.globals
+                .iter()
+                .find(|g| g.name == "LOCAL_TOKEN")
+                .unwrap()
+                .value,
+            None
+        );
+        let constants = m
+            .data_globals
+            .iter()
+            .find(|d| d.name == "CONSTANTS")
+            .unwrap();
+        assert!(!constants.values.contains_key("HTML"));
+        assert!(!constants.values.contains_key("PROSE"));
+        assert_eq!(constants.values["SAFE"], "Token");
+        let encoded = String::from_utf8(crate::encode(&mut m).unwrap()).unwrap();
+        for text in [
+            "<html>",
+            "<body>",
+            "PRIVATE SENTENCE",
+            "LOCALISATION SENTINEL",
+        ] {
+            assert!(!encoded.contains(text), "{text}");
+        }
+    }
     #[test]
     fn scalar_constants_and_documented_dependencies() {
         let mut s = Sources::default();
@@ -558,7 +727,7 @@ mod data_tests {
         );
         assert_eq!(
             m.globals.iter().find(|g| g.name == "LABEL").unwrap().value,
-            Some(serde_json::json!("bag\nslots"))
+            None
         );
         for name in ["LOCAL", "Hidden", "INNER", "FIELD", "FLAG", "UNKNOWN"] {
             assert!(!m.globals.iter().any(|g| g.name == name), "{name}");

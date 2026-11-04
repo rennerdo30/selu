@@ -554,7 +554,29 @@ pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
     }
     m.templates.sort_by(|a, b| a.name.cmp(&b.name));
     m.data_globals.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut bytes = serde_json::to_vec(m)?;
+    let mut json = serde_json::to_value(&*m)?;
+    let mut groups = BTreeMap::<String, serde_json::Value>::new();
+    let mut globals = Vec::new();
+    for g in &m.globals {
+        let mut entry = serde_json::to_value(g)?;
+        if g.value.is_some() {
+            globals.push(entry);
+            continue;
+        }
+        entry.as_object_mut().unwrap().remove("name");
+        let key = serde_json::to_string(&entry)?;
+        let group = groups.entry(key).or_insert_with(|| {
+            entry["names"] = serde_json::json!([]);
+            entry
+        });
+        group["names"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(g.name));
+    }
+    globals.extend(groups.into_values());
+    json["globals"] = serde_json::Value::Array(globals);
+    let mut bytes = serde_json::to_vec(&json)?;
     bytes.push(b'\n');
     Ok(bytes)
 }

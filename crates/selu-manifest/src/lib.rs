@@ -164,7 +164,7 @@ pub struct Manifest {
     pub functions: Vec<FunctionEntry>,
     #[serde(default)]
     pub events: Vec<EventEntry>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "read_globals")]
     pub globals: Vec<GlobalEntry>,
     /// True for hand-made test fixtures, never for generated manifests.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -474,4 +474,45 @@ pub struct DataEntry {
     pub mixins: Vec<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub values: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Generated manifests may group globals with identical metadata into name lists.
+fn read_globals<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<GlobalEntry>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Single(GlobalEntry),
+        Group {
+            names: Vec<String>,
+            #[serde(flatten)]
+            metadata: GlobalMetadata,
+        },
+    }
+    #[derive(Deserialize)]
+    struct GlobalMetadata {
+        #[serde(rename = "type", default)]
+        ty: Option<String>,
+        evidence: Evidence,
+        #[serde(default)]
+        templates: Vec<String>,
+    }
+    let mut globals = Vec::new();
+    for entry in Vec::<Entry>::deserialize(deserializer)? {
+        match entry {
+            Entry::Single(g) => globals.push(g),
+            Entry::Group { names, metadata } => {
+                globals.extend(names.into_iter().map(|name| GlobalEntry {
+                    name,
+                    ty: metadata.ty.clone(),
+                    evidence: metadata.evidence,
+                    templates: metadata.templates.clone(),
+                    value: None,
+                }))
+            }
+        }
+    }
+    globals.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(globals)
 }
