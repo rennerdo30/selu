@@ -65,7 +65,11 @@ struct Project {
 
 #[derive(Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
-enum BuildLayout { #[default] PerTarget, Shared }
+enum BuildLayout {
+    #[default]
+    PerTarget,
+    Shared,
+}
 
 /// The `[addon]` table of `selu.toml`. Unknown keys are an error so a typo
 /// never silently does nothing.
@@ -281,8 +285,13 @@ fn build(
                 imports.imports.insert(from.clone(), signatures.clone());
                 lower_imports.insert(from.clone(), (key.clone(), signatures));
             }
-            let (checked, signature) =
-                selu_check::check_module_targets_with_options(&module.program, manifest, imports, &selected, check_options);
+            let (checked, signature) = selu_check::check_module_targets_with_options(
+                &module.program,
+                manifest,
+                imports,
+                &selected,
+                check_options,
+            );
             for d in &checked.diagnostics {
                 eprint!("{}", d.render(&module.source));
             }

@@ -62,3 +62,8 @@ These numbers come from the resolved manifests; none are compiler constants.
 
 `--target` overrides the selected targets for either layout. No flavour names or
 interface numbers are hardcoded. See `examples/multi-target` for a shared addon.
+
+`[build] strict_api = true` promotes game API signature diagnostics to errors;
+otherwise they are warnings. Availability failures remain errors in both modes.
+Guarded fallback declarations retain API signatures, referenced structures and
+widgets, multiple-result semantics, and factory specialization through aliases.

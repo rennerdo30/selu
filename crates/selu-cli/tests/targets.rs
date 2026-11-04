@@ -484,3 +484,156 @@ fn review_partial_compound_folding() {
         "local function side()\n  return true\nend\nif side() then print(\"yes\") end\n"
     );
 }
+#[test]
+fn integration_availability_is_error_even_when_api_mismatches_warn() {
+    use selu_diagnostics::Severity;
+    let ts = real_targets();
+    for strict_api in [false, true] {
+        let p = selu_syntax::parse(
+            "policy.selu",
+            "CreateFrame(true); C_PaperDollInfo.CanCursorCanGoInSlot(1);",
+        )
+        .unwrap();
+        let c = selu_check::check_module_targets_with_options(
+            &p,
+            &ts[0],
+            Default::default(),
+            &ts,
+            selu_check::CheckOptions { strict_api },
+        )
+        .0;
+        assert_eq!(c.diagnostics.len(), 2, "{:?}", c.diagnostics);
+        assert_eq!(c.diagnostics[0].code, "SELU0481");
+        assert_eq!(
+            c.diagnostics[0].severity,
+            if strict_api {
+                Severity::Error
+            } else {
+                Severity::Warning
+            }
+        );
+        assert_eq!(c.diagnostics[1].code, "SELU0500");
+        assert_eq!(c.diagnostics[1].severity, Severity::Error);
+        assert!(c.has_errors());
+    }
+    for strict in [false, true] {
+        let (ok, log) = review_cli(
+            if strict {
+                "policy-strict"
+            } else {
+                "policy-warn"
+            },
+            &format!(
+                "[addon]\nname='Test'\ntargets=['retail','forever']\n[build]\nstrict_api={strict}\nlayout='shared'\n"
+            ),
+            &[("main.selu", "C_PaperDollInfo.CanCursorCanGoInSlot(1);")],
+            None,
+        );
+        assert!(!ok, "{log}");
+        assert!(log.contains("error[SELU0500]"), "{log}");
+    }
+}
+#[test]
+fn integration_guard_borrows_typed_multiple_results_and_factory_metadata() {
+    use selu_check::Type;
+    let mut ts = real_targets();
+    ts[0].functions.retain(|f| f.name != "UnitName");
+    let p=selu_syntax::parse("typed.selu","const make = CreateFrame; const button = make(\"Button\"); button.SetSize(120,24); if (has(UnitName)) { const get = UnitName; const [name, realm] = get(\"player\"); print(name ?? \"unknown\", realm ?? \"\"); }").unwrap();
+    let (c, exports) = selu_check::check_module_targets_with_options(
+        &p,
+        &ts[0],
+        Default::default(),
+        &ts,
+        selu_check::CheckOptions { strict_api: true },
+    );
+    assert!(exports.is_empty());
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    fn expr(e: &selu_syntax::Expr, c: &selu_check::Checked, found: &mut [bool; 3]) {
+        if let Some(t) = c.types.get(e.id) {
+            match t {
+                Type::Function {
+                    multiple_results: true,
+                    api,
+                    api_semantics,
+                    ..
+                } => {
+                    if api.0.as_ref().is_some_and(|x| x.name == "UnitName") {
+                        found[0] = true;
+                        let mut other = t.clone();
+                        if let Type::Function { api, .. } = &mut other {
+                            api.0.as_mut().unwrap().target = "diagnostic-only".into();
+                        }
+                        assert_eq!(*t, other);
+                    }
+                    if api_semantics.frame_factory {
+                        found[1] = true;
+                    }
+                }
+                Type::Widget(n, _) if n == "Button" => found[2] = true,
+                _ => {}
+            }
+        }
+        selu_syntax::visit::child_exprs_and_stmts(e, &mut |ch| child(ch, c, found));
+    }
+    fn child(ch: selu_syntax::visit::Child<'_>, c: &selu_check::Checked, found: &mut [bool; 3]) {
+        match ch {
+            selu_syntax::visit::Child::Expr(e) => expr(e, c, found),
+            selu_syntax::visit::Child::Stmt(s) => {
+                selu_syntax::visit::child_stmts_and_exprs(s, &mut |ch| child(ch, c, found))
+            }
+        }
+    }
+    let mut found = [false; 3];
+    for s in &p.stmts {
+        selu_syntax::visit::child_stmts_and_exprs(s, &mut |ch| child(ch, &c, &mut found));
+    }
+    assert_eq!(found, [true; 3]);
+    let bad = selu_syntax::parse("typed.selu", "if (has(UnitName)) { UnitName(true); }").unwrap();
+    let c = selu_check::check_module_targets_with_options(
+        &bad,
+        &ts[0],
+        Default::default(),
+        &ts,
+        selu_check::CheckOptions { strict_api: true },
+    )
+    .0;
+    assert_eq!(c.diagnostics[0].code, "SELU0481");
+    assert!(c.has_errors());
+}
+#[test]
+fn integration_namespaced_fallback_reference_keeps_signature_and_shapes() {
+    let mut ts = targets();
+    ts[1].functions.push(serde_json::from_str(r#"{"name":"C_Test.Read","evidence":"documented","signature":{"name":"Read","type":"Function","arguments":[{"name":"label","type":"string"}],"returns":[{"name":"row","type":"BorrowedRow"}]}}"#).unwrap());
+    ts[1].tables.push(
+        serde_json::from_str(
+            r#"{"name":"BorrowedRow","type":"Structure","fields":[{"name":"label","type":"string"}]}"#,
+        )
+        .unwrap(),
+    );
+    let p=selu_syntax::parse("borrow.selu","if (has(C_Test.Read)) { const read = C_Test.Read; const row = read(true); const n: number = row.label; }").unwrap();
+    let c = selu_check::check_module_targets_with_options(
+        &p,
+        &ts[0],
+        Default::default(),
+        &ts,
+        selu_check::CheckOptions { strict_api: true },
+    )
+    .0;
+    assert_eq!(c.diagnostics.len(), 2, "{:?}", c.diagnostics);
+    assert_eq!(c.diagnostics[0].code, "SELU0481");
+    assert!(
+        c.diagnostics[1].message.contains("string"),
+        "{:?}",
+        c.diagnostics
+    );
+}
+#[test]
+fn integration_fold_preserves_effectful_property_reads() {
+    let lua = review_lua(
+        "if (UIParent.flag && has(GetTime)) { print(\"yes\"); } else { print(\"no\"); }",
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("UIParent=setmetatable({}, {__index=function(_,key) if key=='flag' then print('read'); return true end end})").unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    assert_eq!(sim.prints(), ["read", "no"]);
+}

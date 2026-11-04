@@ -135,7 +135,6 @@ fn lower_addon_layout(
         loops: Vec::new(),
     };
     let mut out: LBlock = Vec::new();
-    l.target_prelude(program, &mut out);
     l.file_prelude(program, &mut out);
     let captures_end = out.len();
     out.extend(saved::setup(program));
@@ -238,7 +237,6 @@ pub fn lower_module_layout(
         ),
         span: None,
     };
-    l.target_prelude(program, &mut out);
     l.file_prelude(program, &mut out);
     out.push(namespace_fallback);
     let runtime_index = out.len();
@@ -931,6 +929,7 @@ pub fn generate_toc(addon_name: &str, manifest: &Manifest, lua_files: &[String])
 impl Lowerer<'_> {
     // Every protected runtime capture is emitted once, before source bindings.
     fn file_prelude(&mut self, program: &Program, out: &mut LBlock) {
+        self.target_prelude(program, out);
         self.class_prelude(&program.stmts, out);
         out.extend(saved::captures(program));
     }

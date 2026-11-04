@@ -34,6 +34,17 @@ pub fn exists(m: &Manifest, n: &str) -> bool {
 pub fn with_fallbacks(primary: &Manifest, targets: &[Manifest]) -> Manifest {
     let mut m = primary.clone();
     for t in targets {
+        for (into, from) in [
+            (&mut m.tables, &t.tables),
+            (&mut m.widgets, &t.widgets),
+            (&mut m.predicates, &t.predicates),
+        ] {
+            for d in from {
+                if !into.iter().any(|x| x.name == d.name) {
+                    into.push(d.clone());
+                }
+            }
+        }
         for f in &t.functions {
             if f.available && m.function(&f.name).is_none() {
                 m.functions.retain(|x| x.name != f.name);

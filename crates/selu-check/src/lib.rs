@@ -108,10 +108,27 @@ pub fn check_module_targets(
 ) -> (Checked, ModuleExports) {
     check_module_targets_with_options(program, manifest, imports, targets, CheckOptions::default())
 }
-pub fn check_module_with_options(program: &Program, manifest: &Manifest, imports: ModuleBindings, options: CheckOptions) -> (Checked, ModuleExports) {
-    check_module_targets_with_options(program,manifest,imports,std::slice::from_ref(manifest),options)
+pub fn check_module_with_options(
+    program: &Program,
+    manifest: &Manifest,
+    imports: ModuleBindings,
+    options: CheckOptions,
+) -> (Checked, ModuleExports) {
+    check_module_targets_with_options(
+        program,
+        manifest,
+        imports,
+        std::slice::from_ref(manifest),
+        options,
+    )
 }
-pub fn check_module_targets_with_options(program: &Program, manifest: &Manifest, imports: ModuleBindings, targets: &[Manifest], options: CheckOptions) -> (Checked, ModuleExports) {
+pub fn check_module_targets_with_options(
+    program: &Program,
+    manifest: &Manifest,
+    imports: ModuleBindings,
+    targets: &[Manifest],
+    options: CheckOptions,
+) -> (Checked, ModuleExports) {
     let effective = targets::with_fallbacks(manifest, targets);
     let manifest = &effective;
     let classes = classes::ClassContext::from_imports(&imports);
@@ -1008,7 +1025,18 @@ impl Ctx<'_> {
         if let Some(t) = self.target_member(t, name, object) {
             return t;
         }
-        if let Some(t) = self.api_member(t, name, object) {
+        let api_object = match &object.kind {
+            ExprKind::Member {
+                object: receiver, ..
+            } if object
+                .dotted_name()
+                .is_some_and(|n| self.manifest.function(&n).is_some()) =>
+            {
+                receiver
+            }
+            _ => object,
+        };
+        if let Some(t) = self.api_member(t, name, api_object) {
             return t;
         }
         if let Some(t) = self.class_member(t, name, object) {
