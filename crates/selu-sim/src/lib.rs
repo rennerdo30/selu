@@ -92,10 +92,11 @@ impl Sim {
                 "CreateFrame",
                 lua.create_function(
                     move |lua,
-                          (kind, _name, parent): (
+                          (kind, _name, parent, templates): (
                         Option<String>,
                         Option<String>,
                         Option<Table>,
+                        Option<String>,
                     )| {
                         let frame = lua.create_table()?;
                         frame.set("__kind", kind.unwrap_or_else(|| "Frame".into()))?;
@@ -104,6 +105,7 @@ impl Sim {
                         frame.set("__shown", true)?;
                         frame.set("__parent", parent)?;
                         regions::attach(lua, &frame)?;
+                        regions::templates(lua, &frame, templates.as_deref())?;
                         frame.set(
                             "RegisterEvent",
                             lua.create_function(|_, (this, event): (Table, String)| {

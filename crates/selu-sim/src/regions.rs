@@ -48,6 +48,44 @@ pub(crate) fn attach(lua: &Lua, frame: &Table) -> mlua::Result<()> {
         .call::<()>(frame.clone())
 }
 
+/// Only backdrop storage is modeled; no textures, borders or XML scripts.
+pub(crate) fn templates(lua: &Lua, frame: &Table, templates: Option<&str>) -> mlua::Result<()> {
+    if templates.is_some_and(|s| s.split(',').any(|t| t.trim() == "BackdropTemplate")) {
+        let install: Function = lua
+            .load(
+                r#"
+return function(frame)
+  function frame:SetBackdrop(info)
+    self.__backdrop = info
+    self.__backdropColor = info and {1, 1, 1, 1} or nil
+  end
+  function frame:GetBackdrop()
+    if not self.__backdrop then return nil end
+    local seen = {}
+    local function copy(value)
+      if type(value) ~= 'table' then return value end
+      if seen[value] then return seen[value] end
+      local result = {}; seen[value] = result
+      for key, child in pairs(value) do result[key] = copy(child) end
+      return result
+    end
+    return copy(self.__backdrop)
+  end
+  function frame:SetBackdropColor(r, g, b, a)
+    if self.__backdrop then self.__backdropColor = {r, g, b, a or 1} end
+  end
+  function frame:GetBackdropColor()
+    if self.__backdropColor then return unpack(self.__backdropColor) end
+  end
+end
+"#,
+            )
+            .eval()?;
+        install.call::<()>(frame.clone())?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

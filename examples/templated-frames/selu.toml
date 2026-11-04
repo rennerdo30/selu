@@ -1,0 +1,3 @@
+[addon]
+name = "TemplatedFrames"
+targets = ["retail"]
