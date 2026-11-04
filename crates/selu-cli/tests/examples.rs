@@ -39,6 +39,17 @@ fn run_example(example: &Path) -> Vec<String> {
         String::from_utf8_lossy(&output.stderr)
     );
     let name = addon_name(example);
+    // A project without `saved` data gets no `selu.saved.toml`.
+    let uses_saved = std::fs::read_dir(example.join("src"))
+        .unwrap()
+        .flatten()
+        .any(|f| std::fs::read_to_string(f.path()).is_ok_and(|s| s.contains("saved ")));
+    assert_eq!(
+        example.join("selu.saved.toml").exists(),
+        uses_saved,
+        "{}: selu.saved.toml must exist exactly when the project declares saved data",
+        example.display()
+    );
     let dist = example.join("dist").join(&name);
     let toc = std::fs::read_to_string(dist.join(format!("{name}.toc"))).unwrap();
     let mut files = Vec::new();

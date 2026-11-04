@@ -367,11 +367,17 @@ fn build(
         })?;
         println!("built {} -> {}", project.name, out_dir.display());
     }
+    // Only projects with saved data get the file; one that already has it keeps
+    // it up to date, so its recorded history is never dropped silently.
+    let saved_path = project_dir.join("selu.saved.toml");
+    if saved_shapes.is_empty() && !saved_path.exists() {
+        return Ok(());
+    }
     let text = toml::to_string_pretty(&SavedFile {
         saved: saved_shapes,
     })
     .expect("saved schema serializes");
-    std::fs::write(project_dir.join("selu.saved.toml"), text).map_err(|e| {
+    std::fs::write(&saved_path, text).map_err(|e| {
         eprintln!("SELU0466: cannot write saved shapes: {e}");
         ExitCode::FAILURE
     })?;
