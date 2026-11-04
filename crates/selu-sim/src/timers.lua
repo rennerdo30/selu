@@ -20,12 +20,7 @@ local function deadline(origin, index, period, now)
  return due, origin, index, period
 end
 local function visible(f)
- local seen = {}
- while f do
-  if seen[f] or not rawget(f, '__shown') then return false end
-  seen[f] = true; f = rawget(f, '__parent')
- end
- return true
+ return f:IsVisible()
 end
 local function create(delay, callback, iterations, after)
  assert(type(delay) == 'number' and delay == delay and delay < math.huge, 'invalid timer delay')

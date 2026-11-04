@@ -590,3 +590,65 @@ mod tests {
         assert_eq!(back, snap);
     }
 }
+
+/// Fixed-width metric shared with Studio: Unicode characters have width
+/// `0.5 * font_size`, lines have height `font_size`. WoW markup is ignored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextMeasurement {
+    pub width: f64,
+    pub height: f64,
+}
+pub fn measure_text(text: &str, font_size: f64) -> TextMeasurement {
+    let mut chars = text.chars().peekable();
+    let (mut width, mut longest, mut lines) = (0usize, 0usize, 1usize);
+    while let Some(c) = chars.next() {
+        if c == '|' {
+            match chars.peek().copied() {
+                Some('c') => {
+                    chars.next();
+                    for _ in 0..8 {
+                        chars.next();
+                    }
+                    continue;
+                }
+                Some('r') | Some('h') => {
+                    chars.next();
+                    continue;
+                }
+                Some('T') | Some('H') => {
+                    let end = if chars.next() == Some('T') { 't' } else { 'h' };
+                    while let Some(c) = chars.next() {
+                        if c == '|' && chars.peek() == Some(&end) {
+                            chars.next();
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                Some('|') => {
+                    chars.next();
+                }
+                _ => {}
+            }
+        }
+        if c == '\n' {
+            longest = longest.max(width);
+            width = 0;
+            lines += 1;
+        } else {
+            width += 1;
+        }
+    }
+    TextMeasurement {
+        width: longest.max(width) as f64 * 0.5 * font_size,
+        height: lines as f64 * font_size,
+    }
+}
+#[cfg(test)]
+mod text_tests {
+    #[test]
+    fn unicode_and_markup() {
+        let m = super::measure_text("|cffffffff猫é|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
+        assert_eq!((m.width, m.height), (12.0, 24.0));
+    }
+}

@@ -104,127 +104,7 @@ impl Sim {
         // Registry of every created frame, so `fire` can find them.
         globals.set("__selu_sim_frames", lua.create_table()?)?;
 
-        {
-            let logs = logs.clone();
-            let warned = warned.clone();
-            globals.set(
-                "CreateFrame",
-                lua.create_function(
-                    move |lua,
-                          (kind, _name, parent, templates): (
-                        Option<String>,
-                        Option<String>,
-                        Option<Table>,
-                        Option<String>,
-                    )| {
-                        let frame = lua.create_table()?;
-                        frame.set("__kind", kind.unwrap_or_else(|| "Frame".into()))?;
-                        frame.set("__events", lua.create_table()?)?;
-                        frame.set("__scripts", lua.create_table()?)?;
-                        frame.set("__shown", true)?;
-                        frame.set("__parent", parent)?;
-                        regions::attach(lua, &frame)?;
-                        regions::templates(lua, &frame, templates.as_deref())?;
-                        frame.set(
-                            "RegisterEvent",
-                            lua.create_function(|_, (this, event): (Table, String)| {
-                                this.get::<Table>("__events")?.set(event, true)?;
-                                Ok(())
-                            })?,
-                        )?;
-                        frame.set(
-                            "UnregisterEvent",
-                            lua.create_function(|_, (this, event): (Table, String)| {
-                                this.get::<Table>("__events")?.set(event, Value::Nil)?;
-                                Ok(())
-                            })?,
-                        )?;
-                        frame.set(
-                            "SetScript",
-                            lua.create_function(
-                                |_, (this, name, func): (Table, String, Option<Function>)| {
-                                    this.get::<Table>("__scripts")?.set(name, func)?;
-                                    Ok(())
-                                },
-                            )?,
-                        )?;
-                        frame.set(
-                            "GetScript",
-                            lua.create_function(|_, (this, name): (Table, String)| {
-                                this.get::<Table>("__scripts")?.get::<Value>(name)
-                            })?,
-                        )?;
-                        frame.set(
-                            "Show",
-                            lua.create_function(|_, this: Table| {
-                                let shown = this.get::<bool>("__shown")?;
-                                this.set("__shown", true)?;
-                                if !shown
-                                    && let Some(f) =
-                                        this.get::<Table>("__scripts")?
-                                            .get::<Option<Function>>("OnShow")?
-                                {
-                                    f.call::<()>(this.clone())?;
-                                }
-                                Ok(())
-                            })?,
-                        )?;
-                        frame.set(
-                            "Hide",
-                            lua.create_function(|_, this: Table| {
-                                this.set("__shown", false)?;
-                                Ok(())
-                            })?,
-                        )?;
-                        frame.set(
-                            "IsShown",
-                            lua.create_function(|_, this: Table| this.get::<bool>("__shown"))?,
-                        )?;
-                        frame.set(
-                            "HookScript",
-                            lua.create_function(
-                                |lua, (this, name, hook): (Table, String, Function)| {
-                                    let scripts = this.get::<Table>("__scripts")?;
-                                    let old = scripts.get::<Option<Function>>(name.clone())?;
-                                    scripts.set(
-                                        name,
-                                        lua.create_function(move |_, args: MultiValue| {
-                                            if let Some(old) = &old {
-                                                old.call::<()>(args.clone())?;
-                                            }
-                                            hook.call::<()>(args)
-                                        })?,
-                                    )?;
-                                    Ok(())
-                                },
-                            )?,
-                        )?;
-                        // Unknown frame methods: log once, return a no-op.
-                        let mt = lua.create_table()?;
-                        let logs = logs.clone();
-                        let warned = warned.clone();
-                        mt.set(
-                            "__index",
-                            lua.create_function(move |lua, (_this, key): (Table, String)| {
-                                if key.starts_with("__") {
-                                    return Ok(Value::Nil);
-                                }
-                                log_once(&logs, &warned, &format!("Frame.{key}"));
-                                let noop =
-                                    lua.create_function(|_, _: MultiValue| Ok(Value::Nil))?;
-                                Ok(Value::Function(noop))
-                            })?,
-                        )?;
-                        frame.set_metatable(Some(mt));
-
-                        let registry = lua.globals().get::<Table>("__selu_sim_frames")?;
-                        let next = registry.len()? + 1;
-                        registry.set(next, frame.clone())?;
-                        Ok(frame)
-                    },
-                )?,
-            )?;
-        }
+        frames::install(&lua, &ctx)?;
 
         let create: Function = globals.get("CreateFrame")?;
         globals.set("UIParent", create.call::<Table>("Frame")?)?;
@@ -401,6 +281,7 @@ mod tests {
             local f = CreateFrame("Frame")
             f:Wiggle()
             f:Wiggle()
+            assert(f.missingAddonField == nil)
             TotallyMadeUp(1)
             TotallyMadeUp(2)
             "#,
@@ -408,7 +289,7 @@ mod tests {
         .unwrap();
         let logs = sim.logs();
         assert_eq!(
-            logs.iter().filter(|l| l.contains("Frame.Wiggle")).count(),
+            logs.iter().filter(|l| l.contains("Frame:Wiggle")).count(),
             1,
             "{logs:?}"
         );

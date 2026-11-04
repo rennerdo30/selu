@@ -1,112 +1,66 @@
-//! Frames, textures, font strings and layout. Owner: package S1 (round 8,
-//! docs/SIMULATOR.md decisions 3, 4, 15, 16 and 19). S1 adds `arena.rs`,
-//! `layout.rs`, `widgets.rs` and `input.rs` here and replaces the Lua-table
-//! region model (`../regions.rs` and `CreateFrame` in `../lib.rs`).
-//!
-//! Groundwork (S0): [`LuaTableModel`] implements the core's
-//! [`RegionModel`] over today's Lua tables, so snapshots, Studio's headless
-//! mode and tests can be written against the final interface now. It knows
-//! frames created with `CreateFrame` and `UIParent`; textures and font
-//! strings aren't registered anywhere yet, and there is no layout, so
-//! `rect`, `strata`, `level` and `layer` are `None`.
-
+//! Rust arena adapter, retaining the S0 model name for existing wiring.
+pub mod arena;
+pub mod input;
+pub mod layout;
+pub mod widgets;
 use crate::core::{Ctx, RegionId, RegionModel, RegionSnapshot};
-use mlua::{Lua, Table, Value};
-use std::collections::HashMap;
-
-/// The round-8 region model: regions are the Lua tables in
-/// `__selu_sim_frames` (plus `UIParent` as index 0).
+use mlua::Lua;
 pub struct LuaTableModel {
-    /// Copied into every [`RegionId`] so ids from an older VM don't match.
     pub generation: u32,
 }
-
-impl LuaTableModel {
-    fn regions(&self, lua: &Lua) -> mlua::Result<Vec<Table>> {
-        let mut out = Vec::new();
-        if let Value::Table(ui) = lua.globals().raw_get::<Value>("UIParent")? {
-            out.push(ui);
-        }
-        let registry: Table = lua.globals().raw_get("__selu_sim_frames")?;
-        for frame in registry.sequence_values::<Table>() {
-            out.push(frame?);
-        }
-        Ok(out)
-    }
-}
-
 impl RegionModel for LuaTableModel {
-    fn resolve_layout(&self, _lua: &Lua, _ctx: &Ctx) -> mlua::Result<()> {
-        // No layout in the Lua-table model; S1 resolves anchors here.
+    fn resolve_layout(&self, lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+        layout::resolve(&mut arena::store(lua).borrow_mut(), ctx);
         Ok(())
     }
-
     fn snapshot_regions(&self, lua: &Lua, ctx: &Ctx) -> mlua::Result<Vec<RegionSnapshot>> {
         self.resolve_layout(lua, ctx)?;
-        let tables = self.regions(lua)?;
-        let ids: HashMap<usize, RegionId> = tables
+        let a = arena::store(lua);
+        let a = a.borrow();
+        a.regions
             .iter()
             .enumerate()
-            .map(|(i, t)| {
-                (
-                    t.to_pointer() as usize,
-                    RegionId {
+            .map(|(i, r)| {
+                let mut scripts = r
+                    .table
+                    .raw_get::<mlua::Table>("__scripts")?
+                    .pairs::<String, mlua::Value>()
+                    .map(|p| p.map(|p| p.0))
+                    .collect::<mlua::Result<Vec<_>>>()?;
+                scripts.sort();
+                Ok(RegionSnapshot {
+                    id: RegionId {
                         index: i as u32,
                         generation: self.generation,
                     },
-                )
+                    parent: r.parent.map(|p| RegionId {
+                        index: p as u32,
+                        generation: self.generation,
+                    }),
+                    widget: r.kind.clone(),
+                    name: r.name.clone(),
+                    rect: r.rect,
+                    size: Some((r.width, r.height)),
+                    shown: r.shown,
+                    visible: r.visible,
+                    strata: Some(r.strata),
+                    level: Some(r.level),
+                    layer: Some(r.layer),
+                    alpha: r.effective_alpha,
+                    texture: r.texture.clone(),
+                    text: r.text.clone(),
+                    scripts,
+                    created_at: r.created_at.clone(),
+                })
             })
-            .collect();
-        let mut out = Vec::with_capacity(tables.len());
-        for (i, t) in tables.iter().enumerate() {
-            let parent = match t.raw_get::<Value>("__parent")? {
-                Value::Table(p) => ids.get(&(p.to_pointer() as usize)).copied(),
-                _ => None,
-            };
-            let width = t.raw_get::<Option<f64>>("__width")?;
-            let height = t.raw_get::<Option<f64>>("__height")?;
-            let mut scripts: Vec<String> = Vec::new();
-            if let Value::Table(s) = t.raw_get::<Value>("__scripts")? {
-                for pair in s.pairs::<String, Value>() {
-                    scripts.push(pair?.0);
-                }
-            }
-            scripts.sort();
-            out.push(RegionSnapshot {
-                id: RegionId {
-                    index: i as u32,
-                    generation: self.generation,
-                },
-                parent,
-                widget: t
-                    .raw_get::<Option<String>>("__kind")?
-                    .unwrap_or_else(|| "Frame".into()),
-                name: t.raw_get::<Option<String>>("__name")?,
-                rect: None,
-                size: width.zip(height),
-                shown: t.raw_get::<Option<bool>>("__shown")?.unwrap_or(true),
-                visible: false,
-                strata: None,
-                level: None,
-                layer: None,
-                alpha: 1.0,
-                texture: None,
-                text: t.raw_get::<Option<String>>("__text")?,
-                scripts,
-                created_at: None,
-            });
-        }
-        // Visible = shown and every ancestor visible; parents come first.
-        for i in 0..out.len() {
-            let parent_visible = match out[i].parent {
-                Some(p) => out[p.index as usize].visible,
-                None => true,
-            };
-            out[i].visible = out[i].shown && parent_visible;
-        }
-        Ok(out)
+            .collect()
     }
 }
+pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    widgets::install(lua, ctx)
+}
+
+mod manifest;
 
 #[cfg(test)]
 mod tests {
@@ -136,5 +90,47 @@ mod tests {
         assert!(!frame.shown && !frame.visible);
         assert_eq!(button.parent, Some(frame.id));
         assert!(button.shown && !button.visible, "hidden parent hides child");
+    }
+}
+
+/// Flattened widget method names (including inheritance), with empty return
+/// shapes: b=false, d=0, s=empty string, t=empty table, n=nil.
+pub type MethodList = std::collections::HashMap<String, std::collections::HashMap<String, String>>;
+/// S2 may set this Lua app datum when SessionConfig supplies a manifest.
+#[derive(Default)]
+pub struct MethodCatalog(pub Option<MethodList>);
+pub struct Fallback {
+    pub target: String,
+    pub empty_shape: String,
+}
+/// Missing lowercase addon fields always read nil. Without a manifest,
+/// uppercase keys temporarily retain the historical callable fallback.
+pub fn missing_method(widget: &str, key: &str, manifest: Option<&MethodList>) -> Option<Fallback> {
+    if !key.chars().next().is_some_and(char::is_uppercase) {
+        return None;
+    }
+    let shape = if let Some(manifest) = manifest {
+        manifest.get(widget)?.get(key)?.clone()
+    } else {
+        manifest::methods(widget)
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, shape)| (*shape).to_owned())
+            .unwrap_or_default()
+    };
+    Some(Fallback {
+        target: format!("{widget}:{key}"),
+        empty_shape: shape,
+    })
+}
+#[cfg(test)]
+mod fallback_tests {
+    #[test]
+    fn manifest_filters_and_lowercase_fields() {
+        let mut catalog = super::MethodList::new();
+        catalog.insert("Button".into(), [("Unmodelled".into(), "b".into())].into());
+        assert!(super::missing_method("Button", "Wiggle", Some(&catalog)).is_none());
+        assert!(super::missing_method("Button", "Unmodelled", Some(&catalog)).is_some());
+        assert!(super::missing_method("Button", "addonField", None).is_none());
     }
 }
