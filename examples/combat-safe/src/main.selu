@@ -1,0 +1,6 @@
+// Loading an addon on demand can happen in combat too.
+const panel = CreateFrame("Frame");
+on PLAYER_LOGIN() {
+  panel.Hide();
+  print("Panel hidden or queued");
+}

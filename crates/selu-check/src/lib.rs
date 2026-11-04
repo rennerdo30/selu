@@ -23,6 +23,7 @@ pub use aliases::shape_of;
 mod api;
 mod classes;
 mod modules;
+mod restrictions;
 pub mod saved;
 pub use modules::{ModuleBindings, ModuleExport, ModuleExports, reserved_module_path};
 mod rules;
@@ -91,6 +92,7 @@ pub fn check_program_with_options(
     ctx.block(&program.stmts, &[], Vec::new());
     ctx.finish_alias_diagnostics();
     let types = ctx.types;
+    restrictions::check_uses(program, &types, &mut out);
     Checked {
         diagnostics: out,
         types,
@@ -169,6 +171,7 @@ pub fn check_module_targets_with_options(
     }
     let exports = ctx.module.exports;
     let types = ctx.types;
+    restrictions::check_uses(program, &types, &mut out);
     (
         Checked {
             diagnostics: out,

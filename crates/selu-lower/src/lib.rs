@@ -26,6 +26,7 @@ mod loops;
 mod modules;
 mod patterns;
 mod purity;
+mod restrictions;
 pub mod saved;
 pub use errors::uses_errors;
 pub use modules::ModuleBindings;
@@ -160,6 +161,9 @@ fn lower_addon_layout(
     let captures_end = out.len();
     out.extend(saved::setup(program));
     out.extend(l.error_setup(program));
+    out.extend(restrictions::emit_restriction_runtime(
+        program, types, manifest,
+    ));
     let errors_index = out.len();
     let has_handlers = program.stmts.iter().any(targets::contains_event);
     if has_handlers {
@@ -274,6 +278,9 @@ pub fn lower_module_layout(
     let runtime_index = out.len();
     out.extend(saved::setup(program));
     out.extend(l.error_setup(program));
+    out.extend(restrictions::emit_restriction_runtime(
+        program, types, manifest,
+    ));
     let errors_index = out.len();
     l.module_prologue(&mut out);
     let has_handlers = program.stmts.iter().any(targets::contains_event);
@@ -724,7 +731,7 @@ impl Lowerer<'_> {
                 name: field,
             } => self.data_field(object, field, pre),
             ExprKind::Call { callee, args } => {
-                let v = self.call(callee, args, pre);
+                let v = self.restricted_call(callee, args, pre);
                 if self.types.is_single_value(e.id)
                     && matches!(v, LExpr::Call(..) | LExpr::Method(..))
                     && matches!(

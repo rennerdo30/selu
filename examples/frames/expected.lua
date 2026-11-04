@@ -60,6 +60,26 @@ if not __selu_ns.__selu_wow then
   end
 end
 local __selu_wow = __selu_ns.__selu_wow
+local function __selu_read_s(v0)
+  if canaccessvalue and not canaccessvalue(v0) then v0 = nil end
+  return v0
+end
+local __selu_pending = {}
+local __selu_defer_frame = CreateFrame("Frame")
+__selu_defer_frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+__selu_defer_frame:SetScript("OnEvent", function()
+  while #__selu_pending > 0 and not InCombatLockdown() do
+    local item = table.remove(__selu_pending, 1)
+    item.fn(unpack(item, 1, item.n))
+  end
+end)
+local function __selu_defer(fn, ...)
+  if not InCombatLockdown() then return fn(...) end
+  if false then print("Selu: deferred protected call") end
+  local item = { ... }
+  item.fn, item.n = fn, select("#", ...)
+  __selu_pending[#__selu_pending + 1] = item
+end
 __selu_ns["main"] = {}
 if not __selu_ns.__selu_events then
   -- Selu: shared event frame and dispatch table
@@ -83,18 +103,33 @@ if not __selu_ns.__selu_events then
 end
 local __selu_on = __selu_ns.__selu_events
 local panel = CreateFrame("Frame", nil, UIParent)
-panel:SetSize(160, 60)
-panel:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+do
+  local __selu_t1 = panel
+  __selu_defer(__selu_t1.SetSize, __selu_t1, 160, 60)
+end
+do
+  local __selu_t2 = panel
+  __selu_defer(__selu_t2.SetPoint, __selu_t2, "CENTER", UIParent, "CENTER", 0, 0)
+end
 local texture = panel:CreateTexture()
-texture:SetSize(160, 60)
+do
+  local __selu_t3 = texture
+  __selu_defer(__selu_t3.SetSize, __selu_t3, 160, 60)
+end
 local label = panel:CreateFontString()
 label:SetText("Selu frames")
 panel:HookScript("OnShow", function()
   print("Panel shown")
 end)
-panel:Hide()
+do
+  local __selu_t4 = panel
+  __selu_defer(__selu_t4.Hide, __selu_t4)
+end
 __selu_on("PLAYER_LOGIN", function()
-  panel:Show()
-  print(panel:GetWidth(), panel:GetHeight(), texture:GetWidth(), (texture:GetHeight()))
+  do
+    local __selu_t5 = panel
+    __selu_defer(__selu_t5.Show, __selu_t5)
+  end
+  print(__selu_read_s(panel:GetWidth()), __selu_read_s(panel:GetHeight()), __selu_read_s(texture:GetWidth()), (__selu_read_s(texture:GetHeight())))
   print((label:GetText()))
 end)

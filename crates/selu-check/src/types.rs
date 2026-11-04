@@ -23,6 +23,8 @@ impl PartialEq for ApiOrigin {
 #[derive(Debug, Clone, Default)]
 pub struct ApiSemantics {
     pub frame_factory: bool,
+    pub secret_results: Vec<bool>,
+    pub protected: bool,
     pub overloads: Vec<Type>,
 }
 impl PartialEq for ApiSemantics {
@@ -323,11 +325,40 @@ impl Type {
         if a.is_open() || b.is_open() {
             return Some(Type::Untyped);
         }
+        // A conditional function value may select either API. Preserve the
+        // strictest runtime policy even though policy is identity-neutral.
+        let policy = |mut ty: Type| {
+            if let (
+                Type::Function {
+                    api_semantics: left,
+                    ..
+                },
+                Type::Function {
+                    api_semantics: right,
+                    ..
+                },
+                Type::Function {
+                    api_semantics: result,
+                    ..
+                },
+            ) = (a, b, &mut ty)
+            {
+                result.protected = left.protected || right.protected;
+                let count = left.secret_results.len().max(right.secret_results.len());
+                result.secret_results = (0..count)
+                    .map(|i| {
+                        left.secret_results.get(i) == Some(&true)
+                            || right.secret_results.get(i) == Some(&true)
+                    })
+                    .collect();
+            }
+            ty
+        };
         if b.assignable_to(a) {
-            return Some(a.clone());
+            return Some(policy(a.clone()));
         }
         if a.assignable_to(b) {
-            return Some(b.clone());
+            return Some(policy(b.clone()));
         }
         match (a, b) {
             (Type::Null, t) | (t, Type::Null) => Some(Type::optional(t.clone())),

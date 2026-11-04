@@ -134,7 +134,16 @@ fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     Type::Untyped
 }
 fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
-    let mut returns: Vec<Type> = d.returns.iter().map(|r| map(m, r, depth + 1)).collect();
+    let secret = crate::restrictions::secret_results(m, d);
+    let mut returns: Vec<Type> = d
+        .returns
+        .iter()
+        .zip(&secret)
+        .map(|(r, secret)| {
+            let t = map(m, r, depth + 1);
+            if *secret { Type::optional(t) } else { t }
+        })
+        .collect();
     if flag(d, "MayReturnNothing") {
         returns = returns.into_iter().map(Type::optional).collect();
     }
@@ -143,6 +152,8 @@ fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         unspecified_callback: false,
         api_semantics: crate::types::ApiSemantics {
             frame_factory: false,
+            secret_results: crate::restrictions::secret_results(m, d),
+            protected: flag(d, "IsProtectedFunction"),
             overloads: d
                 .overloads
                 .iter()

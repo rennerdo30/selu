@@ -82,6 +82,20 @@ impl Sim {
             )?;
         }
 
+        globals.set("__selu_sim_combat", false)?;
+        globals.set(
+            "InCombatLockdown",
+            lua.create_function(|lua, ()| lua.globals().get::<bool>("__selu_sim_combat"))?,
+        )?;
+        globals.set(
+            "canaccessvalue",
+            lua.create_function(|_, value: Value| Ok(!matches!(value, Value::LightUserData(_))))?,
+        )?;
+        globals.set(
+            "issecretvalue",
+            lua.create_function(|_, value: Value| Ok(matches!(value, Value::LightUserData(_))))?,
+        )?;
+
         // Registry of every created frame, so `fire` can find them.
         globals.set("__selu_sim_frames", lua.create_table()?)?;
 
@@ -235,6 +249,33 @@ impl Sim {
             logs,
             clock,
         })
+    }
+
+    /// Toggle combat and dispatch the matching transition event once.
+    pub fn set_combat(&self, combat: bool) -> SimResult<()> {
+        let old = self.lua.globals().get::<bool>("__selu_sim_combat")?;
+        self.lua.globals().set("__selu_sim_combat", combat)?;
+        if old != combat {
+            self.fire(
+                if combat {
+                    "PLAYER_REGEN_DISABLED"
+                } else {
+                    "PLAYER_REGEN_ENABLED"
+                },
+                vec![],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Make a named test value inaccessible to the simulated client predicates.
+    pub fn set_secret_global(&self, name: &str) -> SimResult<()> {
+        self.lua.globals().set(name, self.secret_value())
+    }
+
+    /// Opaque sentinel; only the secret predicates may inspect it.
+    pub fn secret_value(&self) -> Value {
+        Value::LightUserData(mlua::LightUserData(std::ptr::null_mut()))
     }
 
     /// Load generated Lua files in TOC order: `(file name, source)` pairs.
