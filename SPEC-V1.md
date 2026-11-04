@@ -374,18 +374,11 @@ garbage comes from.
 
 ## 5. Using existing Lua
 
-- Plain `.lua` files can live in a Selu project. List them in `selu.toml`
-  (`lua = ["libs/LibStub/LibStub.lua"]`); they go into the `.toc` before the
-  generated files, in the listed order.
-- Their types come from declaration files `*.d.selu`:
+Withdrawn (owner, 2026-11-05). Selu doesn't take in untyped Lua: there are no
+plain `.lua` files in projects, no `*.d.selu` declaration files, no library
+declarations and no dynamic `_G` lookups. Every global comes from the
+manifests or from Selu code. See `CLAUDE.md`.
 
-  ```selu
-  declare global function LibStub(name: string, silent?: boolean): unknown;
-  declare module "LibDataBroker-1.1" { ... }
-  ```
-
-- v1 ships declarations for LibStub and CallbackHandler-1.0. Others are
-  written per project or contributed later.
 - Selu code is reachable from Lua through `export global` only.
 
 ## 6. Projects, building, packaging

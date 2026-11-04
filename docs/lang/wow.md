@@ -123,3 +123,5 @@ dispatches both commands, shares translations, fires handlers, verifies user
 ADDON/ns bindings, and checks exactly one reserved loader per generated file.
 A direct lower_module call also checks collected locale keys. Before integration
 loading first.lua failed with an attempt to index missing __selu_wow.
+
+Keybindings are documented in [bindings.md](bindings.md).

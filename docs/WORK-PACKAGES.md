@@ -717,8 +717,7 @@ Acceptance:
    compared with `==`/`!=`, until narrowed with `typeof x == "string"`
    (`"number"`, `"boolean"`, `"table"`, `"function"`), `x != null`, or an
    assignment to a declared type with an explicit check. Untyped game values
-   stay untyped (not `unknown`): `unknown` is for code that opts in, and for
-   `*.d.selu` declarations later.
+   stay untyped (not `unknown`): `unknown` is for code that opts in.
 3. Diagnostics print type names, not their expansion, where a name exists.
 4. Example `examples/named-types/`.
 

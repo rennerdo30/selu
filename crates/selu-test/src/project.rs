@@ -313,6 +313,68 @@ fn build_impl(
             compiled.push((module, lowered));
         }
         validate_saved(&old_saved, &saved_shapes, &sources, &project.name)?;
+        let keybindings: Vec<_> = compiled
+            .iter()
+            .flat_map(|(_, l)| l.bindings.iter().cloned())
+            .collect();
+        let mut binding_names = std::collections::HashSet::new();
+        for b in &keybindings {
+            if !b.name.starts_with(&format!("{}_", project.name))
+                || b.name.len() == project.name.len() + 1
+            {
+                let d = Diagnostic::error(
+                    "SELU0662",
+                    format!(
+                        "Binding {} must start with {}_ and an action name.",
+                        b.name, project.name
+                    ),
+                )
+                .with_span(b.span.clone())
+                .with_help("use the addon name followed by an underscore and the action");
+                let source = compiled
+                    .iter()
+                    .find(|(m, _)| {
+                        m.program
+                            .stmts
+                            .first()
+                            .is_some_and(|s| s.span.file == b.span.file)
+                    })
+                    .map(|(m, _)| m.source.as_str())
+                    .unwrap_or("");
+                return Err(fail(&d, source));
+            }
+            if !binding_names.insert(&b.name) {
+                let d = Diagnostic::error(
+                    "SELU0666",
+                    format!("Binding {} is declared more than once.", b.name),
+                )
+                .with_span(b.span.clone())
+                .with_help("give each binding a unique name across the addon");
+                let source = compiled
+                    .iter()
+                    .find(|(m, _)| {
+                        m.program
+                            .stmts
+                            .first()
+                            .is_some_and(|s| s.span.file == b.span.file)
+                    })
+                    .map(|(m, _)| m.source.as_str())
+                    .unwrap_or("");
+                return Err(fail(&d, source));
+            }
+        }
+        if !keybindings.is_empty() {
+            std::fs::write(
+                out_dir.join("Bindings.xml"),
+                selu_lower::bindings::xml(&keybindings),
+            )
+            .map_err(|e| {
+                eprintln!("selu: cannot write Bindings.xml: {e}");
+                ExitCode::FAILURE
+            })?;
+        } else if out_dir.join("Bindings.xml").exists() {
+            std::fs::remove_file(out_dir.join("Bindings.xml")).map_err(|_| ExitCode::FAILURE)?;
+        }
         let mut lowered_files: Vec<_> = compiled.iter().map(|(_, l)| l.clone()).collect();
         if let Some(mut runtime) = selu_lower::runtime::share(&mut lowered_files) {
             if debug {

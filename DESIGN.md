@@ -430,5 +430,5 @@ versions of your addon, but they are not the exact numbers the game reports
 ## 11. Open questions
 
 Settled for version 1 in [SPEC-V1.md](SPEC-V1.md), including the GUI framework,
-standard library, async, Lua interop, localisation, packaging and the manifest
+standard library, async, localisation, packaging and the manifest
 pipeline. The remaining owner decisions are listed at its end.
