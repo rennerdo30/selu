@@ -1,11 +1,11 @@
 # Handoff
 
-## State (2026-11-04, night)
+## State (2026-11-04, late night)
 
 - `master`, public at https://github.com/rennerdo30/selu. Push only
-  `master`, by explicit ref. `cargo test` (290 tests, including every
-  example built with the real binary and run in the simulator), clippy and
-  `cargo fmt --check` are clean.
+  `master`, by explicit ref. `cargo test` (419 tests, including every
+  example built with the real binary and run in the simulator), the proof
+  test (2), clippy and `cargo fmt --check` are clean.
 - Built and merged, each by a Codex job with an independent review (every
   review found real bugs, all fixed before merge):
   - Round 1: the language core of SPEC-V1 section 2 (packages A-C).
@@ -13,14 +13,17 @@
     `command`/`hook`/`hookScript`/`log`/`L` (D4).
   - Round 3: `saved` with checked migrations and `selu.saved.toml` (D2),
     and generated manifests for retail 12.1.5 and Forever 1.60.1 (M1).
-- Round 4: R readability, M2 every client and T1 typed game API are merged;
-  T2 `has(...)` and several targets is in its final integration.
-- Examples: `hello`, `loot-summary`, `cooldowns`, `modules`, `classes`,
-  `slash-and-hooks`, `saved-settings`; each is a test (`expected.txt`).
+  - Round 4: readability (R), every client (M2), typed game API (T1),
+    `has(...)` and several targets (T2).
+  - Round 5: named types, `interface`, generics, `unknown`/`typeof` (L);
+    XML frames, fonts, constants and templates in the manifests (M3); the
+    `JunkSell` proof port (P, `proof/junksell/`, `docs/proof/junksell.md`).
+- Round 6 is briefed (`docs/WORK-PACKAGES.md`): `try`/`catch` (E), string
+  patterns (S), simulator timers (Q).
+- Examples: 10 (`examples/README.md`); each is a test.
 - `selu` 0.0.1 placeholder is on crates.io; licence MIT.
 - Owner goal: Renner's Toolkit gets written in Selu
-  (`docs/TOOLKIT-SURVEY.md`). Estimate after round 3: about 60% of what the
-  full port needs; a first small module is within reach once T1 lands.
+  (`docs/TOOLKIT-SURVEY.md`). The proof port's open gaps are the plan.
 
 ## Decisions taken while the owner was away (2026-11-04 night)
 
@@ -59,19 +62,27 @@ Each is recorded in the named document; all can be reversed.
 - **Every client:** manifests for `classic-era`, `classic-anniversary`,
   `classic-titan` and `classic` next to `retail` and `forever` (owner's
   wish; SPEC-V1 section 1 updated).
-- **Manifests stay plain JSON in git** (about 9.9 MB together, text that
+- **Manifests stay plain JSON in git** (about 39 MB together after M3, text that
   diffs well), not LFS.
+- **`typeof` gives Lua type names** (`"nil"`, `"table"`, `"function"`,
+  never `"object"` or `"undefined"`), since the result is Lua's `type()`
+  (`docs/lang/types.md`).
+- **Manifest constants keep values only for numbers and short
+  identifier-like strings (ASCII, at most 64 characters);** other strings (markup, long text) keep the name
+  only (`docs/manifests.md`).
+- **Saved schemas record resolved shapes,** so renaming a `type` alias
+  doesn't count as a schema change; existing schemas stayed byte-identical.
+- **String patterns:** a `luaPattern` tag rather than JavaScript regexes
+  (Sol's second opinion; `docs/WORK-PACKAGES.md`, round 6).
 
 ## Next
 
-1. Merge round 4 (R, then T1, then T2), with the usual review per branch.
-2. Then: restriction and combat checks and secret values (DESIGN.md
-   section 3), using the manifest flags M1 records; `selu probe` for
-   verified evidence; unify the two file-prelude mechanisms if R didn't.
-3. Proof port (SPEC step 8): one small Toolkit module (`XPBarETA` or
-   `JunkSell`) in Selu, compared with the hand-written Lua.
-4. Not yet planned: GUI framework (SPEC section 4), `selu debug` app, async,
-   asset pipeline and `selu export`, classic flavours, VS Code extension.
+1. Round 6 (E, S, Q), each with an independent review.
+2. Then: less runtime scaffolding (proof gap 8); restriction and combat
+   checks and secret values (DESIGN.md section 3); `selu probe` for
+   verified evidence; a second, larger proof module.
+3. Not yet planned: GUI framework (SPEC section 4), `selu debug` app, async,
+   asset pipeline and `selu export`, VS Code extension.
 
 ## Traps
 
