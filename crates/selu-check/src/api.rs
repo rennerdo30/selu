@@ -93,7 +93,7 @@ fn primitive(name: &str) -> Option<Type> {
         _ => return None,
     })
 }
-fn named(m: &Manifest, n: &str, depth: usize) -> Type {
+pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     if let Some(t) = primitive(n) {
         return t;
     }
@@ -133,7 +133,7 @@ fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     // not reject valid engine values based on a guessed nominal identity.
     Type::Untyped
 }
-fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
+pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
     let secret = crate::restrictions::secret_results(m, d);
     let mut returns: Vec<Type> = d
         .returns
@@ -144,6 +144,7 @@ fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
             if *secret { Type::secret(t) } else { t }
         })
         .collect();
+
     if flag(d, "MayReturnNothing") {
         returns = returns.into_iter().map(Type::optional).collect();
     }
@@ -253,6 +254,9 @@ fn method<'a>(
 }
 impl Ctx<'_> {
     pub(crate) fn api_global(&self, name: &str) -> Type {
+        if let Some(t) = self.frame_global(name) {
+            return t;
+        }
         if let Some(f) = self.manifest.function(name) {
             return f
                 .signature
@@ -327,6 +331,9 @@ impl Ctx<'_> {
                 }
             }
             return Some(ty);
+        }
+        if let Some(member) = self.frame_member(t, name, object) {
+            return Some(member);
         }
         let mut candidates = Vec::new();
         fn collect(m: &Manifest, n: &str, out: &mut Vec<String>, seen: &mut Vec<String>) {
@@ -407,12 +414,12 @@ impl Ctx<'_> {
             );
             return Type::Tuple(vec![widget(self.manifest, "Frame")]);
         }
-        let mut result = widget(self.manifest, name);
+        let mut base = widget(self.manifest, name);
         let plain = args.get(3).is_none_or(|e| matches!(&e.kind, ExprKind::Str(s) if s.split(',').all(|t| !t.trim().starts_with("Secure"))));
-        if plain && let Type::Widget(_, bases) = &mut result {
+        if plain && let Type::Widget(_, bases) = &mut base {
             bases.push("@selu_plain".into());
         }
-        Type::Tuple(vec![result])
+        Type::Tuple(vec![self.frame_templates(base, args)])
     }
     fn api_diagnostic(
         &self,

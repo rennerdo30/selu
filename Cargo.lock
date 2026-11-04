@@ -526,9 +526,20 @@ dependencies = [
  "selu-manifest",
  "selu-sim",
  "selu-syntax",
+ "selu-test",
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "selu-debug"
+version = "0.1.0"
+dependencies = [
+ "selu-sim",
+ "selu-sourcemap",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -582,6 +593,16 @@ name = "selu-sim"
 version = "0.1.0"
 dependencies = [
  "mlua",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "selu-sourcemap"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -590,6 +611,16 @@ version = "0.1.0"
 dependencies = [
  "selu-diagnostics",
  "serde",
+]
+
+[[package]]
+name = "selu-test"
+version = "0.1.0"
+dependencies = [
+ "selu-sim",
+ "selu-sourcemap",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

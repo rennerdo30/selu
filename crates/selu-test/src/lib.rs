@@ -1,0 +1,250 @@
+//! `selu test`: the `*.test.selu` runner (docs/SIMULATOR.md decisions 11
+//! and 22, SPEC-V1.md section 8). Owner: package S4 (round 9).
+//!
+//! Groundwork (round 8): test discovery, the report model with human and
+//! JSON output, exit codes, and the replay record a failing test keeps.
+//! Not here yet (S4): compiling test files with the project's modules, the
+//! `describe`/`test`/`beforeEach`/`expect` intrinsics and the `sim`/`perf`
+//! test manifest overlay, spies, and running each file in a fresh
+//! [`selu_sim::Session`]. [`run`] says so instead of pretending.
+
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+/// Every `*.test.selu` under the project's `src/` and `tests/` folders,
+/// sorted, with forward-slash project-relative paths.
+pub fn discover(project_dir: &Path) -> std::io::Result<Vec<String>> {
+    let mut found = Vec::new();
+    for top in ["src", "tests"] {
+        let dir = project_dir.join(top);
+        if dir.is_dir() {
+            walk(project_dir, &dir, &mut found)?;
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            walk(root, &path, out)?;
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".test.selu"))
+        {
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            out.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Outcome {
+    Passed,
+    Failed {
+        message: String,
+        /// `src/x.test.selu:12`, already source-mapped.
+        location: Option<String>,
+    },
+    Skipped,
+}
+
+/// One host command a test sent to the session, in order. A failing test's
+/// list plus its seed lets `selu debug --test` replay it (decision 22).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum HostCommand {
+    Fire { event: String, args: Vec<String> },
+    Slash { line: String },
+    AdvanceTime { seconds: f64 },
+    Reload,
+    Eval { code: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Replay {
+    pub seed: u32,
+    pub commands: Vec<HostCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TestResult {
+    pub file: String,
+    /// `describe` names and the test name, outermost first.
+    pub path: Vec<String>,
+    #[serde(flatten)]
+    pub outcome: Outcome,
+    /// Gaps the test ran into (`not simulated: X`), so a pass that relied on
+    /// unmodelled behaviour is visible (decision 21).
+    pub not_simulated: Vec<String>,
+    pub replay: Option<Replay>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Report {
+    pub target: Option<String>,
+    pub results: Vec<TestResult>,
+}
+
+impl Report {
+    pub fn count(&self, pred: impl Fn(&Outcome) -> bool) -> usize {
+        self.results.iter().filter(|r| pred(&r.outcome)).count()
+    }
+    pub fn failed(&self) -> usize {
+        self.count(|o| matches!(o, Outcome::Failed { .. }))
+    }
+    /// 0 when nothing failed, 1 otherwise (decision 11).
+    pub fn exit_code(&self) -> u8 {
+        u8::from(self.failed() > 0)
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("reports always serialise")
+    }
+
+    pub fn to_human(&self) -> String {
+        let mut out = String::new();
+        for r in &self.results {
+            let name = r.path.join(" > ");
+            match &r.outcome {
+                Outcome::Passed => out.push_str(&format!("  ok    {} {name}\n", r.file)),
+                Outcome::Skipped => out.push_str(&format!("  skip  {} {name}\n", r.file)),
+                Outcome::Failed { message, location } => {
+                    out.push_str(&format!("  FAIL  {} {name}\n", r.file));
+                    if let Some(at) = location {
+                        out.push_str(&format!("        at {at}\n"));
+                    }
+                    for line in message.lines() {
+                        out.push_str(&format!("        {line}\n"));
+                    }
+                }
+            }
+            for gap in &r.not_simulated {
+                out.push_str(&format!("        note: {gap}\n"));
+            }
+        }
+        let passed = self.count(|o| matches!(o, Outcome::Passed));
+        let skipped = self.count(|o| matches!(o, Outcome::Skipped));
+        out.push_str(&format!(
+            "{passed} passed, {} failed, {skipped} skipped\n",
+            self.failed()
+        ));
+        out
+    }
+}
+
+/// What a run needs from the CLI.
+#[derive(Debug, Clone)]
+pub struct RunOptions {
+    pub project_dir: PathBuf,
+    pub target: Option<String>,
+    /// Only tests whose joined path contains this text.
+    pub filter: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunError {
+    NoTests,
+    NotImplemented { files: Vec<String> },
+    Io(String),
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunError::NoTests => write!(f, "no *.test.selu files under src/ or tests/"),
+            RunError::NotImplemented { files } => write!(
+                f,
+                "found {} test file(s), but the test runner is not implemented yet (round 9, package S4): {}",
+                files.len(),
+                files.join(", ")
+            ),
+            RunError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Run the project's tests. Groundwork: discovery only.
+pub fn run(options: &RunOptions) -> Result<Report, RunError> {
+    let files = discover(&options.project_dir).map_err(|e| RunError::Io(e.to_string()))?;
+    if files.is_empty() {
+        return Err(RunError::NoTests);
+    }
+    Err(RunError::NotImplemented { files })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovers_test_files_in_src_and_tests() {
+        let root = std::env::temp_dir().join(format!("selu-test-discover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src/ui")).unwrap();
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(root.join("src/main.selu"), "").unwrap();
+        std::fs::write(root.join("src/ui/list.test.selu"), "").unwrap();
+        std::fs::write(root.join("tests/boot.test.selu"), "").unwrap();
+        let found = discover(&root).unwrap();
+        let err = run(&RunOptions {
+            project_dir: root.clone(),
+            target: None,
+            filter: None,
+        })
+        .unwrap_err();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(found, ["src/ui/list.test.selu", "tests/boot.test.selu"]);
+        assert!(matches!(err, RunError::NotImplemented { .. }));
+    }
+
+    #[test]
+    fn report_renders_and_sets_the_exit_code() {
+        let report = Report {
+            target: Some("retail@12.0".into()),
+            results: vec![
+                TestResult {
+                    file: "tests/a.test.selu".into(),
+                    path: vec!["junk".into(), "sells grey items".into()],
+                    outcome: Outcome::Passed,
+                    not_simulated: vec![],
+                    replay: None,
+                },
+                TestResult {
+                    file: "tests/a.test.selu".into(),
+                    path: vec!["junk".into(), "prints the total".into()],
+                    outcome: Outcome::Failed {
+                        message: "expected 3 prints, got 2".into(),
+                        location: Some("tests/a.test.selu:14".into()),
+                    },
+                    not_simulated: vec!["not simulated: C_Container.UseContainerItem".into()],
+                    replay: Some(Replay {
+                        seed: 1,
+                        commands: vec![HostCommand::Fire {
+                            event: "MERCHANT_SHOW".into(),
+                            args: vec![],
+                        }],
+                    }),
+                },
+            ],
+        };
+        assert_eq!(report.exit_code(), 1);
+        let human = report.to_human();
+        assert!(
+            human.contains("FAIL  tests/a.test.selu junk > prints the total"),
+            "{human}"
+        );
+        assert!(
+            human.ends_with("1 passed, 1 failed, 0 skipped\n"),
+            "{human}"
+        );
+        let back: Report = serde_json::from_str(&report.to_json()).unwrap();
+        assert_eq!(back, report);
+        assert_eq!(Report::default().exit_code(), 0);
+    }
+}

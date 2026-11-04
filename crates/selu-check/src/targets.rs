@@ -8,6 +8,9 @@ pub struct Availability {
     targets: Vec<Manifest>,
 }
 impl Availability {
+    pub(crate) fn manifests(&self) -> &[Manifest] {
+        &self.targets
+    }
     pub fn new(targets: &[Manifest]) -> Self {
         Self {
             targets: targets.to_vec(),
@@ -78,24 +81,25 @@ pub fn with_fallbacks(primary: &Manifest, targets: &[Manifest]) -> Manifest {
     m
 }
 impl Ctx<'_> {
+    pub(crate) fn target_is_active(&self, m: &Manifest) -> bool {
+        self.scopes.iter().all(|s| {
+            s.narrowed.keys().all(|k| {
+                if let Some(x) = k.strip_prefix("@has:") {
+                    exists(m, x)
+                } else if let Some(x) = k.strip_prefix("@lacks:") {
+                    !exists(m, x)
+                } else {
+                    true
+                }
+            })
+        })
+    }
     fn availability_error(&mut self, n: &str, span: &Span) -> bool {
         let missing: Vec<_> = self
             .availability
             .targets
             .iter()
-            .filter(|m| {
-                self.scopes.iter().all(|s| {
-                    s.narrowed.keys().all(|k| {
-                        if let Some(x) = k.strip_prefix("@has:") {
-                            exists(m, x)
-                        } else if let Some(x) = k.strip_prefix("@lacks:") {
-                            !exists(m, x)
-                        } else {
-                            true
-                        }
-                    })
-                })
-            })
+            .filter(|m| self.target_is_active(m))
             .filter(|m| !exists(m, n))
             .map(Manifest::target_string)
             .collect();

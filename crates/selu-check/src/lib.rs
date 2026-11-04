@@ -22,6 +22,7 @@ mod aliases;
 pub use aliases::shape_of;
 mod api;
 mod classes;
+mod frames;
 mod modules;
 pub mod restrictions;
 pub mod saved;

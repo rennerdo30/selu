@@ -342,6 +342,9 @@ pub enum ExprKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Expr {
+    /// Decoded string byte boundaries mapped to absolute source offsets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub string_offsets: Option<Vec<usize>>,
     /// Unique within one parsed file; later passes key facts about an
     /// expression (its type) by this id.
     pub id: ExprId,
