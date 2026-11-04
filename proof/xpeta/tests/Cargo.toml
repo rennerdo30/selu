@@ -9,4 +9,3 @@ selu-syntax = { path = "../../../crates/selu-syntax" }
 selu-check = { path = "../../../crates/selu-check" }
 selu-manifest = { path = "../../../crates/selu-manifest" }
 selu-lower = { path = "../../../crates/selu-lower" }
-
