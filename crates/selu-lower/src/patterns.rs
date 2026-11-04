@@ -221,13 +221,13 @@ impl Lowerer<'_> {
         else {
             return false;
         };
-        let Some(selu_check::Type::ApiOpaque(tag, ts)) = self.types.get(iter.id) else {
+        let Some(caps) = self
+            .types
+            .get(iter.id)
+            .and_then(selu_check::patterns::iterator_captures)
+        else {
             return false;
         };
-        if tag != "luaPatternIterator" {
-            return false;
-        }
-        let caps: Vec<_> = ts.iter().map(|t| *t == selu_check::Type::Number).collect();
         let names = match binding {
             ForBinding::Name(n, _) => vec![n.clone()],
             ForBinding::Pattern(Pattern::Array(v)) => v

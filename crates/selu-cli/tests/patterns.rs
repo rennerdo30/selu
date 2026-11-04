@@ -175,3 +175,8 @@ on PLAYER_LOGIN() {
             .any(|d| d.help.as_ref().is_some_and(|h| h.contains("luaPattern")))
     );
 }
+
+#[test]
+fn iterator_is_not_a_string_union() {
+    assert!(!codes("const value: string = \"a\".matchAll(luaPattern`%a`);").is_empty());
+}

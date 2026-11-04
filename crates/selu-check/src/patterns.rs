@@ -133,6 +133,22 @@ fn set(b: &[u8], start: usize) -> Result<usize, (usize, &'static str)> {
     }
     Err((start, "close this character set with ]"))
 }
+// Keep iterator identity opaque: ApiOpaque's member list describes API unions,
+// so capture metadata belongs in the private identity, never that member list.
+pub fn iterator_captures(t: &Type) -> Option<Vec<bool>> {
+    let Type::ApiOpaque(n, members) = t else {
+        return None;
+    };
+    if !members.is_empty() {
+        return None;
+    }
+    Some(
+        n.strip_prefix("luaPatternIterator@")?
+            .bytes()
+            .map(|b| b == b'1')
+            .collect(),
+    )
+}
 fn function(params: Vec<Type>, ret: Type, multiple_results: bool) -> Type {
     Type::Function {
         required: params.len(),
@@ -248,7 +264,15 @@ impl Ctx<'_> {
                 }
                 Type::Tuple(vec![Type::String, Type::Number])
             }
-            "matchAll" => Type::ApiOpaque("luaPatternIterator".into(), ts),
+            "matchAll" => Type::ApiOpaque(
+                format!(
+                    "luaPatternIterator@{}",
+                    ts.iter()
+                        .map(|t| if *t == Type::Number { '1' } else { '0' })
+                        .collect::<String>()
+                ),
+                vec![],
+            ),
             _ if captures(s).unwrap_or_default().is_empty() => ts[0].clone(),
             _ => Type::Tuple(ts),
         };
@@ -269,12 +293,13 @@ impl Ctx<'_> {
         else {
             return false;
         };
-        let Type::ApiOpaque(n, ts) = t else {
+        let Some(caps) = iterator_captures(t) else {
             return false;
         };
-        if n != "luaPatternIterator" {
-            return false;
-        }
+        let ts: Vec<_> = caps
+            .iter()
+            .map(|p| if *p { Type::Number } else { Type::String })
+            .collect();
         let names = match binding {
             ForBinding::Name(n, sp) => vec![Some((n.clone(), sp.clone()))],
             ForBinding::Pattern(Pattern::Array(v)) => v.clone(),
