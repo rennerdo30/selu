@@ -1,0 +1,5 @@
+## Interface: 120001
+## Title: Studio Demo
+## Notes: Hand-written addon that gives Selu Studio something to draw.
+
+StudioDemo.lua

@@ -82,16 +82,17 @@ need no localisation runtime; command, L and log request it.
 
 `runtime.rs` owns one registry with explicit dependencies and fixed ordered keys.
 Error state and captures precede error operations, scalar protection helpers and
-callback entry; saved loading precedes event dispatch; localisation/logging and
-shared event capability probing follow. Each piece has a short comment and a
-Lua `do` scope; dependencies become namespace aliases. Additional pieces (including
-package G's deferred-call queue) can register their body, exports and dependencies
-here. Keep dependency keys earlier than consumers. Protection helpers remain
+callback entry. The protected-call queue is piece `18-protected-calls`, before
+the event dispatcher, preserving drain-before-user-regen-handler order. Saved
+loading also precedes event dispatch; localisation/logging, shared event capability
+probing and the secret-read helper follow. Each piece has a short comment and a
+Lua `do` scope; dependencies become namespace aliases. Additional pieces can register their body, exports and dependencies here. Keep dependency keys earlier than consumers. Protection helpers remain
 specialized by return width, preserving trailing nils without result tables.
 
 `assemble_file` builds the single ordered file prelude for both lowering paths.
 Sharing removes generated AST statements, replaces them with aliases, and prints
-the module AST again to rebuild source-map line numbers. Runtime code has no Selu
+the module AST again to refresh `statement_lines`. The CLI constructs canonical
+S3 maps from `Lowered::source_map` only after sharing; the runtime has no map. Runtime code has no Selu
 source span. Class and typeof captures stay local to their module.
 
 Saved declarations and migrations still register loaders while modules execute.
@@ -138,3 +139,36 @@ from the CLI count. The checked-in reference is retained as historical evidence.
 All expected Lua diffs were inspected: runtime bodies moved into scoped pieces,
 helper aliases precede imports/source bindings, and user event bodies retain their
 names and structure. The new shared-runtime example exercises two source modules.
+
+## Source maps
+
+`selu build` writes readable JSON maps to
+`dist/.selu/<Addon>/<module>.lua.map` (including module subdirectories).
+Maps never go inside the addon folder or its `.toc`. The shared runtime and
+preludes have no source positions.
+
+Version 1 has `version`, `chunk`, `sources` and `ranges`. `chunk` is the
+reported Lua filename. Each source has a normalized project-relative `path`
+and `hash` (`fnv1a64:` followed by 16 hexadecimal digits over the UTF-8 source).
+Each range has `gen_start`, `gen_end` (inclusive, one-based generated lines),
+`source` (zero-based source index), and one-based `line` and `column`.
+Columns count Unicode characters. The printer emits a range for each printed
+statement line, sorted by generated start; nested statement positions win on
+shared lines. Callback bodies map to their own statements, including nested
+callbacks. Synthetic statements carrying an originating span map to that span;
+runtime statements without one are absent. Generated syntax such as `end`
+maps to its containing statement. Erased types and imports emit no executable
+statement and have no generated position.
+
+`selu-sourcemap` reads and writes this format, looks up positions in both
+directions, and rewrites Lua error positions through `map_lua_error`.
+Unmapped positions remain unchanged. Hashes allow consumers to detect stale
+source text; they are not security hashes.
+
+Distinct source statements use distinct generated lines when a compact `if`
+would otherwise make one position hide the other. Multi-line conditions retain
+their body positions after all condition lines. Saved declarations and migration
+registrations map to their declarations; shared saved runtime setup stays unmapped.
+Error chunk selection prefers normalized exact paths, then a unique most-specific
+path suffix. Ambiguous basenames stay unchanged. Quoted chunk names are delimited
+by `[string "` and `"]`, so addon folder names may contain spaces.

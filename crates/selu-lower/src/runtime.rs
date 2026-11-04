@@ -1,5 +1,5 @@
 //! Addon runtime registry. Pieces carry dependencies and are emitted in key order.
-use crate::{Lowered, Lowerer, SourceMap, SourceMapEntry, errors, lua, raw, saved, wow};
+use crate::{Lowered, Lowerer, errors, lua, raw, saved, wow};
 use lua::{LBlock, LStmtKind};
 use selu_syntax::Program;
 use std::collections::BTreeMap;
@@ -11,7 +11,7 @@ pub(crate) struct Piece {
     block: LBlock,
     exports: Vec<(String, String)>,
 }
-fn piece(key: &str, block: LBlock, exports: &[&str], dependencies: &[&str]) -> Piece {
+pub(crate) fn piece(key: &str, block: LBlock, exports: &[&str], dependencies: &[&str]) -> Piece {
     Piece {
         key: key.into(),
         dependencies: dependencies.iter().map(|s| (*s).into()).collect(),
@@ -56,12 +56,18 @@ impl Lowerer<'_> {
         out.extend(wow.into_iter().flatten());
         out.extend(saved::setup(program));
         out.extend(self.error_setup(program));
+        out.extend(crate::restrictions::emit_restriction_runtime(
+            program,
+            self.types,
+            &self.target.universe,
+        ));
         out.extend(entry);
         out.extend(body);
         out
     }
     pub(crate) fn runtime_pieces(&mut self, program: &Program) -> Vec<Piece> {
-        let mut pieces = vec![];
+        let mut pieces =
+            crate::restrictions::runtime_pieces(program, self.types, &self.target.universe);
         if self.addon_errors {
             pieces.push(piece(
                 "10-errors-state",
@@ -220,16 +226,7 @@ pub fn share(files: &mut [Lowered]) -> Option<String> {
         file.block.insert(0, raw(&prelude));
         let printed = lua::print_block(&file.block);
         file.lua = printed.text;
-        file.source_map = SourceMap {
-            entries: printed
-                .lines
-                .into_iter()
-                .map(|(generated_line, span)| SourceMapEntry {
-                    generated_line,
-                    span,
-                })
-                .collect(),
-        };
+        file.statement_lines = printed.lines;
     }
     Some(runtime)
 }

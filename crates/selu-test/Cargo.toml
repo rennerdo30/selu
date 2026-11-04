@@ -1,0 +1,11 @@
+[package]
+name = "selu-test"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+selu-sim = { path = "../selu-sim" }
+selu-sourcemap = { path = "../selu-sourcemap" }
+serde.workspace = true
+serde_json.workspace = true

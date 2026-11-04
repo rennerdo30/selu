@@ -11,10 +11,12 @@ copy into `World of Warcraft/_<flavour>_/Interface/AddOns`.
 
 | Example | Shows |
 |---|---|
+| [`source-maps`](source-maps/src/main.selu) | nested callbacks with separate source positions in the generated map |
 | [`saved-settings`](saved-settings/src/main.selu) | recursive saved defaults, per-character progress and a checked migration |
 | [`modules`](modules/src/main.selu) | named imports, live exports, shared addon namespace and dependency ordering |
 | [`classes`](classes/src/main.selu) | tracker inheritance, super calls, static members and an arrow capturing this |
 | [`item-links`](item-links/src/main.selu) | item link captures and lazy chat word counting |
+| [`templated-frames`](templated-frames/src/main.selu) | backdrop templates and a panel button |
 | [`frames`](frames/src/main.selu) | typed frames, child regions, points, text and OnShow hooks |
 | [`named-types`](named-types/src/main.selu) | structural interfaces, array aliases and unknown narrowing |
 | [`hello`](hello/src/main.selu) | the smallest addon: one event handler |
@@ -34,3 +36,4 @@ can't silently break.
 - `errors/`: typed errors, a fallback return and cleanup with `finally`.
 
 - `shared-runtime/`: two modules sharing error state and the event dispatcher.
+- `combat-safe`: a panel hidden immediately or queued until combat ends.

@@ -16,17 +16,31 @@
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 
+// Module ownership for round 8 (docs/WORK-PACKAGES.md): `core` is S0's
+// contract; `frames` and `regions` belong to S1; `session`, `loader`,
+// `world`, `trace` and `snapshot` to S2. This file is S0's wiring.
+pub mod core;
+pub mod frames;
+pub mod loader;
 mod regions;
 pub mod saved;
+pub mod session;
+pub mod snapshot;
 mod timers;
+mod trace;
+mod world;
 mod wow_api;
 
+pub use core::{
+    Ctx, DrawLayer, Generation, Rect, RegionId, RegionModel, RegionSnapshot, Snapshot, SourcePos,
+    Strata, TextureFill, TraceKind, TraceRecord,
+};
 pub use mlua::Value as SimValue;
+pub use session::{Session, SessionConfig};
 pub type SimResult<T> = Result<T, mlua::Error>;
 
-type Shared<T> = Arc<Mutex<T>>;
+use crate::core::{Shared, dispatch, lock};
 
 fn value_string(v: &Value) -> String {
     match v {
@@ -48,6 +62,7 @@ fn log_once(logs: &Shared<Vec<String>>, warned: &Shared<HashSet<String>>, what: 
 
 pub struct Sim {
     lua: Lua,
+    ctx: Ctx,
     prints: Shared<Vec<String>>,
     logs: Shared<Vec<String>>,
     clock: Shared<f64>,
@@ -56,20 +71,24 @@ pub struct Sim {
 impl Sim {
     pub fn new() -> SimResult<Sim> {
         let lua = Lua::new();
+        let ctx = Ctx::new();
+        core::install_hooks(&lua, &ctx);
         regions::install(&lua)?;
-        let prints: Shared<Vec<String>> = Arc::new(Mutex::new(Vec::new()));
-        let logs: Shared<Vec<String>> = Arc::new(Mutex::new(Vec::new()));
-        let warned: Shared<HashSet<String>> = Arc::new(Mutex::new(HashSet::new()));
-        let clock: Shared<f64> = Arc::new(Mutex::new(0.0));
+        let prints = ctx.prints.clone();
+        let logs = ctx.logs.clone();
+        let warned = ctx.warned.clone();
+        let clock = ctx.clock.clone();
         let globals = lua.globals();
 
         {
-            let prints = prints.clone();
+            let ctx = ctx.clone();
             globals.set(
                 "print",
                 lua.create_function(move |_, args: MultiValue| {
                     let parts: Vec<String> = args.iter().map(value_string).collect();
-                    prints.lock().unwrap().push(parts.join("\t"));
+                    let line = parts.join("\t");
+                    ctx.record(TraceKind::Print, "print", vec![line.clone()]);
+                    lock(&ctx.prints).push(line);
                     Ok(())
                 })?,
             )?;
@@ -82,6 +101,33 @@ impl Sim {
             )?;
         }
 
+        {
+            let logs = logs.clone();
+            let handler = lua.create_function(move |_, error: Value| {
+                logs.lock()
+                    .unwrap()
+                    .push(format!("error: {}", value_string(&error)));
+                Ok(())
+            })?;
+            globals.set(
+                "geterrorhandler",
+                lua.create_function(move |_, ()| Ok(handler.clone()))?,
+            )?;
+        }
+        globals.set("__selu_sim_combat", false)?;
+        globals.set(
+            "InCombatLockdown",
+            lua.create_function(|lua, ()| lua.globals().get::<bool>("__selu_sim_combat"))?,
+        )?;
+        globals.set(
+            "canaccessvalue",
+            lua.create_function(|_, value: Value| Ok(!matches!(value, Value::LightUserData(_))))?,
+        )?;
+        globals.set(
+            "issecretvalue",
+            lua.create_function(|_, value: Value| Ok(matches!(value, Value::LightUserData(_))))?,
+        )?;
+
         // Registry of every created frame, so `fire` can find them.
         globals.set("__selu_sim_frames", lua.create_table()?)?;
 
@@ -92,18 +138,30 @@ impl Sim {
                 "CreateFrame",
                 lua.create_function(
                     move |lua,
-                          (kind, _name, parent): (
+                          (kind, name, parent, templates): (
                         Option<String>,
                         Option<String>,
                         Option<Table>,
+                        Option<String>,
                     )| {
                         let frame = lua.create_table()?;
                         frame.set("__kind", kind.unwrap_or_else(|| "Frame".into()))?;
                         frame.set("__events", lua.create_table()?)?;
                         frame.set("__scripts", lua.create_table()?)?;
                         frame.set("__shown", true)?;
+                        frame.set("__protected", false)?;
+                        frame.set(
+                            "IsProtected",
+                            lua.create_function(|_, this: Table| this.get::<bool>("__protected"))?,
+                        )?;
                         frame.set("__parent", parent)?;
+                        // Named frames become globals, as in the client.
+                        if let Some(name) = &name {
+                            frame.set("__name", name.as_str())?;
+                            lua.globals().raw_set(name.as_str(), frame.clone())?;
+                        }
                         regions::attach(lua, &frame)?;
+                        regions::templates(lua, &frame, templates.as_deref())?;
                         frame.set(
                             "RegisterEvent",
                             lua.create_function(|_, (this, event): (Table, String)| {
@@ -231,16 +289,46 @@ impl Sim {
 
         Ok(Sim {
             lua,
+            ctx,
             prints,
             logs,
             clock,
         })
     }
 
+    /// Toggle combat and dispatch the matching transition event once.
+    pub fn set_combat(&self, combat: bool) -> SimResult<()> {
+        let old = self.lua.globals().get::<bool>("__selu_sim_combat")?;
+        self.lua.globals().set("__selu_sim_combat", combat)?;
+        if old != combat {
+            self.fire(
+                if combat {
+                    "PLAYER_REGEN_DISABLED"
+                } else {
+                    "PLAYER_REGEN_ENABLED"
+                },
+                vec![],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Make a named test value inaccessible to the simulated client predicates.
+    pub fn set_secret_global(&self, name: &str) -> SimResult<()> {
+        self.lua.globals().set(name, self.secret_value())
+    }
+
+    /// Opaque sentinel; only the secret predicates may inspect it.
+    pub fn secret_value(&self) -> Value {
+        Value::LightUserData(mlua::LightUserData(std::ptr::null_mut()))
+    }
+
     /// Load generated Lua files in TOC order: `(file name, source)` pairs.
     pub fn load_files(&self, files: &[(String, String)]) -> SimResult<()> {
         for (name, source) in files {
-            self.lua.load(source).set_name(name).exec()?;
+            dispatch(&self.lua, &self.ctx, || {
+                self.lua.load(source).set_name(name).exec()
+            })?;
         }
         Ok(())
     }
@@ -251,10 +339,12 @@ impl Sim {
     pub fn load_addon(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
         let ns = self.lua.create_table()?;
         for (name, source) in files {
-            self.lua
-                .load(source)
-                .set_name(name)
-                .call::<()>((addon, ns.clone()))?;
+            dispatch(&self.lua, &self.ctx, || {
+                self.lua
+                    .load(source)
+                    .set_name(name)
+                    .call::<()>((addon, ns.clone()))
+            })?;
         }
         self.fire(
             "ADDON_LOADED",
@@ -264,18 +354,28 @@ impl Sim {
     }
 
     pub fn slash(&self, line: &str) -> SimResult<()> {
-        self.lua
-            .globals()
-            .get::<Function>("__selu_sim_slash")?
-            .call(line)
+        self.ctx
+            .record(TraceKind::Host, "slash", vec![line.to_string()]);
+        dispatch(&self.lua, &self.ctx, || {
+            self.lua
+                .globals()
+                .get::<Function>("__selu_sim_slash")?
+                .call(line)
+        })
     }
 
     pub fn eval(&self, source: &str) -> SimResult<()> {
-        self.lua.load(source).exec()
+        dispatch(&self.lua, &self.ctx, || self.lua.load(source).exec())
     }
 
     /// Fire an event at every frame that registered for it.
     pub fn fire(&self, event: &str, args: Vec<Value>) -> SimResult<usize> {
+        let rendered = args.iter().map(value_string).collect();
+        self.ctx.record(TraceKind::Event, event, rendered);
+        dispatch(&self.lua, &self.ctx, || self.fire_now(event, &args))
+    }
+
+    fn fire_now(&self, event: &str, args: &[Value]) -> SimResult<usize> {
         let registry = self.lua.globals().get::<Table>("__selu_sim_frames")?;
         let mut delivered = 0;
         for pair in registry.pairs::<i64, Table>() {
@@ -289,7 +389,7 @@ impl Sim {
                 let mut call = MultiValue::new();
                 call.push_back(Value::Table(frame));
                 call.push_back(Value::String(self.lua.create_string(event)?));
-                for a in &args {
+                for a in args {
                     call.push_back(a.clone());
                 }
                 func.call::<()>(call)?;
@@ -309,10 +409,32 @@ impl Sim {
         *self.clock.lock().unwrap()
     }
     pub fn advance_time(&self, seconds: f64) {
-        timers::advance(&self.lua, &self.clock, &self.logs, seconds);
+        let _ = dispatch(&self.lua, &self.ctx, || {
+            timers::advance(&self.lua, &self.clock, &self.logs, seconds);
+            Ok(())
+        });
     }
     pub fn lua(&self) -> &Lua {
         &self.lua
+    }
+    /// The install context: logs, clock, trace, budget and flush queue.
+    pub fn ctx(&self) -> &Ctx {
+        &self.ctx
+    }
+    /// The region tree through the core's snapshot view (generation 0; a
+    /// [`Session`] stamps its own).
+    pub fn snapshot(&self) -> SimResult<Snapshot> {
+        let model = frames::LuaTableModel {
+            generation: 0,
+            ui_size: snapshot::DEFAULT_UI_SIZE,
+        };
+        snapshot::take(
+            &self.lua,
+            &self.ctx,
+            &model,
+            Generation::default(),
+            snapshot::DEFAULT_UI_SIZE,
+        )
     }
 }
 
@@ -390,6 +512,30 @@ mod tests {
         sim.eval("print(GetTime())").unwrap();
         assert_eq!(sim.prints(), vec!["2.5".to_string()]);
         assert_eq!(sim.now(), 2.5);
+    }
+
+    #[test]
+    fn runaway_handler_is_a_logged_error_not_a_hang() {
+        let sim = Sim::new().unwrap();
+        sim.ctx().set_budget(50);
+        sim.eval(
+            r#"
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_LOGIN")
+            f:SetScript("OnEvent", function() while true do end end)
+            "#,
+        )
+        .unwrap();
+        let err = sim.fire("PLAYER_LOGIN", vec![]).unwrap_err();
+        assert!(err.to_string().contains(core::BUDGET_ERROR), "{err}");
+        assert!(
+            sim.logs().iter().any(|l| l.contains(core::BUDGET_ERROR)),
+            "{:?}",
+            sim.logs()
+        );
+        // The session keeps working afterwards.
+        sim.eval("print('still alive')").unwrap();
+        assert_eq!(sim.prints(), ["still alive"]);
     }
 
     #[test]

@@ -209,6 +209,7 @@ pub fn print_block(block: &LBlock) -> Printed {
         out: String::new(),
         line: 1,
         lines: Vec::new(),
+        embedded: Vec::new(),
     };
     p.block(block, 0);
     Printed {
@@ -224,6 +225,7 @@ pub fn print_expr(e: &LExpr) -> String {
         out: String::new(),
         line: 1,
         lines: Vec::new(),
+        embedded: Vec::new(),
     };
     p.expr(e, 0, 0)
 }
@@ -233,12 +235,26 @@ struct Printer {
     out: String,
     line: u32,
     lines: Vec<(u32, Span)>,
+    embedded: Vec<(String, Vec<(u32, Span)>)>,
 }
 
 impl Printer {
     fn line(&mut self, indent: usize, text: &str, span: &Option<Span>) {
-        if let Some(s) = span {
-            self.lines.push((self.line, s.clone()));
+        for offset in 0..=text.matches('\n').count() as u32 {
+            if let Some(s) = span {
+                self.lines.push((self.line + offset, s.clone()));
+            }
+        }
+        let mut cursor = 0;
+        for (fragment, lines) in std::mem::take(&mut self.embedded) {
+            let offset = text[cursor..]
+                .find(&fragment)
+                .expect("embedded function in emitted expression")
+                + cursor;
+            let base = self.line + text[..offset].matches('\n').count() as u32;
+            self.lines
+                .extend(lines.into_iter().map(|(line, span)| (base + line, span)));
+            cursor = offset + fragment.len();
         }
         if !text.is_empty() {
             for _ in 0..indent {
@@ -323,15 +339,24 @@ impl Printer {
                         out: String::new(),
                         line: 0,
                         lines: Vec::new(),
+                        embedded: Vec::new(),
                     };
                     inner.stmt(only, 0);
                     let body_text = inner.out.trim_end().to_string();
+                    let pending = self.embedded.len();
                     let c = self.scalar_expr(cond, indent);
                     let text = format!("if {c} then {body_text} end");
-                    if !body_text.contains('\n') && text.len() + indent * 2 <= 100 {
+                    if !body_text.contains('\n')
+                        && text.len() + indent * 2 <= 100
+                        && (c.contains('\n') || only.span == s.span)
+                    {
+                        let generated = self.line + c.matches('\n').count() as u32;
                         self.line(indent, &text, sp);
+                        self.lines
+                            .extend(inner.lines.into_iter().map(|(_, span)| (generated, span)));
                         return;
                     }
+                    self.embedded.truncate(pending);
                 }
                 for (i, (cond, body)) in arms.iter().enumerate() {
                     let kw = if i == 0 { "if" } else { "elseif" };
@@ -549,13 +574,13 @@ impl Printer {
             }
             LExpr::Function(f) => {
                 let head = self.func_head(f, indent);
-                // Known simplification: lines inside a function expression
-                // map to the statement that holds it in the source map.
+                // Carry body positions with the expression until its containing line is emitted.
                 let mut sub = Printer {
                     column: 0,
                     out: String::new(),
                     line: 0,
                     lines: Vec::new(),
+                    embedded: Vec::new(),
                 };
                 sub.block(&f.body, indent + 1);
                 let mut text = format!("function{head}\n{}", sub.out);
@@ -563,6 +588,13 @@ impl Printer {
                     text.push_str("  ");
                 }
                 text.push_str("end");
+                self.embedded.push((
+                    text.clone(),
+                    sub.lines
+                        .into_iter()
+                        .map(|(line, span)| (line + 1, span))
+                        .collect(),
+                ));
                 text
             }
             LExpr::Table(fields) => {

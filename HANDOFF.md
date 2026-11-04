@@ -86,6 +86,10 @@ Each is recorded in the named document; all can be reversed.
 
 ## Next
 
+0. Round 7 (F, G, K) is running. Then round 8, the simulator core
+   (`docs/SIMULATOR.md` is the architecture, reviewed by Sol;
+   `docs/WORK-PACKAGES.md` has the S0-S3 briefs and the outline of
+   `selu test`, Selu Studio and the debugger in rounds 9 and 10).
 1. Less runtime scaffolding (proof gap 8); the error runtime is about 45
    lines per file that uses it and could live once in the shared namespace; restriction and combat
    checks and secret values (DESIGN.md section 3); `selu probe` for

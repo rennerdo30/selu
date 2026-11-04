@@ -11,6 +11,7 @@ function methods:GetWidth() return self.__width or 0 end
 function methods:GetHeight() return self.__height or 0 end
 function methods:GetParent() return self.__parent end
 function methods:SetText(text)
+  if issecretvalue and issecretvalue(text) then self.__text = text; return end
   if text == nil then self.__text = nil else self.__text = tostring(text) end
 end
 function methods:GetText() return self.__text end
@@ -26,16 +27,43 @@ function methods:GetPoint(index)
   if p then return p[1], p[2], p[3], p[4], p[5] end
 end
 function methods:GetNumPoints() return #self.__points end
+-- Stored for snapshots only (frames/mod.rs resolves a basic layout from
+-- them until S1's arena replaces this model).
+function methods:ClearAllPoints() self.__points = {} end
+function methods:SetAllPoints(relative)
+  self.__points = {
+    {'TOPLEFT', relative, 'TOPLEFT', 0, 0},
+    {'BOTTOMRIGHT', relative, 'BOTTOMRIGHT', 0, 0},
+  }
+end
+function methods:SetColorTexture(r, g, b, a)
+  self.__color = {r or 0, g or 0, b or 0, a or 1}; self.__texture = nil
+end
+function methods:SetTexture(texture) self.__texture = texture; self.__color = nil end
+function methods:GetTexture() return self.__texture end
+function methods:SetAlpha(alpha) self.__alpha = alpha end
+function methods:GetAlpha() return self.__alpha or 1 end
+function methods:Show() self.__shown = true end
+function methods:Hide() self.__shown = false end
+function methods:SetShown(shown) if shown then self:Show() else self:Hide() end end
+function methods:IsShown() return self.__shown ~= false end
 local function attach(object)
   object.__points = {}
   for name, method in pairs(methods) do object[name] = method end
   return object
 end
-function methods:CreateTexture(name)
-  return attach({ __kind = 'Texture', __parent = self, __name = name })
+-- Textures and font strings, for snapshots (frames are in __selu_sim_frames).
+__selu_sim_regions = {}
+local function child(kind, parent, name, layer)
+  local object = attach({ __kind = kind, __parent = parent, __name = name, __layer = layer })
+  __selu_sim_regions[#__selu_sim_regions + 1] = object
+  return object
 end
-function methods:CreateFontString(name)
-  return attach({ __kind = 'FontString', __parent = self, __name = name })
+function methods:CreateTexture(name, layer)
+  return child('Texture', self, name, layer)
+end
+function methods:CreateFontString(name, layer)
+  return child('FontString', self, name, layer)
 end
 return attach
 "#,
@@ -46,6 +74,44 @@ return attach
 pub(crate) fn attach(lua: &Lua, frame: &Table) -> mlua::Result<()> {
     lua.named_registry_value::<Function>("selu.regions.attach")?
         .call::<()>(frame.clone())
+}
+
+/// Only backdrop storage is modeled; no textures, borders or XML scripts.
+pub(crate) fn templates(lua: &Lua, frame: &Table, templates: Option<&str>) -> mlua::Result<()> {
+    if templates.is_some_and(|s| s.split(',').any(|t| t.trim() == "BackdropTemplate")) {
+        let install: Function = lua
+            .load(
+                r#"
+return function(frame)
+  function frame:SetBackdrop(info)
+    self.__backdrop = info
+    self.__backdropColor = info and {1, 1, 1, 1} or nil
+  end
+  function frame:GetBackdrop()
+    if not self.__backdrop then return nil end
+    local seen = {}
+    local function copy(value)
+      if type(value) ~= 'table' then return value end
+      if seen[value] then return seen[value] end
+      local result = {}; seen[value] = result
+      for key, child in pairs(value) do result[key] = copy(child) end
+      return result
+    end
+    return copy(self.__backdrop)
+  end
+  function frame:SetBackdropColor(r, g, b, a)
+    if self.__backdrop then self.__backdropColor = {r, g, b, a or 1} end
+  end
+  function frame:GetBackdropColor()
+    if self.__backdropColor then return unpack(self.__backdropColor) end
+  end
+end
+"#,
+            )
+            .eval()?;
+        install.call::<()>(frame.clone())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

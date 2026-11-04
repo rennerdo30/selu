@@ -6,3 +6,7 @@ edition.workspace = true
 
 [dependencies]
 mlua = { version = "0.10", features = ["lua51", "vendored"] }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

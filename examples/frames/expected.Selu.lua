@@ -20,3 +20,11 @@ do
   end
   __selu_ns.__selu_events = __selu_on
 end
+-- Selu: secret-read
+do
+  local function __selu_read(value)
+    if canaccessvalue and not canaccessvalue(value) then return nil end
+    return value
+  end
+  __selu_ns.__selu_read = __selu_read
+end

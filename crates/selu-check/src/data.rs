@@ -337,6 +337,7 @@ impl Ctx<'_> {
                 .with_help("check the method arguments"),
             );
         }
+        self.restriction_data_call(callee, &params, &ret);
         for (arg, want) in args.iter().zip(&params) {
             let got = self.value(arg);
             if !got.assignable_to(want) {

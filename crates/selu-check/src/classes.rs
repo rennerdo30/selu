@@ -267,7 +267,8 @@ impl Ctx<'_> {
         t: &TypeExpr,
         aliases: &HashMap<String, Type>,
     ) -> Type {
-        let mut names = self.class_type_names();
+        let mut names = self.frame_type_names();
+        names.extend(self.class_type_names());
         names.extend(aliases.clone());
         types::resolve_classes(t, self.out, &names)
     }

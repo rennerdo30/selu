@@ -15,9 +15,12 @@ selu-syntax = { path = "../selu-syntax" }
 selu-manifest = { path = "../selu-manifest" }
 selu-check = { path = "../selu-check" }
 selu-lower = { path = "../selu-lower" }
+selu-test = { path = "../selu-test" }
+selu-fmt = { path = "../selu-fmt" }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
 selu-sim = { path = "../selu-sim" }
+selu-sourcemap = { path = "../selu-sourcemap" }

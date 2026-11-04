@@ -3,7 +3,9 @@ local __selu_on = __selu_ns.__selu_events
 local __selu_type = type
 __selu_ns["main"] = {}
 local function score(value)
-  if __selu_type(value) == "number" then return value end
+  if __selu_type(value) == "number" then
+    return value
+  end
   return 0
 end
 __selu_on("PLAYER_LOGIN", function()

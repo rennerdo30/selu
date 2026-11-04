@@ -227,3 +227,140 @@ end"#,
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), ["7"]);
 }
+#[test]
+fn protected_queue_is_one_registry_piece_with_cross_module_fifo() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut m =
+        selu_manifest::load_manifest(&root.join("manifests/retail/12.1.5.70391.json")).unwrap();
+    for name in [
+        "RestrictedOne",
+        "RestrictedTwo",
+        "RestrictedThree",
+        "RestrictedFour",
+    ] {
+        let mut f = m.function("GetTime").unwrap().clone();
+        f.name = name.into();
+        let signature = f.signature.as_mut().unwrap();
+        signature.name = name.into();
+        signature.arguments.clear();
+        signature.returns.clear();
+        signature
+            .attributes
+            .insert("IsProtectedFunction".into(), true.into());
+        m.functions.push(f);
+    }
+    let mut files: Vec<_> = [
+        "RestrictedOne(); RestrictedTwo(); global again = () => { RestrictedFour(); };",
+        "RestrictedThree(); on PLAYER_REGEN_ENABLED() { print(9); }",
+    ]
+    .iter()
+    .map(|s| {
+        let p = selu_syntax::parse("queue.selu", s).unwrap();
+        let c = selu_check::check_program(&p, &m);
+        assert!(!c.has_errors(), "{:?}", c.diagnostics);
+        selu_lower::lower(&p, &m, &c.types)
+    })
+    .collect();
+    let runtime = selu_lower::runtime::share(&mut files).expect("queue belongs in shared runtime");
+    assert_eq!(runtime.matches("local pending = {}").count(), 1);
+    assert_eq!(
+        runtime
+            .matches("RegisterEvent(\"PLAYER_REGEN_ENABLED\")")
+            .count(),
+        1
+    );
+    for module in &files {
+        assert!(!module.lua.contains("local pending = {}"));
+    }
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval(
+        r#"combat = true
+registrations = 0
+errors = 0
+local base = CreateFrame
+CreateFrame = function(...)
+  local frame = base(...)
+  local register = frame.RegisterEvent
+  frame.RegisterEvent = function(self, event)
+    if event == "PLAYER_REGEN_ENABLED" then registrations = registrations + 1 end
+    return register(self, event)
+  end
+  return frame
+end
+InCombatLockdown = function() return combat end
+geterrorhandler = function() return function(_) errors = (errors or 0) + 1 end end
+RestrictedOne = function() print(1); combat = true; again() end
+RestrictedTwo = function() print(2); error("isolated") end
+RestrictedThree = function() print(3) end
+RestrictedFour = function() print(4) end"#,
+    )
+    .unwrap();
+    sim.load_addon(
+        "Queue",
+        &[
+            ("Selu.lua".into(), runtime),
+            ("a.lua".into(), files[0].lua.clone()),
+            ("b.lua".into(), files[1].lua.clone()),
+        ],
+    )
+    .unwrap();
+    sim.eval("assert(registrations == 2, tostring(registrations)); combat = false")
+        .unwrap();
+    sim.fire("PLAYER_REGEN_ENABLED", vec![]).unwrap();
+    assert_eq!(sim.prints(), ["1", "9"]);
+    sim.eval("combat = false").unwrap();
+    sim.fire("PLAYER_REGEN_ENABLED", vec![]).unwrap();
+    assert_eq!(sim.prints(), ["1", "9", "2", "3", "4", "9"]);
+    sim.eval("assert(errors == 1, tostring(errors))").unwrap();
+}
+
+#[test]
+fn shared_queue_debug_toggle_preserves_module_maps_and_line_counts() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = std::env::temp_dir().join(format!("selu-k-debug-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/main.selu"),
+        "on PLAYER_LOGIN() { UIParent.Hide(); }",
+    )
+    .unwrap();
+    let mut outputs = Vec::new();
+    for debug in [false, true] {
+        std::fs::write(
+            dir.join("selu.toml"),
+            format!(
+                "[addon]\nname = \"QueueDebug\"\ntargets = [\"retail\"]\n[build]\ndebug = {debug}\n"
+            ),
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_selu"))
+            .arg("build")
+            .arg(&dir)
+            .arg("--manifest-dir")
+            .arg(root.join("manifests"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        outputs.push((
+            std::fs::read_to_string(dir.join("dist/QueueDebug/Selu.lua")).unwrap(),
+            std::fs::read_to_string(dir.join("dist/.selu/QueueDebug/main.lua.map")).unwrap(),
+        ));
+        assert!(!dir.join("dist/.selu/QueueDebug/Selu.lua.map").exists());
+    }
+    assert!(
+        outputs[0]
+            .0
+            .contains("if false then print(\"Selu: deferred protected call\") end")
+    );
+    assert!(
+        outputs[1]
+            .0
+            .contains("if true then print(\"Selu: deferred protected call\") end")
+    );
+    assert_eq!(outputs[0].0.lines().count(), outputs[1].0.lines().count());
+    assert_eq!(outputs[0].1, outputs[1].1);
+}

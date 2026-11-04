@@ -1,0 +1,3 @@
+[addon]
+name = "SourceMaps"
+targets = ["forever@1.0"]
