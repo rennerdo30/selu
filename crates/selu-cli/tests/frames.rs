@@ -93,7 +93,7 @@ fn named_templates_and_simulator_backdrop_storage() {
     let mut other = m.clone();
     other.flavour = "without-tooltip".into();
     other.templates.retain(|d| d.name != "GameTooltipTemplate");
-    let d = check("GameTooltip.OnLoadGameTooltip();", &[m, other], false);
+    let d = check("GameTooltip.RefreshDataNextUpdate();", &[m, other], false);
     assert!(
         d.diagnostics.iter().any(|d| d.code == "SELU0581"),
         "{:?}",
