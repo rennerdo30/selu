@@ -1025,7 +1025,7 @@ impl Studio {
                         "World of Warcraft is already running: type /reload in game to load the new version",
                     );
                 } else {
-                    match crate::game::launch(client, self.game_settings.launch_direct) {
+                    match crate::game::launch(client, self.game_settings.launch) {
                         Ok(how) => self.line(LineKind::Build, how),
                         Err(e) => self.line(LineKind::Error, e),
                     }
@@ -1199,16 +1199,22 @@ impl Studio {
                     }
                 });
                 ui.add_space(6.0);
-                let mut via_bnet = !self.game_settings.launch_direct;
-                if ui
-                    .checkbox(&mut via_bnet, "Start through Battle.net (keeps you logged in)")
-                    .on_hover_text("Otherwise Studio starts the game's executable directly")
-                    .changed()
-                {
-                    self.game_settings.launch_direct = !via_bnet;
-                    changed = true;
+                ui.label(egui::RichText::new("Start the game").strong());
+                for mode in [
+                    crate::game::LaunchMode::Battlenet,
+                    crate::game::LaunchMode::BattlenetPage,
+                    crate::game::LaunchMode::Direct,
+                ] {
+                    if ui
+                        .radio_value(&mut self.game_settings.launch, mode, mode.label())
+                        .changed()
+                    {
+                        changed = true;
+                    }
                 }
-                if via_bnet && crate::game::battlenet_exe().is_none() {
+                if self.game_settings.launch != crate::game::LaunchMode::Direct
+                    && crate::game::battlenet_exe().is_none()
+                {
                     ui.label(
                         egui::RichText::new("Battle.net wasn't found; the game will be started directly.")
                             .small()

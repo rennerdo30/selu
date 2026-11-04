@@ -12,15 +12,17 @@ use std::sync::Arc;
 /// Colours used across the app.
 pub mod palette {
     use eframe::egui::Color32;
-    pub const BG: Color32 = Color32::from_rgb(0x17, 0x18, 0x1c);
+    // Text colours meet WCAG AA (4.5:1) on every background below; plain
+    // text is around 14:1.
+    pub const BG: Color32 = Color32::from_rgb(0x15, 0x16, 0x1a);
     pub const PANEL: Color32 = Color32::from_rgb(0x1e, 0x1f, 0x24);
     pub const SIDEBAR: Color32 = Color32::from_rgb(0x1a, 0x1b, 0x20);
     pub const RAISED: Color32 = Color32::from_rgb(0x26, 0x28, 0x2e);
     pub const HOVER: Color32 = Color32::from_rgb(0x2c, 0x2e, 0x36);
     pub const BORDER: Color32 = Color32::from_rgb(0x2a, 0x2c, 0x33);
-    pub const TEXT: Color32 = Color32::from_rgb(0xd6, 0xd8, 0xde);
-    pub const MUTED: Color32 = Color32::from_rgb(0x8b, 0x90, 0x9c);
-    pub const FAINT: Color32 = Color32::from_rgb(0x5c, 0x61, 0x6c);
+    pub const TEXT: Color32 = Color32::from_rgb(0xec, 0xee, 0xf3);
+    pub const MUTED: Color32 = Color32::from_rgb(0xb4, 0xb9, 0xc4);
+    pub const FAINT: Color32 = Color32::from_rgb(0x8f, 0x95, 0xa1);
     pub const ACCENT: Color32 = Color32::from_rgb(0x8b, 0x6c, 0xff);
     pub const ACCENT_SOFT: Color32 = Color32::from_rgb(0x3a, 0x31, 0x6b);
     pub const ERROR: Color32 = Color32::from_rgb(0xf2, 0x6d, 0x6d);
@@ -182,7 +184,7 @@ pub fn install(ctx: &egui::Context) {
     v.striped = false;
     let w = &mut v.widgets;
     for (state, fill, text) in [
-        (&mut w.noninteractive, PANEL, MUTED),
+        (&mut w.noninteractive, PANEL, TEXT),
         (&mut w.inactive, RAISED, TEXT),
         (&mut w.hovered, HOVER, Color32::WHITE),
         (&mut w.active, ACCENT_SOFT, Color32::WHITE),

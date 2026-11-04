@@ -69,7 +69,7 @@ fn main() -> ExitCode {
                             .and_then(|e| e.file_name())
                             .map_or_else(|| "-".to_string(), |n| n.to_string_lossy().into_owned()),
                         game::product_code(&c.folder_name())
-                            .map_or_else(|| "-".to_string(), |p| format!("battlenet://game/{p}")),
+                            .map_or_else(|| "-".to_string(), |p| format!("launch {p}")),
                         c.folder.display()
                     );
                 }

@@ -68,9 +68,9 @@ pub fn flavour_of(folder: &str) -> Option<&'static str> {
     }
 }
 
-/// Battle.net's product code for a client folder (`_retail_` -> `wow`,
-/// `_classic_era_` -> `wow_classic_era`), as in the install's `.build.info`
-/// and Battle.net's `battlenet://game/<code>` launch addresses.
+/// Battle.net's game id for a client folder, as Battle.net lists its
+/// installed games (`_retail_` -> `wow`, `_classic_era_` -> `wow_classic_era`,
+/// `_anniversary_` -> `wow_classic_anniversary`).
 pub fn product_code(folder: &str) -> Option<String> {
     let f = folder.trim_matches('_').to_ascii_lowercase();
     if f.is_empty() {
@@ -78,12 +78,39 @@ pub fn product_code(folder: &str) -> Option<String> {
     }
     Some(match f.as_str() {
         "retail" => "wow".into(),
+        // Not in Battle.net's list on the owner's PC; the install's
+        // .build.info names the product `wowf`.
         "forever" => "wowf".into(),
         "ptr" => "wowt".into(),
         "xptr" => "wowxptr".into(),
         "beta" => "wow_beta".into(),
+        "anniversary" => "wow_classic_anniversary".into(),
         other => format!("wow_{other}"),
     })
+}
+
+/// How Run in Game starts the client.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LaunchMode {
+    /// `Battle.net.exe --exec="launch <id>"`: Battle.net starts the game,
+    /// logged in.
+    #[default]
+    Battlenet,
+    /// `battlenet://game/<id>`: only selects the game in Battle.net.
+    BattlenetPage,
+    /// The game's executable, without Battle.net's login.
+    Direct,
+}
+
+impl LaunchMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            LaunchMode::Battlenet => "Start the game through Battle.net (logged in)",
+            LaunchMode::BattlenetPage => "Only open the game in Battle.net",
+            LaunchMode::Direct => "Start the game's executable directly (no login)",
+        }
+    }
 }
 
 /// Battle.net's executable, from its registered `battlenet://` handler
@@ -129,10 +156,9 @@ pub struct Settings {
     /// The client last used for each flavour: flavour -> client folder.
     #[serde(default)]
     pub chosen: BTreeMap<String, String>,
-    /// Start the game's executable directly instead of through Battle.net
-    /// (which keeps the login).
+    /// How Run in Game starts the client.
     #[serde(default)]
-    pub launch_direct: bool,
+    pub launch: LaunchMode,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -373,17 +399,23 @@ pub fn is_running(client: &Client) -> bool {
         .unwrap_or(false)
 }
 
-/// Start the client: through Battle.net (logged in) unless `direct`. The
-/// game opens its own window; Studio doesn't wait. Returns how it started.
-pub fn launch(client: &Client, direct: bool) -> Result<String, String> {
-    if !direct
-        && let (Some(code), Some(bnet)) = (product_code(&client.folder_name()), battlenet_exe())
+/// Start the client the chosen way. The game opens its own window; Studio
+/// doesn't wait. Returns what was done, for the console.
+pub fn launch(client: &Client, mode: LaunchMode) -> Result<String, String> {
+    if mode != LaunchMode::Direct
+        && let (Some(id), Some(bnet)) = (product_code(&client.folder_name()), battlenet_exe())
     {
-        let uri = format!("battlenet://game/{code}");
-        return std::process::Command::new(&bnet)
-            .arg(format!("--uri={uri}"))
+        let mut cmd = std::process::Command::new(&bnet);
+        let what = if mode == LaunchMode::Battlenet {
+            cmd.arg(format!("--exec=launch {id}"));
+            format!("asked Battle.net to start {} (launch {id})", client.label())
+        } else {
+            cmd.arg(format!("--uri=battlenet://game/{id}"));
+            format!("opened {} in Battle.net", client.label())
+        };
+        return cmd
             .spawn()
-            .map(|_| format!("asked Battle.net to start {} ({uri})", client.label()))
+            .map(|_| what)
             .map_err(|e| format!("cannot start Battle.net ({}): {e}", bnet.display()));
     }
     launch_exe(client).map(|()| format!("started {} directly", client.label()))
@@ -433,7 +465,7 @@ mod tests {
 
     #[test]
     fn product_codes_from_folder_names() {
-        // As in the install's .build.info `Product` column.
+        // As Battle.net lists its installed games.
         assert_eq!(product_code("_retail_").as_deref(), Some("wow"));
         assert_eq!(product_code("_classic_").as_deref(), Some("wow_classic"));
         assert_eq!(
@@ -442,7 +474,7 @@ mod tests {
         );
         assert_eq!(
             product_code("_anniversary_").as_deref(),
-            Some("wow_anniversary")
+            Some("wow_classic_anniversary")
         );
         assert_eq!(product_code("_forever_").as_deref(), Some("wowf"));
         assert_eq!(product_code("_ptr_").as_deref(), Some("wowt"));
