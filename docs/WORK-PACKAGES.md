@@ -981,3 +981,154 @@ writing, the examples' `expected.lua` files.
 
 F and G in either order, K last (it rebases and regenerates every
 `expected.lua`, including F's and G's new examples).
+
+## Round 8: simulator core (groundwork for `selu test` and Studio)
+
+Architecture and decisions: `docs/SIMULATOR.md` (read it first; it is part
+of every brief below). Owner, 2026-11-04: "make the groundwork for the
+simulator, studio and debug commands so Sol can take over". Starts after
+round 7 is merged. "How every package works" applies, with one change: these
+packages add at least one test addon under `crates/selu-sim/tests/addons/`
+(plain Lua, written by hand like a real addon) instead of an `examples/`
+entry, unless the package also adds language-facing features.
+
+| Package | Owned files | Codes |
+|---|---|---|
+| S0 core contract (first, alone) | `crates/selu-sim/src/core.rs` (new), `crates/selu-sim/src/lib.rs`, its tests | none |
+| S1 frames and layout | `crates/selu-sim/src/frames/` (new: `mod.rs`, `arena.rs`, `layout.rs`, `widgets.rs`, `input.rs`), its tests | none |
+| S2 sessions and world | `crates/selu-sim/src/session.rs`, `loader.rs`, `world.rs`, `trace.rs`, `snapshot.rs` (new), its tests | none |
+| S3 source maps | `crates/selu-sourcemap/` (new crate), `crates/selu-cli/tests/sourcemap.rs`, `docs/lang/output.md` (section "Source maps") | none |
+
+### S0: core contract and wiring
+
+SIMULATOR.md decisions 5, 6, 15, 16, 17 and 18. Small and first, so S1 and
+S2 can then work in parallel without touching the same files. Acceptance:
+
+1. `core.rs`: the types and traits S1 and S2 share, with doc comments:
+   `RegionId` (generational), the install context handed to each module
+   (Lua handle, shared state, logging), the script-dispatch entry point with
+   its flush points (decision 16), the layout-resolution call, the immutable
+   snapshot view types (decision 8, serde), the trace record type, the
+   session generation number, and the instruction-budget count hook
+   (decision 17), installed once.
+2. `lib.rs` wired so that `Sim` delegates to a `Session` skeleton, and the
+   frames module (still the current Lua region model behind the new
+   `RegionId` interface, so nothing changes yet) and the world module plug
+   in through `core.rs`. The files S1 and S2 will own exist as empty modules
+   with their owner noted at the top.
+3. A runaway-loop test (hitting the budget is a logged error, not a hang),
+   and the existing `Sim` API, every example and the proof test pass
+   unchanged.
+
+Shared edits: none outside `selu-sim`.
+
+### S1: frames and layout in Rust
+
+SIMULATOR.md decisions 3 and 4. Acceptance:
+
+1. The region arena: Frame, Button, CheckButton, EditBox, StatusBar, Slider,
+   ScrollFrame, Cooldown, Texture, FontString, MaskTexture (SPEC 8), created
+   by `CreateFrame`/`CreateTexture`/`CreateFontString`, parented, named
+   (named frames become globals; `$parent` names resolve), with per-object
+   Lua tables for addon fields. The current Lua region model
+   (`regions.rs`) is replaced; every existing test and example keeps
+   passing unchanged.
+2. Methods per widget type from the manifest's `widgets` and `inherits`;
+   modelled methods implemented in Rust; the rest log `not simulated` once
+   and return the documented empty value. List which methods are modelled.
+3. Layout as decision 4: points, `SetAllPoints`, `ClearAllPoints`, size from
+   two anchors, scale and effective scale, strata, levels, layers and
+   sublevels, alpha (effective alpha), shown/visible, `IsVisible`,
+   `GetRect`/`GetLeft`/..., anchor cycles logged. Tested against hand-worked
+   numbers, not against the implementation.
+4. Scripts: `SetScript`, `GetScript`, `HookScript`, `HasScript` for the
+   widget's documented script types; `OnShow`/`OnHide`/`OnSizeChanged` fired
+   at the right moments; input `click`, `hover` (`OnEnter`/`OnLeave`),
+   `drag` (`OnDragStart`/`OnDragStop`, `StartMoving` changing points) driven
+   from Rust with hit testing in draw order and `EnableMouse`.
+5. Implements S0's snapshot view and layout-resolution contract from the
+   arena; region identity, fields and lifetime as decision 15; layout
+   callback timing as decision 16; cursor, capture, focus and text
+   measurement as decision 19.
+
+Shared edits: replacing `regions.rs`; the timers module's `OnUpdate`
+visibility check (use the arena). Not `lib.rs` (S0 wired it); a needed
+contract change goes to the parent first.
+
+### S2: sessions, loader, world, trace and snapshots
+
+SIMULATOR.md decisions 1, 5, 6 (the API shape; the worker thread itself is
+Studio's), 7, 8 and 13. Acceptance:
+
+1. `Session` with `SessionConfig` and the methods in decision 5 except
+   input (S1) and debugging (round 10). `Sim` becomes a thin wrapper over
+   `Session`; existing callers keep compiling.
+2. The `.toc` loader for any addon folder, the boot sequence, several addons
+   in one session, `## SavedVariables(PerCharacter)` loaded before
+   `ADDON_LOADED` and written by `reload()`, which restarts the VM (test
+   that a migration runs after a reload; reuse `saved.rs`).
+3. World state for SPEC 8's units (`player`, `target`, `focus`, `party1-4`,
+   `raid1-40`, `pet`: name, class, level, health, power, auras, in combat),
+   money and a simple bag model, each setter firing the client's events
+   (`UNIT_HEALTH`, `UNIT_AURA`, `PLAYER_MONEY`, `BAG_UPDATE`...) with
+   payloads from the manifest. The `Unit*` API reads it. Secret values and
+   combat from round 7 move into `world.rs` if they aren't there already.
+4. The trace ring buffer and snapshots through S0's snapshot view. S2 may
+   develop against a fake arena, but acceptance needs a real non-empty tree:
+   if S1 isn't merged yet, the parent merges S1 first and S2 adds the
+   integration test after rebasing.
+4a. Loading scope, flavour `.toc` files, dependencies, load-on-demand and
+   the XML "not supported yet" error as decision 18; saved-data namespacing
+   and `run_until_idle` bounds as decision 20; test replay data as
+   decision 22.
+5. Determinism: seeded `math.random`, simulated `time()`/`date()`.
+6. A plain Lua test addon under `crates/selu-sim/tests/addons/` that loads
+   through its `.toc`, uses saved data across a reload, reacts to unit
+   events and is checked through the trace.
+
+Shared edits: `saved.rs`, `wow_api.rs`; the proof test and the CLI's tests
+only if the wrapper can't keep them unchanged. Not `lib.rs` (S0 wired it).
+
+### S3: source maps
+
+SIMULATOR.md decision 9. Acceptance:
+
+1. `crates/selu-sourcemap`: the format of decision 23 (documented in `docs/lang/output.md`),
+   writer and reader, lookups both ways (generated line to source position,
+   source line to generated lines), with unit tests.
+2. The lowering records the source span for every emitted statement; the
+   printer records generated lines; `selu build` writes `Name.lua.map`
+   beside every generated file (not in the `.toc`). Runtime-only lines
+   (shared runtime, preludes) map to no source.
+3. A test that for every example each `.selu` statement line maps to a
+   generated line that contains the corresponding code, and that a runtime
+   error in generated Lua maps back to the right `.selu` line.
+4. The error panel's need: a function `map_lua_error(message, maps)` that
+   rewrites `[string "Name.lua"]:42:` or `Name.lua:42:` positions into
+   `file.selu:7:` (used by `selu test` and Studio later).
+
+Shared edits: the lowering's statement emission and the printer
+(`selu-lower/src/lib.rs`, `lua.rs`), the CLI's file writing, the workspace
+`Cargo.toml`, the examples harness (ignore `.map` files when comparing).
+
+### Merge order (round 8)
+
+S0 first. Then S1 before S2; S3 at any time (it may start alongside S0,
+since it doesn't touch `selu-sim`).
+
+## Round 9 and 10 (outline, briefed after round 8)
+
+- **S4 `selu test`** (SIMULATOR.md decision 11): `*.test.selu`, `describe`,
+  `test`, `beforeEach`, `expect` matchers from SPEC 8, `sim.*` helpers
+  over the Session API, spies, human and `--json` output, source-mapped
+  failures, exit codes. Codes `SELU0620`-`0639`.
+- **S5 Studio shell** (decisions 2, 6, 12): crate `selu-debug`, binary
+  `selu-studio`; `selu debug` builds and launches it; game screen from
+  snapshots, frame inspector with anchors drawn, event timeline with
+  scrubbing, console, world panel, rebuild on save. Manual check list plus
+  snapshot-level tests (no screenshot tests in v1).
+- **S6 debugger** (decision 10): breakpoints in `.selu` and `.lua`, stepping,
+  stack, locals, console in the paused frame, "fire this event now" while
+  paused.
+- **S7 Studio panels**: saved data view with "/reload", target switch, error
+  panel with links, "not simulated" panel.
