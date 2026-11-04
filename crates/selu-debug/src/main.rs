@@ -78,7 +78,14 @@ fn main() -> ExitCode {
             viewport: eframe::egui::ViewportBuilder::default()
                 .with_title("Selu Studio")
                 .with_inner_size([1600.0, 980.0])
-                .with_min_inner_size([900.0, 560.0]),
+                .with_min_inner_size([900.0, 560.0])
+                // Studio draws its own title bar with the window buttons.
+                .with_decorations(false)
+                .with_resizable(true)
+                .with_icon(
+                    eframe::icon_data::from_png_bytes(theme::LOGO_PNG)
+                        .expect("the bundled logo is a valid PNG"),
+                ),
             ..Default::default()
         };
         return match eframe::run_native(

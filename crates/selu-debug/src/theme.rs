@@ -47,12 +47,18 @@ pub mod icon {
     pub const ERROR: &str = "\u{EA39}";
     pub const WARNING: &str = "\u{E7BA}";
     pub const CODE: &str = "\u{E943}";
-    pub const ADD: &str = "\u{E710}";
     pub const CLOSE: &str = "\u{E711}";
     pub const CHEVRON_RIGHT: &str = "\u{E76C}";
     pub const CHEVRON_DOWN: &str = "\u{E70D}";
     pub const UP: &str = "\u{E70E}";
     pub const DOWN: &str = "\u{E70D}";
+    pub const NEW_FILE: &str = "\u{E8A5}";
+    pub const NEW_FOLDER: &str = "\u{E8F4}";
+    pub const FOLDER: &str = "\u{E8B7}";
+    pub const WIN_MINIMIZE: &str = "\u{E921}";
+    pub const WIN_MAXIMIZE: &str = "\u{E922}";
+    pub const WIN_RESTORE: &str = "\u{E923}";
+    pub const WIN_CLOSE: &str = "\u{E8BB}";
 }
 
 /// A font id for icons at `size`.
@@ -212,6 +218,18 @@ pub fn install(ctx: &egui::Context) {
         ]
         .into();
     });
+}
+
+/// The Selu logo (docs/logo/selu.svg rendered at 256 px).
+pub const LOGO_PNG: &[u8] = include_bytes!("../assets/selu-256.png");
+
+/// The logo as an egui image, for the title bar.
+pub fn logo_image() -> Option<egui::ColorImage> {
+    let icon = eframe::icon_data::from_png_bytes(LOGO_PNG).ok()?;
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [icon.width as usize, icon.height as usize],
+        &icon.rgba,
+    ))
 }
 
 /// A thin horizontal rule in the border colour.

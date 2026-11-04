@@ -69,8 +69,12 @@ pub struct Editor {
     collapsed: BTreeSet<String>,
     /// 1-based line and column of the cursor, for the status bar.
     cursor_pos: Option<(usize, usize)>,
-    /// Name being typed for a new file.
-    new_file: Option<String>,
+    /// Inline new-file, new-folder or rename field in the Explorer.
+    edit: Option<view::Edit>,
+    /// Asking before moving this path to the Recycle Bin.
+    confirm_delete: Option<String>,
+    /// The Explorer asked for Project Settings.
+    settings_request: bool,
     /// Byte range to select in the active buffer (find).
     jump_select: Option<std::ops::Range<usize>>,
 }
@@ -83,20 +87,35 @@ fn list_files(project: &Path) -> Vec<String> {
         let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         entries.sort();
         for path in entries {
-            if path.is_dir() {
-                walk(root, &path, out);
-            } else if path.extension().is_some_and(|e| e == "selu")
-                && let Ok(rel) = path.strip_prefix(root)
+            let Ok(rel) = path.strip_prefix(root) else {
+                continue;
+            };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if path
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with('.'))
             {
-                out.push(rel.to_string_lossy().replace('\\', "/"));
+                continue;
+            }
+            if path.is_dir() {
+                out.push(format!("{rel}/"));
+                walk(root, &path, out);
+            } else {
+                out.push(rel);
             }
         }
     }
+    // Files and folders (with a trailing `/`) the Explorer shows.
     let mut out = Vec::new();
     if project.join("selu.toml").is_file() {
         out.push("selu.toml".to_string());
     }
-    walk(project, &project.join("src"), &mut out);
+    for top in ["src", "tests"] {
+        if project.join(top).is_dir() {
+            out.push(format!("{top}/"));
+            walk(project, &project.join(top), &mut out);
+        }
+    }
     out
 }
 
@@ -196,7 +215,9 @@ impl Editor {
             quick_open: None,
             collapsed: BTreeSet::new(),
             cursor_pos: None,
-            new_file: None,
+            edit: None,
+            confirm_delete: None,
+            settings_request: false,
             jump_select: None,
         };
         if let Some(project) = editor.project.clone() {
@@ -287,7 +308,12 @@ impl Editor {
             .and_then(|f| f.get("on_save"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        (selu_fmt::Options { indent }, on_save)
+        let width = format
+            .and_then(|f| f.get("width"))
+            .and_then(|v| v.as_integer())
+            .filter(|n| (40..=400).contains(n))
+            .map_or(100, |n| n as usize);
+        (selu_fmt::Options { indent, width }, on_save)
     }
 
     /// Format buffer `i` in place; problems go to the messages.
@@ -481,24 +507,10 @@ impl Editor {
         }
     }
 
-    /// Create an empty file in the project and open it.
-    pub fn create_file(&mut self, rel: &str) {
-        let Some(project) = &self.project else { return };
-        let path = project.join(rel);
-        if path.exists() {
-            self.open_file(rel);
-            return;
-        }
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match std::fs::write(&path, "") {
-            Ok(()) => {
-                self.files = list_files(project);
-                self.open_file(rel);
-                self.messages.push(format!("created {rel}"));
-            }
-            Err(e) => self.messages.push(format!("cannot create {rel}: {e}")),
+    /// Re-read the project listing (after creating, renaming or deleting).
+    pub fn refresh_files(&mut self) {
+        if let Some(project) = &self.project {
+            self.files = list_files(project);
         }
     }
 }

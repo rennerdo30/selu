@@ -91,6 +91,10 @@ struct FormatSection {
     #[serde(default)]
     #[allow(dead_code)]
     indent: Option<usize>,
+    /// Line width before lists are wrapped (default 100).
+    #[serde(default)]
+    #[allow(dead_code)]
+    width: Option<usize>,
     /// Studio formats files when it saves them.
     #[serde(default)]
     #[allow(dead_code)]
@@ -200,12 +204,20 @@ fn fmt_options(file: &Path) -> selu_fmt::Options {
     let mut dir = file.parent();
     while let Some(d) = dir {
         if let Ok(text) = std::fs::read_to_string(d.join("selu.toml")) {
-            let indent = toml::from_str::<toml::Value>(&text)
-                .ok()
-                .and_then(|v| v.get("format")?.get("indent")?.as_integer())
-                .filter(|n| (1..=8).contains(n));
+            let value = toml::from_str::<toml::Value>(&text).ok();
+            let get = |key: &str| {
+                value
+                    .as_ref()
+                    .and_then(|v| v.get("format")?.get(key)?.as_integer())
+            };
+            let defaults = selu_fmt::Options::default();
             return selu_fmt::Options {
-                indent: indent.map_or(2, |n| n as usize),
+                indent: get("indent")
+                    .filter(|n| (1..=8).contains(n))
+                    .map_or(defaults.indent, |n| n as usize),
+                width: get("width")
+                    .filter(|n| (40..=400).contains(n))
+                    .map_or(defaults.width, |n| n as usize),
             };
         }
         dir = d.parent();
