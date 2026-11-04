@@ -397,6 +397,12 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             } else {
                 Some(crate::value_string(&v[0]))
             };
+            if !matches!(r.text_value, Value::LightUserData(_)) {
+                r.text_value = match &r.text {
+                    Some(text) => Value::String(lua.create_string(text)?),
+                    None => Value::Nil,
+                };
+            }
         }
         "GetText" => out!(r.text_value.clone()),
         "SetFont" => {
