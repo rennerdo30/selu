@@ -9,6 +9,7 @@ members = [
     "crates/selu-lower",
     "crates/selu-sim",
     "crates/selu-sourcemap",
+    "crates/selu-fmt",
     "crates/selu-test",
     "crates/selu-debug",
     "crates/selu-cli",

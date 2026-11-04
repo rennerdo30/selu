@@ -270,7 +270,76 @@ impl Editor {
         }
     }
 
+    /// `[format]` settings from the project's `selu.toml`.
+    fn format_config(&self) -> (selu_fmt::Options, bool) {
+        let value = self
+            .project
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p.join("selu.toml")).ok())
+            .and_then(|t| toml::from_str::<toml::Value>(&t).ok());
+        let format = value.as_ref().and_then(|v| v.get("format"));
+        let indent = format
+            .and_then(|f| f.get("indent"))
+            .and_then(|v| v.as_integer())
+            .filter(|n| (1..=8).contains(n))
+            .map_or(2, |n| n as usize);
+        let on_save = format
+            .and_then(|f| f.get("on_save"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        (selu_fmt::Options { indent }, on_save)
+    }
+
+    /// Format buffer `i` in place; problems go to the messages.
+    fn format_buffer(&mut self, i: usize, options: &selu_fmt::Options) {
+        let Some(buf) = self.open.get_mut(i) else {
+            return;
+        };
+        if !buf.rel.ends_with(".selu") {
+            return;
+        }
+        match selu_fmt::format(&buf.text, options) {
+            Ok(out) => {
+                if out != buf.text {
+                    buf.text = out;
+                    self.locals_stale = true;
+                }
+            }
+            Err(e) => self
+                .messages
+                .push(format!("cannot format {}: {e}", buf.rel)),
+        }
+    }
+
+    /// Format Document (Shift+Alt+F).
+    pub fn format_active(&mut self, now: f64) {
+        let (options, _) = self.format_config();
+        let before = self.open.get(self.active).map(|b| b.text.clone());
+        self.format_buffer(self.active, &options);
+        if self.open.get(self.active).map(|b| &b.text) != before.as_ref() {
+            self.edited_at = Some(now);
+        }
+    }
+
+    /// The project's configuration changed (Project Settings saved).
+    pub fn config_changed(&mut self, now: f64) {
+        self.edited_at = Some(now);
+        self.messages.push("saved selu.toml".into());
+    }
+
+    pub fn project_dir(&self) -> Option<&Path> {
+        self.project.as_deref()
+    }
+
     pub fn save_all(&mut self) {
+        let (options, on_save) = self.format_config();
+        if on_save {
+            for i in 0..self.open.len() {
+                if self.open[i].dirty() {
+                    self.format_buffer(i, &options);
+                }
+            }
+        }
         for i in 0..self.open.len() {
             self.save(i);
         }

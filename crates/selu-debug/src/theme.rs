@@ -190,6 +190,9 @@ pub fn install(ctx: &egui::Context) {
     w.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
     w.inactive.bg_stroke = Stroke::NONE;
     w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    // Checkbox and radio fills must stand out from windows and panels.
+    w.inactive.bg_fill = Color32::from_rgb(0x36, 0x39, 0x43);
+    w.inactive.bg_stroke = Stroke::NONE;
     w.hovered.bg_stroke = Stroke::NONE;
     w.active.bg_stroke = Stroke::new(1.0, ACCENT);
     ctx.set_visuals(v);
