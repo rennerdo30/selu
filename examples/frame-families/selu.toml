@@ -1,0 +1,3 @@
+[addon]
+name = "FrameFamilies"
+targets = ["retail"]

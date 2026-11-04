@@ -127,6 +127,12 @@ fn run_example(example: &Path) -> Vec<String> {
     }
     assert_source_inventory(example, &example.join("src"), &mapped_sources);
     let sim = Sim::new().unwrap();
+    for manifest in selu_manifest::load_manifest_dir(&manifests).unwrap() {
+        for family in manifest.frame_families {
+            sim.register_frame_family(&family.prefix, &family.suffix)
+                .unwrap();
+        }
+    }
     sim.load_addon(&name, &files)
         .unwrap_or_else(|e| panic!("{}: {e}", example.display()));
     sim.fire("PLAYER_LOGIN", vec![])

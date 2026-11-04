@@ -498,6 +498,14 @@ impl Session {
             .push(HostCommand::Slash { line: line.into() });
         self.sim.slash(line)
     }
+    /// Register a manifest family whose absent members must behave as nil,
+    /// rather than the simulator's fallback for unmodelled API functions.
+    pub fn register_frame_family(&self, prefix: &str, suffix: &str) -> SimResult<()> {
+        let families: Table = self.sim.lua.globals().raw_get("__selu_frame_families")?;
+        let pair = self.sim.lua.create_sequence_from([prefix, suffix])?;
+        families.raw_set(families.raw_len() + 1, pair)
+    }
+
     pub fn eval(&self, source: &str) -> SimResult<()> {
         lock(&self.sim.state).commands.push(HostCommand::Eval {
             code: source.into(),
@@ -590,6 +598,7 @@ impl Vm {
         globals.set("UIParent", create.call::<Table>("Frame")?)?;
         let registry: Table = globals.get("__selu_sim_frames")?;
         registry.raw_set(registry.raw_len(), Value::Nil)?;
+        globals.raw_set("__selu_frame_families", lua.create_table()?)?;
         // Unknown globals: log once, hand back a callable no-op so the
         // addon keeps running and the gap is visible.
         {
@@ -605,6 +614,19 @@ impl Vm {
                         .unwrap_or(false)
                     {
                         return Ok(Value::Nil);
+                    }
+                    let families: Table = lua.globals().raw_get("__selu_frame_families")?;
+                    for pair in families.sequence_values::<Table>() {
+                        let pair = pair?;
+                        let prefix: String = pair.raw_get(1)?;
+                        let suffix: String = pair.raw_get(2)?;
+                        if key
+                            .strip_prefix(&prefix)
+                            .and_then(|s| s.strip_suffix(&suffix))
+                            .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+                        {
+                            return Ok(Value::Nil);
+                        }
                     }
                     log_once(&logs, &warned, &key);
                     let noop = lua.create_function(|_, _: MultiValue| Ok(Value::Nil))?;

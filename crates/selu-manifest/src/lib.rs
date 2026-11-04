@@ -135,9 +135,24 @@ pub struct EventEntry {
     pub evidence: Evidence,
 }
 
+/// A numbered widget suffix, inferred from typed named globals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameFamily {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    pub prefix: String,
+    pub suffix: String,
+    pub min_index: u32,
+    pub max_index: u32,
+    pub widget: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frame_families: Vec<FrameFamily>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

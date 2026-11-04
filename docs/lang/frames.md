@@ -52,3 +52,53 @@ colour, and GetBackdrop returns a deep copy);
 UIPanelButtonTemplate uses the existing button text and geometry model. XML
 scripts, border textures, rendering and arbitrary mixins are not simulated.
 Actual client appearance remains an owner check.
+
+## Numbered Blizzard frames
+
+`frameFamily("MerchantItem", index)` returns `Frame?`;
+`frameFamily("MailItem", index, "Subject")` returns `FontString?`.
+Check for null before calling methods. Blizzard may not have loaded the UI,
+created a particular row, or populated an observed gap yet.
+
+The prefix and optional suffix must be string literals present in every target
+manifest. The index is a number using Blizzard's numbering (usually starting at
+1), without Selu array index adjustment. A literal outside the observed bounds
+is an error. Dynamic indices are nullable and are not clamped.
+
+The compiler emits `_G["MerchantItem" .. index .. "NameFrame"]` directly.
+This intrinsic is the only access it grants: `_G` remains forbidden in Selu.
+A local declaration named `frameFamily` shadows the intrinsic normally.
+
+`frameFamilies` stores one record per prefix/suffix with `widget`, `minIndex`
+and `maxIndex`. Manifest generation splits the first decimal run in a typed
+named widget global, rejects leading zeroes and mixed widget types, and requires
+at least two distinct indices. Each suffix has its own range; missing interior
+indices remain safe because results are nullable. Existing template and XML
+child expansion supplies widget types without guessed signatures.
+
+Diagnostics: SELU0640 unknown family, 0641 unknown suffix, 0642 nonliteral
+prefix/suffix, 0643 nonnumeric index, 0644 family absent on another target,
+0645 literal outside bounds, 0646 arity, 0647 inconsistent target widget types.
+
+Ranges describe source evidence, not guaranteed runtime existence. In retail's
+pinned source, MerchantFrame.xml:127 defines MerchantItem1 (and later rows);
+MerchantFrame.lua:1 sets MERCHANT_ITEMS_PER_PAGE to 10. The manifest scans all
+source variants, whose XML instances extend through MerchantItem12; its observed
+range is therefore 1..12. These are XML families. FloatingChatFrame.xml:698 and :729
+define ChatFrame1 and ChatFrame2. FloatingChatFrame.lua:710 and :723 create
+temporary ChatFrame tabs and ScrollingMessageFrames using maxTempIndex; its
+runtime-dependent upper bound is not inferred. Those temporary indices remain
+a coverage gap. No arbitrary string-based frame lookup is provided.
+
+The generator also reads numeric Lua `for` loops around direct `CreateFrame`
+calls with a literal widget and `"Prefix" .. loopIndex` name. Literal bounds
+and scalar constants with retained numeric values produce source-evidence
+families; `sources` records creation file and line. Counts from engine globals,
+computed expressions, temporary frame counters, pools, and runtime suffix
+expressions remain gaps. For example, CalendarDayButton's
+CALENDAR_MAX_DAYS_PER_MONTH is not defined by the pinned source, so the
+calendar loop at Blizzard_Calendar/Mainline/Blizzard_Calendar.lua:1079 is not
+assigned an invented range. QuestTitleButton uses a frame pool at
+Blizzard_UIPanels_Game/Mainline/QuestFrame.lua:303 and supplies no numbered
+creation evidence. Retail runtime evidence does include
+AchievementFrameSummaryAchievement, created in Mainline/Blizzard_AchievementUI.lua:2391.

@@ -27,6 +27,8 @@ struct Scan {
     locals: Vec<(String, usize, usize)>,
     definitions: Vec<(String, usize, Vec<String>, bool)>,
     calls: Vec<(String, usize)>,
+    frame_calls: Vec<FunctionCall>,
+    numeric_loops: Vec<NumericFor>,
     tables: Vec<(String, usize, TableConstructor)>,
     members: Vec<(String, String, usize)>,
     scalars: Vec<(String, usize, Expression)>,
@@ -158,6 +160,9 @@ impl Visitor for Scan {
         }
     }
     fn visit_function_call(&mut self, n: &FunctionCall) {
+        if matches!(n.prefix(), Prefix::Name(t) if name(t) == "CreateFrame") {
+            self.frame_calls.push(n.clone());
+        }
         if self.depth == 0
             && let Some((target, parents)) = mixin_call(n, None)
         {
@@ -181,6 +186,7 @@ impl Visitor for Scan {
         }
     }
     fn visit_numeric_for(&mut self, n: &NumericFor) {
+        self.numeric_loops.push(n.clone());
         self.bind(name(n.index_variable()), start(n.block()), end(n.block()));
     }
     fn visit_generic_for(&mut self, n: &GenericFor) {
@@ -191,6 +197,7 @@ impl Visitor for Scan {
 }
 #[derive(Default)]
 pub struct Sources {
+    runtime_frames: Vec<(String, String, String, String, String)>,
     definitions: BTreeMap<String, (String, Vec<String>)>,
     all_definitions: BTreeSet<String>,
     calls: BTreeMap<String, String>,
@@ -203,6 +210,51 @@ impl Sources {
             .map_err(|e| format!("{file}: Lua parse error: {e:?}"))?;
         let mut scan = Scan::default();
         scan.visit_ast(&ast);
+        for call in &scan.frame_calls {
+            if scan.local("CreateFrame", start(call)) {
+                continue;
+            }
+            let Some(Suffix::Call(Call::AnonymousCall(call_args))) = call.suffixes().next() else {
+                continue;
+            };
+            let FunctionArgs::Parentheses { arguments, .. } = call_args.as_ref() else {
+                continue;
+            };
+            let args: Vec<_> = arguments.iter().collect();
+            if args.len() < 2 {
+                continue;
+            }
+            if !args[0].to_string().trim().starts_with(['"', '\'']) {
+                continue;
+            }
+            let widget = args[0]
+                .to_string()
+                .trim()
+                .trim_matches(['\"', '\''])
+                .to_string();
+            let key = args[1].to_string();
+            let parts: Vec<_> = key.split("..").map(str::trim).collect();
+            if parts.len() != 2 || !parts[0].starts_with(['\"', '\'']) {
+                continue;
+            }
+            for lp in &scan.numeric_loops {
+                if start(lp.block()) <= start(call)
+                    && end(call) <= end(lp.block())
+                    && parts[1] == name(lp.index_variable())
+                    && lp.step().is_none()
+                    && !scan.local(lp.start().to_string().trim(), start(lp))
+                    && !scan.local(lp.end().to_string().trim(), start(lp))
+                {
+                    self.runtime_frames.push((
+                        parts[0].trim_matches(['\"', '\'']).into(),
+                        widget.clone(),
+                        lp.start().to_string().trim().into(),
+                        lp.end().to_string().trim().into(),
+                        format!("{file}:{}", call.start_position().unwrap().line()),
+                    ));
+                }
+            }
+        }
         for (n, pos, e) in &scan.scalars {
             if !scan.local(n, *pos)
                 && let Some(expr) = Scalar::from_ast(e, &scan, *pos)
@@ -345,6 +397,44 @@ impl Sources {
                     evidence: Evidence::Source,
                     templates: vec![],
                 });
+            }
+        }
+        for (prefix, widget, low, high, evidence) in &self.runtime_frames {
+            let bound = |s: &str| {
+                s.parse::<u32>().ok().or_else(|| {
+                    m.globals
+                        .iter()
+                        .find(|g| g.name == s)
+                        .and_then(|g| g.value.as_ref())
+                        .and_then(|v| v.as_f64())
+                        .filter(|v| v.fract() == 0.0 && *v >= 0.0 && *v <= u32::MAX as f64)
+                        .map(|v| v as u32)
+                })
+            };
+            if let (Some(lo), Some(hi)) = (bound(low), bound(high)) {
+                if lo > hi || hi - lo > 1000 {
+                    continue;
+                }
+                m.frame_families.push(selu_manifest::FrameFamily {
+                    prefix: prefix.clone(),
+                    suffix: String::new(),
+                    widget: widget.clone(),
+                    min_index: lo,
+                    max_index: hi,
+                    sources: vec![evidence.clone()],
+                });
+                for i in lo..=hi {
+                    let name = format!("{prefix}{i}");
+                    if !m.globals.iter().any(|g| g.name == name) {
+                        m.globals.push(selu_manifest::GlobalEntry {
+                            name,
+                            ty: Some(widget.clone()),
+                            value: None,
+                            evidence: Evidence::Source,
+                            templates: vec![],
+                        });
+                    }
+                }
             }
         }
         for (_, mut d) in self.tables {

@@ -22,6 +22,7 @@ mod aliases;
 pub use aliases::shape_of;
 mod api;
 mod classes;
+mod frame_families;
 mod frames;
 mod modules;
 pub mod restrictions;
@@ -1338,6 +1339,9 @@ impl Ctx<'_> {
     }
 
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+        if let Some(t) = self.frame_family(e, callee, args) {
+            return t;
+        }
         if let Some(t) = self.target_call(callee, args) {
             return t;
         }
