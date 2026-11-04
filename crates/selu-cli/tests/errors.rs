@@ -335,8 +335,10 @@ fn review_cross_module_error_identity() {
         .collect();
     let sim = selu_sim::Sim::new().unwrap();
     let ping = &files.iter().find(|(n, _)| n == "ping.lua").unwrap().1;
+    let runtime = &files.iter().find(|(n, _)| n == "Selu.lua").unwrap().1;
+    assert!(runtime.contains("local __selu_errors = __selu_ns.__selu_errors"));
     assert!(
-        ping.contains("local __selu_errors = __selu_ns.__selu_errors"),
+        ping.contains("local __selu_entry = __selu_ns.__selu_entry"),
         "{ping}"
     );
     assert!(

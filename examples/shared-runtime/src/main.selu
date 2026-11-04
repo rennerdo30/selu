@@ -1,0 +1,2 @@
+import { ready } from "./worker";
+on PLAYER_LOGIN() { print(ready()); }

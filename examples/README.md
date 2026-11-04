@@ -35,4 +35,5 @@ can't silently break.
 - `timers/`: defer a merchant-style action; advance the simulator 0.2 seconds to print `Sale ready`.
 - `errors/`: typed errors, a fallback return and cleanup with `finally`.
 
+- `shared-runtime/`: two modules sharing error state and the event dispatcher.
 - `combat-safe`: a panel hidden immediately or queued until combat ends.

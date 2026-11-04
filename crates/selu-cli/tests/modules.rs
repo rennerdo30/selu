@@ -74,7 +74,7 @@ fn run(label: &str, files: &[(&str, &str)]) -> (Vec<String>, Vec<String>) {
         .iter()
         .map(|n| (n.clone(), std::fs::read_to_string(dist.join(n)).unwrap()))
         .collect();
-    for n in &names {
+    for n in names.iter().filter(|n| n.as_str() != "Selu.lua") {
         let map: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.join("dist/.selu/Modules").join(format!("{n}.map")))
                 .unwrap(),
@@ -115,7 +115,7 @@ fn live_alias_const_signature_shadow_and_global() {
         ],
     );
     assert_eq!(prints, ["1", "2", "ready", "99", "88", "3"]);
-    assert_eq!(order, ["state.lua", "main.lua"]);
+    assert_eq!(order, ["Selu.lua", "state.lua", "main.lua"]);
 }
 #[test]
 fn nested_paths_ties_and_private_names() {
@@ -293,7 +293,7 @@ fn example_builds_and_runs_in_toc_order() {
             .iter()
             .map(|(n, _): &(String, String)| n.as_str())
             .collect::<Vec<_>>(),
-        ["counter.lua", "main.lua"]
+        ["Selu.lua", "counter.lua", "main.lua"]
     );
     let sim = selu_sim::Sim::new().unwrap();
     sim.load_addon("Modules", &files).unwrap();
@@ -476,7 +476,20 @@ fn review_shared_event_frame() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let files: Vec<_> = ["state.lua", "main.lua"]
+    let toc = std::fs::read_to_string(dir.join("dist/Modules/Modules.toc")).unwrap();
+    assert_eq!(
+        toc.lines().find(|line| line.ends_with(".lua")),
+        Some("Selu.lua")
+    );
+    let runtime = std::fs::read_to_string(dir.join("dist/Modules/Selu.lua")).unwrap();
+    assert_eq!(runtime.matches("-- Selu: events").count(), 1);
+    assert!(
+        !runtime.contains("__selu_saved")
+            && !runtime.contains("__selu_errors")
+            && !runtime.contains("__selu_wow")
+            && !runtime.contains("__selu_has_event")
+    );
+    let files: Vec<_> = ["Selu.lua", "state.lua", "main.lua"]
         .iter()
         .map(|n| {
             (

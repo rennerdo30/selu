@@ -73,6 +73,37 @@ pub(super) fn emit_restriction_runtime(
     }
     out
 }
+/// The same blocks serve standalone lowering and the addon registry. Keep the
+/// queue algorithm here unchanged; sharing only moves its initialization.
+pub(crate) fn runtime_pieces(
+    program: &Program,
+    types: &TypeTable,
+    manifest: &Manifest,
+) -> Vec<crate::runtime::Piece> {
+    let mut blocks = emit_restriction_runtime(program, types, manifest);
+    let mut pieces = Vec::new();
+    if blocks
+        .first()
+        .is_some_and(|s| matches!(&s.kind, LStmtKind::Raw(text) if text == READ_RUNTIME))
+    {
+        pieces.push(crate::runtime::piece(
+            "60-secret-read",
+            vec![blocks.remove(0)],
+            &["__selu_read"],
+            &[],
+        ));
+    }
+    if !blocks.is_empty() {
+        // Preserve standalone ordering: drain frame before the user dispatcher.
+        pieces.push(crate::runtime::piece(
+            "18-protected-calls",
+            blocks,
+            &["__selu_defer", "__selu_invoke", "__selu_widget_call"],
+            &[],
+        ));
+    }
+    pieces
+}
 const READ_RUNTIME: &str = r#"local function __selu_read(value)
   if canaccessvalue and not canaccessvalue(value) then return nil end
   return value

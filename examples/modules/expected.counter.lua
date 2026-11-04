@@ -1,5 +1,4 @@
 local __selu_addon, __selu_ns = ...
-__selu_ns = __selu_ns or {}
 __selu_ns["counter"] = {}
 local count = 0
 __selu_ns["counter"].count = function()

@@ -60,13 +60,85 @@ calls the translation helper even without placeholders, since returning the Engl
 literal would disable translations. That helper returns a plain string without
 formatting when no arguments exist.
 
-The addon namespace uses __selu_events and __selu_wow for shared internal state.
-Each file checks the event registration function before constructing the shared
-frame. Dispatch preserves registration order and passes all event results through.
-Both entry paths order their prelude as loader, protected class/saved captures,
-namespace initialization, then runtimes. The class capture precedes the WoW
-runtime even for a standalone lowering. Saved runtime setup follows namespace initialization; captures occur
-once even when both saved declarations and classes occur in the same file.
+
+## Shared addon runtime
+
+Project builds emit `Selu.lua` first in the `.toc` whenever any module needs
+runtime helpers, followed by source modules in dependency order. If a source
+module is named Selu (case-insensitively), the runtime uses the reserved filename
+`__selu_runtime.lua` instead, so it cannot overwrite authored output. Even a one-module
+addon uses this arrangement: consistent debugging and a short main file take
+precedence over saving a few wrapper lines. There is no installed runtime library.
+Standalone lowering APIs remain self-contained; addon builders call `runtime::share`
+on the complete set of lowered modules before writing files.
+
+Every file receives the existing addon name and `__selu_ns` table through `...`.
+Module files alias only helpers they reference, with plain local declarations.
+The runtime is scoped to this addon namespace, including across multiple addons.
+`[build] layout = "shared"` emits one runtime beside the common modules, used by
+all targets listed in that TOC. Per-target layout emits one runtime per output
+addon directory; folded-away capabilities require no helper. Native hook/hookScript calls alone
+need no localisation runtime; command, L and log request it.
+
+`runtime.rs` owns one registry with explicit dependencies and fixed ordered keys.
+Error state and captures precede error operations, scalar protection helpers and
+callback entry. The protected-call queue is piece `18-protected-calls`, before
+the event dispatcher, preserving drain-before-user-regen-handler order. Saved
+loading also precedes event dispatch; localisation/logging, shared event capability
+probing and the secret-read helper follow. Each piece has a short comment and a
+Lua `do` scope; dependencies become namespace aliases. Additional pieces can register their body, exports and dependencies here. Keep dependency keys earlier than consumers. Protection helpers remain
+specialized by return width, preserving trailing nils without result tables.
+
+`assemble_file` builds the single ordered file prelude for both lowering paths.
+Sharing removes generated AST statements, replaces them with aliases, and prints
+the module AST again to refresh `statement_lines`. The CLI constructs canonical
+S3 maps from `Lowered::source_map` only after sharing; the runtime has no map. Runtime code has no Selu
+source span. Class and typeof captures stay local to their module.
+
+Saved declarations and migrations still register loaders while modules execute.
+The saved runtime frame is created before the user dispatcher; `ADDON_LOADED`
+runs saved loaders before user handlers. The simulator receives every TOC file
+before firing that event. Existing rollback, newer-schema and character isolation
+checks remain unchanged. The saved init table is exported only through
+`__selu_saved`, which that event clears; primitive captures stay private so the
+cold init helpers can be collected even if the namespace remains alive. The proof harness also reads the TOC and uses
+`Sim::load_addon`, rather than evaluating just main.lua.
+
+Temporary elimination is deliberately small: literal left operands of `??` are
+folded after the purity check. `null ?? false` becomes false without a temporary;
+non-null literals never evaluate the right operand. Effectful receivers, calls,
+optional field reads and sequencing still use the existing purity/order machinery.
+
+Physical line counts include comments. Existing expected.txt files are unchanged.
+New Selu.lua files add wrapper/export lines; this is primarily a reduction in
+module scaffolding, not a claim that tiny addons have fewer total lines.
+
+| Example | Main before | Main after | Runtime after | Other module before -> after |
+| --- | ---: | ---: | ---: | --- |
+| classes | 78 | 57 | 22 | - |
+| cooldowns | 85 | 64 | 22 | - |
+| errors | 96 | 33 | 99 | - |
+| frames | 100 | 19 | 22 | - |
+| hello | 30 | 9 | 22 | - |
+| item-links | 34 | 13 | 22 | - |
+| loot-summary | 94 | 73 | 22 | - |
+| modules | 32 | 11 | 22 | expected.counter.lua: 13 -> 12 |
+| multi-target | 31 | 10 | 22 | - |
+| named-types | 37 | 16 | 22 | - |
+| saved-settings | 148 | 27 | 127 | - |
+| shared-runtime | new | 7 | 99 | expected.worker.lua: new -> 20 |
+| slash-and-hooks | 106 | 26 | 86 | - |
+| timers | 30 | 9 | 22 | - |
+
+The proof's checked-in baseline `reference.lua` has 439 lines. Its CLI shared
+output now has 259 main lines and 191 runtime lines (450 total): the main file
+shrinks by 180 lines (41%). The in-process proof test's standalone baseline had
+432 lines; its new shared main omits the CLI module export table and can differ
+from the CLI count. The checked-in reference is retained as historical evidence.
+
+All expected Lua diffs were inspected: runtime bodies moved into scoped pieces,
+helper aliases precede imports/source bindings, and user event bodies retain their
+names and structure. The new shared-runtime example exercises two source modules.
 
 ## Source maps
 

@@ -626,7 +626,27 @@ fn build(
             compiled.push((module, lowered));
         }
         validate_saved(&old_saved, &saved_shapes, &sources, &project.name)?;
-        for (module, lowered) in compiled {
+        let mut lowered_files: Vec<_> = compiled.iter().map(|(_, l)| l.clone()).collect();
+        if let Some(mut runtime) = selu_lower::runtime::share(&mut lowered_files) {
+            if debug {
+                runtime = runtime.replace(
+                    "if false then print(\"Selu: deferred protected call\") end",
+                    "if true then print(\"Selu: deferred protected call\") end",
+                );
+            }
+            // __selu module paths are reserved, so the fallback cannot collide.
+            let runtime_name = if sources.iter().any(|m| m.key.eq_ignore_ascii_case("Selu")) {
+                "__selu_runtime.lua"
+            } else {
+                "Selu.lua"
+            };
+            std::fs::write(out_dir.join(runtime_name), runtime).map_err(|e| {
+                eprintln!("selu: cannot write runtime: {e}");
+                ExitCode::FAILURE
+            })?;
+            lua_files.push(runtime_name.to_string());
+        }
+        for ((module, _), lowered) in compiled.into_iter().zip(lowered_files) {
             let lua_name = format!("{}.lua", module.key);
             let output = out_dir.join(&lua_name);
             let map = map_dir.join(format!("{lua_name}.map"));
