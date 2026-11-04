@@ -363,7 +363,13 @@ impl Lowerer<'_> {
         let span = &s.span;
         match &s.kind {
             StmtKind::Try { .. } | StmtKind::Throw { .. } => self.error_stmt(s, out),
-            StmtKind::Saved { .. } | StmtKind::Migrate { .. } => self.saved_stmt(s, forward, out),
+            StmtKind::Saved { .. } | StmtKind::Migrate { .. } => {
+                let start = out.len();
+                self.saved_stmt(s, forward, out);
+                for statement in &mut out[start..] {
+                    statement.span = Some(span.clone());
+                }
+            }
             StmtKind::VarDecl { init: None, .. } if forward => {}
             StmtKind::VarDecl {
                 name: n,

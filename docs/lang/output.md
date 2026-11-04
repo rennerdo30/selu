@@ -92,3 +92,11 @@ statement and have no generated position.
 directions, and rewrites Lua error positions through `map_lua_error`.
 Unmapped positions remain unchanged. Hashes allow consumers to detect stale
 source text; they are not security hashes.
+
+Distinct source statements use distinct generated lines when a compact `if`
+would otherwise make one position hide the other. Multi-line conditions retain
+their body positions after all condition lines. Saved declarations and migration
+registrations map to their declarations; shared saved runtime setup stays unmapped.
+Error chunk selection prefers normalized exact paths, then a unique most-specific
+path suffix. Ambiguous basenames stay unchanged. Quoted chunk names are delimited
+by `[string "` and `"]`, so addon folder names may contain spaces.

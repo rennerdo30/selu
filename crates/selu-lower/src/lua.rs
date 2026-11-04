@@ -346,8 +346,11 @@ impl Printer {
                     let pending = self.embedded.len();
                     let c = self.scalar_expr(cond, indent);
                     let text = format!("if {c} then {body_text} end");
-                    if !body_text.contains('\n') && text.len() + indent * 2 <= 100 {
-                        let generated = self.line;
+                    if !body_text.contains('\n')
+                        && text.len() + indent * 2 <= 100
+                        && (c.contains('\n') || only.span == s.span)
+                    {
+                        let generated = self.line + c.matches('\n').count() as u32;
                         self.line(indent, &text, sp);
                         self.lines
                             .extend(inner.lines.into_iter().map(|(_, span)| (generated, span)));

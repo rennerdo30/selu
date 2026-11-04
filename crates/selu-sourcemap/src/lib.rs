@@ -45,7 +45,7 @@ pub struct Position<'a> {
 pub struct SourceMap {
     pub version: u32,
     /// The generated file's name as the client reports it in error
-    /// positions, e.g. `main.lua` (matched by base name, case-insensitive).
+    /// positions, e.g. `main.lua` or `b/util.lua` (case-insensitive paths).
     pub chunk: String,
     pub sources: Vec<Source>,
     /// Sorted by `gen_start`; nested ranges are allowed and the innermost
@@ -174,10 +174,6 @@ impl SourceMap {
         out.dedup();
         out
     }
-
-    fn matches_chunk(&self, name: &str) -> bool {
-        base_name(name).eq_ignore_ascii_case(base_name(&self.chunk))
-    }
 }
 
 /// FNV-1a 64-bit over the UTF-8 bytes, as `fnv1a64:<16 hex digits>`. Not a
@@ -195,8 +191,41 @@ fn normalise(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-fn base_name(path: &str) -> &str {
-    path.rsplit(['/', '\\']).next().unwrap_or(path)
+/// Resolve the chunk independently of line coverage: an unmapped exact match
+/// must never fall through to a different module with the same basename.
+fn find_chunk<'a>(name: &str, maps: &'a [SourceMap]) -> Option<&'a SourceMap> {
+    fn key(path: &str) -> String {
+        normalise(path)
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect::<Vec<_>>()
+            .join("/")
+            .to_ascii_lowercase()
+    }
+    let name = key(name);
+    let mut candidates = maps
+        .iter()
+        .filter_map(|map| {
+            let chunk = key(&map.chunk);
+            let score = if name == chunk {
+                usize::MAX
+            } else if name.ends_with(&format!("/{chunk}")) {
+                chunk.len()
+            } else if chunk.ends_with(&format!("/{name}")) {
+                name.len()
+            } else {
+                return None;
+            };
+            Some((score, map))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    let (score, map) = candidates.first()?;
+    if candidates.get(1).is_some_and(|(next, _)| next == score) {
+        None
+    } else {
+        Some(*map)
+    }
 }
 
 /// Rewrite generated positions in a Lua error message or traceback into
@@ -232,30 +261,24 @@ pub fn map_lua_error(message: &str, maps: &[SourceMap]) -> String {
         let Ok(line) = message[digits_start..digits_end].parse::<u32>() else {
             continue;
         };
-        // Walk back to the start of the file token.
-        let mut start = ext_end - 4;
-        while start > copied {
-            let c = bytes[start - 1];
-            if c.is_ascii_whitespace() || c == b'"' || c == b'(' || c == b'\'' {
-                break;
-            }
-            start -= 1;
-        }
-        let name = &message[start..ext_end];
-        let mut token_start = start;
-        if quoted {
+        let (token_start, name) = if quoted {
             const PREFIX: &str = "[string \"";
-            if start >= PREFIX.len() && &message[start - PREFIX.len()..start] == PREFIX {
-                token_start = start - PREFIX.len();
-            } else {
+            let Some(start) = message[copied..ext_end].rfind(PREFIX).map(|i| copied + i) else {
                 continue;
+            };
+            (start, &message[start + PREFIX.len()..ext_end])
+        } else {
+            let mut start = ext_end - 4;
+            while start > copied {
+                let c = bytes[start - 1];
+                if c.is_ascii_whitespace() || c == b'"' || c == b'(' || c == b'\'' {
+                    break;
+                }
+                start -= 1;
             }
-        }
-        let Some(pos) = maps
-            .iter()
-            .filter(|m| m.matches_chunk(name))
-            .find_map(|m| m.lookup(line))
-        else {
+            (start, &message[start..ext_end])
+        };
+        let Some(pos) = find_chunk(name, maps).and_then(|m| m.lookup(line)) else {
             continue;
         };
         out.push_str(&message[copied..token_start]);
@@ -378,5 +401,61 @@ mod tests {
         );
         assert_eq!(map_lua_error("other.lua:4: x", &maps), "other.lua:4: x");
         assert_eq!(map_lua_error("no positions", &maps), "no positions");
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    fn map(chunk: &str, path: &str) -> SourceMap {
+        let mut m = SourceMap::new(chunk);
+        let source = m.add_source(path, "code");
+        m.push(Range {
+            gen_start: 5,
+            gen_end: 5,
+            source,
+            line: 7,
+            column: 1,
+        });
+        m
+    }
+    #[test]
+    fn exact_suffix_and_ambiguous_chunk_paths() {
+        let maps = [
+            map("a/util.lua", "a/util.selu"),
+            map("b/util.lua", "b/util.selu"),
+        ];
+        for name in [
+            "b/util.lua",
+            "B\\UTIL.lua",
+            "Interface/AddOns/Demo/b/util.lua",
+        ] {
+            assert_eq!(
+                map_lua_error(&format!("{name}:5: boom"), &maps),
+                "b/util.selu:7: boom"
+            );
+        }
+        assert_eq!(map_lua_error("util.lua:5: boom", &maps), "util.lua:5: boom");
+        assert_eq!(
+            map_lua_error("c/util.lua:5: boom", &maps),
+            "c/util.lua:5: boom"
+        );
+        let mut unmapped = maps[1].clone();
+        unmapped.ranges.clear();
+        assert_eq!(
+            map_lua_error("b/util.lua:5: boom", &[maps[0].clone(), unmapped]),
+            "b/util.lua:5: boom"
+        );
+    }
+    #[test]
+    fn quoted_chunk_paths_with_spaces() {
+        let maps = [map("b/util.lua", "src/my file.selu")];
+        assert_eq!(
+            map_lua_error(
+                "[string \"Interface/AddOns/My Addon/b/util.lua\"]:5: boom",
+                &maps
+            ),
+            "src/my file.selu:7: boom"
+        );
     }
 }

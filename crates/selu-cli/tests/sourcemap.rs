@@ -44,3 +44,32 @@ fn callback_statement_positions_and_runtime_error() {
     let mapped = map_lua_error(&error, &[map]);
     assert!(mapped.contains("src/main.selu:7:"), "{mapped}");
 }
+
+#[test]
+fn multiline_headers_keep_body_positions() {
+    for statement in [
+        "if (yes(() => {\n    return true;\n  }))\n    fail();",
+        "while (yes(() => {\n    return true;\n  })) {\n    fail();\n  }",
+        "for (; yes(() => {\n    return true;\n  });) {\n    fail();\n  }",
+        "if (false) {} else if (yes(() => {\n    return true;\n  })) {\n    fail();\n  }",
+    ] {
+        let source = format!(
+            "global fail = () => {{}};\nfunction yes(f: () => boolean): boolean {{ return f(); }}\non PLAYER_LOGIN() {{\n  {statement}\n}}\n"
+        );
+        let expected = source.lines().position(|s| s.trim() == "fail();").unwrap() as u32 + 1;
+        let (lua, map) = compile(&source);
+        let sim = selu_sim::Sim::new().unwrap();
+        sim.load_files(&[("main.lua".into(), lua)]).unwrap();
+        sim.eval("fail = 3").unwrap();
+        let error = sim.fire("PLAYER_LOGIN", vec![]).unwrap_err().to_string();
+        let mapped = map_lua_error(&error, &[map]);
+        assert!(
+            mapped.contains(&format!("src/main.selu:{expected}:")),
+            "{statement}: {mapped}"
+        );
+    }
+    let source = "function factory() {\n  return () => {\n    return 2;\n  };\n}\n";
+    let (lua, map) = compile(source);
+    let line = lua.lines().position(|s| s.contains("return 2")).unwrap() as u32 + 1;
+    assert_eq!(map.lookup(line).unwrap().line, 3);
+}
