@@ -126,7 +126,6 @@ pub enum StmtKind {
     },
     Throw {
         value: Box<Expr>,
-        line: usize,
     },
     Try {
         body: Vec<Stmt>,
@@ -328,6 +327,8 @@ pub enum ExprKind {
         class: String,
         type_args: Vec<TypeExpr>,
         args: Vec<Expr>,
+        /// One-based source line of `new`; `new Error` records it.
+        line: usize,
     },
     /// `(a, b) => a + b`, `x => { ... }`, `function (a) { ... }`.
     Function {

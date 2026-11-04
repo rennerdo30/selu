@@ -207,9 +207,11 @@ fn review_rethrow_formats_once() {
     sim.load_files(&[("t.lua".into(), lua)]).unwrap();
     let error = sim.fire("PLAYER_LOGIN", vec![]).unwrap_err().to_string();
     assert_eq!(sim.prints(), ["true\toriginal"]);
-    assert!(error.contains("t.selu:3: original"), "{error}");
+    // The position is where the Error was created, not where it was thrown.
+    assert!(error.contains("t.selu:1: original"), "{error}");
+    assert!(!error.contains("t.selu:3:"), "{error}");
     assert!(!error.contains("t.selu:5:"), "{error}");
-    assert_eq!(error.matches("t.selu:3:").count(), 1, "{error}");
+    assert_eq!(error.matches("t.selu:").count(), 1, "{error}");
 }
 #[test]
 fn review_unused_self_catch_binding() {
@@ -290,10 +292,18 @@ fn review_no_cascading_error_diagnostics() {
     assert_eq!(codes("throw new Error(missing, 1);"), ["SELU0310"]);
 }
 
+/// Removes a test project directory, also when the test fails.
+struct TempProject(std::path::PathBuf);
+impl Drop for TempProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 #[test]
 fn review_cross_module_error_identity() {
     use std::{fs, path::Path, process::Command};
     let dir = std::env::temp_dir().join(format!("selu-e-module-{}", std::process::id()));
+    let _cleanup = TempProject(dir.clone());
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(
         dir.join("selu.toml"),
@@ -301,7 +311,9 @@ fn review_cross_module_error_identity() {
     )
     .unwrap();
     fs::write(dir.join("src/fail.selu"),r#"export const original = new Error("module"); export function fail() { throw original; }"#).unwrap();
-    fs::write(dir.join("src/main.selu"),r#"import {original,fail} from "./fail"; try { fail(); } catch(e) { print(e == original, e.message); e.message = "mutated"; } print(original.message); on PLAYER_LOGIN() { try { fail(); } catch(e) { throw e; } }"#).unwrap();
+    // A module without try/throw: its hook is still a callback entry.
+    fs::write(dir.join("src/ping.selu"),r#"import {fail} from "./fail"; hook("GetTime", () => { fail(); }); export const loaded = true;"#).unwrap();
+    fs::write(dir.join("src/main.selu"),r#"import {original,fail} from "./fail"; import {loaded} from "./ping"; try { fail(); } catch(e) { print(e == original, e.message); e.message = "mutated"; } print(original.message); global escape = () => { throw original; }; global probe = () => { try { try { GetTime(); } catch(e) { print(e == original, e.message); } throw original; } catch(e) { print(e == original, e.message); } }; on PLAYER_LOGIN() { try { fail(); } catch(e) { throw e; } }"#).unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_selu"))
         .arg("build")
         .arg(&dir)
@@ -322,9 +334,153 @@ fn review_cross_module_error_identity() {
         .map(|l| (l.to_string(), fs::read_to_string(dist.join(l)).unwrap()))
         .collect();
     let sim = selu_sim::Sim::new().unwrap();
+    let ping = &files.iter().find(|(n, _)| n == "ping.lua").unwrap().1;
+    assert!(
+        ping.contains("local __selu_errors = __selu_ns.__selu_errors"),
+        "{ping}"
+    );
+    assert!(
+        ping.contains("hooksecurefunc(\"GetTime\", __selu_entry(function()"),
+        "{ping}"
+    );
+    assert!(!ping.contains("__selu_pcall"), "{ping}");
     sim.load_addon("CrossErrors", &files).unwrap();
     assert_eq!(sim.prints(), ["true\tmodule", "mutated"]);
+    // The hook throws at depth 0 (text), and the try's depth is restored:
+    // the following throw still keeps its identity.
+    sim.eval("probe()").unwrap();
+    assert_eq!(
+        sim.prints()[2..],
+        ["false\tfail.selu:1: mutated", "true\tmutated"]
+    );
+    // Back outside every try, a throw reaches the host as text again.
+    sim.eval("local ok, err = pcall(escape); print(type(err), err)")
+        .unwrap();
+    assert_eq!(sim.prints()[4], "string\tfail.selu:1: mutated");
     let error = sim.fire("PLAYER_LOGIN", vec![]).unwrap_err().to_string();
     assert_eq!(error.matches("fail.selu:1: mutated").count(), 1, "{error}");
     assert!(!error.contains("main.selu:"), "{error}");
+}
+
+// WoW runs script handlers, hooks, slash commands and events behind its own
+// boundary: an error there goes to geterrorhandler(), which formats it with
+// `%s`, and the code that triggered the callback (here frame.Show() inside a
+// Selu try) keeps running. The simulator lets callback errors propagate to the
+// caller, so this test models the engine boundary explicitly: `trigger` runs
+// inside the try and dispatches every generated callback through the
+// simulator's frame scripts, hooked function, SlashCmdList and event frame,
+// each under a pcall standing in for the engine. What escapes each boundary is
+// what WoW's error handler would receive: it must be text with one position.
+#[test]
+fn recheck_callback_boundary_receives_text() {
+    let lua = compile(
+        "global Target = () => {};\nconst frame = CreateFrame(\"Frame\");\nframe.Hide();\nhookScript(frame, \"OnShow\", (self) => {\n throw new Error(\"show\");\n});\nhook(\"Target\", () => {\n throw new Error(\"hook\");\n});\ncommand(\"/selutest\", (msg) => {\n throw new Error(\"command\");\n});\non PLAYER_LOGIN() {\n throw new Error(\"event\");\n}\nglobal trigger = () => {};\nglobal run = () => {\n try { trigger(); } catch (e) { print(\"caught\", e.message); }\n};",
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    // The engine boundary: each hooked script runs under its own pcall. The
+    // simulator's own HookScript chain is Rust, which would wrap the value.
+    sim.eval(
+        r#"
+escaped = {}
+function engine(fn, ...)
+  local ok, err = pcall(fn, ...)
+  if not ok then escaped[#escaped + 1] = err end
+end
+local create = CreateFrame
+CreateFrame = function(...)
+  local frame = create(...)
+  frame.HookScript = function(self, name, hook)
+    local scripts = rawget(self, "__scripts")
+    local old = scripts[name]
+    scripts[name] = function(...)
+      if old then engine(old, ...) end
+      engine(hook, ...)
+    end
+  end
+  return frame
+end
+"#,
+    )
+    .unwrap();
+    sim.load_files(&[("t.lua".into(), lua.clone())]).unwrap();
+    sim.eval(
+        r#"
+trigger = function()
+  for _, f in ipairs(__selu_sim_frames) do
+    local scripts = rawget(f, "__scripts")
+    if rawget(scripts, "OnShow") then f:Show() end
+    if rawget(f, "__events").PLAYER_LOGIN then
+      engine(scripts.OnEvent, f, "PLAYER_LOGIN")
+    end
+  end
+  engine(Target)
+  for _, handler in pairs(SlashCmdList) do engine(handler, "") end
+end
+run()
+for _, err in ipairs(escaped) do print(type(err), tostring(err)) end
+"#,
+    )
+    .unwrap_or_else(|e| panic!("{e}\n{lua}"));
+    let mut prints = sim.prints();
+    prints.sort();
+    assert_eq!(
+        prints,
+        [
+            "string\tt.selu:11: command",
+            "string\tt.selu:14: event",
+            "string\tt.selu:5: show",
+            "string\tt.selu:8: hook",
+        ],
+        "{lua}"
+    );
+    // The try's protection depth survives the callbacks: a later throw in
+    // the same protected block is still caught with its identity.
+    sim.eval("trigger = function() end").unwrap();
+    let lua2 = compile(
+        "const frame = CreateFrame(\"Frame\");\nframe.Hide();\nhookScript(frame, \"OnShow\", (self) => { print(\"shown\"); });\nconst original = new Error(\"after\");\ntry {\n frame.Show();\n throw original;\n} catch (e) { print(e == original, e.message); }",
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("t.lua".into(), lua2)]).unwrap();
+    assert_eq!(sim.prints(), ["shown", "true\tafter"]);
+}
+
+#[test]
+fn recheck_rethrown_native_error_keeps_lua_location_only() {
+    let lua = compile(
+        "global fail = () => {};\non PLAYER_LOGIN() {\n try { fail(); } catch (e) {\n throw e;\n }\n}",
+    );
+    let lua = lua.replace(
+        "fail = function()\nend",
+        "fail = function() local t; return t.x end",
+    );
+    assert!(lua.contains("local t; return t.x"), "{lua}");
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    let error = sim.fire("PLAYER_LOGIN", vec![]).unwrap_err().to_string();
+    assert!(error.contains("attempt to index"), "{error}");
+    assert!(!error.contains("t.selu:"), "{error}");
+}
+
+#[test]
+fn recheck_reused_error_reports_creation_position() {
+    let lua = compile(
+        "const shared = new Error(\"again\");\non PLAYER_LOGIN() {\n try { throw shared; } catch (e) { print(\"first\"); }\n throw shared;\n}",
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    let error = sim.fire("PLAYER_LOGIN", vec![]).unwrap_err().to_string();
+    assert_eq!(sim.prints(), ["first"]);
+    assert_eq!(error.matches("t.selu:1: again").count(), 1, "{error}");
+    assert!(!error.contains("t.selu:3:"), "{error}");
+    assert!(!error.contains("t.selu:4:"), "{error}");
+}
+
+#[test]
+fn recheck_reserved_error_parameter_reported_once() {
+    let found = codes("function f(Error) {}");
+    assert_eq!(
+        found.iter().filter(|c| *c == "SELU0542").count(),
+        1,
+        "{found:?}"
+    );
 }

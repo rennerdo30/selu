@@ -108,6 +108,7 @@ impl Lowerer<'_> {
         self.wow.used = true;
         let refs: Vec<_> = args.iter().collect();
         let mut vals = self.seq(&refs, pre);
+        self.error_entry_callback(&mut vals);
         Some(match n.as_str() {
             "command" => lua::call(name("__selu_wow.command"), vals),
             "hook" => lua::call(name("hooksecurefunc"), vals),

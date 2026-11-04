@@ -14,16 +14,19 @@ There are no name/stack methods or inheritance requirements in this minimal type
 
 Throw and catch preserve the object. After `throw original`, the caught value
 compares equal to original; its message is unchanged, and mutations affect
-original. A private source position is set once, at that object's first Selu
-throw. Rethrowing leaves it alone. The position is independent of message and
-is rendered exactly once when the Error escapes, as `file.selu:line: message`.
-A shared metatable also gives the Error that textual representation through
-Lua tostring. Source positions use the parser's original one-based line and
+original. The position is where the Error was created: like JavaScript, which
+records the stack at construction, `new Error(...)` stores a private source
+position known at compile time. Throwing, rethrowing or reusing the object
+never changes it. The position is independent of message and is rendered
+exactly once when the Error escapes, as `file.selu:line: message`. A shared
+metatable also gives the Error that textual representation through Lua
+tostring. Source positions use the parser's original one-based line and
 module-relative file name; generated Lua line numbers and source-map sidecars
-are not needed to render an explicit throw.
+are not needed.
 
 Non-Error values thrown by Lua are wrapped. The wrapper's `message` comes from
-a protected tostring conversion and retains Lua's own location text. Its
+a protected tostring conversion and retains Lua's own location text; a wrapper
+has no Selu position, so rethrowing it shows only Lua's location. Its
 `value: unknown` field keeps the original value, including null for Lua nil;
 Errors constructed directly in Selu have value null. An Error already created
 by Selu is recognized by shared metatable identity and passes through unchanged.
@@ -39,15 +42,31 @@ game's secret restrictions. General secret-value checking is a separate feature.
 
 Every protected clause uses captured Lua pcall. The addon namespace shares an
 Error metatable and a protection-depth counter across its modules. Each file's
-fixed-arity `__selu_protect` increments the counter, calls the captured pcall,
-then decrements it on both success and failure. It forwards completion values
-through scalar locals, without a result table. Throw/propagation inside active
+fixed-arity `__selu_protect` saves the counter, increments it, calls the
+captured pcall, then restores the saved value on both success and failure. It
+forwards completion values through scalar locals, without a result table. Throw/propagation inside active
 Selu protection passes the Error object to Lua error unchanged. With no active
 Selu protection, `__selu_raise` converts it to safe text before Lua error. Thus
 uncaught event throws and rethrows reach the normal game error path as strings;
 Selu neither replaces geterrorhandler() nor swallows the error. Low-level Lua
 pcall outside Selu protection sees that host-formatted text; use try/catch for
 Selu Error identity.
+
+The game runs callbacks behind its own boundary, even when they fire
+synchronously inside a Selu try: `frame.Show()` runs an OnShow hook, a call
+can fire an event or a hooked function. An error there goes to the game's
+error handler, and the code that triggered the callback carries on. So in an
+addon where any file uses try or throw, every generated callback entry point
+starts with no active Selu protection: the shared event dispatcher sets the
+counter to 0 before running handlers and restores it afterwards, and the
+callbacks of `command`, `hook` and `hookScript` are wrapped in `__selu_entry`,
+which does the same. An escaping throw inside a callback therefore reaches the
+handler as text. If the callback fails, the enclosing `__selu_protect` restores
+the counter. A Selu try around a direct call of a hooked function catches that
+text as a wrapped error, not the original Error object. Files of such an addon
+without try/throw get only the shared counter. Addons without try/throw emit
+none of this. Callbacks passed directly to game APIs (`SetScript`,
+`C_Timer.After`) are not generated entry points and are not wrapped.
 
 This explicit boundary conversion avoids assuming every WoW handler accepts
 tables: the read-only source at wow-ui-source commit
@@ -70,30 +89,32 @@ completion overrides the previous one, including return and throw. The pending
 loop break flag is saved while finally executes and restored only when finally
 completes normally, so a finally-continue can override a pending break.
 
-The common catch shape (temporary names simplified):
+The common catch shape:
 
 ```lua
-local ok, status = __selu_protect(function() work() end)
-if not ok then
-  ok, status = __selu_protect(function()
-    local e = __selu_wrap_error(status)
+local __selu_ok, __selu_status = __selu_protect(function() work() end)
+if not __selu_ok then
+  __selu_ok, __selu_status = __selu_protect(function()
+    local e = __selu_wrap_error(__selu_status)
     print(e.message)
   end)
 end
-if not ok then __selu_raise(status) end
+if not __selu_ok then __selu_raise(__selu_status) end
 ```
 
-A return with cleanup:
+A return with cleanup (the `__selu_` prefix omitted):
 
 ```lua
-local ok, status, value = __selu_protect(function() return "return", value end)
-local finalOk, finalStatus, finalValue = __selu_protect(function() cleanup() end)
-if not finalOk or finalStatus ~= nil then
-  ok, status, value = finalOk, finalStatus, finalValue
+local ok, status, value1 = __selu_protect(function() return "return", value end)
+local final_ok, final_status, final_value1 = __selu_protect(function() cleanup() end)
+if not final_ok or final_status ~= nil then
+  ok, status, value1 = final_ok, final_status, final_value1
 end
 if not ok then __selu_raise(status) end
-if status == "return" then return value end
+if status == "return" then return value1 end
 ```
+
+Each try's locals live in their own `do` block, so nested tries reuse the names.
 
 Inside a loop, continue returns `"break"` from the protected function, runs
 cleanup, then dispatches break out of the single-iteration repeat. Real breaks

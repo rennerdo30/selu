@@ -94,6 +94,7 @@ impl Ctx<'_> {
                 class,
                 type_args,
                 args,
+                ..
             } => {
                 if class == "Error" {
                     return self.error_new(e, type_args, args);

@@ -52,25 +52,32 @@ fn completions(
     }
 }
 impl Lowerer<'_> {
-    pub(crate) fn error_new(&mut self, args: &[Expr], pre: &mut LBlock) -> LExpr {
+    // Like JavaScript's stack, the position is recorded where the Error is created.
+    pub(crate) fn error_new(
+        &mut self,
+        args: &[Expr],
+        file: &str,
+        line: usize,
+        pre: &mut LBlock,
+    ) -> LExpr {
         let message = args
             .first()
             .map(|e| self.expr(e, pre))
             .unwrap_or_else(|| LExpr::Str(String::new()));
-        lua::call(name("__selu_new_error"), vec![message])
+        lua::call(
+            name("__selu_new_error"),
+            vec![message, LExpr::Str(format!("{file}:{line}: "))],
+        )
     }
 
     pub(crate) fn error_stmt(&mut self, s: &Stmt, out: &mut LBlock) {
         let sp = &s.span;
         match &s.kind {
-            StmtKind::Throw { value, line } => {
+            StmtKind::Throw { value } => {
                 let mut pre = vec![];
                 let v = self.expr(value, &mut pre);
                 pre.push(st(
-                    LStmtKind::Call(lua::call(
-                        name("__selu_throw"),
-                        vec![v, LExpr::Str(format!("{}:{line}: ", sp.file))],
-                    )),
+                    LStmtKind::Call(lua::call(name("__selu_raise"), vec![v])),
                     sp,
                 ));
                 out.extend(pre);
@@ -92,9 +99,10 @@ impl Lowerer<'_> {
                 if let Some(b) = &mut final_body {
                     completions(b, 0, &mut count, &mut breaks, &mut returns);
                 }
-                let ok = self.temp();
-                let status = self.temp();
-                let values: Vec<_> = (0..count).map(|_| self.temp()).collect();
+                // Fixed names: each try's locals live in their own do block.
+                let ok = "__selu_ok".to_string();
+                let status = "__selu_status".to_string();
+                let values: Vec<_> = (1..=count).map(|i| format!("__selu_value{i}")).collect();
                 let mut names = vec![ok.clone(), status.clone()];
                 names.extend(values.clone());
                 let protect = |body| {
@@ -149,7 +157,10 @@ impl Lowerer<'_> {
                         ));
                         saved
                     });
-                    let fresh: Vec<_> = names.iter().map(|_| self.temp()).collect();
+                    let fresh: Vec<_> = names
+                        .iter()
+                        .map(|n| n.replacen("__selu_", "__selu_final_", 1))
+                        .collect();
                     b.push(st(LStmtKind::Local(fresh.clone(), vec![protect(fb)]), sp));
                     let override_c = bin(
                         BinOp::Or,
@@ -461,7 +472,8 @@ fn free_names(f: &LFunction) -> Names {
     free
 }
 
-pub(crate) fn uses_errors(program: &selu_syntax::Program) -> bool {
+/// Whether a file uses try, throw or `new Error`.
+pub fn uses_errors(program: &selu_syntax::Program) -> bool {
     fn inspect(c: selu_syntax::visit::Child<'_>, found: &mut bool) {
         use selu_syntax::visit::{self, Child};
         match c {
@@ -518,21 +530,60 @@ impl Lowerer<'_> {
         results.extend((1..=width).map(|i| format!("value{i}")));
         let results = results.join(", ");
         vec![
+            crate::raw(ERROR_STATE),
             crate::raw(ERROR_RUNTIME),
+            // Save and restore: a callback entry may reset the count meanwhile.
             crate::raw(&format!(
-                "local function __selu_protect(fn, ...)\n  __selu_errors.depth = __selu_errors.depth + 1\n  local {results} = __selu_pcall(fn, ...)\n  __selu_errors.depth = __selu_errors.depth - 1\n  return {results}\nend"
+                "local function __selu_protect(fn, ...)\n  local depth = __selu_errors.depth\n  __selu_errors.depth = depth + 1\n  local {results} = __selu_pcall(fn, ...)\n  __selu_errors.depth = depth\n  return {results}\nend"
             )),
         ]
     }
+    /// Runtime for callback entry points, after the body is lowered. Files
+    /// without try/throw get only the shared state when their addon uses it.
+    pub(crate) fn error_entry_setup(
+        &self,
+        program: &selu_syntax::Program,
+        has_handlers: bool,
+    ) -> LBlock {
+        let mut out = vec![];
+        if self.addon_errors && !uses_errors(program) && (has_handlers || self.error_entry) {
+            out.push(crate::raw(ERROR_STATE));
+        }
+        if self.error_entry {
+            out.push(crate::raw(ERROR_ENTRY));
+        }
+        out
+    }
+    /// The game runs callbacks behind its own error boundary, even when
+    /// they fire synchronously inside a Selu try: wrap the last argument.
+    pub(crate) fn error_entry_callback(&mut self, args: &mut [LExpr]) {
+        if !self.addon_errors {
+            return;
+        }
+        if let Some(callback) = args.last_mut() {
+            self.error_entry = true;
+            let inner = std::mem::replace(callback, LExpr::Nil);
+            *callback = lua::call(name("__selu_entry"), vec![inner]);
+        }
+    }
 }
-const ERROR_RUNTIME: &str = r#"if not __selu_ns.__selu_errors then
+// Shared by every file of the addon; the event dispatcher needs only this.
+const ERROR_STATE: &str = r#"if not __selu_ns.__selu_errors then
   __selu_ns.__selu_errors = { depth = 0, meta = {} }
   __selu_ns.__selu_errors.meta.__tostring = function(value)
     return (value.__selu_position or "") .. value.message
   end
 end
-local __selu_errors = __selu_ns.__selu_errors
-local function __selu_error_text(value)
+local __selu_errors = __selu_ns.__selu_errors"#;
+const ERROR_ENTRY: &str = r#"local function __selu_entry(fn)
+  return function(...)
+    local depth = __selu_errors.depth
+    __selu_errors.depth = 0
+    fn(...)
+    __selu_errors.depth = depth
+  end
+end"#;
+const ERROR_RUNTIME: &str = r#"local function __selu_error_text(value)
   return __selu_tostring(value) .. ""
 end
 local function __selu_safe_error_text(value)
@@ -540,8 +591,8 @@ local function __selu_safe_error_text(value)
   if ok then return message end
   return "<error object>"
 end
-local function __selu_new_error(message, value)
-  return __selu_error_setmetatable({ message = message, value = value }, __selu_errors.meta)
+local function __selu_new_error(message, position, value)
+  return __selu_error_setmetatable({ message = message, value = value, __selu_position = position }, __selu_errors.meta)
 end
 local function __selu_is_error(value)
   if __selu_error_getmetatable(value) == __selu_errors.meta then return true end
@@ -550,7 +601,7 @@ end
 local function __selu_wrap_error(value)
   local ok, isError = __selu_pcall(__selu_is_error, value)
   if ok and isError then return value end
-  return __selu_new_error(__selu_safe_error_text(value), value)
+  return __selu_new_error(__selu_safe_error_text(value), nil, value)
 end
 local function __selu_raise(value)
   if __selu_errors.depth == 0 then
@@ -558,8 +609,4 @@ local function __selu_raise(value)
   else
     __selu_error(value, 0)
   end
-end
-local function __selu_throw(value, position)
-  if value.__selu_position == nil then value.__selu_position = position end
-  __selu_raise(value)
 end"#;

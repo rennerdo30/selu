@@ -17,8 +17,8 @@ local function __selu_safe_error_text(value)
   if ok then return message end
   return "<error object>"
 end
-local function __selu_new_error(message, value)
-  return __selu_error_setmetatable({ message = message, value = value }, __selu_errors.meta)
+local function __selu_new_error(message, position, value)
+  return __selu_error_setmetatable({ message = message, value = value, __selu_position = position }, __selu_errors.meta)
 end
 local function __selu_is_error(value)
   if __selu_error_getmetatable(value) == __selu_errors.meta then return true end
@@ -27,7 +27,7 @@ end
 local function __selu_wrap_error(value)
   local ok, isError = __selu_pcall(__selu_is_error, value)
   if ok and isError then return value end
-  return __selu_new_error(__selu_safe_error_text(value), value)
+  return __selu_new_error(__selu_safe_error_text(value), nil, value)
 end
 local function __selu_raise(value)
   if __selu_errors.depth == 0 then
@@ -36,14 +36,11 @@ local function __selu_raise(value)
     __selu_error(value, 0)
   end
 end
-local function __selu_throw(value, position)
-  if value.__selu_position == nil then value.__selu_position = position end
-  __selu_raise(value)
-end
 local function __selu_protect(fn, ...)
-  __selu_errors.depth = __selu_errors.depth + 1
+  local depth = __selu_errors.depth
+  __selu_errors.depth = depth + 1
   local ok, status, value1 = __selu_pcall(fn, ...)
-  __selu_errors.depth = __selu_errors.depth - 1
+  __selu_errors.depth = depth
   return ok, status, value1
 end
 __selu_ns["main"] = {}
@@ -54,7 +51,10 @@ if not __selu_ns.__selu_events then
   __selu_frame:SetScript("OnEvent", function(self, event, ...)
     local handlers = __selu_handlers[event]
     if not handlers then return end
+    local depth = __selu_errors.depth
+    __selu_errors.depth = 0
     for i = 1, #handlers do handlers[i](...) end
+    __selu_errors.depth = depth
   end)
   local function __selu_on(event, fn)
     local handlers = __selu_handlers[event]
@@ -69,26 +69,26 @@ if not __selu_ns.__selu_events then
 end
 local __selu_on = __selu_ns.__selu_events
 local function readBalance()
-  local failure = __selu_new_error("Balance unavailable")
+  local failure = __selu_new_error("Balance unavailable", "main.selu:2: ")
   do
-    local __selu_t1, __selu_t2, __selu_t3 = __selu_protect(function()
-      __selu_throw(failure, "main.selu:4: ")
+    local __selu_ok, __selu_status, __selu_value1 = __selu_protect(function()
+      __selu_raise(failure)
     end)
-    if not __selu_t1 then
-      __selu_t1, __selu_t2, __selu_t3 = __selu_protect(function()
-        local e = __selu_wrap_error(__selu_t2)
+    if not __selu_ok then
+      __selu_ok, __selu_status, __selu_value1 = __selu_protect(function()
+        local e = __selu_wrap_error(__selu_status)
         print(e.message)
         return "return", 0
       end)
     end
-    local __selu_t4, __selu_t5, __selu_t6 = __selu_protect(function()
+    local __selu_final_ok, __selu_final_status, __selu_final_value1 = __selu_protect(function()
       print("Balance check finished")
     end)
-    if not __selu_t4 or __selu_t5 ~= nil then
-      __selu_t1, __selu_t2, __selu_t3 = __selu_t4, __selu_t5, __selu_t6
+    if not __selu_final_ok or __selu_final_status ~= nil then
+      __selu_ok, __selu_status, __selu_value1 = __selu_final_ok, __selu_final_status, __selu_final_value1
     end
-    if not __selu_t1 then __selu_raise(__selu_t2) end
-    if __selu_t2 == "return" then return __selu_t3 end
+    if not __selu_ok then __selu_raise(__selu_status) end
+    if __selu_status == "return" then return __selu_value1 end
   end
 end
 __selu_on("PLAYER_LOGIN", function()

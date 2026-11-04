@@ -431,10 +431,7 @@ impl Parser {
                 self.bump();
                 let value = Box::new(self.expr()?);
                 self.semi(start)?;
-                StmtKind::Throw {
-                    value,
-                    line: self.source[..start].bytes().filter(|b| *b == b'\n').count() + 1,
-                }
+                StmtKind::Throw { value }
             }
             Tok::Ident(ref w) if w == "try" => {
                 self.bump();
@@ -1328,6 +1325,8 @@ impl Parser {
                 ExprKind::Object(fields)
             }
             Tok::New => {
+                let start = self.peek_span().start;
+                let line = self.source[..start].bytes().filter(|b| *b == b'\n').count() + 1;
                 self.bump();
                 let (class, _) = self.ident("a class name after `new`")?;
                 let mut type_args = Vec::new();
@@ -1345,6 +1344,7 @@ impl Parser {
                     class,
                     type_args,
                     args,
+                    line,
                 }
             }
             Tok::TemplateHead(s) => {

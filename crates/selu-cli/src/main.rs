@@ -276,6 +276,7 @@ fn build(
         let mut lua_files: Vec<String> = Vec::new();
         let mut exports = std::collections::BTreeMap::new();
         let mut compiled = Vec::new();
+        let addon_errors = sources.iter().any(|m| selu_lower::uses_errors(&m.program));
         for module in &sources {
             let mut imports = selu_check::ModuleBindings::default();
             let mut lower_imports = std::collections::BTreeMap::new();
@@ -318,6 +319,7 @@ fn build(
             let mut bindings =
                 selu_lower::ModuleBindings::new(module.key.clone(), lower_imports, &module.program);
             bindings.addon_name = project.name.clone();
+            bindings.addon_errors = addon_errors;
             let lowered = selu_lower::lower_module_layout(
                 &module.program,
                 &selu_check::targets::with_fallbacks(manifest, &selected),

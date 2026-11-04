@@ -14,7 +14,13 @@ pub(crate) fn error_type() -> Type {
 }
 impl Ctx<'_> {
     pub(crate) fn reserved_error_name(&mut self, name: &str, span: &selu_diagnostics::Span) {
-        if name == "Error" {
+        // Some bindings are visited by more than one declaration pass.
+        if name == "Error"
+            && !self
+                .out
+                .iter()
+                .any(|d| d.code == "SELU0542" && d.span.as_ref() == Some(span))
+        {
             self.out.push(
                 err("SELU0542", "Error is a reserved built-in name", span)
                     .with_help("choose another declaration name"),
