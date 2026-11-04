@@ -139,6 +139,40 @@ fn files(directory: &Path) -> Result<Vec<std::path::PathBuf>> {
     files.sort();
     Ok(files)
 }
+// Keep the lock file's identity stable; unlinking it would let another process
+// lock a different inode. The OS releases the lock when this handle closes.
+fn writer_lock(directory: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(directory)?;
+    let directory = std::fs::canonicalize(directory)?;
+    let mut name = directory
+        .file_name()
+        .ok_or("store has no directory name")?
+        .to_os_string();
+    name.push(".lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(directory.with_file_name(name))?;
+    let start = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock)
+                if start.elapsed() < std::time::Duration::from_secs(30) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(
+                    "timed out waiting for manifest store writer lock; retry the update".into(),
+                );
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+}
 /// Headers include the checksum of the complete immutable segment payload.
 pub fn fingerprint(directory: &Path) -> Result<String> {
     use std::io::Read;
@@ -254,8 +288,11 @@ pub fn load_cached_selected(
 
 impl Store {
     pub fn open(directory: &Path) -> Result<Self> {
+        Self::open_paths(files(directory)?)
+    }
+    fn open_paths(paths: Vec<std::path::PathBuf>) -> Result<Self> {
         let mut store = Self::default();
-        for path in files(directory)? {
+        for path in paths {
             let bytes = std::fs::read(path)?;
             if bytes.len() < HEADER || &bytes[..8] != MAGIC || bytes[8..12] != [2, 0, 1, 0] {
                 return Err("unsupported or truncated store header".into());
@@ -467,6 +504,9 @@ impl Store {
         manifests: &[Manifest],
         chunk_size: usize,
     ) -> Result<u64> {
+        let _writer_lock = writer_lock(directory)?;
+        // A caller may have opened this handle before another writer committed.
+        *self = Self::open(directory)?;
         if manifests.is_empty() {
             return Ok(0);
         }
@@ -488,7 +528,7 @@ impl Store {
         let mut catalog = Catalog::default();
         let mut manifests: Vec<_> = manifests.iter().collect();
         manifests.sort_by_key(|m| m.target_string());
-        for manifest in manifests {
+        for &manifest in &manifests {
             let target = manifest.target_string();
             if self.builds.contains_key(&target) {
                 if self.load(&target)? != *manifest {
@@ -606,10 +646,23 @@ impl Store {
             .write(true)
             .create_new(true)
             .open(&temporary)?;
-        let write = (|| -> Result<()> {
+        let write = (|| -> Result<Self> {
             file.write_all(&bytes)?;
             file.sync_all()?;
             drop(file);
+            let mut combined = files(directory)?;
+            combined.push(temporary.clone());
+            let candidate = Self::open_paths(combined)?;
+            // Expand every index to catch invalid combined copy ranges, and
+            // reconstruct pending manifests before making the segment visible.
+            for target in candidate.builds() {
+                candidate.index(target)?;
+            }
+            for manifest in &manifests {
+                if candidate.load(&manifest.target_string())? != **manifest {
+                    return Err("staged manifest differs from pending build".into());
+                }
+            }
             if path.exists() {
                 if std::fs::read(&path)? != bytes {
                     return Err("segment filename collision".into());
@@ -618,13 +671,14 @@ impl Store {
             } else {
                 std::fs::rename(&temporary, &path)?;
             }
-            Ok(())
+            candidate.indexes.borrow_mut().clear();
+            candidate.chunks.borrow_mut().clear();
+            Ok(candidate)
         })();
         if write.is_err() {
             let _ = std::fs::remove_file(&temporary);
         }
-        write?;
-        *self = Self::open(directory)?;
+        *self = write?;
         Ok(bytes.len() as u64)
     }
 }
@@ -632,6 +686,79 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn independent_writers_preserve_both_pending_builds() {
+        let root = std::env::temp_dir().join(format!(
+            "selu-writers-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let directory = root.join("store");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut workers = Vec::new();
+        for build in [1, 2] {
+            let mut writer = Store::open(&directory).unwrap();
+            let directory = directory.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                let manifest: Manifest = serde_json::from_value(serde_json::json!({"flavour":"wow","build":{"major":12,"minor":1,"patch":5,"build":build},"interface":120105})).unwrap();
+                barrier.wait();
+                writer.append(&directory,&[manifest]).map_err(|e| e.to_string())
+            }));
+        }
+        let outcomes: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+        assert!(outcomes.iter().all(|r| r.is_ok()), "{outcomes:?}");
+        let stored = Store::open(&directory).unwrap();
+        assert_eq!(stored.builds().count(), 2);
+        for build in [1, 2] {
+            assert_eq!(
+                stored
+                    .load(&format!("wow@12.1.5.{build}"))
+                    .unwrap()
+                    .build
+                    .build,
+                build
+            );
+        }
+        let before: Vec<_> = files(&directory)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.clone(), std::fs::read(p).unwrap()))
+            .collect();
+        let mut invalid = stored.load("wow@12.1.5.1").unwrap();
+        invalid.interface += 1;
+        assert!(
+            Store::open(&directory)
+                .unwrap()
+                .append(&directory, &[invalid])
+                .is_err()
+        );
+        let mut noncanonical = stored.load("wow@12.1.5.1").unwrap();
+        noncanonical.build.build = 3;
+        for name in ["Z", "A"] {
+            noncanonical.globals.push(
+                serde_json::from_value(
+                    serde_json::json!({"name":name,"evidence":"source","type":"number"}),
+                )
+                .unwrap(),
+            );
+        }
+        let error = Store::open(&directory)
+            .unwrap()
+            .append(&directory, &[noncanonical])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("staged manifest differs"), "{error}");
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), before.len());
+        for (p, bytes) in before {
+            assert_eq!(std::fs::read(p).unwrap(), bytes);
+        }
+        assert!(Store::open(&directory).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn requested_loads_skip_unrelated_builds_and_repair_only_their_cache() {
         let root = std::env::temp_dir().join(format!("selu-selective-{}", std::process::id()));

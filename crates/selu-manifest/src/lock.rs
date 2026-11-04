@@ -64,6 +64,33 @@ fn widget_methods(
     Ok(methods)
 }
 
+fn reference_names(value: &serde_json::Value, names: &mut std::collections::BTreeSet<String>) {
+    for key in ["name", "prefix"] {
+        if let Some(name) = value.get(key).and_then(serde_json::Value::as_str)
+            && !name.is_empty()
+        {
+            names.insert(name.into());
+        }
+    }
+    for key in ["fields", "methods", "predicates"] {
+        for member in value
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(name) = member.as_str() {
+                names.insert(name.into());
+            } else {
+                reference_names(member, names);
+            }
+        }
+    }
+    if let Some(values) = value.get("values").and_then(serde_json::Value::as_object) {
+        names.extend(values.keys().cloned());
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lock {
@@ -80,6 +107,19 @@ impl Lock {
         yes: bool,
     ) -> Result<String> {
         let targets = project_targets(project)?;
+        let valid = targets
+            .iter()
+            .map(|target| {
+                TargetSpec::parse(target)
+                    .map(|spec| crate::product(&spec.flavour).to_owned())
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
+        for selector in products {
+            if !valid.contains(crate::product(selector)) {
+                return Err(format!("unknown update selector `{selector}`; valid project products: {}; project targets: {}",valid.iter().cloned().collect::<Vec<_>>().join(", "),targets.join(", ")).into());
+            }
+        }
         let mut next = self.targets.clone();
         let mut report = String::new();
         let mut major = false;
@@ -114,18 +154,44 @@ impl Lock {
                 report.push_str("WARNING: MAJOR VERSION CHANGE - confirmation required\n");
             }
             if let Some(old) = old {
-                for section in ["functions", "events", "widgets"] {
-                    let entries = |m: &Manifest| -> Result<BTreeMap<String, serde_json::Value>> {
-                        let value = serde_json::to_value(m)?;
-                        Ok(value[section]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|v| Some((v.get("name")?.as_str()?.into(), v.clone())))
-                            .collect())
-                    };
-                    let before = entries(old)?;
-                    let after = entries(newest)?;
+                let old_value = serde_json::to_value(old)?;
+                let new_value = serde_json::to_value(newest)?;
+                for section in [
+                    "functions",
+                    "events",
+                    "widgets",
+                    "globals",
+                    "tables",
+                    "predicates",
+                    "enums",
+                    "templates",
+                    "dataGlobals",
+                    "frameFamilies",
+                ] {
+                    let entries =
+                        |value: &serde_json::Value| -> BTreeMap<String, serde_json::Value> {
+                            value[section]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|v| {
+                                    let name = if section == "frameFamilies" {
+                                        format!(
+                                            "{}...{}",
+                                            v.get("prefix")?.as_str()?,
+                                            v.get("suffix")?.as_str()?
+                                        )
+                                    } else if section == "enums" {
+                                        format!("Enum.{}", v.get("name")?.as_str()?)
+                                    } else {
+                                        v.get("name")?.as_str()?.to_owned()
+                                    };
+                                    Some((name, v.clone()))
+                                })
+                                .collect()
+                        };
+                    let before = entries(&old_value);
+                    let after = entries(&new_value);
                     let added = after.keys().filter(|k| !before.contains_key(*k)).count();
                     let removed: Vec<_> =
                         before.keys().filter(|k| !after.contains_key(*k)).collect();
@@ -146,6 +212,9 @@ impl Lock {
                         .chain(&changed)
                         .map(|name| (*name).clone())
                         .collect();
+                    for name in removed.iter().chain(&changed) {
+                        reference_names(&before[*name], &mut affected);
+                    }
                     if section == "widgets" {
                         for widget in removed.iter().chain(&changed) {
                             let before = widget_methods(old, widget)?;
@@ -253,6 +322,119 @@ impl Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn update_reports_removed_global_and_every_other_consumed_section() {
+        let project =
+            std::env::temp_dir().join(format!("selu-all-api-diff-{}", std::process::id()));
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(
+            project.join("selu.toml"),
+            "[addon]\nname=\"Diff\"\ntargets=[\"wow\"]\n",
+        )
+        .unwrap();
+        let sections = [
+            (
+                "globals",
+                "RemovedGlobal",
+                serde_json::json!({"name":"RemovedGlobal","type":"number","evidence":"source"}),
+                "const value = RemovedGlobal;",
+            ),
+            (
+                "tables",
+                "RemovedType",
+                serde_json::json!({"name":"RemovedType","type":"Structure","fields":[{"name":"lost","type":"number"}]}),
+                "let value: RemovedType;",
+            ),
+            (
+                "predicates",
+                "RemovedPredicate",
+                serde_json::json!({"name":"RemovedPredicate","type":"number"}),
+                "RemovedPredicate(value);",
+            ),
+            (
+                "enums",
+                "RemovedEnum",
+                serde_json::json!({"name":"RemovedEnum","values":{"Lost":1}}),
+                "const value = Enum.RemovedEnum.Lost;",
+            ),
+            (
+                "templates",
+                "RemovedTemplate",
+                serde_json::json!({"name":"RemovedTemplate","source":0,"evidence":"source","methods":["DoOld"]}),
+                "const frame = CreateFrame(\"Frame\", undefined, undefined, \"RemovedTemplate\");",
+            ),
+            (
+                "dataGlobals",
+                "RemovedFrame",
+                serde_json::json!({"name":"RemovedFrame","source":0,"evidence":"source","type":"Frame"}),
+                "RemovedFrame.Show();",
+            ),
+            (
+                "frameFamilies",
+                "Gone",
+                serde_json::json!({"prefix":"Gone","suffix":"Button","minIndex":1,"maxIndex":2,"widget":"Button"}),
+                "frameFamily(\"Gone\",1,\"Button\");",
+            ),
+        ];
+        for (section, name, entry, source) in sections {
+            let mut json = serde_json::to_value(manifest(1)).unwrap();
+            json["sourceFiles"] = serde_json::json!(["source.lua"]);
+            json[section] = serde_json::json!([entry]);
+            let old: Manifest = serde_json::from_value(json).unwrap();
+            let new = manifest(2);
+            std::fs::write(project.join("src/main.selu"), source).unwrap();
+            let mut lock = Lock::read(&project).unwrap();
+            lock.targets.clear();
+            lock.resolve(&["wow".into()], std::slice::from_ref(&old))
+                .unwrap();
+            lock.write(&project).unwrap();
+            let report = lock.update(&project, &[old, new], &[], false).unwrap();
+            assert!(
+                report.contains(&format!("{section}: +0, -1")),
+                "{section}: {report}"
+            );
+            assert!(
+                report.contains(name) && report.contains("main.selu:1:") && report.contains(source),
+                "{report}"
+            );
+            assert_eq!(Lock::read(&project).unwrap().targets["wow"], "wow@12.1.5.2");
+        }
+        std::fs::remove_dir_all(project).unwrap();
+    }
+    #[test]
+    fn unknown_update_selector_errors_without_moving_any_lock() {
+        let project =
+            std::env::temp_dir().join(format!("selu-unknown-selector-{}", std::process::id()));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("selu.toml"),
+            "[addon]\nname=\"Typo\"\ntargets=[\"wow\"]\n",
+        )
+        .unwrap();
+        let mut lock = Lock::read(&project).unwrap();
+        lock.resolve(&["wow".into()], &[manifest(1)]).unwrap();
+        lock.write(&project).unwrap();
+        let before = std::fs::read(project.join("selu.lock")).unwrap();
+        for selectors in [
+            vec!["wow_typo".into()],
+            vec!["wowf".into()],
+            vec!["wow".into(), "wow_typo".into()],
+        ] {
+            let error = lock
+                .update(&project, &[manifest(1), manifest(2)], &selectors, false)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(selectors.last().unwrap())
+                    && error.contains("wow")
+                    && error.contains("valid"),
+                "{error}"
+            );
+            assert_eq!(lock.targets["wow"], "wow@12.1.5.1");
+            assert_eq!(std::fs::read(project.join("selu.lock")).unwrap(), before);
+        }
+        std::fs::remove_dir_all(project).unwrap();
+    }
     fn manifest(build: u32) -> Manifest {
         serde_json::from_value(serde_json::json!({"flavour":"wow","build":{"major":12,"minor":1,"patch":5,"build":build},"interface":120105})).unwrap()
     }

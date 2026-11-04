@@ -243,6 +243,15 @@ entries once per non-empty update, then appends one new segment containing only 
 entries and new build indexes. Existing files are never rewritten. Repeated updates
 add zero bytes; conflicting content for an existing product/full-build ID is an error.
 
+Writers serialize with an exclusive OS lock on `manifests/store.lock`, next to the
+store. The lock file is gitignored and keeps a stable identity; its handle releases
+the lock automatically, including after a process exits. Writers wait at most 30
+seconds, then return a retry error. After acquiring the lock, a writer reopens the
+current store before assigning entry IDs. It writes and syncs a temporary file,
+validates the combined store and pending reconstructions, and only then atomically
+renames the file into place. Rejected candidates are removed while still temporary.
+Generation may run outside the lock; publication always uses the refreshed store.
+
 Production entry blocks contain at most 4,096 entries. Larger blocks were measured
 and saved some space, but increased one-build cold load time. Opening the store reads
 and verifies complete compressed segments and decodes their small catalogs; it does

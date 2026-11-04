@@ -22,20 +22,57 @@ impl TargetRow {
     pub fn parse(s: &str) -> TargetRow {
         match s.split_once('@') {
             Some((f, v)) => TargetRow {
-                flavour: selu_manifest::product(f.trim()).into(),
+                flavour: f.trim().into(),
                 version: v.trim().into(),
             },
             None => TargetRow {
-                flavour: selu_manifest::product(s.trim()).into(),
+                flavour: s.trim().into(),
                 version: String::new(),
             },
         }
     }
+    fn select_product(
+        &mut self,
+        product: &str,
+        lock: &selu_manifest::lock::Lock,
+    ) -> Result<(), String> {
+        let current = selu_manifest::product(&self.flavour);
+        if current != self.flavour && current == product {
+            let requested =
+                selu_manifest::TargetSpec::parse(&self.render()).map_err(|e| e.to_string())?;
+            let targets = lock
+                .discovery_targets(&[self.render()])
+                .map_err(|e| e.to_string())?;
+            let exact = &targets[0];
+            let selected = selu_manifest::TargetSpec::parse(exact).map_err(|e| e.to_string())?;
+            let Some((_, version)) = exact.split_once('@') else {
+                return Err(
+                    "Build the project to lock its exact build before migrating this legacy target"
+                        .into(),
+                );
+            };
+            if selected.parts.len() != 4
+                || selu_manifest::product(&selected.flavour) != product
+                || !selected.parts.starts_with(&requested.parts)
+            {
+                return Err(
+                    "Build the project to lock its exact build before migrating this legacy target"
+                        .into(),
+                );
+            }
+            self.flavour = product.into();
+            self.version = version.into();
+        } else {
+            self.flavour = product.into();
+            self.version.clear();
+        }
+        Ok(())
+    }
     pub fn render(&self) -> String {
         if self.version.is_empty() {
-            selu_manifest::product(&self.flavour).to_string()
+            self.flavour.clone()
         } else {
-            format!("{}@{}", selu_manifest::product(&self.flavour), self.version)
+            format!("{}@{}", self.flavour, self.version)
         }
     }
 }
@@ -183,7 +220,8 @@ impl Settings {
                 out.push(error.to_string());
             }
 
-            if !t.flavour.is_empty() && !seen.insert(t.flavour.clone()) {
+            if !t.flavour.is_empty() && !seen.insert(selu_manifest::product(&t.flavour).to_owned())
+            {
                 out.push(format!(
                     "`{}` is listed twice; one build per flavour.",
                     t.flavour
@@ -334,12 +372,15 @@ impl SettingsWindow {
                             .show_ui(ui, |ui| {
                                 for f in &flavours {
                                     if ui.selectable_label(&t.flavour == f, self.builds.get(f).and_then(|builds| builds.last()).and_then(|v| selu_manifest::Build::parse(v).ok()).map(|b| format!("{f}  -  {}", selu_manifest::display_name(f, &b))).unwrap_or_else(|| f.clone())).clicked() {
-                                        t.flavour = f.clone();
-                                        t.version.clear();
+                                        let project = self.path.parent().unwrap_or(Path::new("."));
+                                        let result = selu_manifest::lock::Lock::read(project)
+                                            .map_err(|e| e.to_string())
+                                            .and_then(|lock| t.select_product(f, &lock));
+                                        if let Err(error) = result { self.error = Some(error); }
                                     }
                                 }
                             });
-                        let builds = self.builds.get(&t.flavour).cloned().unwrap_or_default();
+                        let builds = self.builds.get(selu_manifest::product(&t.flavour)).cloned().unwrap_or_default();
                         let choices = version_choices(&builds);
                         let current = choices
                             .iter()
@@ -363,7 +404,7 @@ impl SettingsWindow {
                             remove = Some(i);
                         }
                     });
-                    if !t.flavour.is_empty() && !self.builds.contains_key(&t.flavour) {
+                    if !t.flavour.is_empty() && !self.builds.contains_key(selu_manifest::product(&t.flavour)) {
                         ui.label(
                             RichText::new(format!("No manifest for `{}`.", t.flavour))
                                 .small()
@@ -377,7 +418,7 @@ impl SettingsWindow {
                 if ui.button("Add target").clicked() {
                     let next = flavours
                         .iter()
-                        .find(|f| !s.targets.iter().any(|t| &t.flavour == *f))
+                        .find(|f| !s.targets.iter().any(|t| selu_manifest::product(&t.flavour) == f.as_str()))
                         .cloned()
                         .unwrap_or_default();
                     s.targets.push(TargetRow {
@@ -488,6 +529,64 @@ impl SettingsWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn open_and_save_preserves_legacy_partial_target() {
+        let project =
+            std::env::temp_dir().join(format!("selu-studio-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("selu.toml"),
+            "[addon]\nname=\"Legacy\"\ntargets=[\"retail@12.1\"]\n",
+        )
+        .unwrap();
+        let mut window = SettingsWindow::open(&project).unwrap();
+        assert!(
+            window.settings.problems().is_empty(),
+            "{:?}",
+            window.settings.problems()
+        );
+        assert_eq!(window.settings.targets[0].render(), "retail@12.1");
+        window.settings.indent = 4;
+        assert!(window.save());
+        assert_eq!(
+            selu_manifest::lock::project_targets(&project).unwrap(),
+            ["retail@12.1"]
+        );
+        assert!(
+            SettingsWindow::open(&project)
+                .unwrap()
+                .settings
+                .problems()
+                .is_empty()
+        );
+        let no_lock = selu_manifest::lock::Lock::read(&project).unwrap();
+        assert!(
+            window.settings.targets[0]
+                .select_product("wow", &no_lock)
+                .is_err()
+        );
+        assert_eq!(window.settings.targets[0].render(), "retail@12.1");
+        let lock = selu_manifest::lock::Lock {
+            version: 1,
+            targets: BTreeMap::from([("wow@12.1".into(), "wow@12.1.5.70391".into())]),
+        };
+        lock.write(&project).unwrap();
+        window.settings.targets[0]
+            .select_product("wow", &lock)
+            .unwrap();
+        assert_eq!(window.settings.targets[0].render(), "wow@12.1.5.70391");
+        assert!(window.settings.problems().is_empty());
+        assert!(window.save());
+        assert_eq!(
+            selu_manifest::lock::project_targets(&project).unwrap(),
+            ["wow@12.1.5.70391"]
+        );
+        assert_eq!(
+            selu_manifest::lock::Lock::read(&project).unwrap().targets,
+            lock.targets
+        );
+        std::fs::remove_dir_all(project).unwrap();
+    }
 
     #[test]
     fn edits_keep_comments_and_unknown_keys() {

@@ -3,3 +3,5 @@ dist/
 examples/**/dist/
 # Machine-local build settings (shared sccache on the owner's PC).
 .cargo/config.toml
+# Persistent OS writer-lock identity; no manifest data is stored here.
+/manifests/store.lock
