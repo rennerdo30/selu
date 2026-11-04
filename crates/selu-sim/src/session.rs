@@ -111,6 +111,7 @@ struct VmState {
     generation: Generation,
     ui_size: Option<(f64, f64)>,
     frame_families: std::collections::BTreeSet<(String, String)>,
+    checked_manifests: std::collections::BTreeMap<PathBuf, selu_manifest::Manifest>,
     manual_frame_families: std::collections::BTreeSet<(String, String)>,
 }
 
@@ -155,6 +156,94 @@ pub struct Session {
     saved: crate::saved::SavedSnapshot,
 }
 
+type CheckedManifests = std::collections::BTreeMap<PathBuf, selu_manifest::Manifest>;
+fn snapshot_target(config: &SessionConfig, checked: &CheckedManifests) -> Option<String> {
+    config.target.clone().or_else(|| {
+        checked
+            .values()
+            .next()
+            .map(selu_manifest::Manifest::target_string)
+    })
+}
+fn validate_snapshots(checked: &CheckedManifests) -> SimResult<()> {
+    let mut target = None;
+    let mut families = std::collections::BTreeMap::new();
+    for (path, m) in checked {
+        let current = m.target_string();
+        if target.as_ref().is_some_and(|t| t != &current) {
+            return Err(runtime(format!(
+                "incompatible checked snapshot target `{current}` for {}",
+                path.display()
+            )));
+        }
+        target = Some(current);
+        for family in &m.frame_families {
+            let key = (&family.prefix, &family.suffix);
+            if let Some(previous) = families.insert(key, family)
+                && (previous.widget != family.widget
+                    || previous.min_index != family.min_index
+                    || previous.max_index != family.max_index)
+            {
+                return Err(runtime(format!(
+                    "incompatible checked frame family `{}...{}` in {}",
+                    family.prefix,
+                    family.suffix,
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+fn install_snapshots(vm: &Vm, checked: CheckedManifests) -> SimResult<()> {
+    validate_snapshots(&checked)?;
+    let manual = lock(&vm.state).manual_frame_families.clone();
+    let mut families = manual;
+    for m in checked.values() {
+        families.extend(
+            m.frame_families
+                .iter()
+                .map(|f| (f.prefix.clone(), f.suffix.clone())),
+        );
+    }
+    let table = vm.lua.create_table()?;
+    for (prefix, suffix) in &families {
+        table.raw_set(
+            table.raw_len() + 1,
+            vm.lua
+                .create_sequence_from([prefix.as_str(), suffix.as_str()])?,
+        )?;
+    }
+    vm.lua.globals().raw_set("__selu_frame_families", table)?;
+    let mut state = lock(&vm.state);
+    state.checked_manifests = checked;
+    state.frame_families = families;
+    Ok(())
+}
+fn register_addon_snapshot(vm: &Vm, dir: &Path, config: &SessionConfig) -> SimResult<()> {
+    // Reload installs the complete prevalidated set before executing any addon.
+    if lock(&vm.state).checked_manifests.contains_key(dir) {
+        return Ok(());
+    }
+    let mut checked = lock(&vm.state).checked_manifests.clone();
+    let target = snapshot_target(config, &checked);
+    match selu_manifest::resolution::compiled_manifest_for_target(dir, target.as_deref())
+        .map_err(|e| runtime(e.to_string()))?
+    {
+        Some(m) => {
+            checked.insert(dir.to_path_buf(), m);
+            install_snapshots(vm, checked)?;
+        }
+        None if checked.contains_key(dir) => {
+            return Err(runtime(format!(
+                "checked snapshot missing for {}",
+                dir.display()
+            )));
+        }
+        None => {}
+    }
+    Ok(())
+}
 fn load_dynamic(
     vm: &Vm,
     dir: &Path,
@@ -181,6 +270,7 @@ fn load_dynamic(
         {
             load_dynamic(vm, &dir.parent().unwrap().join(dep), config, saved)?;
         }
+        register_addon_snapshot(vm, &dir, config)?;
         lock(&vm.state).loaded.push(dir.clone());
         Session::load_into(vm, &dir, config, saved)?;
         lock(&vm.state).loading.remove(&dir);
@@ -198,6 +288,18 @@ fn load_dynamic(
         let unfinished = state.loading.remove(&dir);
         if result.is_err() && unfinished {
             state.loaded.retain(|path| path != &dir);
+        }
+    }
+    if result.is_err() {
+        let mut checked = lock(&vm.state).checked_manifests.clone();
+        if checked.remove(&dir).is_some() {
+            let empty = checked.is_empty();
+            install_snapshots(vm, checked)?;
+            if empty && let Some(m) = &config.manifest {
+                for f in &m.frame_families {
+                    register_family(vm, &f.prefix, &f.suffix)?;
+                }
+            }
         }
     }
     result
@@ -271,6 +373,16 @@ fn runtime(message: String) -> mlua::Error {
 
 impl Session {
     pub fn new(mut config: SessionConfig) -> SimResult<Session> {
+        if let Some(m) = &config.manifest {
+            selu_manifest::resolution::select_checked_manifest(
+                std::slice::from_ref(m),
+                config.target.as_deref(),
+            )
+            .map_err(|e| runtime(e.to_string()))?;
+            if config.target.is_none() {
+                config.target = Some(m.target_string());
+            }
+        }
         if config.manifest.is_none()
             && let Ok(cwd) = std::env::current_dir()
         {
@@ -390,27 +502,11 @@ impl Session {
     /// Load an addon folder through its `.toc` and fire `ADDON_LOADED`.
     /// Returns the addon name.
     pub fn load_addon_dir(&mut self, dir: &Path) -> SimResult<String> {
-        {
-            if let Some(manifest) = selu_manifest::resolution::compiled_manifest(dir)
-                .map_err(|e| runtime(e.to_string()))?
-            {
-                self.config.manifest = Some(manifest);
-                // A checked build takes precedence over ambient discovery.
-                lock(&self.sim.state).frame_families.clear();
-                self.sim
-                    .lua
-                    .globals()
-                    .raw_set("__selu_frame_families", self.sim.lua.create_table()?)?;
-                let manual = lock(&self.sim.state).manual_frame_families.clone();
-                for (prefix, suffix) in manual {
-                    register_family(&self.sim, &prefix, &suffix)?;
-                }
-            } else if self.config.manifest.is_none() {
-                self.config.manifest = discover_manifest(&self.config, dir)?;
-            }
-            if let Some(manifest) = &self.config.manifest {
-                for family in &manifest.frame_families {
-                    register_family(&self.sim, &family.prefix, &family.suffix)?;
+        if self.config.manifest.is_none() && lock(&self.sim.state).checked_manifests.is_empty() {
+            self.config.manifest = discover_manifest(&self.config, dir)?;
+            if let Some(m) = &self.config.manifest {
+                for f in &m.frame_families {
+                    register_family(&self.sim, &f.prefix, &f.suffix)?;
                 }
             }
         }
@@ -507,6 +603,26 @@ impl Session {
     pub fn reload(&mut self) -> SimResult<()> {
         lock(&self.sim.state).commands.push(HostCommand::Reload);
         let addons = lock(&self.sim.state).loaded.clone();
+        let old_checked = lock(&self.sim.state).checked_manifests.clone();
+        let target = snapshot_target(&self.config, &old_checked);
+        let mut snapshots = CheckedManifests::new();
+        for dir in &addons {
+            match selu_manifest::resolution::compiled_manifest_for_target(dir, target.as_deref())
+                .map_err(|e| runtime(e.to_string()))?
+            {
+                Some(m) => {
+                    snapshots.insert(dir.clone(), m);
+                }
+                None if old_checked.contains_key(dir) => {
+                    return Err(runtime(format!(
+                        "checked snapshot missing for {}",
+                        dir.display()
+                    )));
+                }
+                None => {}
+            }
+        }
+        validate_snapshots(&snapshots)?;
         self.sim.fire("PLAYER_LOGOUT", vec![])?;
         let mut saved = self.saved.clone();
         for dir in &addons {
@@ -538,21 +654,15 @@ impl Session {
                 crate::saved::capture(self.sim.lua.globals().raw_get(name)?, &mut HashSet::new())?,
             ));
         }
-        let loaded = lock(&self.sim.state).loaded.clone();
-        for dir in loaded {
-            if let Some(manifest) = selu_manifest::resolution::compiled_manifest(&dir)
-                .map_err(|e| runtime(e.to_string()))?
-            {
-                self.config.manifest = Some(manifest);
-                break;
-            }
-        }
         let replacement = Self::start_vm(&self.config)?;
         for (prefix, suffix) in &lock(&self.sim.state).manual_frame_families {
             register_family(&replacement, prefix, suffix)?;
             lock(&replacement.state)
                 .manual_frame_families
                 .insert((prefix.clone(), suffix.clone()));
+        }
+        if !snapshots.is_empty() {
+            install_snapshots(&replacement, snapshots)?;
         }
         *lock(&replacement.clock) = self.now();
         {

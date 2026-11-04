@@ -109,13 +109,15 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let manifest = match manifest_path {
-        Some(path) => match selu_manifest::load_manifest(&path) {
-            Ok(m) => Some(m),
-            Err(e) => {
-                eprintln!("{e}");
-                return ExitCode::FAILURE;
+        Some(path) => {
+            match selu_manifest::resolution::load_checked_manifest(&path, target.as_deref()) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
             }
-        },
+        }
         None => None,
     };
     if !headless {

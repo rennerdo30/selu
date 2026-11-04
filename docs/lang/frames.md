@@ -135,3 +135,25 @@ as well. `selu test --manifest-dir ...` builds and checks tests against that sam
 selection and passes it into Session. Compiler and Session discovery share the
 precedence: explicit directory, `SELU_MANIFEST_DIR`, project ancestors, then cwd
 ancestors. Rebuilds preserve an explicit Studio manifest-directory override.
+
+## Shared targets and multiple addons in the simulator
+
+A compiled output's `manifest.json` contains one checked snapshot per canonical
+target. Single-target output retains the legacy single-manifest form; shared
+output bundles its snapshots in a `manifests` array. Session and Studio select
+using the requested flavour/version, including partial-version resolution.
+Multiple snapshots require an explicit target; an unavailable or mismatched
+target is an error, including when loading a legacy single-target snapshot.
+
+Session keeps checked metadata for every loaded addon, including dependencies
+and load-on-demand addons. Compatible snapshots have the same canonical target
+and identical widget type and observed range for every family/suffix they share;
+disjoint families merge. Conflicting target identities or family definitions
+are errors before the incoming addon's code runs. Loading another addon cannot
+remove previously loaded families. Manual simulator registrations remain separate.
+
+Reload reads and validates the whole loaded set before retiring the current VM.
+Missing, incompatible or wrong-target snapshots fail without replacing that VM.
+The new VM receives the complete validated registry before any addon executes,
+and uses that same checked set throughout loading. Rebuilds publish snapshots
+only after all target compilations succeed.

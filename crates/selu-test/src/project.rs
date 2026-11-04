@@ -185,6 +185,7 @@ fn build_impl(
             return Err(ExitCode::FAILURE);
         }
     };
+    let mut snapshots = std::collections::BTreeMap::<std::path::PathBuf, Vec<&Manifest>>::new();
     for target_str in &target_strings {
         let spec = TargetSpec::parse(target_str).map_err(|d| fail(&d, ""))?;
         let manifest = selu_manifest::resolve(&spec, &manifests).map_err(|d| fail(&d, ""))?;
@@ -412,17 +413,31 @@ fn build_impl(
             eprintln!("selu: cannot write .toc: {e}");
             ExitCode::FAILURE
         })?;
-        std::fs::write(
-            map_dir.join("manifest.json"),
-            serde_json::to_vec(manifest).expect("manifest serializes"),
-        )
-        .map_err(|e| {
-            eprintln!("selu: cannot write checked manifest: {e}");
-            ExitCode::FAILURE
-        })?;
+        snapshots
+            .entry(map_dir.join("manifest.json"))
+            .or_default()
+            .push(manifest);
         if !quiet {
             println!("built {} -> {}", project.name, out_dir.display());
         }
+    }
+    for (path, manifests) in snapshots {
+        #[derive(Serialize)]
+        struct Targets<'a> {
+            manifests: &'a [&'a Manifest],
+        }
+        let bytes = if manifests.len() == 1 {
+            serde_json::to_vec(manifests[0])
+        } else {
+            serde_json::to_vec(&Targets {
+                manifests: &manifests,
+            })
+        }
+        .expect("checked manifests serialize");
+        std::fs::write(path, bytes).map_err(|e| {
+            eprintln!("selu: cannot write checked snapshots: {e}");
+            ExitCode::FAILURE
+        })?;
     }
     // Only projects with saved data get the file; one that already has it keeps
     // it up to date, so its recorded history is never dropped silently.
