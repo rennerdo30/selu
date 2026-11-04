@@ -289,6 +289,7 @@ dependencies = [
  "selu-check",
  "selu-diagnostics",
  "selu-manifest",
+ "selu-sourcemap",
  "selu-syntax",
  "serde",
  "serde_json",
@@ -309,6 +310,14 @@ version = "0.1.0"
 dependencies = [
  "mlua",
  "serde",
+]
+
+[[package]]
+name = "selu-sourcemap"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

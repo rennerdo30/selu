@@ -69,7 +69,9 @@ __selu_on("PLAYER_LOGIN", function()
       do
         local count = countByQuality[quality]
         if count == nil then count = 0 end
-        if count > 0 then print(string.format("  %s: %s", qualityNames[quality + 1], count)) end
+        if count > 0 then
+          print(string.format("  %s: %s", qualityNames[quality + 1], count))
+        end
       end
       quality = quality + 1
     end

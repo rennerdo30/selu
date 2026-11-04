@@ -76,7 +76,9 @@ __selu_on("PLAYER_LOGIN", function()
       local c = __selu_t9[__selu_t10]
       if c == nil then break end
       repeat
-        if c.seconds > 0 then break end
+        if c.seconds > 0 then
+          break
+        end
         ready = ready + 1
       until true
     end

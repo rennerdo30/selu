@@ -11,6 +11,7 @@ copy into `World of Warcraft/_<flavour>_/Interface/AddOns`.
 
 | Example | Shows |
 |---|---|
+| [`source-maps`](source-maps/src/main.selu) | nested callbacks with separate source positions in the generated map |
 | [`saved-settings`](saved-settings/src/main.selu) | recursive saved defaults, per-character progress and a checked migration |
 | [`modules`](modules/src/main.selu) | named imports, live exports, shared addon namespace and dependency ordering |
 | [`classes`](classes/src/main.selu) | tracker inheritance, super calls, static members and an arrow capturing this |

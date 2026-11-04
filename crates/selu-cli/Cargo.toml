@@ -23,3 +23,4 @@ toml.workspace = true
 
 [dev-dependencies]
 selu-sim = { path = "../selu-sim" }
+selu-sourcemap = { path = "../selu-sourcemap" }

@@ -481,7 +481,7 @@ fn review_partial_compound_folding() {
         review_lua(
             "function side(): boolean { return true; } if (!has(GetTime) && side()) { print(\"yes\"); }"
         ),
-        "local function side()\n  return true\nend\nif side() then print(\"yes\") end\n"
+        "local function side()\n  return true\nend\nif side() then\n  print(\"yes\")\nend\n"
     );
 }
 #[test]
