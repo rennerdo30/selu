@@ -166,6 +166,21 @@ impl Visitor for Scan {
         for v in n.variables() {
             if let Var::Name(t) = v {
                 self.assignments.push((name(t), start(n)));
+            } else if let Var::Expression(e) = v
+                && let Prefix::Name(root) = e.prefix()
+            {
+                let mut parts = vec![name(root)];
+                let mut known = true;
+                for suffix in e.suffixes() {
+                    if let Suffix::Index(Index::Dot { name: n, .. }) = suffix {
+                        parts.push(name(n));
+                    } else {
+                        known = false;
+                    }
+                }
+                if known {
+                    self.assignments.push((parts.join("."), start(n)));
+                }
             }
         }
         for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
@@ -259,6 +274,22 @@ pub struct Sources {
     calls: BTreeMap<String, String>,
     tables: BTreeMap<String, selu_manifest::Declaration>,
     scalars: BTreeMap<String, Vec<(Scalar, bool)>>,
+}
+pub(crate) fn helper_names(ast: &full_moon::ast::Ast) -> BTreeSet<String> {
+    let mut scan = Scan::default();
+    scan.visit_ast(ast);
+    let mut names = BTreeSet::new();
+    for (n, pos) in &scan.assignments {
+        if !scan.local(n.split('.').next().unwrap(), *pos) {
+            names.insert(n.clone());
+        }
+    }
+    for (n, pos, _) in &scan.signatures {
+        if !scan.local(n.split('.').next().unwrap(), *pos) {
+            names.insert(n.clone());
+        }
+    }
+    names
 }
 impl Sources {
     pub fn parse(&mut self, file: &str, source: &str) -> Result<(), String> {
@@ -442,7 +473,38 @@ impl Sources {
         for (qualified, pos, body) in &scan.signatures {
             let root = qualified.split('.').next().unwrap();
             if !scan.local(root, *pos) {
-                let signature = source_signature(qualified, body, &source[..*pos], file);
+                let mut signature = source_signature(qualified, body, &source[..*pos], file);
+                let builtin = body
+                    .block()
+                    .last_stmt()
+                    .and_then(|last| match last {
+                        LastStmt::Return(r) if r.returns().len() == 1 => r.returns().iter().next(),
+                        _ => None,
+                    })
+                    .and_then(|e| match e {
+                        Expression::FunctionCall(c) => match c.prefix() {
+                            Prefix::Name(n) => Some((name(n), start(c))),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                if builtin.as_ref().is_some_and(|(n, call_pos)| {
+                    ["pairs", "ipairs"].contains(&n.as_str())
+                        && (scan.local(n, *call_pos)
+                            || scan
+                                .assignments
+                                .iter()
+                                .any(|(v, pos)| v == n && !scan.local(n, *pos)))
+                }) {
+                    for r in &mut signature.returns {
+                        if r.attributes.remove("SeluIterator").is_some() {
+                            r.ty = Some(String::new());
+                            signature
+                                .attributes
+                                .insert("SeluUntypedReturnTail".into(), true.into());
+                        }
+                    }
+                }
                 self.signatures
                     .entry(qualified.clone())
                     .or_insert(signature);
@@ -624,6 +686,7 @@ impl Sources {
 struct ReturnArity {
     depth: usize,
     max: usize,
+    tail: bool,
 }
 impl Visitor for ReturnArity {
     fn visit_function_body(&mut self, _: &FunctionBody) {
@@ -635,8 +698,33 @@ impl Visitor for ReturnArity {
     fn visit_return(&mut self, r: &Return) {
         if self.depth == 1 {
             self.max = self.max.max(r.returns().len());
+            self.tail |= matches!(r.returns().iter().last(), Some(Expression::FunctionCall(_)))
+                || r.returns()
+                    .iter()
+                    .last()
+                    .is_some_and(|e| e.to_string().trim() == "...");
         }
     }
+}
+// Read the type expression, stopping before an optional parameter/result description.
+fn annotation_type(text: &str) -> String {
+    let mut words = text.split_whitespace().peekable();
+    let mut ty = words.next().unwrap_or("").to_owned();
+    while words
+        .peek()
+        .is_some_and(|w| *w == "|" || w.starts_with('|'))
+        || ty.ends_with('|')
+    {
+        let Some(part) = words.next() else {
+            break;
+        };
+        ty.push_str(part);
+    }
+    let parts: Vec<_> = ty.split('|').collect();
+    if parts.len() == 2 && parts.contains(&"nil") {
+        return format!("{}?", parts.iter().find(|p| **p != "nil").unwrap());
+    }
+    ty
 }
 // Source-only signatures preserve arity and primitive EmmyLua annotations.
 // Unspecified types use the checker's existing untyped-game-value rule.
@@ -660,14 +748,13 @@ pub(crate) fn source_signature(
         }
         if let Some(param) = line.strip_prefix("---@param ") {
             let mut words = param.split_whitespace();
-            if let (Some(n), Some(t)) = (words.next(), words.next()) {
-                annotations.insert(n.to_owned(), t.to_owned());
+            if let Some(n) = words.next() {
+                annotations.insert(n.to_owned(), annotation_type(param[n.len()..].trim()));
             }
         }
-        if let Some(ret) = line.strip_prefix("---@return ")
-            && let Some(t) = ret.split_whitespace().next()
-        {
-            returns.push(t.to_owned());
+        if let Some(ret) = line.strip_prefix("---@return ") {
+            let group: Vec<_> = ret.split(',').map(annotation_type).collect();
+            returns.extend(group.into_iter().rev());
         }
     }
     for param in body.parameters() {
@@ -681,6 +768,10 @@ pub(crate) fn source_signature(
             "",
         );
         a.attributes.clear();
+        if let Some(t) = a.ty.clone().filter(|t| t.ends_with('?')) {
+            a.ty = Some(t.trim_end_matches('?').into());
+            a.attributes.insert("Nilable".into(), true.into());
+        }
         if a.ty.as_deref() == Some("") {
             a.attributes.insert("Nilable".into(), true.into());
         }
@@ -690,11 +781,19 @@ pub(crate) fn source_signature(
         let mut arity = ReturnArity::default();
         full_moon::visitors::Visit::visit(body, &mut arity);
         returns.resize(arity.max.max(1), String::new());
+        if arity.tail {
+            d.attributes
+                .insert("SeluUntypedReturnTail".into(), true.into());
+        }
     }
     returns.reverse();
     for ty in returns {
         let mut r = crate::xml::declaration("result", &ty, "");
         r.attributes.clear();
+        if let Some(t) = r.ty.clone().filter(|t| t.ends_with('?')) {
+            r.ty = Some(t.trim_end_matches('?').into());
+            r.attributes.insert("Nilable".into(), true.into());
+        }
         d.returns.push(r);
     }
     if let Some(LastStmt::Return(r)) = body.block().last_stmt()
@@ -705,7 +804,21 @@ pub(crate) fn source_signature(
             Prefix::Name(t) => name(t),
             _ => String::new(),
         };
-        if ["pairs", "ipairs"].contains(&builtin.as_str()) {
+        let mut bindings = Scan::default();
+        full_moon::visitors::Visit::visit(body, &mut bindings);
+        if ["pairs", "ipairs"].contains(&builtin.as_str())
+            && !bindings.local(&builtin, start(call))
+            && !bindings
+                .assignments
+                .iter()
+                .any(|(n, pos)| n == &builtin && !bindings.local(n, *pos))
+            && call.suffixes().count() == 1
+            && matches!(
+                call.suffixes().next(),
+                Some(Suffix::Call(Call::AnonymousCall(_)))
+            )
+        {
+            d.attributes.remove("SeluUntypedReturnTail");
             let types = if builtin == "ipairs" {
                 vec!["number", ""]
             } else {
