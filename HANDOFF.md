@@ -1,11 +1,11 @@
 # Handoff
 
-## State (2026-11-04, late night)
+## State (2026-11-04, after round 6)
 
 - `master`, public at https://github.com/rennerdo30/selu. Push only
-  `master`, by explicit ref. `cargo test` (419 tests, including every
+  `master`, by explicit ref. `cargo test` (480 tests, including every
   example built with the real binary and run in the simulator), the proof
-  test (2), clippy and `cargo fmt --check` are clean.
+  test (4), clippy and `cargo fmt --check` are clean.
 - Built and merged, each by a Codex job with an independent review (every
   review found real bugs, all fixed before merge):
   - Round 1: the language core of SPEC-V1 section 2 (packages A-C).
@@ -18,9 +18,11 @@
   - Round 5: named types, `interface`, generics, `unknown`/`typeof` (L);
     XML frames, fonts, constants and templates in the manifests (M3); the
     `JunkSell` proof port (P, `proof/junksell/`, `docs/proof/junksell.md`).
-- Round 6 is briefed (`docs/WORK-PACKAGES.md`): `try`/`catch` (E), string
-  patterns (S), simulator timers (Q).
-- Examples: 10 (`examples/README.md`); each is a test.
+  - Round 6: simulator timers and `OnUpdate` (Q), `try`/`catch`/`finally`/
+    `throw` with `Error` (E), Lua string patterns via `luaPattern` (S). Codex
+    ran out of usage mid-round (until 2026-11-08); the last fixes and
+    re-checks were done by Claude agents.
+- Examples: 13 (`examples/README.md`); each is a test.
 - `selu` 0.0.1 placeholder is on crates.io; licence MIT.
 - Owner goal: Renner's Toolkit gets written in Selu
   (`docs/TOOLKIT-SURVEY.md`). The proof port's open gaps are the plan.
@@ -74,13 +76,25 @@ Each is recorded in the named document; all can be reversed.
   doesn't count as a schema change; existing schemas stayed byte-identical.
 - **String patterns:** a `luaPattern` tag rather than JavaScript regexes
   (Sol's second opinion; `docs/WORK-PACKAGES.md`, round 6).
+- **Errors:** an `Error` records its Selu position when created; `e.message`
+  is the raw message; the position is shown once, when the error escapes to
+  the game; a user name `Error` is reserved (`docs/lang/errors.md`).
+- **`%f` frontier patterns are allowed** (Lua 5.1's `lstrlib.c` implements
+  them on every client); `%g` is rejected (`docs/lang/patterns.md`).
+- **Simulator timers follow `1.13.2:SharedXML/C_TimerAugment.lua`**, the only
+  client evidence: an erroring ticker stops (`crates/selu-sim/src/timers.rs`).
 
 ## Next
 
-1. Round 6 (E, S, Q), each with an independent review.
-2. Then: less runtime scaffolding (proof gap 8); restriction and combat
+1. Less runtime scaffolding (proof gap 8); the error runtime is about 45
+   lines per file that uses it and could live once in the shared namespace; restriction and combat
    checks and secret values (DESIGN.md section 3); `selu probe` for
-   verified evidence; a second, larger proof module.
+   verified evidence; a second, larger proof module that uses `try`,
+   patterns and timers instead of the JunkSell workarounds.
+2. Small follow-ups from the round-6 re-checks: hoist capture-free `try`
+   bodies outside loops too; the flaky `every_example_builds_for_every_client`
+   failure seen once on `timers --target retail` (empty stderr, not
+   reproduced).
 3. Not yet planned: GUI framework (SPEC section 4), `selu debug` app, async,
    asset pipeline and `selu export`, VS Code extension.
 
