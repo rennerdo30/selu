@@ -3,7 +3,7 @@ rem The repository gate, as run before every push: format check, clippy,
 rem the full workspace tests and the proof port's tests. Stops at the
 rem first failure. This builds and tests everything, so it takes a while.
 setlocal
-set "ROOT=%~dp0.."
+for %%I in ("%~dp0..") do set "ROOT=%%~fI"
 cd /d "%ROOT%" || exit /b 1
 echo == cargo fmt --check
 cargo fmt --all -- --check || exit /b 1
