@@ -34,19 +34,17 @@ fn selu(args: &[&str]) -> (Option<i32>, String) {
 }
 
 #[test]
-fn selu_test_discovers_files_and_says_the_runner_is_not_there_yet() {
+fn selu_test_runs_discovered_files() {
     let dir = hello_project("test");
     let (code, err) = selu(&["test", dir.to_str().unwrap()]);
-    assert_eq!(code, Some(1), "{err}");
+    assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("no *.test.selu files"), "{err}");
 
     std::fs::create_dir_all(dir.join("tests")).unwrap();
     std::fs::write(dir.join("tests/boot.test.selu"), "").unwrap();
     let (code, err) = selu(&["test", dir.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(code, Some(2), "{err}");
-    assert!(err.contains("found 1 test file(s)"), "{err}");
-    assert!(err.contains("tests/boot.test.selu"), "{err}");
+    assert_eq!(code, Some(0), "{err}");
 }
 
 #[test]

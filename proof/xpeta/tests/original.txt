@@ -1,0 +1,233 @@
+local ADDON_NAME, RA = ...
+if RA.LoadMark then RA.LoadMark("Modules/XPBarETA.lua") end
+local C_Timer = RA.CPU and RA.CPU.Timers("XPBarETA") or C_Timer
+
+RA.RegisterStrings("enUS", {
+    ["xpeta.eta"] = "%s to level (~%d kills)",
+})
+
+RA.RegisterStrings("deDE", {
+    ["xpeta.eta"] = "%s bis zum Level (~%d Kills)",
+})
+
+-- Rolling window of {t=GetTime(), xp=UnitXP} samples, used to derive an
+-- XP/second rate instead of trusting a single last-gain delta (a quest
+-- turn-in spikes XP once and would wreck a naive per-event estimate).
+local WINDOW_SECONDS = 900
+local MIN_SAMPLE_SPAN = 30
+local MIN_SAMPLE_GAP = 5    -- coalesce repeated events that carry no new XP
+local TICK_INTERVAL = 15
+local samples = {}
+local xpUnreadableWarned = false
+
+-- This client can hand back "secret" numbers whose read succeeds but whose
+-- arithmetic throws (see CLAUDE.md - the restore module hit exactly this on unit health),
+-- so every unit-derived number is proved usable once, on the way in.
+local function Add0(v) return v + 0 end
+
+local function LegacySafeUnitNumber(fn, unit)
+    if type(fn) ~= "function" then return nil end
+
+    local ok, raw = pcall(fn, unit)
+    if not ok or type(raw) ~= "number" then return nil end
+
+    local usable, value = pcall(Add0, raw)
+    if not usable then return nil end
+    return value
+end
+
+-- Core's guard asks issecretvalue() up front instead of discovering a refusal
+-- by pcall-ing arithmetic afterwards. Declared after the legacy version so the
+-- fallback it closes over actually exists (a `local function` is not in scope
+-- for closures created before it).
+local function SafeUnitNumber(fn, unit)
+    if RA.SafeNumber then
+        return (RA.SafeNumber(fn, unit))
+    end
+    return LegacySafeUnitNumber(fn, unit)
+end
+
+local function IsEligible()
+    if IsXPUserDisabled and IsXPUserDisabled() then return false end
+    local xpMax = SafeUnitNumber(UnitXPMax, "player")
+    return xpMax ~= nil and xpMax > 0
+end
+
+local function PruneSamples(now)
+    while samples[1] and (now - samples[1].t) > WINDOW_SECONDS do
+        table.remove(samples, 1)
+    end
+end
+
+----------------------------------------------------------------
+-- Persistence
+--
+-- Without this the estimate is blank for the first MIN_SAMPLE_SPAN seconds
+-- after every login and every /reload - which is most of the time, given how
+-- often a reload gets asked for around here.
+--
+-- GetTime() is SESSION-relative and resets to ~0 on every reload, so a saved
+-- GetTime() value would produce a nonsensical span next session. Samples are
+-- therefore persisted as epoch seconds (time()) and converted back on load.
+-- Rates are per character, not account-wide.
+----------------------------------------------------------------
+local function EpochOffset()
+    -- epoch = GetTime() + offset. Computed per call rather than cached, since
+    -- both clocks advance together and a stale offset would skew a long session.
+    if type(time) ~= "function" then return nil end
+    local ok, epoch = pcall(time)
+    if not ok or type(epoch) ~= "number" then return nil end
+    return epoch - GetTime()
+end
+
+local function CharacterKey()
+    local name = UnitName("player")
+    local realm = GetRealmName and GetRealmName() or ""
+    if not name then return nil end
+    return name .. "-" .. tostring(realm)
+end
+
+local function RateStore()
+    if not (RA.db and RA.db.xpEta) then return nil end
+    RA.db.xpEta.rate = RA.db.xpEta.rate or {}
+    return RA.db.xpEta.rate
+end
+
+local function SaveSamples()
+    local store, key, offset = RateStore(), CharacterKey(), EpochOffset()
+    if not (store and key and offset) then return end
+
+    local saved = {}
+    for i, sample in ipairs(samples) do
+        saved[i] = { t = sample.t + offset, xp = sample.xp }
+    end
+
+    store[key] = { level = UnitLevel("player"), samples = saved }
+end
+
+local loadedFromSave = false
+
+local function LoadSamples()
+    if loadedFromSave then return end
+    loadedFromSave = true
+
+    local store, key, offset = RateStore(), CharacterKey(), EpochOffset()
+    if not (store and key and offset) then return end
+
+    local saved = store[key]
+    if type(saved) ~= "table" or type(saved.samples) ~= "table" then return end
+
+    -- Anything that makes the old window meaningless: a level-up while logged
+    -- out (XP resets to 0), an XP rollback, or a window so old it's outside
+    -- the averaging period anyway.
+    if saved.level ~= UnitLevel("player") then return end
+
+    local newest = saved.samples[#saved.samples]
+    if type(newest) ~= "table" or type(newest.t) ~= "number" then return end
+
+    local nowEpoch = GetTime() + offset
+    if (nowEpoch - newest.t) > WINDOW_SECONDS then return end
+
+    local currentXp = SafeUnitNumber(UnitXP, "player")
+    if not currentXp or currentXp < newest.xp then return end
+
+    wipe(samples)
+    for _, sample in ipairs(saved.samples) do
+        if type(sample) == "table" and type(sample.t) == "number" and type(sample.xp) == "number" then
+            table.insert(samples, { t = sample.t - offset, xp = sample.xp })
+        end
+    end
+    PruneSamples(GetTime())
+end
+
+local function RecordSample()
+    if not IsEligible() then return end
+
+    local xp = SafeUnitNumber(UnitXP, "player")
+    if not xp then
+        -- Same verdict class as the restore module's secret health: the client refuses
+        -- the read, so no rate can ever accumulate. Say so once per session
+        -- instead of leaving a permanently blank frame unexplained.
+        if not xpUnreadableWarned then
+            xpUnreadableWarned = true
+            RA.Log("WARN", "xpeta: UnitXP cannot be read on this client, so no estimate can be computed")
+        end
+        return
+    end
+
+    local now = GetTime()
+    local last = samples[#samples]
+    if last and xp < last.xp then
+        wipe(samples)
+        last = nil
+    end
+
+    if last and xp > last.xp then
+        -- Keep each positive XP transition distinct so the gain-count estimate
+        -- is not distorted by either periodic samples or rapid successive gains.
+        table.insert(samples, { t = now, xp = xp })
+    elseif last and (now - last.t) < MIN_SAMPLE_GAP then
+        -- Repeated events with no XP change add no information. Periodic samples
+        -- outside this gap still extend the rolling time-rate window.
+        last.xp = xp
+    else
+        table.insert(samples, { t = now, xp = xp })
+    end
+
+    PruneSamples(now)
+    SaveSamples()
+end
+
+local function FormatDuration(seconds)
+    if seconds < 60 then
+        return "<1m"
+    end
+
+    local totalMinutes = math.floor(seconds / 60)
+    local hours = math.floor(totalMinutes / 60)
+    local minutes = totalMinutes % 60
+
+    if hours > 0 then
+        return ("~%dh %dm"):format(hours, minutes)
+    end
+    return ("~%dm"):format(minutes)
+end
+
+local function ComputeETAText()
+    if not IsEligible() then return nil end
+
+    local now = GetTime()
+    PruneSamples(now)
+    if #samples < 2 then return nil end
+
+    local first, last = samples[1], samples[#samples]
+    local span = last.t - first.t
+    if span < MIN_SAMPLE_SPAN then return nil end
+
+    local xpGained = last.xp - first.xp
+    if xpGained <= 0 then return nil end
+
+    local xp = SafeUnitNumber(UnitXP, "player")
+    local xpMax = SafeUnitNumber(UnitXPMax, "player")
+    if not xp or not xpMax then return nil end
+
+    local remaining = xpMax - xp
+    if remaining <= 0 then return nil end
+
+    local etaSeconds = remaining / (xpGained / span)
+    if not etaSeconds or etaSeconds <= 0 or etaSeconds ~= etaSeconds then return nil end
+
+    -- Ticker and lifecycle samples can repeat the same XP value, so only
+    -- positive transitions are gain events. Quests count as gains too, which
+    -- is why this is an estimate rather than a literal mob count.
+    local gains = 0
+    for i = 2, #samples do
+        if samples[i].xp > samples[i - 1].xp then
+            gains = gains + 1
+        end
+    end
+    if gains == 0 then return nil end
+    local killsLeft = math.ceil(remaining / (xpGained / gains))
+
+    return RA.L("xpeta.eta", FormatDuration(etaSeconds), killsLeft)
+end

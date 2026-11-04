@@ -780,7 +780,31 @@ impl Ctx<'_> {
 
     // ---- names --------------------------------------------------------
 
+    fn test_intrinsic_error(&mut self, name: &str, span: &Span) -> bool {
+        if self.lookup(name).is_none()
+            && matches!(
+                name,
+                "describe" | "test" | "beforeEach" | "expect" | "sim" | "perf"
+            )
+            && !span.file.ends_with(".test.selu")
+        {
+            self.out.push(
+                err(
+                    "SELU0620",
+                    "test intrinsics are only available in .test.selu files",
+                    span,
+                )
+                .with_help("move this code into a .test.selu file"),
+            );
+            return true;
+        }
+        false
+    }
+
     fn read(&mut self, name: &str, span: &Span) -> Type {
+        if self.test_intrinsic_error(name, span) {
+            return Type::Error;
+        }
         if let Some(t) = self.target_read(name, span) {
             return t;
         }
@@ -1343,6 +1367,12 @@ impl Ctx<'_> {
     }
 
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+        if let ExprKind::Ident(name) = &callee.kind
+            && self.test_intrinsic_error(name, &callee.span)
+        {
+            for arg in args { self.value(arg); }
+            return Type::Error;
+        }
         if let Some(t) = self.frame_family(e, callee, args) {
             return t;
         }

@@ -178,7 +178,9 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
             .arguments
             .iter()
             .rposition(|a| {
-                !flag(a, "Nilable") && !a.attributes.contains_key("Default") && a.name != "..."
+                a.name != "..."
+                    && (flag(a, "Required")
+                        || (!flag(a, "Nilable") && !a.attributes.contains_key("Default")))
             })
             .map_or(0, |i| i + 1),
         params: d

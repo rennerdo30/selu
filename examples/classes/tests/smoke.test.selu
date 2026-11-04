@@ -1,0 +1,6 @@
+describe("session", () => {
+  beforeEach(() => { sim.setMoney(123); });
+  test("has a root frame", () => {
+    expect(sim.frame("UIParent")).not.toBeNull();
+  });
+});
