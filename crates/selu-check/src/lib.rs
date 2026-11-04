@@ -22,6 +22,7 @@ mod aliases;
 pub use aliases::shape_of;
 mod api;
 mod classes;
+mod frame_families;
 mod frames;
 mod modules;
 pub mod restrictions;
@@ -333,6 +334,10 @@ impl Ctx<'_> {
 
     /// Declares `name` in the innermost scope; only parameters start ready.
     fn declare(&mut self, name: &str, span: &Span, kind: Kind, ty: Type) {
+        if name == "_G" {
+            self.out
+                .push(err("SELU0648", "`_G` cannot be bound in Selu", span));
+        }
         self.reserved_error_name(name, span);
         let fn_depth = self.fn_depth;
         let scope = self.scopes.last_mut().expect("a scope is open");
@@ -1369,6 +1374,9 @@ impl Ctx<'_> {
                 self.value(arg);
             }
             return Type::Error;
+        }
+        if let Some(t) = self.frame_family(e, callee, args) {
+            return t;
         }
         if let Some(t) = self.target_call(callee, args) {
             return t;

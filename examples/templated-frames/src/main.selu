@@ -1,14 +1,16 @@
 // Display a merchant reminder with a button that dismisses the panel.
-// Shows template-provided backdrop methods and a typed child button.
+// Shows a background texture and a template-created button.
 // Try: selu build examples/templated-frames, install and log in; click Got it.
 // Offline: scripts\studio.bat examples\templated-frames, then fire PLAYER_LOGIN.
 
-// BackdropTemplate supplies SetBackdrop; a plain Frame need not provide it.
-const panel = CreateFrame("Frame", null, UIParent, "BackdropTemplate");
+// Use declared Texture methods; source-only mixin names have no checked signature.
+const panel = CreateFrame("Frame", null, UIParent);
 panel.SetSize(260, 100);
 panel.SetPoint("CENTER", UIParent, "CENTER", 0, 0);
-panel.SetBackdrop({ bgFile: "Interface/Tooltips/UI-Tooltip-Background" });
-panel.SetBackdropColor(0.1, 0.2, 0.3, 1);
+const backdrop = panel.CreateTexture(null, "BACKGROUND");
+backdrop.SetTexture("Interface/Tooltips/UI-Tooltip-Background");
+backdrop.SetAllPoints(panel);
+backdrop.SetVertexColor(0.1, 0.2, 0.3, 1);
 const label = panel.CreateFontString(null, "OVERLAY", "GameFontNormal");
 label.SetPoint("TOP", panel, "TOP", 0, -16);
 label.SetText("Review grey items at a merchant.");

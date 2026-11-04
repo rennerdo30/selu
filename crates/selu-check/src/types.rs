@@ -369,6 +369,19 @@ impl Type {
             {
                 result.retain(|b| b != "@selu_plain");
             }
+            if let (Type::Widget(_, left), Type::Widget(_, right), Type::Widget(_, result)) =
+                (a, b, &mut ty)
+            {
+                for marker in left
+                    .iter()
+                    .chain(right)
+                    .filter(|s| s.starts_with("@family:"))
+                {
+                    if !result.contains(marker) {
+                        result.push(marker.clone());
+                    }
+                }
+            }
             if let (
                 Type::Function {
                     api_semantics: left,
@@ -630,11 +643,18 @@ pub struct TypeTable {
     pub(crate) named_roots: Vec<NamedShape>,
     types: HashMap<ExprId, Type>,
     stable: std::collections::HashSet<ExprId>,
+    frame_families: std::collections::HashSet<ExprId>,
     method_calls: std::collections::HashSet<ExprId>,
     single_values: std::collections::HashSet<ExprId>,
 }
 
 impl TypeTable {
+    pub fn mark_frame_family(&mut self, id: ExprId) {
+        self.frame_families.insert(id);
+    }
+    pub fn is_frame_family(&self, id: ExprId) -> bool {
+        self.frame_families.contains(&id)
+    }
     pub fn mark_single_value(&mut self, id: ExprId) {
         self.single_values.insert(id);
     }

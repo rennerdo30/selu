@@ -38,7 +38,7 @@ fn results_widgets_events_and_namespaces() {
                 r#"const f = CreateFrame("Button"); f.SetSze(10, 10);"#,
                 flavour
             ),
-            vec!["SELU0482"]
+            vec!["SELU0582"]
         );
         assert_eq!(
             codes(r#"const f = CreateFrame("Buton");"#, flavour),
@@ -457,19 +457,20 @@ fn review_api_mismatches_are_warnings() {
     }
 }
 #[test]
-fn review_widgets_are_open_and_unknown_frames_fall_back() {
+fn review_widgets_reject_undeclared_members_and_unknown_frames_use_frame() {
     let c = review_checked(
         r#"const f = CreateFrame("Frame", null, UIParent, "BackdropTemplate"); f.customFlag = true; f.SetBackdrop({}); f.SetSze(20, 30); const unknown = CreateFrame("UnrecordedFrame"); unknown.custom = 1;"#,
         "retail",
     );
-    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    assert!(c.has_errors(), "{:?}", c.diagnostics);
     assert_eq!(
         c.diagnostics
             .iter()
-            .map(|d| d.code.as_str())
-            .collect::<Vec<_>>(),
-        ["SELU0482", "SELU0483"]
+            .filter(|d| d.code == "SELU0582")
+            .count(),
+        4
     );
+    assert!(c.diagnostics.iter().any(|d| d.code == "SELU0483"));
 }
 #[test]
 fn review_frame_types_and_factory_aliases() {

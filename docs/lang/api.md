@@ -3,7 +3,7 @@
 Manifest entries with signatures are checked; names-only entries remain untyped.
 Explicit overlay signatures are usable even when their provenance is source
 rather than generated documentation. Diagnostics SELU0480/0481 report arity and
-parameter type mismatches and name the target. SELU0482/0483 report unknown widget
+parameter type mismatches and name the target. SELU0582/0483 report unknown widget
 methods/types with spelling suggestions; SELU0484 reports excess event parameters
 and SELU0486 rejects an incompatible written payload annotation.
 Aliases and imported function values retain the multiple-results convention in
@@ -85,10 +85,12 @@ promotes these signature mismatches to errors. Selu functions, classes and typed
 values retain strict checking. Missing API availability and multiple-result
 contracts retain their existing rules.
 
-Widget values are open: addon fields can always be written, and unknown members
-are untyped. Only a member within edit distance 1 or 2 of an inherited known
-method warns (SELU0482). Unknown CreateFrame literals warn (SELU0483) and produce
-open Frame, including in strict mode. Number arguments satisfy API string
+Widget reads, writes and calls require declared members. Undeclared members
+report SELU0582 even after annotations or other widening; source-only mixin
+names without signatures do not grant an unchecked member. Keep addon state in
+typed objects or classes and use frameFamily suffix lookups for child globals.
+Unknown CreateFrame literals warn (SELU0483) and produce the declared Frame
+type, including in strict mode. Number arguments satisfy API string
 parameters because the client converts them; return types and Selu string rules
 are unchanged.
 

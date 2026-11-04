@@ -543,6 +543,7 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
     Ok(())
 }
 pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
+    detect_frame_families(m);
     summarize(m);
     m.predicates.sort_by(|a, b| a.name.cmp(&b.name));
     m.predicates.dedup_by(|a, b| a == b);
@@ -650,5 +651,140 @@ mod tests {
             let value = serde_json::to_value(&m).unwrap();
             assert_eq!(serde_json::from_value::<Manifest>(value).unwrap(), m);
         }
+    }
+}
+
+/// Detect only repeated, consistently typed numbered names. Sparse ranges are
+/// safe: lookups remain nullable, including indices inside observed bounds.
+pub fn detect_frame_families(m: &mut Manifest) {
+    let mut groups = BTreeMap::<(String, String), BTreeMap<u32, BTreeSet<String>>>::new();
+    for g in &m.globals {
+        let Some(ty) = &g.ty else { continue };
+        if !m
+            .widgets
+            .iter()
+            .any(|w| w.name == *ty || w.name == format!("{ty}API"))
+        {
+            continue;
+        }
+        let Some(start) = g.name.find(|c: char| c.is_ascii_digit()) else {
+            continue;
+        };
+        if start == 0 {
+            continue;
+        }
+        let end = g.name[start..]
+            .find(|c: char| !c.is_ascii_digit())
+            .map_or(g.name.len(), |n| start + n);
+        let digits = &g.name[start..end];
+        if digits.len() > 1 && digits.starts_with('0') {
+            continue;
+        }
+        let Ok(index) = digits.parse::<u32>() else {
+            continue;
+        };
+        groups
+            .entry((g.name[..start].into(), g.name[end..].into()))
+            .or_default()
+            .entry(index)
+            .or_default()
+            .insert(ty.clone());
+    }
+    let runtime = m.frame_families.clone();
+    m.frame_families = groups
+        .into_iter()
+        .filter_map(|((prefix, suffix), entries)| {
+            let widget = entries.values().next()?.iter().next()?.clone();
+            if entries.len() < 2
+                || entries
+                    .values()
+                    .any(|types| types.len() != 1 || !types.contains(&widget))
+            {
+                return None;
+            }
+            Some(selu_manifest::FrameFamily {
+                sources: runtime
+                    .iter()
+                    .filter(|f| f.prefix == prefix && f.suffix == suffix)
+                    .flat_map(|f| f.sources.clone())
+                    .collect(),
+                prefix,
+                suffix,
+                min_index: *entries.keys().next()?,
+                max_index: *entries.keys().next_back()?,
+                widget,
+            })
+        })
+        .collect();
+}
+
+#[cfg(test)]
+mod family_tests {
+    #[test]
+    fn runtime_numeric_loop_is_typed_and_bounded() {
+        let mut m: selu_manifest::Manifest = serde_json::from_str(r#"{"flavour":"fixture","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1}"#).unwrap();
+        m.widgets
+            .push(serde_json::from_str(r#"{"name":"Button"}"#).unwrap());
+        let mut sources = crate::source::Sources::default();
+        sources.parse("Frames.lua", "COUNT = 3; function init() for i = 1, COUNT do CreateFrame(\"Button\", \"Example\"..i) end end").unwrap();
+        sources.extend_manifest(&mut m);
+        super::detect_frame_families(&mut m);
+        assert_eq!(m.frame_families.len(), 1);
+        assert_eq!(m.frame_families[0].min_index, 1);
+        assert_eq!(m.frame_families[0].max_index, 3);
+    }
+}
+
+#[cfg(test)]
+mod review_family_regressions {
+    fn generate(src: &str) -> selu_manifest::Manifest {
+        let mut m: selu_manifest::Manifest = serde_json::from_str(r#"{"flavour":"fixture","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1,"widgets":[{"name":"Button"},{"name":"Frame"}]}"#).unwrap();
+        let mut sources = crate::source::Sources::default();
+        sources.parse("review.lua", src).unwrap();
+        sources.extend_manifest(&mut m);
+        super::detect_frame_families(&mut m);
+        m
+    }
+    #[test]
+    fn conflicting_creation_types_never_choose_the_first() {
+        let m = generate(
+            r#"function a() for i=1,3 do CreateFrame("Button","Example"..i) end end function b() for i=1,3 do CreateFrame("Frame","Example"..i) end end"#,
+        );
+        assert!(m.frame_families.is_empty(), "{:?}", m.frame_families);
+        assert!(
+            m.globals
+                .iter()
+                .any(|g| g.name == "Example1" && g.ty.as_deref() == Some("Button"))
+        );
+        assert!(
+            m.globals
+                .iter()
+                .any(|g| g.name == "Example1" && g.ty.as_deref() == Some("Frame"))
+        );
+    }
+    #[test]
+    fn index_binding_must_be_the_unchanged_numeric_loop_binding() {
+        for src in [
+            r#"for i=1,3 do local i="Other"; CreateFrame("Button","Example"..i) end"#,
+            r#"for i=1,3 do i=9; CreateFrame("Button","Example"..i) end"#,
+            r#"for i=1,3 do function i() end; CreateFrame("Button","Example"..i) end"#,
+            r#"for i=1,3 do local function f(i) CreateFrame("Button","Example"..i) end end"#,
+        ] {
+            assert!(generate(src).frame_families.is_empty(), "{src}");
+        }
+        let m = generate(r#"for i=1,3 do for i=5,7 do CreateFrame("Button","Example"..i) end end"#);
+        assert_eq!(m.frame_families[0].min_index, 5);
+        assert_eq!(m.frame_families[0].max_index, 7);
+        assert!(generate(r#"local CreateFrame=function() end; for i=1,3 do CreateFrame("Button","Example"..i) end"#).frame_families.is_empty());
+        assert!(
+            generate(r#"local N=3; for i=1,N do CreateFrame("Button","Example"..i) end"#)
+                .frame_families
+                .is_empty()
+        );
+    }
+    #[test]
+    fn single_zero_is_not_padding() {
+        let m = generate(r#"for i=0,2 do CreateFrame("Button","Example"..i) end"#);
+        assert_eq!(m.frame_families[0].min_index, 0);
     }
 }

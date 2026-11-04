@@ -145,7 +145,17 @@ fn review_global_children_are_not_fields_and_run_as_globals() {
 
 #[test]
 fn review_scoped_guards_filter_named_and_created_frames() {
-    let m = retail();
+    let mut m = retail();
+    // A typed fixture member preserves the capability-guard contract; the
+    // source-only mixin name itself is no longer a checked member signature.
+    m.widgets
+        .iter_mut()
+        .find(|w| w.name == "GameTooltip")
+        .unwrap()
+        .methods
+        .push(
+            serde_json::from_str(r#"{"name":"RefreshDataNextUpdate","type":"Function"}"#).unwrap(),
+        );
     let other = cached_manifests()
         .clone()
         .into_iter()
@@ -251,7 +261,8 @@ fn review_later_overrides_win_including_untyped_and_inherited() {
     assert!(
         check(src, std::slice::from_ref(&m), true)
             .diagnostics
-            .is_empty()
+            .iter()
+            .any(|d| d.code == "SELU0582")
     );
     let mut parent = m
         .templates
@@ -270,7 +281,8 @@ fn review_later_overrides_win_including_untyped_and_inherited() {
             true
         )
         .diagnostics
-        .is_empty()
+        .iter()
+        .any(|d| d.code == "SELU0582")
     );
     let parent = m.templates.last_mut().unwrap();
     parent.mixins = std::mem::take(&mut parent.inherits);
@@ -278,7 +290,8 @@ fn review_later_overrides_win_including_untyped_and_inherited() {
     assert!(
         check(&src.replace("ReviewA,ReviewB", "ReviewParent"), &[m], true)
             .diagnostics
-            .is_empty()
+            .iter()
+            .any(|d| d.code == "SELU0582")
     );
 }
 #[test]

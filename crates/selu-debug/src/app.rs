@@ -21,6 +21,8 @@ use eframe::egui::{
 
 /// What `selu-studio` was started with.
 pub struct Options {
+    pub manifest: Option<selu_manifest::Manifest>,
+    pub manifest_dir: Option<PathBuf>,
     pub addons: Vec<PathBuf>,
     pub target: Option<String>,
     /// The Selu project, for rebuild on save (`selu debug` passes it).
@@ -150,6 +152,7 @@ pub struct Studio {
 impl Studio {
     pub fn new(opts: Options, ctx: &egui::Context) -> Studio {
         let worker = Worker::spawn(SessionConfig {
+            manifest: opts.manifest.clone(),
             target: opts.target.clone(),
             trace: true,
             ..SessionConfig::default()
@@ -318,6 +321,7 @@ impl Studio {
             return;
         };
         let target = self.opts.target.clone();
+        let manifest_dir = self.opts.manifest_dir.clone();
         let (tx, rx) = channel::<BuildMsg>();
         let repaint = self.repaint.clone();
         self.line(LineKind::Build, format!("building {}", project.display()));
@@ -336,6 +340,9 @@ impl Studio {
                 .stderr(std::process::Stdio::piped());
             if let Some(t) = &target {
                 cmd.arg("--target").arg(t);
+            }
+            if let Some(dir) = manifest_dir {
+                cmd.arg("--manifest-dir").arg(dir);
             }
             let mut child = match cmd.spawn() {
                 Ok(c) => c,

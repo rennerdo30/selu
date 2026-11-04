@@ -27,12 +27,24 @@ struct Scan {
     locals: Vec<(String, usize, usize)>,
     definitions: Vec<(String, usize, Vec<String>, bool)>,
     calls: Vec<(String, usize)>,
+    frame_calls: Vec<FunctionCall>,
+    numeric_loops: Vec<NumericFor>,
+    assignments: Vec<(String, usize)>,
+    function_bodies: Vec<(usize, usize)>,
     tables: Vec<(String, usize, TableConstructor)>,
     members: Vec<(String, String, usize)>,
     scalars: Vec<(String, usize, Expression)>,
     mixins: Vec<(String, usize, Vec<String>, String)>,
 }
 impl Scan {
+    fn binding(&self, n: &str, pos: usize) -> Option<(usize, usize)> {
+        self.locals
+            .iter()
+            .filter(|(v, a, b)| v == n && *a <= pos && pos <= *b)
+            .max_by_key(|(_, a, _)| *a)
+            .map(|(_, a, b)| (*a, *b))
+    }
+
     fn bind(&mut self, n: String, from: usize, to: usize) {
         self.locals.push((n, from, to));
     }
@@ -68,6 +80,7 @@ impl Visitor for Scan {
         self.bind(name(n.name()), start(n), self.blocks.last().unwrap().1);
     }
     fn visit_function_body(&mut self, n: &FunctionBody) {
+        self.function_bodies.push((start(n), end(n)));
         self.depth += 1;
         for p in n.parameters() {
             if let Parameter::Name(t) = p {
@@ -100,6 +113,7 @@ impl Visitor for Scan {
             );
         } else if n.name().names().len() == 1 {
             let t = n.name().names().iter().next().unwrap();
+            self.assignments.push((name(t), start(n)));
             self.definitions.push((
                 name(t),
                 start(n),
@@ -116,6 +130,11 @@ impl Visitor for Scan {
         }
     }
     fn visit_assignment(&mut self, n: &Assignment) {
+        for v in n.variables() {
+            if let Var::Name(t) = v {
+                self.assignments.push((name(t), start(n)));
+            }
+        }
         for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
             if self.depth == 0
                 && let Var::Name(t) = v
@@ -158,6 +177,9 @@ impl Visitor for Scan {
         }
     }
     fn visit_function_call(&mut self, n: &FunctionCall) {
+        if matches!(n.prefix(), Prefix::Name(t) if name(t) == "CreateFrame") {
+            self.frame_calls.push(n.clone());
+        }
         if self.depth == 0
             && let Some((target, parents)) = mixin_call(n, None)
         {
@@ -181,6 +203,7 @@ impl Visitor for Scan {
         }
     }
     fn visit_numeric_for(&mut self, n: &NumericFor) {
+        self.numeric_loops.push(n.clone());
         self.bind(name(n.index_variable()), start(n.block()), end(n.block()));
     }
     fn visit_generic_for(&mut self, n: &GenericFor) {
@@ -191,6 +214,7 @@ impl Visitor for Scan {
 }
 #[derive(Default)]
 pub struct Sources {
+    runtime_frames: Vec<(String, String, String, String, String)>,
     definitions: BTreeMap<String, (String, Vec<String>)>,
     all_definitions: BTreeSet<String>,
     calls: BTreeMap<String, String>,
@@ -203,6 +227,61 @@ impl Sources {
             .map_err(|e| format!("{file}: Lua parse error: {e:?}"))?;
         let mut scan = Scan::default();
         scan.visit_ast(&ast);
+        for call in &scan.frame_calls {
+            if scan.local("CreateFrame", start(call)) {
+                continue;
+            }
+            let Some(Suffix::Call(Call::AnonymousCall(call_args))) = call.suffixes().next() else {
+                continue;
+            };
+            let FunctionArgs::Parentheses { arguments, .. } = call_args.as_ref() else {
+                continue;
+            };
+            let args: Vec<_> = arguments.iter().collect();
+            if args.len() < 2 {
+                continue;
+            }
+            if !args[0].to_string().trim().starts_with(['"', '\'']) {
+                continue;
+            }
+            let widget = args[0]
+                .to_string()
+                .trim()
+                .trim_matches(['\"', '\''])
+                .to_string();
+            let key = args[1].to_string();
+            let parts: Vec<_> = key.split("..").map(str::trim).collect();
+            if parts.len() != 2 || !parts[0].starts_with(['\"', '\'']) {
+                continue;
+            }
+            for lp in &scan.numeric_loops {
+                if start(lp.block()) <= start(call)
+                    && end(call) <= end(lp.block())
+                    && parts[1] == name(lp.index_variable())
+                    && scan.binding(parts[1], start(call))
+                        == Some((start(lp.block()), end(lp.block())))
+                    && !scan.assignments.iter().any(|(n, p)| {
+                        n == parts[1]
+                            && scan.binding(n, *p) == Some((start(lp.block()), end(lp.block())))
+                    })
+                    && !scan
+                        .function_bodies
+                        .iter()
+                        .any(|(a, b)| *a > start(lp) && *a < start(call) && end(call) <= *b)
+                    && lp.step().is_none()
+                    && !scan.local(lp.start().to_string().trim(), start(lp))
+                    && !scan.local(lp.end().to_string().trim(), start(lp))
+                {
+                    self.runtime_frames.push((
+                        parts[0].trim_matches(['\"', '\'']).into(),
+                        widget.clone(),
+                        lp.start().to_string().trim().into(),
+                        lp.end().to_string().trim().into(),
+                        format!("{file}:{}", call.start_position().unwrap().line()),
+                    ));
+                }
+            }
+        }
         for (n, pos, e) in &scan.scalars {
             if !scan.local(n, *pos)
                 && let Some(expr) = Scalar::from_ast(e, &scan, *pos)
@@ -345,6 +424,48 @@ impl Sources {
                     evidence: Evidence::Source,
                     templates: vec![],
                 });
+            }
+        }
+        for (prefix, widget, low, high, evidence) in &self.runtime_frames {
+            let bound = |s: &str| {
+                s.parse::<u32>().ok().or_else(|| {
+                    m.globals
+                        .iter()
+                        .find(|g| g.name == s)
+                        .and_then(|g| g.value.as_ref())
+                        .and_then(|v| v.as_f64())
+                        .filter(|v| v.fract() == 0.0 && *v >= 0.0 && *v <= u32::MAX as f64)
+                        .map(|v| v as u32)
+                })
+            };
+            if let (Some(lo), Some(hi)) = (bound(low), bound(high)) {
+                if lo > hi || hi - lo > 1000 {
+                    continue;
+                }
+                m.frame_families.push(selu_manifest::FrameFamily {
+                    prefix: prefix.clone(),
+                    suffix: String::new(),
+                    widget: widget.clone(),
+                    min_index: lo,
+                    max_index: hi,
+                    sources: vec![evidence.clone()],
+                });
+                for i in lo..=hi {
+                    let name = format!("{prefix}{i}");
+                    if !m
+                        .globals
+                        .iter()
+                        .any(|g| g.name == name && g.ty.as_deref() == Some(widget.as_str()))
+                    {
+                        m.globals.push(selu_manifest::GlobalEntry {
+                            name,
+                            ty: Some(widget.clone()),
+                            value: None,
+                            evidence: Evidence::Source,
+                            templates: vec![],
+                        });
+                    }
+                }
             }
         }
         for (_, mut d) in self.tables {

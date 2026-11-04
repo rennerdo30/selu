@@ -110,10 +110,16 @@ struct VmState {
     marks: std::collections::VecDeque<(u64, Snapshot)>,
     generation: Generation,
     ui_size: Option<(f64, f64)>,
+    frame_families: std::collections::BTreeSet<(String, String)>,
+    checked_manifests: std::collections::BTreeMap<PathBuf, selu_manifest::Manifest>,
+    manual_frame_families: std::collections::BTreeSet<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionConfig {
+    /// The checked target manifest. Front ends may pass it directly; otherwise
+    /// sessions resolve `target` from the nearest manifests directory.
+    pub manifest: Option<selu_manifest::Manifest>,
     /// `flavour@version`, selecting flavour-specific `.toc` files.
     pub target: Option<String>,
     /// UIParent size in pixels at scale 1 (decision 4).
@@ -130,6 +136,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         SessionConfig {
+            manifest: None,
             target: None,
             ui_size: snapshot::DEFAULT_UI_SIZE,
             seed: 1,
@@ -149,6 +156,94 @@ pub struct Session {
     saved: crate::saved::SavedSnapshot,
 }
 
+type CheckedManifests = std::collections::BTreeMap<PathBuf, selu_manifest::Manifest>;
+fn snapshot_target(config: &SessionConfig, checked: &CheckedManifests) -> Option<String> {
+    config.target.clone().or_else(|| {
+        checked
+            .values()
+            .next()
+            .map(selu_manifest::Manifest::target_string)
+    })
+}
+fn validate_snapshots(checked: &CheckedManifests) -> SimResult<()> {
+    let mut target = None;
+    let mut families = std::collections::BTreeMap::new();
+    for (path, m) in checked {
+        let current = m.target_string();
+        if target.as_ref().is_some_and(|t| t != &current) {
+            return Err(runtime(format!(
+                "incompatible checked snapshot target `{current}` for {}",
+                path.display()
+            )));
+        }
+        target = Some(current);
+        for family in &m.frame_families {
+            let key = (&family.prefix, &family.suffix);
+            if let Some(previous) = families.insert(key, family)
+                && (previous.widget != family.widget
+                    || previous.min_index != family.min_index
+                    || previous.max_index != family.max_index)
+            {
+                return Err(runtime(format!(
+                    "incompatible checked frame family `{}...{}` in {}",
+                    family.prefix,
+                    family.suffix,
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+fn install_snapshots(vm: &Vm, checked: CheckedManifests) -> SimResult<()> {
+    validate_snapshots(&checked)?;
+    let manual = lock(&vm.state).manual_frame_families.clone();
+    let mut families = manual;
+    for m in checked.values() {
+        families.extend(
+            m.frame_families
+                .iter()
+                .map(|f| (f.prefix.clone(), f.suffix.clone())),
+        );
+    }
+    let table = vm.lua.create_table()?;
+    for (prefix, suffix) in &families {
+        table.raw_set(
+            table.raw_len() + 1,
+            vm.lua
+                .create_sequence_from([prefix.as_str(), suffix.as_str()])?,
+        )?;
+    }
+    vm.lua.globals().raw_set("__selu_frame_families", table)?;
+    let mut state = lock(&vm.state);
+    state.checked_manifests = checked;
+    state.frame_families = families;
+    Ok(())
+}
+fn register_addon_snapshot(vm: &Vm, dir: &Path, config: &SessionConfig) -> SimResult<()> {
+    // Reload installs the complete prevalidated set before executing any addon.
+    if lock(&vm.state).checked_manifests.contains_key(dir) {
+        return Ok(());
+    }
+    let mut checked = lock(&vm.state).checked_manifests.clone();
+    let target = snapshot_target(config, &checked);
+    match selu_manifest::resolution::compiled_manifest_for_target(dir, target.as_deref())
+        .map_err(|e| runtime(e.to_string()))?
+    {
+        Some(m) => {
+            checked.insert(dir.to_path_buf(), m);
+            install_snapshots(vm, checked)?;
+        }
+        None if checked.contains_key(dir) => {
+            return Err(runtime(format!(
+                "checked snapshot missing for {}",
+                dir.display()
+            )));
+        }
+        None => {}
+    }
+    Ok(())
+}
 fn load_dynamic(
     vm: &Vm,
     dir: &Path,
@@ -175,6 +270,7 @@ fn load_dynamic(
         {
             load_dynamic(vm, &dir.parent().unwrap().join(dep), config, saved)?;
         }
+        register_addon_snapshot(vm, &dir, config)?;
         lock(&vm.state).loaded.push(dir.clone());
         Session::load_into(vm, &dir, config, saved)?;
         lock(&vm.state).loading.remove(&dir);
@@ -192,6 +288,18 @@ fn load_dynamic(
         let unfinished = state.loading.remove(&dir);
         if result.is_err() && unfinished {
             state.loaded.retain(|path| path != &dir);
+        }
+    }
+    if result.is_err() {
+        let mut checked = lock(&vm.state).checked_manifests.clone();
+        if checked.remove(&dir).is_some() {
+            let empty = checked.is_empty();
+            install_snapshots(vm, checked)?;
+            if empty && let Some(m) = &config.manifest {
+                for f in &m.frame_families {
+                    register_family(vm, &f.prefix, &f.suffix)?;
+                }
+            }
         }
     }
     result
@@ -212,12 +320,74 @@ fn saved_key(config: &SessionConfig, toc: &loader::Toc, name: &str) -> String {
     )
 }
 
+fn register_family(vm: &Vm, prefix: &str, suffix: &str) -> SimResult<()> {
+    if lock(&vm.state)
+        .frame_families
+        .insert((prefix.into(), suffix.into()))
+    {
+        let families: Table = vm.lua.globals().raw_get("__selu_frame_families")?;
+        families.raw_set(
+            families.raw_len() + 1,
+            vm.lua.create_sequence_from([prefix, suffix])?,
+        )?;
+    }
+    Ok(())
+}
+fn discover_manifest(
+    config: &SessionConfig,
+    from: &Path,
+) -> SimResult<Option<selu_manifest::Manifest>> {
+    let inferred = from.ancestors().find_map(|dir| {
+        let text = std::fs::read_to_string(dir.join("selu.toml")).ok()?;
+        let project: toml::Value = toml::from_str(&text).ok()?;
+        let targets = project.get("addon")?.get("targets")?.as_array()?;
+        if targets.len() == 1 {
+            return targets[0].as_str().map(str::to_owned);
+        }
+        let addon = from.file_name()?.to_str()?;
+        targets
+            .iter()
+            .filter_map(|v| v.as_str())
+            .find(|t| addon.ends_with(&format!("-{}", t.split('@').next().unwrap_or(t))))
+            .map(str::to_owned)
+    });
+    let Some(target) = config.target.as_ref().or(inferred.as_ref()) else {
+        return Ok(None);
+    };
+    // Session targets also select TOC flavours for plain Lua/synthetic addons,
+    // whose labels (for example retail@test) need not be manifest versions.
+    let Ok(spec) = selu_manifest::TargetSpec::parse(target) else {
+        return Ok(None);
+    };
+    if let Ok(all) =
+        selu_manifest::resolution::discover(None, from, Some(std::slice::from_ref(&spec.flavour)))
+    {
+        return Ok(selu_manifest::resolve(&spec, &all).ok().cloned());
+    }
+    Ok(None)
+}
+
 fn runtime(message: String) -> mlua::Error {
     mlua::Error::RuntimeError(message)
 }
 
 impl Session {
-    pub fn new(config: SessionConfig) -> SimResult<Session> {
+    pub fn new(mut config: SessionConfig) -> SimResult<Session> {
+        if let Some(m) = &config.manifest {
+            selu_manifest::resolution::select_checked_manifest(
+                std::slice::from_ref(m),
+                config.target.as_deref(),
+            )
+            .map_err(|e| runtime(e.to_string()))?;
+            if config.target.is_none() {
+                config.target = Some(m.target_string());
+            }
+        }
+        if config.manifest.is_none()
+            && let Ok(cwd) = std::env::current_dir()
+        {
+            config.manifest = discover_manifest(&config, &cwd)?;
+        }
         let sim = Self::start_vm(&config)?;
         Ok(Session {
             config,
@@ -230,6 +400,11 @@ impl Session {
 
     fn start_vm(config: &SessionConfig) -> SimResult<Vm> {
         let sim = Vm::new()?;
+        if let Some(manifest) = &config.manifest {
+            for family in &manifest.frame_families {
+                register_family(&sim, &family.prefix, &family.suffix)?;
+            }
+        }
         lock(&sim.ctx().trace).enabled = config.trace;
         lock(&sim.state).ui_size = Some(config.ui_size);
         frames::configure_ui_size(sim.lua(), config.ui_size)?;
@@ -327,6 +502,14 @@ impl Session {
     /// Load an addon folder through its `.toc` and fire `ADDON_LOADED`.
     /// Returns the addon name.
     pub fn load_addon_dir(&mut self, dir: &Path) -> SimResult<String> {
+        if self.config.manifest.is_none() && lock(&self.sim.state).checked_manifests.is_empty() {
+            self.config.manifest = discover_manifest(&self.config, dir)?;
+            if let Some(m) = &self.config.manifest {
+                for f in &m.frame_families {
+                    register_family(&self.sim, &f.prefix, &f.suffix)?;
+                }
+            }
+        }
         self.install_lod(
             dir.parent()
                 .ok_or_else(|| runtime("addon has no parent".into()))?,
@@ -420,6 +603,26 @@ impl Session {
     pub fn reload(&mut self) -> SimResult<()> {
         lock(&self.sim.state).commands.push(HostCommand::Reload);
         let addons = lock(&self.sim.state).loaded.clone();
+        let old_checked = lock(&self.sim.state).checked_manifests.clone();
+        let target = snapshot_target(&self.config, &old_checked);
+        let mut snapshots = CheckedManifests::new();
+        for dir in &addons {
+            match selu_manifest::resolution::compiled_manifest_for_target(dir, target.as_deref())
+                .map_err(|e| runtime(e.to_string()))?
+            {
+                Some(m) => {
+                    snapshots.insert(dir.clone(), m);
+                }
+                None if old_checked.contains_key(dir) => {
+                    return Err(runtime(format!(
+                        "checked snapshot missing for {}",
+                        dir.display()
+                    )));
+                }
+                None => {}
+            }
+        }
+        validate_snapshots(&snapshots)?;
         self.sim.fire("PLAYER_LOGOUT", vec![])?;
         let mut saved = self.saved.clone();
         for dir in &addons {
@@ -452,6 +655,15 @@ impl Session {
             ));
         }
         let replacement = Self::start_vm(&self.config)?;
+        for (prefix, suffix) in &lock(&self.sim.state).manual_frame_families {
+            register_family(&replacement, prefix, suffix)?;
+            lock(&replacement.state)
+                .manual_frame_families
+                .insert((prefix.clone(), suffix.clone()));
+        }
+        if !snapshots.is_empty() {
+            install_snapshots(&replacement, snapshots)?;
+        }
         *lock(&replacement.clock) = self.now();
         {
             let mut state = lock(&replacement.state);
@@ -507,6 +719,16 @@ impl Session {
             .push(HostCommand::Slash { line: line.into() });
         self.sim.slash(line)
     }
+    /// Register a manifest family whose absent members must behave as nil,
+    /// rather than the simulator's fallback for unmodelled API functions.
+    pub fn register_frame_family(&self, prefix: &str, suffix: &str) -> SimResult<()> {
+        register_family(&self.sim, prefix, suffix)?;
+        lock(&self.sim.state)
+            .manual_frame_families
+            .insert((prefix.into(), suffix.into()));
+        Ok(())
+    }
+
     pub fn eval(&self, source: &str) -> SimResult<()> {
         lock(&self.sim.state).commands.push(HostCommand::Eval {
             code: source.into(),
@@ -599,6 +821,7 @@ impl Vm {
         globals.set("UIParent", create.call::<Table>("Frame")?)?;
         let registry: Table = globals.get("__selu_sim_frames")?;
         registry.raw_set(registry.raw_len(), Value::Nil)?;
+        globals.raw_set("__selu_frame_families", lua.create_table()?)?;
         // Unknown globals: log once, hand back a callable no-op so the
         // addon keeps running and the gap is visible.
         {
@@ -614,6 +837,19 @@ impl Vm {
                         .unwrap_or(false)
                     {
                         return Ok(Value::Nil);
+                    }
+                    let families: Table = lua.globals().raw_get("__selu_frame_families")?;
+                    for pair in families.sequence_values::<Table>() {
+                        let pair = pair?;
+                        let prefix: String = pair.raw_get(1)?;
+                        let suffix: String = pair.raw_get(2)?;
+                        if key
+                            .strip_prefix(&prefix)
+                            .and_then(|s| s.strip_suffix(&suffix))
+                            .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+                        {
+                            return Ok(Value::Nil);
+                        }
                     }
                     log_once(&logs, &warned, &key);
                     let noop = lua.create_function(|_, _: MultiValue| Ok(Value::Nil))?;

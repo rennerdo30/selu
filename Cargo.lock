@@ -2508,8 +2508,10 @@ name = "selu-sim"
 version = "0.1.0"
 dependencies = [
  "mlua",
+ "selu-manifest",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

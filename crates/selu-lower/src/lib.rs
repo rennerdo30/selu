@@ -668,6 +668,15 @@ impl Lowerer<'_> {
                 object,
                 name: field,
             } => self.data_field(object, field, pre),
+            ExprKind::Call { callee: _, args } if self.types.is_frame_family(e.id) => {
+                let prefix = self.expr(&args[0], pre);
+                let index = self.expr(&args[1], pre);
+                let mut key = bin(BinOp::Concat, prefix, index);
+                if let Some(suffix) = args.get(2) {
+                    key = bin(BinOp::Concat, key, self.expr(suffix, pre));
+                }
+                LExpr::Index(Box::new(name("_G")), Box::new(key))
+            }
             ExprKind::Call { callee, args } => {
                 let v = self.restricted_call(callee, args, pre);
                 if self.types.is_single_value(e.id)

@@ -1,0 +1,10 @@
+// Blizzard may not have loaded the merchant UI yet.
+const index = 1;
+const item = frameFamily("MerchantItem", index, "NameFrame");
+
+if (item != null) {
+  item.Show();
+}
+
+// A typed lookup still requires a null check, even inside the known range.
+print("Frame family checked");

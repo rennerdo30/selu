@@ -189,8 +189,14 @@ fn failed_migration_rolls_back_and_retries_and_newer_data_is_untouched() {
 }
 #[test]
 fn runtime_globals_are_captured_and_forward_reads_capture_the_saved_local() {
+    // The environment name is now reserved; other runtime names can still
+    // shadow normally, while the saved runtime retains its captured globals.
+    let forbidden = project("const _G = 1; saved s = { x: 7 };");
+    let output = build(&forbidden);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("SELU0648"));
     let dir = project(
-        "const type = 1; const pairs = 1; const ipairs = 1; const rawget = 1; const pcall = 1; const error = 1; const string = 1; const _G = 1; const CreateFrame = 1; function read(): number { return s.x; } saved s = { x: 7 }; on PLAYER_LOGIN() { print(read()); }",
+        "const type = 1; const pairs = 1; const ipairs = 1; const rawget = 1; const pcall = 1; const error = 1; const string = 1; const CreateFrame = 1; function read(): number { return s.x; } saved s = { x: 7 }; on PLAYER_LOGIN() { print(read()); }",
     );
     success(&dir);
     let sim = Sim::new().unwrap();
