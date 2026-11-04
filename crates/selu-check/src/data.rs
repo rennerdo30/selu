@@ -229,6 +229,9 @@ impl Ctx<'_> {
         {
             return Some(t);
         }
+        if let Some(t) = self.pattern_receiver(&t, callee, name, args) {
+            return Some(t);
+        }
         let (params, ret) = if math {
             match name.as_str() {
                 "floor" | "ceil" | "round" | "abs" => (vec![Type::Number], Type::Number),

@@ -13,6 +13,13 @@ forbidden. Pass the template directly to the method. Template delimiter escapes 
 `\d` is diagnosed at the backslash with the suggestion `%d`. Other tags (L and logging) and untagged strings/templates retain their
 existing escape rules and diagnostics. A local binding named luaPattern shadows the intrinsic.
 
+The receiver must be typed `string` (an alias of `string` counts). Calling a
+pattern method with a `luaPattern` on an untyped value is an error (SELU0566),
+because Lua would call the value's own method, or Lua's 1-based `match`: annotate
+the value with `: string` or convert it with a template string such as `${value}`.
+Objects and classes that declare their own `match`, `search`, `matchAll`,
+`replace` or `replaceAll` keep calling those methods.
+
 | Method | Result |
 |---|---|
 | `match(pattern)` | `string?` without captures, otherwise capture results |
@@ -26,6 +33,8 @@ byte positions. On failure every capture result is `null`. Single-value uses
 select the first result, including arguments, array elements and conditions.
 Destructuring takes all results. Tuple-returning functions can forward them.
 Positions and search use arithmetic temporaries, without tables or closures.
+Destructuring declares your names directly (`local s, p = string.match(...)`,
+then `p = p and p - 1`); only skipped slots get a temporary.
 `matchAll` lowers to `for a, b in string.gmatch(...) do`; positions are adjusted
 inside the loop. Stored iterators are stateful and consumed once. Iteration over
 empty matches follows Lua 5.1 gmatch, including the position after the last byte.
@@ -42,6 +51,9 @@ Named callbacks and callbacks with rest parameters and positions need an adapter
 closure per replacement operation, never per match. Untyped replacement values
 are checked once at runtime: strings have percent signs escaped, functions get
 the position adapter when needed, and other values pass through to Lua gsub.
+An untyped `nil` or table replacement therefore follows Lua gsub's behaviour:
+`nil` raises an error, and a table is used as a lookup by the first capture (or
+the whole match).
 Statically typed strings and fixed-parameter inline callbacks keep direct paths.
 
 Lua 5.1 supports `.`, sets (`[abc]`, `[^abc]`), classes `%a %c %d %l %p %s %u
@@ -58,6 +70,9 @@ rejected because it is a Lua 5.2+ class. No client was launched.
 Regex alternation `|`, counted repeats `{n}`, `\d` and non-capturing groups
 `(?:...)` are errors with character spans and suggested Lua syntax. Escape
 literal punctuation using `%`, for example `%|`, `%{`, `%(` and `%%`.
+A backslash is an ordinary character in Lua patterns; Selu rejects every
+backslash because it reads like a regex escape, and `\\` gets the suggestion to
+write `%\` for a literal backslash.
 
 WoW text uses `|cAARRGGBB` for colour, `|r` to reset colour, `|H...|hlabel|h`
 for hyperlinks, and `||` for a visible pipe. Patterns see the underlying bytes,

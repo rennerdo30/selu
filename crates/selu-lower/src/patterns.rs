@@ -249,6 +249,9 @@ impl Lowerer<'_> {
             }
             return true;
         }
+        if self.pattern_destructure_direct(s, items, init, forward, out) {
+            return true;
+        }
         let Some(values) = self.pattern_values(init, out) else {
             return false;
         };
@@ -268,6 +271,70 @@ impl Lowerer<'_> {
             },
             &s.span,
         ));
+        true
+    }
+    /// `const [s, p] = x.match(luaPattern`(%a)()`)` declares the user's names
+    /// straight from `string.match` and adjusts positions in place, so a
+    /// destructuring costs one local per name (temporaries only for holes).
+    fn pattern_destructure_direct(
+        &mut self,
+        s: &Stmt,
+        items: &[Option<(String, selu_diagnostics::Span)>],
+        init: &Expr,
+        forward: bool,
+        out: &mut LBlock,
+    ) -> bool {
+        let Some((object, "match", args)) = pattern_call(init, self.types) else {
+            return false;
+        };
+        if self.types.is_single_value(init.id) {
+            return false;
+        }
+        let Some(caps) = selu_check::patterns::text(&args[0])
+            .and_then(|(p, _)| selu_check::patterns::captures(&p).ok())
+        else {
+            return false;
+        };
+        // Trailing holes take no value; holes are never read, so only named
+        // positions are adjusted.
+        let used = items.iter().rposition(Option::is_some).map_or(0, |i| i + 1);
+        let positions: Vec<_> = items[..used]
+            .iter()
+            .enumerate()
+            .map(|(k, i)| i.is_some() && caps.get(k) == Some(&true))
+            .collect();
+        if !positions.contains(&true) {
+            return false;
+        }
+        let vs = self.seq(&[object, &args[0]], out);
+        let call = lib("match", vs);
+        let names: Vec<_> = items[..used]
+            .iter()
+            .map(|i| {
+                i.as_ref()
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_else(|| self.temp())
+            })
+            .collect();
+        // Assigning to forward-declared names: holes still need local scratch.
+        let scratch: Vec<_> = names
+            .iter()
+            .zip(items)
+            .filter(|(_, i)| i.is_none())
+            .map(|(n, _)| n.clone())
+            .collect();
+        if forward && !scratch.is_empty() {
+            out.push(LStmt::new(LStmtKind::Local(scratch, vec![]), &s.span));
+        }
+        out.push(LStmt::new(
+            if forward {
+                LStmtKind::Assign(names.iter().map(|n| name(n)).collect(), vec![call])
+            } else {
+                LStmtKind::Local(names.clone(), vec![call])
+            },
+            &s.span,
+        ));
+        self.pattern_positions(&names, &positions, true, &s.span, out);
         true
     }
     pub(crate) fn pattern_for_of(&mut self, s: &Stmt, out: &mut LBlock) -> bool {

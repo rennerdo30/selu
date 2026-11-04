@@ -338,3 +338,122 @@ fn review_proof_document_encoding() {
     assert!(!text.contains('\u{fffd}'));
     assert!(text.contains("``const x = \"item:123\".match(luaPattern`item:(%d+)`);``"));
 }
+#[test]
+fn recheck_untyped_receivers_are_compile_errors() {
+    for call in [
+        "o.search(luaPattern`b`)",
+        "o.replaceAll(luaPattern`b`, \"c\")",
+        "o.replace(luaPattern`b`, \"c\")",
+        "o.match(luaPattern`(%a)()`)",
+        "o.matchAll(luaPattern`%a`)",
+    ] {
+        let src = format!("function m(o) {{ return {call}; }}");
+        let program = selu_syntax::parse("t.selu", &src).unwrap();
+        let ds = selu_check::check(&program, &common::manifest());
+        let d = ds.iter().find(|d| d.code == "SELU0566").unwrap_or_else(|| {
+            panic!(
+                "{call}: {:?}",
+                ds.iter().map(|d| &d.code).collect::<Vec<_>>()
+            )
+        });
+        let help = d.help.as_ref().unwrap();
+        assert!(
+            help.contains(": string") && help.contains("`${value}`"),
+            "{help}"
+        );
+        assert_eq!(d.span.as_ref().unwrap().start, src.find("o.").unwrap());
+    }
+    // Typed receivers, aliases, conversions and user methods keep working.
+    assert_eq!(
+        run(r#"
+type Name = string;
+const obj = {search: (p: unknown): number => 7};
+function typed(o: string): number? { return o.search(luaPattern`b`); }
+function aliased(o: Name): number? { return o.search(luaPattern`b`); }
+function converted(o): number? { return `${o}`.search(luaPattern`b`); }
+on PLAYER_LOGIN() {
+ print(typed("ab") ?? -1, aliased("ab") ?? -1, converted("ab") ?? -1, obj.search(luaPattern`b`));
+}
+"#),
+        ["1\t1\t1\t7"]
+    );
+}
+#[test]
+fn recheck_position_destructuring_uses_the_declared_names() {
+    let mut src = String::from("on PLAYER_LOGIN() {\n");
+    let names = |k: usize| {
+        (0..32)
+            .map(|i| format!("a{k}_{i}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    for k in 0..4 {
+        src.push_str(&format!(
+            " const [{}] = \"abc\".match(luaPattern`{}`);\n print(a{k}_0 ?? -1, a{k}_31 ?? -1);\n",
+            names(k),
+            "()".repeat(32)
+        ));
+    }
+    src.push('}');
+    assert_eq!(run(&src), vec!["0\t0"; 4]);
+    let lua = compile(
+        "on PLAYER_LOGIN() {const [s, p, , q] = \"ab\".match(luaPattern`(%a)()(%a)()`); print(s ?? \"?\", p ?? -1, q ?? -1);}",
+    );
+    assert!(
+        lua.contains(concat!(
+            "  local s, p, __selu_t1, q = string.match(\"ab\", \"(%a)()(%a)()\")\n",
+            "  p = p and p - 1\n",
+            "  q = q and q - 1\n",
+            "  do\n",
+        )),
+        "{lua}"
+    );
+    assert_eq!(
+        run(
+            "on PLAYER_LOGIN() {const [s, p, , q] = \"ab\".match(luaPattern`(%a)()(%a)()`); print(s ?? \"?\", p ?? -1, q ?? -1);}"
+        ),
+        ["a\t1\t2"]
+    );
+    let lua = compile(
+        "on PLAYER_LOGIN() {const [s, p] = \"ab\".match(luaPattern`(%a)()(%a)()`); print(s ?? \"?\", p ?? -1);}",
+    );
+    assert!(
+        lua.contains(concat!(
+            "  local s, p = string.match(\"ab\", \"(%a)()(%a)()\")\n",
+            "  p = p and p - 1\n",
+            "  do\n",
+        )),
+        "{lua}"
+    );
+}
+#[test]
+fn recheck_backslash_hint() {
+    let src = r"const x = luaPattern`a\\b`;";
+    let p = selu_syntax::parse("t.selu", src).unwrap();
+    let ds = selu_check::check(&p, &common::manifest());
+    let d = ds.iter().find(|d| d.code == "SELU0560").unwrap();
+    let help = d.help.as_ref().unwrap();
+    assert!(help.contains("backslash") && !help.contains("%d"), "{help}");
+    assert_eq!(
+        run(r#"on PLAYER_LOGIN() {print("a\\b".match(luaPattern`a%\b`) ?? "?");}"#),
+        ["a\\b"]
+    );
+}
+#[test]
+fn recheck_forward_position_destructuring_keeps_holes_local() {
+    let src = r#"
+function show() { print(s ?? "?", q ?? -1); }
+const [s, , q] = "ab".match(luaPattern`(%a)()()`);
+on PLAYER_LOGIN() { show(); }
+"#;
+    assert_eq!(run(src), ["a\t1"]);
+    let lua = compile(src);
+    let at = lua.find("s, __selu_t").expect(&lua) + 3;
+    let hole = lua[at..].split(',').next().unwrap();
+    assert!(
+        lua.contains(&format!(
+            "local {hole}\ns, {hole}, q = string.match(\"ab\", \"(%a)()()\")\nq = q and q - 1\n"
+        )),
+        "{lua}"
+    );
+}

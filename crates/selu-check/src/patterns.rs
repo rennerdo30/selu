@@ -41,6 +41,7 @@ fn template_text(raw: &str) -> (String, Vec<usize>) {
 }
 fn regex_help(next: Option<&u8>) -> &'static str {
     match next {
+        Some(b'\\') => "write %\\ for a literal backslash; Lua patterns have no backslash escapes",
         Some(b'w') => "use %w instead of \\w",
         Some(b's') => "use %s instead of \\s",
         _ => "use Lua classes such as %d instead of \\d",
@@ -325,6 +326,45 @@ impl Ctx<'_> {
             function(vec![], ret.clone(), replace || method == "match"),
         );
         Some(ret)
+    }
+    /// A luaPattern passed to a pattern method on a receiver that is neither a
+    /// string nor a value with its own method would become a Lua method call
+    /// (`o:search(...)`) that fails at runtime or uses 1-based positions.
+    pub(crate) fn pattern_receiver(
+        &mut self,
+        t: &Type,
+        callee: &Expr,
+        method: &str,
+        args: &[Expr],
+    ) -> Option<Type> {
+        let tagged = matches!(
+            &args.first()?.kind,
+            ExprKind::TaggedTemplate { tag, .. } if tag.dotted_name().as_deref() == Some("luaPattern")
+        );
+        if !tagged
+            || !matches!(
+                method,
+                "match" | "search" | "matchAll" | "replace" | "replaceAll"
+            )
+            || !matches!(t, Type::Untyped | Type::Widget(..) | Type::ApiOpaque(..))
+            || self.lookup("luaPattern").is_some()
+        {
+            return None;
+        }
+        self.out.push(
+            err(
+                "SELU0566",
+                format!("`{method}` with a luaPattern needs a string receiver."),
+                &callee.span,
+            )
+            .with_help(
+                "annotate the value with `: string`, or convert it with a template string such as `${value}`",
+            ),
+        );
+        for a in args {
+            self.expr(a);
+        }
+        Some(Type::Error)
     }
     pub(crate) fn pattern_for_of(&mut self, s: &selu_syntax::Stmt, t: &Type) -> bool {
         use selu_syntax::{ForBinding, Pattern, StmtKind};
