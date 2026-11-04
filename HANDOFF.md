@@ -75,6 +75,12 @@ Each is recorded in the named document; all can be reversed.
 
 ## Traps
 
+- **Gate the push.** Run every check (fmt, clippy, `cargo test`, `selu build
+  proof/junksell` followed by `cargo test --manifest-path
+  proof/junksell/tests/Cargo.toml`, `git diff --check`) joined with `&&`, and
+  put `git push` last in the same chain. Twice a failing proof test was
+  pushed because the commands were chained with `;`.
+
 - `.cargo/config.toml` is local only (gitignored since the repo went
   public): it points builds at the shared sccache (`rustc-wrapper` =
   `E:/Development/_tools/sccache/0.19.0/.../sccache.exe`, `jobs = 8`,

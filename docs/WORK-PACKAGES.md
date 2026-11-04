@@ -763,3 +763,110 @@ Shared edits: none outside the manifest crates and data. The data source
 
 M3 and L in any order; P last (it reports against `master` at its base and
 is merged as documentation plus the proof project).
+
+## Round 6: errors, string patterns, timers
+
+From the proof port's open gaps (`docs/proof/junksell.md`: 1, 4, 7). The
+parent decided the scope while the owner was away. "How every package
+works" applies unchanged, including the example rule.
+
+| Package | Owned files | Codes |
+|---|---|---|
+| E errors | `selu-check/src/errors.rs`, `selu-lower/src/errors.rs` (new), `crates/selu-cli/tests/errors.rs`, `docs/lang/errors.md`, `examples/errors/` | `SELU0540`-`0559` |
+| S string patterns | `selu-check/src/patterns.rs`, `selu-lower/src/patterns.rs` (new), `crates/selu-cli/tests/patterns.rs`, `docs/lang/patterns.md`, `examples/item-links/` | `SELU0560`-`0579` |
+| Q simulator timers | `crates/selu-sim/src/timers.rs` (new), its tests, `proof/junksell/tests/` | none |
+
+### Decision: string patterns (second opinion from Sol)
+
+Plain strings stay literal everywhere. A Lua pattern is written as a
+`luaPattern` tagged template: `` s.match(luaPattern`item:(%d+)`) ``. The tag is
+a compiler intrinsic (no runtime object, no interpolation), checked at
+compile time. `match` without captures gives `string?`; with captures it
+gives multiple results (each `string?`, or `number?` for a position capture
+`()`, 0-based), first value in single use, all by destructuring (the round-4
+rule). No match makes every result `null`. `search` gives a 0-based
+`number?`. `matchAll` iterates lazily (usable in `for...of`), yielding the
+same capture types, non-null per turn; a leading `^` is an error there.
+`replace` replaces once and `replaceAll` replaces every match; both return
+multiple results `(string, number)`. The replacement is a literal string
+(`%` escaped) or a typed callback receiving the captures. Regex-looking
+syntax (`|`, `{n}`, `\d`, `(?:`) is a Selu error with a Lua-pattern
+suggestion (`\d` -> `%d`; write `%|` or `%{` for the literal characters).
+`%f[set]` is allowed only if every supported target and the simulator agree
+(check). Document that Lua patterns can backtrack badly.
+
+### E: `try`/`catch`/`finally`/`throw`
+
+SPEC-V1 2.5. Acceptance:
+
+1. `try { } catch (e) { } finally { }` (with `catch` and/or `finally`)
+   lowers to `pcall` (or `xpcall` where a traceback is needed), readable,
+   with no closure per execution of a hot loop body if avoidable (document
+   the cost when not).
+2. `return`, `break` and `continue` inside `try`, `catch` and `finally` work
+   as in TypeScript, including `finally` running on every exit path and a
+   `return` in `finally` overriding (or a Selu error forbidding it, the
+   simpler choice; document).
+3. `throw new Error("...")` lowers to `error(...)` with the Selu source
+   position (`file:line:`), and `throw` of any other value is an error
+   unless it's an `Error`. `catch (e)` gives `e` the type `Error` with a
+   `message: string` (non-`Error` values from Lua code arrive wrapped).
+   `e.message` works for errors from Lua (`error("x")`) too.
+4. Errors that escape an event handler keep reaching the game's error
+   handler with a source-mapped position (SPEC 2.5 last point; test with
+   the simulator's error capture).
+5. Example `examples/errors/`.
+
+Shared edits: parser and AST for `try`/`catch`/`finally`/`throw`, and the
+`Error` type and `new Error(...)` (one dispatch where `new` is handled), the
+statement dispatch in checker and lowering, `always_exits` for `throw`,
+and the loop-context interplay with A's `continue` machinery in
+`loops.rs` (one hook).
+
+### S: string patterns
+
+Acceptance: the decision above, implemented, plus:
+
+1. The pattern checker: balanced captures and sets, capture limit (32),
+   `%1`-`%9` back-references only to closed captures, `%bxy`, trailing `%`,
+   `%f` per the decision; spans pointing at the offending character.
+2. Lowering to `string.match`/`string.find`/`string.gmatch`/`string.gsub`
+   with no tables or adapter closures on the plain paths; position captures
+   and `search` converted to 0-based; `matchAll` without per-turn garbage
+   beyond what `gmatch` itself allocates.
+3. Tests for: item links with the WoW `|H...|h` escapes, failure, mixed
+   string and position captures, `%` in replacements, empty-match
+   iteration, anchors, and multiple results in every position.
+4. Example `examples/item-links/`: parsing item IDs and names from item
+   links and counting words in a chat line.
+
+Shared edits: the `luaPattern` tag in `selu-check/src/wow.rs`'s
+tagged-template dispatch (one line) and the string method dispatch in
+`data.rs` (one line each side). No parser changes needed.
+
+### Q: simulator timers
+
+Acceptance:
+
+1. `C_Timer.After`, `C_Timer.NewTimer`, `C_Timer.NewTicker` (with
+   iterations) and `:Cancel()`, plus frame `OnUpdate` scripts receiving
+   `elapsed`, driven by the simulated clock: `Sim::advance_time(seconds)`
+   runs every callback that becomes due, in due order, with `GetTime()`
+   reporting the due time during each callback. Callbacks scheduled during a
+   callback run in the same advance if due.
+2. Errors in callbacks go through the simulator's error capture without
+   stopping other timers.
+3. The proof port's test (`proof/junksell/tests/`) uses the real simulator
+   timers instead of its own stub, and builds the project itself instead of
+   requiring a prior `selu build` (the current test silently depends on
+   one).
+4. Unit tests for ordering, cancel, tickers, nested scheduling and
+   `OnUpdate` throttling.
+
+Shared edits: the hook in `Sim::new` and `advance_time` in
+`crates/selu-sim/src/lib.rs`; `proof/junksell/tests/` and the proof gap
+test's status for gap 7.
+
+### Merge order (round 6)
+
+Q first, then E and S in either order.
