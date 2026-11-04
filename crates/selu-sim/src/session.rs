@@ -26,6 +26,9 @@ pub enum HostCommand {
         token: String,
         unit: crate::world::Unit,
     },
+    SetCombat {
+        combat: bool,
+    },
     SetMoney {
         copper: u64,
     },
@@ -73,7 +76,7 @@ impl HostValue {
             }
         })
     }
-    fn capture(v: &Value) -> SimResult<Self> {
+    pub fn capture(v: &Value) -> SimResult<Self> {
         fn convert(v: crate::saved::SavedValue) -> HostValue {
             use crate::saved::SavedValue as S;
             match v {
@@ -285,6 +288,12 @@ impl Session {
             unit: unit.clone(),
         });
         self.sim.set_unit(token, unit)
+    }
+    pub fn set_combat(&self, combat: bool) -> SimResult<()> {
+        lock(&self.sim.state)
+            .commands
+            .push(HostCommand::SetCombat { combat });
+        self.sim.set_combat(combat)
     }
     pub fn set_money(&self, copper: u64) -> SimResult<()> {
         lock(&self.sim.state)
@@ -650,6 +659,8 @@ impl Vm {
     /// its files.
     fn load_chunks(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
         let ns = self.lua.create_table()?;
+        self.lua
+            .set_named_registry_value(&format!("selu:addon:{addon}"), ns.clone())?;
         for (name, source) in files {
             dispatch(&self.lua, &self.ctx, || {
                 core::call_lua::<()>(
@@ -660,6 +671,11 @@ impl Vm {
             })?;
         }
         Ok(())
+    }
+    /// The private namespace passed to every chunk loaded through this addon's TOC.
+    pub fn addon_namespace(&self, addon: &str) -> SimResult<Table> {
+        self.lua
+            .named_registry_value(&format!("selu:addon:{addon}"))
     }
     pub fn load_addon(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
         self.load_chunks(addon, files)?;

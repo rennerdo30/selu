@@ -9,3 +9,11 @@ selu-sim = { path = "../selu-sim" }
 selu-sourcemap = { path = "../selu-sourcemap" }
 serde.workspace = true
 serde_json.workspace = true
+
+selu-diagnostics = { path = "../selu-diagnostics" }
+selu-syntax = { path = "../selu-syntax" }
+selu-manifest = { path = "../selu-manifest" }
+selu-check = { path = "../selu-check" }
+selu-lower = { path = "../selu-lower" }
+toml.workspace = true
+mlua = { version = "0.10", features = ["lua51", "vendored"] }

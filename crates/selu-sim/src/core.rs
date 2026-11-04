@@ -337,6 +337,12 @@ impl Ctx {
         }
     }
 
+    /// Start a front-end observation interval without clearing prints or world state.
+    pub fn begin_observation(&self) {
+        lock(&self.warned).clear();
+        lock(&self.logs).clear();
+    }
+
     pub fn now(&self) -> f64 {
         *lock(&self.clock)
     }
