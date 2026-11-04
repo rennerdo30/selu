@@ -130,7 +130,7 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
     };
     let out = &mut a.regions[i];
     out.rect = rect;
-    out.visible = visible && valid;
+    out.visible = visible;
     out.effective_scale = scale;
     out.effective_alpha = alpha;
     marks[i] = 2;

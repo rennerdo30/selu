@@ -62,3 +62,9 @@ fn unanchored_size_change_is_deferred() {
     sim.eval("local f=CreateFrame('Frame'); f:SetScript('OnSizeChanged',function(_,w,h) print(w,h) end); f:SetSize(80,30);print('after')").unwrap();
     assert_eq!(sim.prints(), ["after", "80\t30"]);
 }
+#[test]
+fn anchor_cycles_do_not_change_shown_visibility() {
+    let sim = Sim::new().unwrap();
+    sim.eval("local a=CreateFrame('Frame','VisibleCycleA'); local b=CreateFrame('Frame','VisibleCycleB');a:SetPoint('CENTER',b);b:SetPoint('CENTER',a);assert(a:IsShown());assert(a:IsVisible())").unwrap();
+    assert!(sim.snapshot().unwrap().regions[1].rect.is_none());
+}
