@@ -168,3 +168,179 @@ test("gap again", () => { expect(() => { perf.allocations(() => {}); }).toThrow(
     assert!(String::from_utf8_lossy(&out.stderr).contains("SELU0620"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn typed_timers(dir: &Path) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("manifests/fixtures/forever-1.0.0.1000.json")).unwrap(),
+    )
+    .unwrap();
+    manifest["functions"].as_array_mut().unwrap().push(serde_json::json!({"name":"C_Timer.After","evidence":"verified","signature":{"name":"After","arguments":[{"name":"seconds","type":"number"},{"name":"callback","type":"LuaFunctionReference"}]}}));
+    std::fs::create_dir_all(dir.join("manifests")).unwrap();
+    std::fs::write(dir.join("manifests/forever.json"), manifest.to_string()).unwrap();
+}
+fn report(out: &std::process::Output) -> selu_test::Report {
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "{e}: {}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    })
+}
+#[test]
+fn asynchronous_callbacks_fail_the_owning_test() {
+    let dir = project(
+        "callbacks",
+        r#"
+test("timer", () => { C_Timer.After(0.1, () => { expect(1).toBe(2); }); sim.advanceTime(0.2); });
+test("update", () => { const f=CreateFrame("Frame"); f.SetScript("OnUpdate", () => { expect(1).toBe(2); }); sim.advanceTime(0.02); f.Hide(); });
+test("queued", () => { const f=CreateFrame("Frame"); f.SetScript("OnSizeChanged", () => { expect(1).toBe(2); }); f.SetSize(10,10); });
+test("reload timer", () => { sim.reload(); sim.advanceTime(0.2); });
+test("reload callback", () => { const f=sim.frame("UIParent"); if(f != null) { f.SetScript("OnSizeChanged", () => { expect(1).toBe(2); }); f.SetSize(11,12); } });
+"#,
+    );
+    typed_timers(&dir);
+    std::fs::write(
+        dir.join("src/main.selu"),
+        "on PLAYER_LOGIN() { C_Timer.After(0.1, () => { throw new Error(\"addon timer\"); }); }",
+    )
+    .unwrap();
+    let out = run(&dir, None);
+    assert_eq!(out.status.code(), Some(1));
+    let report = report(&out);
+    assert_eq!(report.results.len(), 5);
+    assert_eq!(report.failed(), 5, "{}", report.to_human());
+    assert!(
+        report.results.iter().all(|r| matches!(
+            &r.outcome,
+            selu_test::Outcome::Failed {
+                location: Some(_),
+                ..
+            }
+        )),
+        "{}",
+        report.to_human()
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn stale_world_and_imports_fail_explicitly_after_reload() {
+    let dir = project(
+        "stale",
+        r#"
+import { double } from "../src/math";
+const read = GetTime;
+const oldFrame = UIParent;
+test("clock", () => { sim.advanceTime(2); sim.reload(); sim.advanceTime(3); expect(GetTime()).toBe(5); });
+test("import", () => { expect(double(2)).toBe(4); });
+test("aliased API", () => { expect(read()).toBe(5); });
+test("stale frame", () => { expect(oldFrame.GetWidth()).toBe(1920); });
+test("helpers remain current", () => { expect(sim.now()).toBe(5); expect(sim.frame("UIParent")).not.toBeNull(); });
+"#,
+    );
+    let out = run(&dir, None);
+    assert_eq!(out.status.code(), Some(1));
+    let report = report(&out);
+    assert_eq!(report.failed(), 4, "{}", report.to_human());
+    for r in &report.results[..4] {
+        assert!(
+            matches!(&r.outcome,selu_test::Outcome::Failed {message,..} if message.contains("SELU0623") && message.contains("stale")),
+            "{r:?}"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn setup_errors_are_mapped_reports_for_all_files() {
+    for (tag, source) in [
+        ("top", "throw new Error(\"top\");"),
+        ("login", "on PLAYER_LOGIN() { throw new Error(\"login\"); }"),
+    ] {
+        let dir = project(tag, "test(\"never\", () => {});");
+        std::fs::write(
+            dir.join("tests/other.test.selu"),
+            "test(\"other\", () => {});",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.selu"), source).unwrap();
+        let out = run(&dir, None);
+        assert_eq!(out.status.code(), Some(1));
+        let report = report(&out);
+        assert_eq!(report.results.len(), 2);
+        assert_eq!(report.failed(), 2);
+        for r in report.results {
+            assert!(
+                matches!(r.outcome,selu_test::Outcome::Failed {location:Some(ref at),..} if at.contains("src/main.selu:1"))
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+#[test]
+fn spies_preserve_vm_values_and_frames_preserve_identity() {
+    let dir = project(
+        "handles",
+        r#"
+test("spy values", () => {
+  const spy=sim.spy("print"); const callback=() => {}; const cycle: unknown[]=[]; cycle.push(cycle);
+  print(callback); print(UIParent); print(cycle);
+  expect(spy).toHaveBeenCalledWith(callback); expect(spy).toHaveBeenCalledWith(UIParent); expect(spy).toHaveBeenCalledWith(cycle);
+});
+test("same VM frames", () => {
+  const f=CreateFrame("Frame", "Child", UIParent); f.SetSize(23,42);
+  expect(sim.frame("Child")).toBe(sim.frame("Child"));
+  const proxy=sim.frame("Child"); if(proxy != null) { expect(proxy.GetParent()).toBe(UIParent); const [w,h]=proxy.GetSize(); expect(w).toBe(23); expect(h).toBe(42); }
+});
+test("cross VM frames", () => {
+  sim.reload(); const child=sim.frame("NamedChild"); const root=sim.frame("UIParent");
+  if(child != null && root != null) {
+    expect(child).toBe(sim.frame("NamedChild")); expect(child.GetParent()).toBe(root);
+    const [w,h]=child.GetSize(); expect(w).toBe(23); expect(h).toBe(42);
+    let count=0; const callback=(frame) => {expect(frame).toBe(child); count += 1;}; child.SetScript("OnSizeChanged", callback); expect(child.GetScript("OnSizeChanged")).toBe(callback); child.SetSize(40,50); expect(count).toBe(1);
+    const spy=sim.spy("print"); sim.fire("PLAYER_LOGIN"); expect(spy).toHaveBeenCalledWith("boot"); expect(spy).toHaveBeenCalledWith(child); expect(spy).not.toHaveBeenCalledWith(root);
+  } else { expect(0).toBe(1); }
+});
+"#,
+    );
+    std::fs::write(
+        dir.join("src/main.selu"),
+        "const child=CreateFrame(\"Frame\",\"NamedChild\",UIParent); child.SetSize(23,42); on PLAYER_LOGIN() { print(\"boot\"); print(child); }",
+    )
+    .unwrap();
+    let out = run(&dir, None);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(report(&out).results.len(), 3);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn invalid_intrinsic_arguments_are_compiler_errors() {
+    for (i, source) in [
+        "test(\"bad\",123);",
+        "describe(\"bad\",123);",
+        "beforeEach(123);",
+        "test(\"bad\", () => {expect(1).toBeLessThan(null);});",
+        "test(\"bad\", () => {expect(1).toBeLessThan();});",
+        "test(\"bad\", () => {expect(1).toBe();});",
+        "test(\"bad\", () => {expect(1).toBeGreaterThan(\"a\");});",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let dir = project(&format!("bad-arg-{i}"), source);
+        let out = run(&dir, None);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{source}: {}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

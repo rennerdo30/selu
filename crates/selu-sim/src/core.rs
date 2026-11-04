@@ -302,8 +302,16 @@ pub type Pending = Box<dyn FnOnce(&Lua) -> mlua::Result<()>>;
 /// The shared state every module gets at install time. Cheap to clone (all
 /// handles). Rust code must not hold one of these locks across a call into
 /// Lua (decision 15).
+#[derive(Debug, Clone)]
+pub struct RuntimeFailure {
+    pub kind: String,
+    pub message: String,
+}
+
 #[derive(Clone)]
 pub struct Ctx {
+    pub failures: Shared<Vec<RuntimeFailure>>,
+    pub stale_sources: Shared<HashSet<String>>,
     pub prints: Shared<Vec<String>>,
     pub logs: Shared<Vec<String>>,
     pub(crate) warned: Shared<HashSet<String>>,
@@ -318,6 +326,8 @@ pub struct Ctx {
 impl Ctx {
     pub fn new() -> Ctx {
         Ctx {
+            failures: shared(Vec::new()),
+            stale_sources: shared(HashSet::new()),
             prints: shared(Vec::new()),
             logs: shared(Vec::new()),
             warned: shared(HashSet::new()),
@@ -339,6 +349,7 @@ impl Ctx {
 
     /// Start a front-end observation interval without clearing prints or world state.
     pub fn begin_observation(&self) {
+        lock(&self.failures).clear();
         lock(&self.warned).clear();
         lock(&self.logs).clear();
     }
@@ -349,6 +360,16 @@ impl Ctx {
 
     pub fn log(&self, line: impl Into<String>) {
         lock(&self.logs).push(line.into());
+    }
+    pub fn runtime_failure(&self, kind: &str, message: impl Into<String>) {
+        lock(&self.failures).push(RuntimeFailure {
+            kind: kind.into(),
+            message: message.into(),
+        });
+    }
+
+    pub fn runtime_failures(&self) -> Vec<RuntimeFailure> {
+        lock(&self.failures).clone()
     }
 
     /// Log `not simulated: what` the first time only (SPEC 8).
@@ -410,20 +431,39 @@ fn budget_instruction(budget: &Shared<Budget>) -> mlua::Result<VmState> {
 // resume boundaries, restoring the caller before executing more Lua. Count
 // every instruction so repeated short coroutine resumes cannot lose credit.
 fn set_count_hook(lua: &Lua, budget: Shared<Budget>, _interval: u32) {
-    lua.set_hook(HookTriggers::new().every_nth_instruction(1), move |_, _| {
-        budget_instruction(&budget)
-    });
+    lua.set_hook(
+        HookTriggers::new().every_nth_instruction(1),
+        move |lua, debug| {
+            reject_stale(lua, debug.source().source.as_deref())?;
+            budget_instruction(&budget)
+        },
+    );
 }
 
 pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) {
     let budget = ctx.budget.clone();
     if let Some(thread) = thread {
-        thread.set_hook(HookTriggers::new().every_nth_instruction(1), move |_, _| {
-            budget_instruction(&budget)
-        });
+        thread.set_hook(
+            HookTriggers::new().every_nth_instruction(1),
+            move |lua, debug| {
+                reject_stale(lua, debug.source().source.as_deref())?;
+                budget_instruction(&budget)
+            },
+        );
     } else {
         set_count_hook(lua, budget, 1);
     }
+}
+
+fn reject_stale(lua: &Lua, source: Option<&str>) -> mlua::Result<()> {
+    if let Some(ctx) = lua.app_data_ref::<Ctx>()
+        && source.is_some_and(|s| lock(&ctx.stale_sources).contains(s.trim_start_matches('@')))
+    {
+        return Err(mlua::Error::runtime(
+            "SELU0623: stale addon reference after sim.reload(); use sim helpers to access the current Session",
+        ));
+    }
+    Ok(())
 }
 
 /// Reset the budget for a new dispatch, restoring the normal hook interval
@@ -672,6 +712,7 @@ pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
             b.exhausted || b.pending_tasks > 10_000
         };
         if stop {
+            ctx.runtime_failure("flush", "dispatch callback/instruction budget exhausted");
             lock(&ctx.pending).clear();
             ctx.log("error: dispatch callback/instruction budget exhausted");
             ctx.record(
@@ -683,6 +724,7 @@ pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
         }
         if let Err(e) = next(lua) {
             let text = e.to_string();
+            ctx.runtime_failure("flush", text.clone());
             ctx.log(format!("error: {text}"));
             ctx.record(TraceKind::Error, "flush", vec![text]);
         }

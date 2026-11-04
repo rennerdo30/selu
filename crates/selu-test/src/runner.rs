@@ -1,3 +1,4 @@
+use super::bridge;
 use crate::*;
 use mlua::{Function, Lua, Value};
 use selu_sim::{Session, SessionConfig};
@@ -8,24 +9,27 @@ fn build_error(e: impl std::fmt::Display) -> RunError {
 }
 fn overlay(m: &mut selu_manifest::Manifest) {
     use serde_json::json;
+    m.tables.push(
+        serde_json::from_value(json!({"name":"SeluTestCallback","type":"CallbackType"})).unwrap(),
+    );
     let mut add = |name: &str, args: serde_json::Value, returns: serde_json::Value| {
         m.functions.push(serde_json::from_value(json!({"name":name,"evidence":"verified","signature":{"name":name,"arguments":args,"returns":returns}})).unwrap());
     };
     for name in ["test", "describe"] {
         add(
             name,
-            json!([{"name":"name","type":"string"},{"name":"body","type":"LuaFunctionReference"}]),
+            json!([{"name":"name","type":"string"},{"name":"body","type":"SeluTestCallback"}]),
             json!([]),
         );
     }
     add(
         "beforeEach",
-        json!([{"name":"body","type":"LuaFunctionReference"}]),
+        json!([{"name":"body","type":"SeluTestCallback"}]),
         json!([]),
     );
     add(
         "expect",
-        json!([{"name":"value","type":"unknown","attributes":{"Nilable":true}}]),
+        json!([{"name":"value","type":"unknown","attributes":{"Nilable":true,"Required":true}}]),
         json!([{"name":"result","type":"SeluExpectation"}]),
     );
     for (name, args, returns) in [
@@ -45,6 +49,11 @@ fn overlay(m: &mut selu_manifest::Manifest) {
             json!([]),
         ),
         ("sim.reload", json!([]), json!([])),
+        (
+            "sim.now",
+            json!([]),
+            json!([{"name":"seconds","type":"number"}]),
+        ),
         (
             "sim.setMoney",
             json!([{"name":"copper","type":"number"}]),
@@ -77,7 +86,7 @@ fn overlay(m: &mut selu_manifest::Manifest) {
         ),
         (
             "perf.allocations",
-            json!([{"name":"body","type":"LuaFunctionReference"}]),
+            json!([{"name":"body","type":"SeluTestCallback"}]),
             json!([{"name":"count","type":"number"}]),
         ),
     ] {
@@ -92,10 +101,10 @@ fn overlay(m: &mut selu_manifest::Manifest) {
         ("toBeGreaterThan", "number"),
         ("toHaveBeenCalledWith", "unknown"),
     ] {
-        fields.push(json!({"name":name,"type":"CallbackType","arguments":[{"name":if name == "toHaveBeenCalledWith" { "..." } else { "expected" },"type":ty,"attributes":{"Nilable":true}}]}));
+        fields.push(json!({"name":name,"type":"Function","arguments":[{"name":if name == "toHaveBeenCalledWith" { "..." } else { "expected" },"type":ty,"attributes":{"Nilable":ty == "unknown","Required":true}}]}));
     }
     for name in ["toBeNull", "toThrow", "toHaveBeenCalled"] {
-        fields.push(json!({"name":name,"type":"CallbackType"}));
+        fields.push(json!({"name":name,"type":"Function"}));
     }
     fields.push(json!({"name":"not","type":"SeluExpectation"}));
     m.tables.push(
@@ -222,7 +231,12 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
         }
         let mut test_manifest = manifest.clone();
         overlay(&mut test_manifest);
-        let (checked, _) = selu_check::check_module(&program, &test_manifest, imports);
+        let (checked, _) = selu_check::check_module_with_options(
+            &program,
+            &test_manifest,
+            imports,
+            selu_check::CheckOptions { strict_api: true },
+        );
         if checked.has_errors() {
             return Err(build_error(
                 checked
@@ -254,14 +268,23 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
             })
             .map_err(build_error)?,
         ));
-        session
-            .borrow_mut()
-            .load_addon_dir(&addon)
-            .map_err(build_error)?;
-        session.borrow_mut().login().map_err(build_error)?;
+        let loaded = { session.borrow_mut().load_addon_dir(&addon) };
+        let setup = loaded.and_then(|_| session.borrow_mut().login());
+        let setup_failures = session.borrow().sim().ctx().runtime_failures();
+        if let Err(error) = setup.and_then(|_| failures_result(setup_failures)) {
+            report
+                .results
+                .push(failure(&file, vec!["setup".into()], error, &maps, &session));
+            continue;
+        }
         let lua = session.borrow().sim().lua().clone();
         let test_ctx = session.borrow().sim().ctx().clone();
         let registrations = Rc::new(RefCell::new(Registrations::default()));
+        registrations.borrow_mut().sources = modules
+            .iter()
+            .map(|m| format!("{}.lua", m.key))
+            .chain(["Selu.lua".into(), "__selu_runtime.lua".into()])
+            .collect();
         let _bridge = BridgeLifetime(lua.clone(), registrations.clone());
         install(&lua, session.clone(), registrations.clone()).map_err(build_error)?;
         let namespace = session
@@ -295,6 +318,7 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
                 continue;
             }
             registrations.borrow_mut().notes.clear();
+            registrations.borrow_mut().failures.clear();
             test_ctx.begin_observation();
             session.borrow().sim().ctx().begin_observation();
             // The Lua handle and Rust registrations stay alive when reload replaces Session's VM.
@@ -307,6 +331,10 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
                 }
                 body.call::<()>(())
             });
+            let mut errors = registrations.borrow().failures.clone();
+            errors.extend(test_ctx.runtime_failures());
+            errors.extend(session.borrow().sim().ctx().runtime_failures());
+            let result = result.and_then(|_| failures_result(errors));
             match result {
                 Ok(()) => report.results.push(TestResult {
                     file: file.clone(),
@@ -343,6 +371,9 @@ type HookScope = Rc<RefCell<Vec<Function>>>;
 type Registered = (Vec<String>, Function, Vec<HookScope>);
 struct Registrations {
     notes: Vec<String>,
+    failures: Vec<selu_sim::core::RuntimeFailure>,
+    stale: Rc<std::cell::Cell<bool>>,
+    sources: Vec<String>,
     path: Vec<String>,
     scopes: Vec<HookScope>,
     tests: Vec<Registered>,
@@ -351,6 +382,9 @@ impl Default for Registrations {
     fn default() -> Self {
         Self {
             notes: vec![],
+            failures: vec![],
+            stale: Default::default(),
+            sources: vec![],
             path: vec![],
             scopes: vec![Default::default()],
             tests: vec![],
@@ -367,6 +401,7 @@ impl Drop for BridgeLifetime {
             let _ = self.0.globals().raw_set(name, Value::Nil);
         }
         // Release unreachable bridge closures before the Session's final handle.
+        bridge::clear(&self.0);
         let _ = self.0.gc_collect();
     }
 }
@@ -384,11 +419,31 @@ fn failure(
     maps: &[selu_sourcemap::SourceMap],
     s: &Rc<RefCell<Session>>,
 ) -> TestResult {
-    let message = selu_sourcemap::map_lua_error(&e.to_string(), maps);
-    let location = message
-        .lines()
-        .find(|line| line.contains(".selu:"))
-        .map(|s| s.trim().to_string());
+    let mut message = selu_sourcemap::map_lua_error(&e.to_string(), maps);
+    for source in maps.iter().flat_map(|m| &m.sources) {
+        if let Some(short) = source.path.strip_prefix("src/") {
+            let needle = format!("{short}:");
+            if let Some(start) = message.find(&needle)
+                && (start == 0 || !matches!(message.as_bytes()[start - 1], b'/' | b'\\'))
+            {
+                message.replace_range(start..start + short.len(), &source.path);
+            }
+        }
+    }
+    let location = maps
+        .iter()
+        .flat_map(|m| &m.sources)
+        .filter_map(|s| {
+            let prefix = format!("{}:", s.path);
+            let start = message.find(&prefix)?;
+            let digits: String = message[start + prefix.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            (!digits.is_empty()).then_some((start, format!("{prefix}{digits}")))
+        })
+        .min_by_key(|p| p.0)
+        .map(|p| p.1);
     TestResult {
         file: file.into(),
         path,
@@ -432,7 +487,9 @@ fn install(
             Ok(())
         })?,
     )?;
+    let r_stale = r.borrow().stale.clone();
     let observations = r.clone();
+    let stale = r.borrow().stale.clone();
     lua.globals().set(
         "test",
         lua.create_function(move |_, (name, body): (String, Function)| {
@@ -445,6 +502,11 @@ fn install(
         })?,
     )?;
     let sim = lua.create_table()?;
+    let s = session.clone();
+    sim.set(
+        "now",
+        lua.create_function(move |_, ()| Ok(s.borrow().now()))?,
+    )?;
     let s = session.clone();
     sim.set(
         "fire",
@@ -472,16 +534,7 @@ fn install(
                 ));
             }
             let session = s.borrow();
-            let before = session.logs().len();
             session.advance_time(seconds);
-            if let Some(error) = session
-                .logs()
-                .into_iter()
-                .skip(before)
-                .find(|s| s.starts_with("error:"))
-            {
-                return Err(mlua::Error::RuntimeError(error));
-            }
             Ok(())
         })?,
     )?;
@@ -490,11 +543,20 @@ fn install(
         "reload",
         lua.create_function(move |_, ()| {
             observations.borrow_mut().notes.extend(gaps(&s));
+            observations
+                .borrow_mut()
+                .failures
+                .extend(s.borrow().sim().ctx().runtime_failures());
+            let old = s.borrow().sim().ctx().clone();
             s.try_borrow_mut()
-                .map_err(|_| {
-                    mlua::Error::RuntimeError("cannot reload during a Session callback".into())
-                })?
-                .reload()
+                .map_err(|_| mlua::Error::runtime("cannot reload during a Session callback"))?
+                .reload()?;
+            stale.set(true);
+            old.stale_sources
+                .lock()
+                .unwrap()
+                .extend(observations.borrow().sources.clone());
+            Ok(())
         })?,
     )?;
     let s = session.clone();
@@ -544,32 +606,42 @@ fn install(
             let target = session.sim().lua();
             let original: Function = target.globals().get(name.clone())?;
             let original = target.create_registry_value(original)?;
-            let calls = Rc::new(RefCell::new(Vec::<Vec<selu_sim::session::HostValue>>::new()));
+            let calls = Rc::new(target.create_registry_value(target.create_table()?)?);
             let recorded = calls.clone();
             target.globals().set(
                 name,
                 target.create_function(move |lua, args: mlua::MultiValue| {
-                    recorded.borrow_mut().push(
-                        args.iter()
-                            .map(selu_sim::session::HostValue::capture)
-                            .collect::<mlua::Result<Vec<_>>>()?,
-                    );
+                    let calls: mlua::Table = lua.registry_value(&recorded)?;
+                    let values = lua.create_table()?;
+                    values.raw_set("n", args.len())?;
+                    for (i, v) in args.iter().enumerate() {
+                        values.raw_set(i + 1, v.clone())?;
+                    }
+                    calls.raw_set(calls.raw_len() + 1, values)?;
                     lua.registry_value::<Function>(&original)?
                         .call::<mlua::MultiValue>(args)
                 })?,
             )?;
+            let origin = target.clone();
+            let cache = bridge::state(lua);
             let spy = lua.create_table()?;
             spy.set(
                 "calls",
                 lua.create_function(move |lua, ()| {
+                    let calls: mlua::Table = origin.registry_value(&calls)?;
                     let out = lua.create_table()?;
-                    for (i, call) in calls.borrow().iter().enumerate() {
+                    for (i, call) in calls.sequence_values::<mlua::Table>().enumerate() {
+                        let call = call?;
+                        let n: usize = call.raw_get("n")?;
                         let values = lua.create_table()?;
-                        values.set("n", call.len())?;
-                        for (j, v) in call.iter().enumerate() {
-                            values.set(j + 1, v.to_lua(lua)?)?;
+                        values.raw_set("n", n)?;
+                        for j in 1..=n {
+                            values.raw_set(
+                                j,
+                                bridge::value(call.raw_get(j)?, &origin, lua, &cache)?,
+                            )?;
                         }
-                        out.set(i + 1, values)?;
+                        out.raw_set(i + 1, values)?;
                     }
                     Ok(out)
                 })?,
@@ -595,60 +667,27 @@ fn install(
     )?;
     lua.globals().set("perf", perf)?;
     lua.globals().set("sim", sim)?;
+    guard_game_apis(lua, r_stale)?;
     lua.load(include_str!("matchers.lua"))
         .set_name("selu-test-matchers")
         .exec()
 }
 
-fn copy_value(value: &Value, lua: &Lua) -> mlua::Result<Value> {
-    selu_sim::session::HostValue::capture(value)?.to_lua(lua)
-}
 fn frame_proxy(lua: &Lua, s: Rc<RefCell<Session>>, name: String) -> mlua::Result<Value> {
-    if s.borrow()
-        .sim()
-        .lua()
-        .globals()
-        .get::<Value>(name.clone())?
-        .is_nil()
-    {
-        return Ok(Value::Nil);
-    }
-    let proxy = lua.create_table()?;
-    let meta = lua.create_table()?;
-    meta.set(
-        "__index",
-        lua.create_function(move |lua, (_, key): (Value, String)| {
-            let session = s.borrow();
-            let frame: mlua::Table = session.sim().lua().globals().get(name.clone())?;
-            let value: Value = frame.get(key.clone())?;
-            if matches!(value, Value::Function(_)) {
-                let s = s.clone();
-                let name = name.clone();
-                return Ok(Value::Function(lua.create_function(
-                    move |lua, args: mlua::Variadic<Value>| {
-                        let session = s.borrow();
-                        let target = session.sim().lua();
-                        let frame: mlua::Table = target.globals().get(name.clone())?;
-                        let f: Function = frame.get(key.clone())?;
-                        let mut values = vec![Value::Table(frame)];
-                        for arg in args.iter().skip(1) {
-                            values.push(copy_value(arg, target)?);
-                        }
-                        let result: Value =
-                            selu_sim::core::dispatch(target, session.sim().ctx(), || {
-                                f.call(mlua::MultiValue::from_vec(values))
-                            })?;
-                        copy_value(&result, lua)
-                    },
-                )?));
-            }
-            copy_value(&value, lua)
-        })?,
-    )?;
-    proxy.set_metatable(Some(meta));
-    Ok(Value::Table(proxy))
+    let vm = s.borrow().sim().clone();
+    let value = vm.lua().globals().get::<Value>(name)?;
+    bridge::value(value, vm.lua(), lua, &bridge::state(lua))
 }
-
+fn failures_result(errors: Vec<selu_sim::core::RuntimeFailure>) -> mlua::Result<()> {
+    if errors.is_empty() {
+        return Ok(());
+    }
+    let messages = errors
+        .into_iter()
+        .map(|e| format!("{}: {}", e.kind, e.message))
+        .collect::<Vec<_>>();
+    Err(mlua::Error::runtime(messages.join("\n")))
+}
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
@@ -699,4 +738,51 @@ mod hook_order_tests {
         }
         body.call::<()>(()).unwrap();
     }
+}
+
+fn guard_game_apis(lua: &Lua, stale: Rc<std::cell::Cell<bool>>) -> mlua::Result<()> {
+    fn wrap(
+        lua: &Lua,
+        table: &mlua::Table,
+        key: String,
+        stale: Rc<std::cell::Cell<bool>>,
+    ) -> mlua::Result<()> {
+        let f: Function = table.get(key.clone())?;
+        let f = lua.create_registry_value(f)?;
+        table.set(key,lua.create_function(move |lua,args:mlua::MultiValue| {
+            if stale.get() { return Err(mlua::Error::runtime("SELU0623: stale game API after sim.reload(); use sim helpers to access the current Session")); }
+            lua.registry_value::<Function>(&f)?.call::<mlua::MultiValue>(args)
+        })?)
+    }
+    let standard = Lua::new();
+    let globals = lua.globals();
+    let entries = globals
+        .clone()
+        .pairs::<String, Value>()
+        .collect::<mlua::Result<Vec<_>>>()?;
+    for (name, v) in entries {
+        if name.starts_with("__")
+            || ["test", "describe", "beforeEach", "expect"].contains(&name.as_str())
+        {
+            continue;
+        }
+        if matches!(v, Value::Function(_))
+            && (name == "print" || standard.globals().get::<Value>(name.clone())?.is_nil())
+        {
+            wrap(lua, &globals, name, stale.clone())?;
+        } else if name.starts_with("C_")
+            && let Value::Table(t) = v
+        {
+            let methods = t
+                .clone()
+                .pairs::<String, Value>()
+                .collect::<mlua::Result<Vec<_>>>()?;
+            for (key, v) in methods {
+                if matches!(v, Value::Function(_)) {
+                    wrap(lua, &t, key, stale.clone())?;
+                }
+            }
+        }
+    }
+    Ok(())
 }

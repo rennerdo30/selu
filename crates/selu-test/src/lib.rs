@@ -148,6 +148,7 @@ impl std::fmt::Display for RunError {
     }
 }
 
+mod bridge;
 mod runner;
 pub use runner::run;
 
