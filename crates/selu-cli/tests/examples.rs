@@ -52,6 +52,22 @@ fn run_example(example: &Path) -> Vec<String> {
     );
     let dist = example.join("dist").join(&name);
     let toc = std::fs::read_to_string(dist.join(format!("{name}.toc"))).unwrap();
+    let expected_bindings = example.join("expected.Bindings.xml");
+    let bindings = dist.join("Bindings.xml");
+    assert_eq!(
+        bindings.exists(),
+        expected_bindings.exists(),
+        "{}: Bindings.xml fixture presence",
+        example.display()
+    );
+    if expected_bindings.exists() {
+        assert_eq!(
+            std::fs::read_to_string(&bindings).unwrap(),
+            std::fs::read_to_string(&expected_bindings).unwrap(),
+            "{}",
+            expected_bindings.display()
+        );
+    }
     let mut files = Vec::new();
     let mut mapped_sources = std::collections::BTreeSet::new();
     for line in toc.lines().map(str::trim) {
@@ -164,6 +180,9 @@ fn assert_statement_coverage(input: &str, path: &str, lua: &str, map: &selu_sour
                 if let ExprKind::Ident(n) = &callee.kind {
                     if n == "hookScript" {
                         return "HookScript".into();
+                    }
+                    if n == "keybinding" {
+                        return "BINDING_NAME_".into();
                     }
                     if n == "command" {
                         return "__selu".into();

@@ -1,0 +1,5 @@
+<Bindings>
+  <Binding name="Keybindings_TOGGLE_PANEL" header="Keybindings_TOGGLE_PANEL" runOnUp="false">
+    Keybindings_TOGGLE_PANEL_Binding()
+  </Binding>
+</Bindings>
