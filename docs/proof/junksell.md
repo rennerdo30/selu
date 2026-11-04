@@ -38,8 +38,13 @@ and two newly sold locked duplicates bought back from index 2 then 1.
 (`typeof`) are closed by package L; gap 5 (`MerchantFrame`) is closed by M3;
 gap 6 (`NUM_TOTAL_EQUIPPED_BAG_SLOTS`) is closed on retail and forever, while
 the classic branches only reference it (guard with `has(...)` there). Gaps 1
+<<<<<<< HEAD
 (`try`/`catch`), 4 (string patterns) and 8 (runtime
 scaffolding) are open and planned for round 6. Gap 7 is closed by Q. `tests/src/lib.rs`
+=======
+(`try`/`catch`), 7 (simulator timers) and 8 (runtime
+scaffolding) are open and planned for round 6. Gap 4 is closed by package S. `tests/src/lib.rs`
+>>>>>>> bd76fad (Add checked Lua string patterns and lazy capture iteration)
 (`gap_reproductions`) asserts each gap's current status, so this list can't
 drift from the compiler. The port itself still uses its original
 workarounds.
@@ -64,12 +69,11 @@ Numbered gaps encountered (4 language, 0 checker false errors, 2 manifests,
    Lua `type(x)` can be called, but does not supply the promised TypeScript
    narrowing. The proof primarily relies on API types and pcall, with less
    thorough validation than Core.SafeNumber/SafeBool. L may address this.
-4. **Language/library: no string pattern match.**
-   `const x = "item:123".match("item:(%d+)");` gives SELU0390 on all six.
-   Expected a way to extract an ID from an uncached hyperlink independently
-   of API cache state. Workaround used: C_Item.GetItemInfoInstant(link),
-   defaulting missing ID to 0. This loses the source's robust pattern-first
-   identity fallback; unrelated unresolved links can collide at ID 0.
+4. **Language/library: string pattern match — closed by package S.**
+   `const x = "item:123".match(luaPattern`item:(%d+)`);` compiles on all six
+   flavours. Plain-string `.match("item:(%d+)")` remains an error and suggests
+   `luaPattern`. The port retains its C_Item.GetItemInfoInstant workaround;
+   it has not been rewritten. See `docs/lang/patterns.md`.
 5. **Manifest: MerchantFrame unresolved.** `const x = MerchantFrame;` gives
    SELU0310 on every real flavour. Expected the source-defined native frame
    so MerchantFrame.IsShown can be revalidated before a sale. Locations

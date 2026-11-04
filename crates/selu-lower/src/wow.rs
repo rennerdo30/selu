@@ -11,9 +11,15 @@ impl Lowerer<'_> {
         self.wow.used.then(|| vec![crate::raw(RUNTIME)])
     }
     pub(crate) fn tagged_template(&mut self, e: &Expr, pre: &mut LBlock) -> LExpr {
-        let ExprKind::TaggedTemplate { tag, quasis, exprs } = &e.kind else {
+        let ExprKind::TaggedTemplate {
+            tag, quasis, exprs, ..
+        } = &e.kind
+        else {
             unreachable!()
         };
+        if let Some(v) = self.pattern_template(e) {
+            return v;
+        }
         self.wow.used = true;
         let tag = tag.dotted_name().unwrap();
         let mut key = String::new();

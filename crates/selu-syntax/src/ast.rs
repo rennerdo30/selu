@@ -259,6 +259,7 @@ pub enum ExprKind {
     },
     /// ``tag`...` ``, for example ``L`...` `` and ``log.warn`...` ``.
     TaggedTemplate {
+        raw_quasis: Vec<(String, Span)>,
         tag: Box<Expr>,
         quasis: Vec<String>,
         exprs: Vec<Expr>,

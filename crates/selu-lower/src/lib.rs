@@ -23,6 +23,7 @@ mod data;
 mod functions;
 mod loops;
 mod modules;
+mod patterns;
 mod purity;
 pub mod saved;
 pub use modules::ModuleBindings;

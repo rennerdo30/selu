@@ -1,0 +1,10 @@
+on PLAYER_LOGIN() {
+  const link = "|cffffffff|Hitem:123:0|h[Silver Sword]|h|r";
+  const [itemId, itemName] = link.match(luaPattern`%|Hitem:(%d+).-%|h%[(.-)%]%|h`);
+  print(itemId ?? "missing", itemName ?? "missing");
+  let words = 0;
+  for (const word of "Selling a Silver Sword".matchAll(luaPattern`%S+`)) {
+    words += 1;
+  }
+  print(words);
+}

@@ -168,6 +168,11 @@ impl Lowerer<'_> {
         {
             return None;
         }
+        if ty == Type::String
+            && let Some(v) = self.pattern_method(callee, args, pre)
+        {
+            return Some(v);
+        }
         let span = &callee.span;
         if math {
             let refs: Vec<_> = args.iter().collect();
@@ -599,6 +604,9 @@ impl Lowerer<'_> {
     }
 
     pub(crate) fn for_of(&mut self, s: &selu_syntax::Stmt, out: &mut LBlock) {
+        if self.pattern_for_of(s, out) {
+            return;
+        }
         use selu_syntax::{ForBinding, Pattern, StmtKind};
         let StmtKind::ForOf {
             binding,

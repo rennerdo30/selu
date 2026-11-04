@@ -31,6 +31,7 @@ mod rules;
 mod data;
 mod functions;
 mod loops;
+pub mod patterns;
 pub mod targets;
 pub mod types;
 mod wow;

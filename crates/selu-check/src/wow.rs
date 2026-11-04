@@ -27,6 +27,9 @@ impl Ctx<'_> {
             unreachable!()
         };
         let n = self.wow_name(tag);
+        if n.as_deref() == Some("luaPattern") {
+            return self.pattern_tag(e);
+        }
         let valid = matches!(
             n.as_deref(),
             Some("L" | "log.debug" | "log.info" | "log.warn" | "log.error" | "log.warnOnce")

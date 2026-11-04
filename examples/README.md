@@ -14,6 +14,7 @@ copy into `World of Warcraft/_<flavour>_/Interface/AddOns`.
 | [`saved-settings`](saved-settings/src/main.selu) | recursive saved defaults, per-character progress and a checked migration |
 | [`modules`](modules/src/main.selu) | named imports, live exports, shared addon namespace and dependency ordering |
 | [`classes`](classes/src/main.selu) | tracker inheritance, super calls, static members and an arrow capturing this |
+| [`item-links`](item-links/src/main.selu) | item link captures and lazy chat word counting |
 | [`frames`](frames/src/main.selu) | typed frames, child regions, points, text and OnShow hooks |
 | [`named-types`](named-types/src/main.selu) | structural interfaces, array aliases and unknown narrowing |
 | [`hello`](hello/src/main.selu) | the smallest addon: one event handler |

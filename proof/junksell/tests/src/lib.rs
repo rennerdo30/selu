@@ -43,7 +43,7 @@ fn gap_reproductions() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let manifests = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
     // (source, open on these flavours; empty = closed everywhere)
-    let cases: [(&str, &[&str]); 7] = [
+    let cases: [(&str, &[&str]); 8] = [
         // Gap 1, open: `try` doesn't parse yet.
         ("try { print(1); } catch (e) { print(2); }", &["*"]),
         // Gaps 2 and 3, closed by package L.
@@ -51,7 +51,9 @@ fn gap_reproductions() {
         ("function safe(x) { return typeof x == \"number\"; }", &[]),
         // The workaround the port uses.
         ("const [ok, value] = pcall(GetMoney);", &[]),
-        // Gap 4, open: no string patterns yet.
+        // Gap 4, closed: explicit Lua patterns compile on every flavour.
+        ("const x = \"item:123\".match(luaPattern`item:(%d+)`);", &[]),
+        // Plain strings remain literal and require the luaPattern hint.
         ("const x = \"item:123\".match(\"item:(%d+)\");", &["*"]),
         // Gap 5, closed by package M3.
         ("const x = MerchantFrame;", &[]),

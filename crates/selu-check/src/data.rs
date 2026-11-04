@@ -224,6 +224,11 @@ impl Ctx<'_> {
         } else {
             self.data_receiver(object)
         };
+        if t == Type::String
+            && let Some(t) = self.pattern_call(e, callee, name, args)
+        {
+            return Some(t);
+        }
         let (params, ret) = if math {
             match name.as_str() {
                 "floor" | "ceil" | "round" | "abs" => (vec![Type::Number], Type::Number),
@@ -353,6 +358,9 @@ impl Ctx<'_> {
             unreachable!()
         };
         let t = crate::shape_of(&self.value(iter));
+        if self.pattern_for_of(s, &t) {
+            return;
+        }
         let bindings = match (&t, binding) {
             (Type::Array(t) | Type::Set(t), ForBinding::Name(n, sp)) => {
                 vec![(n.clone(), sp.clone(), (**t).clone())]

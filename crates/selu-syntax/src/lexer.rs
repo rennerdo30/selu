@@ -138,6 +138,7 @@ const PUNCT: &[(&str, Tok)] = &[
 pub struct Token {
     pub tok: Tok,
     pub span: Span,
+    pub template_error: Option<Diagnostic>,
 }
 
 struct Lexer<'a> {
@@ -175,6 +176,7 @@ impl Lexer<'_> {
         self.out.push(Token {
             tok,
             span: Span::new(self.file, s, e),
+            template_error: None,
         });
     }
 
@@ -391,6 +393,7 @@ impl Lexer<'_> {
     /// `${`. `first`: right after the opening backtick (else after a `}`).
     fn template_part(&mut self, start: usize, first: bool) -> Result<(), Diagnostic> {
         let mut s = String::new();
+        let mut invalid = None;
         loop {
             match self.at(0) {
                 None => {
@@ -401,7 +404,13 @@ impl Lexer<'_> {
                         self.i,
                     ));
                 }
-                Some(b'\\') => s.push(self.escape(&[(b'`', '`'), (b'$', '$')])?),
+                Some(b'\\') => match self.escape(&[(b'`', '`'), (b'$', '$')]) {
+                    Ok(c) => s.push(c),
+                    Err(e) => {
+                        invalid.get_or_insert(e);
+                        s.push(self.char());
+                    }
+                },
                 Some(b'`') => {
                     self.i += 1;
                     let tok = if first {
@@ -410,6 +419,7 @@ impl Lexer<'_> {
                         Tok::TemplateTail(s)
                     };
                     self.push(tok, start, self.i);
+                    self.out.last_mut().unwrap().template_error = invalid;
                     return Ok(());
                 }
                 Some(b'$') if self.at(1) == Some(b'{') => {

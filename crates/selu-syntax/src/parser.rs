@@ -6,6 +6,7 @@ pub fn parse(file: &str, src: &str) -> Result<Program, Diagnostic> {
     let tokens = lex(file, src)?;
     let mut p = Parser {
         tokens,
+        source: src.to_string(),
         pos: 0,
         file: file.to_string(),
         next_id: 0,
@@ -18,6 +19,7 @@ pub fn parse(file: &str, src: &str) -> Result<Program, Diagnostic> {
 }
 
 struct Parser {
+    source: String,
     tokens: Vec<Token>,
     pos: usize,
     file: String,
@@ -1105,17 +1107,21 @@ impl Parser {
                     }
                 }
                 Tok::Template(s) => {
+                    let raw_quasis = self.raw_templates(self.pos, self.pos + 1);
                     self.bump();
                     ExprKind::TaggedTemplate {
+                        raw_quasis,
                         tag: Box::new(e),
                         quasis: vec![s],
                         exprs: Vec::new(),
                     }
                 }
                 Tok::TemplateHead(s) => {
+                    let raw_start = self.pos;
                     self.bump();
                     let (quasis, exprs) = self.template_rest(s)?;
                     ExprKind::TaggedTemplate {
+                        raw_quasis: self.raw_templates(raw_start, self.pos),
                         tag: Box::new(e),
                         quasis,
                         exprs,
@@ -1134,6 +1140,43 @@ impl Parser {
             let span = self.span_from(start);
             e = self.mk(kind, span);
         }
+    }
+
+    fn raw_templates(&self, start: usize, end: usize) -> Vec<(String, Span)> {
+        let mut depth = 0usize;
+        self.tokens[start..end]
+            .iter()
+            .filter_map(|t| {
+                let outer = depth == 0
+                    || depth == 1 && matches!(t.tok, Tok::TemplateMiddle(_) | Tok::TemplateTail(_));
+                match t.tok {
+                    Tok::TemplateHead(_) => depth += 1,
+                    Tok::TemplateTail(_) => depth -= 1,
+                    _ => {}
+                }
+                if !outer {
+                    return None;
+                }
+                let trim = match t.tok {
+                    Tok::Template(_) | Tok::TemplateTail(_) => 1,
+                    Tok::TemplateHead(_) | Tok::TemplateMiddle(_) => 2,
+                    _ => return None,
+                };
+                let sp = Span::new(&self.file, t.span.start + 1, t.span.end - trim);
+                Some((self.source[sp.start..sp.end].to_string(), sp))
+            })
+            .collect()
+    }
+    fn validate_templates(&self, start: usize, end: usize) -> PResult<()> {
+        let spans = self.raw_templates(start, end);
+        for t in &self.tokens[start..end] {
+            if spans.iter().any(|(_, sp)| sp.start == t.span.start + 1)
+                && let Some(e) = &t.template_error
+            {
+                return Err(e.clone());
+            }
+        }
+        Ok(())
     }
 
     /// After a `TemplateHead`: the expressions and text parts up to the tail.
@@ -1299,12 +1342,17 @@ impl Parser {
                 }
             }
             Tok::TemplateHead(s) => {
+                let raw_start = self.pos;
                 self.bump();
                 let (quasis, exprs) = self.template_rest(s)?;
+                self.validate_templates(raw_start, self.pos)?;
                 ExprKind::Template { quasis, exprs }
             }
             _ => {
                 let tok = self.bump();
+                if let Some(e) = tok.template_error {
+                    return Err(e);
+                }
                 match tok.tok {
                     Tok::Number(n) => ExprKind::Number(n),
                     Tok::Str(s) | Tok::Template(s) => ExprKind::Str(s),

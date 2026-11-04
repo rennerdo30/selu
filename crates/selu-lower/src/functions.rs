@@ -60,6 +60,9 @@ impl Lowerer<'_> {
         LExpr::Function(self.function(params, &body))
     }
     pub(crate) fn function_return(&mut self, e: &Expr, pre: &mut LBlock) -> Vec<LExpr> {
+        if let Some(v) = self.pattern_values(e, pre) {
+            return v;
+        }
         if let ExprKind::Array(items) = &e.kind
             && matches!(self.types.get(e.id), Some(selu_check::Type::Tuple(_)))
         {
@@ -95,6 +98,9 @@ impl Lowerer<'_> {
         vec![self.expr(e, pre)]
     }
     pub(crate) fn destructure(&mut self, s: &Stmt, forward: bool, out: &mut LBlock) {
+        if self.pattern_destructure(s, forward, out) {
+            return;
+        }
         let StmtKind::Destructure { pattern, init, .. } = &s.kind else {
             unreachable!()
         };
