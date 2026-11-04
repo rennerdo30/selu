@@ -108,6 +108,7 @@ fn generate(args: &[String]) -> Result<()> {
         ],
     )?)?;
     let mut sources = vec![];
+    let mut factory_sources = vec![];
     let mut files = 0;
     for entry in tar::Archive::new(std::fs::File::open(archive)?).entries()? {
         use std::io::Read;
@@ -130,6 +131,7 @@ fn generate(args: &[String]) -> Result<()> {
             continue;
         }
         source_globals.parse(&path, &text)?;
+        if text.contains("CreateFromMixins") { factory_sources.push((path.clone(),text.clone())); }
         files += 1;
         if path.starts_with("Interface/AddOns/Blizzard_APIDocumentationGenerated/") {
             sources.push(text);
@@ -145,6 +147,7 @@ fn generate(args: &[String]) -> Result<()> {
     let (defined, called) = source_globals.extend_manifest(&mut m);
     eprintln!("source globals: {defined} defined, {called} called; parsed {files} Lua files");
     xml.extend_manifest(&mut m);
+    selu_manifest_gen::factory::extend(&mut m, &factory_sources);
     let overlay = output
         .parent()
         .ok_or("output needs parent directory")?

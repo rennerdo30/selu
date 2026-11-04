@@ -543,7 +543,7 @@ impl Sources {
 }
 // Source-only signatures preserve arity and primitive EmmyLua annotations.
 // Unspecified types use the checker's existing untyped-game-value rule.
-fn source_signature(
+pub(crate) fn source_signature(
     qualified: &str,
     body: &FunctionBody,
     prefix: &str,
@@ -837,7 +837,7 @@ mod tests {
     }
 }
 
-fn literal(e: &Expression) -> Option<serde_json::Value> {
+pub(crate) fn literal(e: &Expression) -> Option<serde_json::Value> {
     match e {
         Expression::Number(t) => mlua::Lua::new()
             .load(format!("return {}", t.token()))

@@ -1,3 +1,4 @@
+pub mod factory;
 pub mod xml;
 use mlua::{Lua, LuaOptions, StdLib, Table, Value};
 use selu_manifest::{Declaration, EventEntry, EventParam, Evidence, FunctionEntry, Manifest};
