@@ -116,6 +116,8 @@ pub struct Studio {
     /// Copy into this client after the running build succeeds.
     pending_deploy: Option<(String, crate::game::Client)>,
     confirm_replace: Option<(String, crate::game::Client, PathBuf)>,
+    /// Run in Game's "which version?" dialog, with the selected client.
+    game_picker: Option<usize>,
     /// The running background build, if any.
     build: Option<Receiver<BuildMsg>>,
     build_failed: bool,
@@ -181,6 +183,7 @@ impl Studio {
             game_new_root: String::new(),
             pending_deploy: None,
             confirm_replace: None,
+            game_picker: None,
             repaint: Some(ctx.clone()),
             logo: crate::theme::logo_image()
                 .map(|img| ctx.load_texture("selu-logo", img, egui::TextureOptions::LINEAR)),
@@ -208,6 +211,10 @@ impl Studio {
             editor: crate::editor::Editor::new(opts_project, opts_selu, opts_target, ctx),
             confirm_close: false,
         };
+        // For screenshots in checks: open Run in Game's version picker.
+        if std::env::var_os("SELU_STUDIO_OPEN_PICKER").is_some() {
+            studio.run_in_game();
+        }
         // For screenshots in checks: open the Game Installs window.
         if std::env::var_os("SELU_STUDIO_OPEN_GAMES").is_some() {
             studio.games_open = true;
@@ -592,6 +599,7 @@ impl eframe::App for Studio {
         self.editor.ui_quick_open(&ctx);
         self.ui_games(&ctx);
         self.ui_confirm_replace(&ctx);
+        self.ui_game_picker(&ctx);
         if self.editor.take_settings_request() {
             self.open_settings();
         }
@@ -741,6 +749,38 @@ impl Studio {
     }
 
     /// Run in Game (Ctrl+F5): build, copy into the client's AddOns, start it.
+    /// Every flavour the project builds for: `--target`, else `selu.toml`'s
+    /// targets, in order.
+    fn project_flavours(&self) -> Vec<String> {
+        let targets: Vec<String> = match &self.opts.target {
+            Some(t) => t.split(',').map(|s| s.trim().to_string()).collect(),
+            None => self
+                .opts
+                .project
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p.join("selu.toml")).ok())
+                .and_then(|t| toml::from_str::<toml::Value>(&t).ok())
+                .and_then(|v| {
+                    v.get("addon")?.get("targets")?.as_array().map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default(),
+        };
+        let mut out: Vec<String> = Vec::new();
+        for t in targets {
+            let f = t.split('@').next().unwrap_or(&t).trim().to_string();
+            if !f.is_empty() && !out.contains(&f) {
+                out.push(f);
+            }
+        }
+        out
+    }
+
+    /// Run in Game (Ctrl+F5): ask which game version, then build, copy into
+    /// that client's AddOns and start it.
     fn run_in_game(&mut self) {
         if self.opts.project.is_none() || self.opts.selu.is_none() {
             self.line(
@@ -749,21 +789,40 @@ impl Studio {
             );
             return;
         }
-        let Some(flavour) = self.game_flavour() else {
-            self.line(LineKind::Error, "the project has no target in selu.toml");
+        if self.build.is_some() {
+            self.line(LineKind::Log, "a build is already running");
             return;
-        };
+        }
         self.ensure_clients();
-        let Some(client) =
-            crate::game::pick(&self.game_clients, &flavour, &self.game_settings).cloned()
-        else {
-            self.line(
-                LineKind::Error,
-                format!("no {flavour} game install found; add it under Run > Game Installs"),
-            );
-            self.games_open = true;
+        // Preselect the last choice, else the first target's usual client.
+        let flavours = self.project_flavours();
+        let last = self.game_settings.chosen.get("__last_run").and_then(|f| {
+            self.game_clients
+                .iter()
+                .position(|c| c.folder.to_string_lossy() == *f)
+        });
+        let default = last.or_else(|| {
+            flavours.iter().find_map(|f| {
+                let c = crate::game::pick(&self.game_clients, f, &self.game_settings)?;
+                self.game_clients.iter().position(|x| x.folder == c.folder)
+            })
+        });
+        self.game_picker = Some(default.unwrap_or(0));
+    }
+
+    /// Start a chosen client: remember it, build, then copy and launch.
+    fn start_in_game(&mut self, client: crate::game::Client) {
+        let Some(flavour) = client.flavour.clone() else {
             return;
         };
+        let key = client.folder.to_string_lossy().into_owned();
+        self.game_settings
+            .chosen
+            .insert(flavour.clone(), key.clone());
+        self.game_settings.chosen.insert("__last_run".into(), key);
+        if let Err(e) = self.game_settings.save() {
+            self.line(LineKind::Error, format!("cannot save game settings: {e}"));
+        }
         self.line(
             LineKind::Build,
             format!(
@@ -774,6 +833,172 @@ impl Studio {
         );
         self.pending_deploy = Some((flavour, client));
         self.rebuild();
+    }
+
+    /// The "which version?" dialog of Run in Game.
+    fn ui_game_picker(&mut self, ctx: &egui::Context) {
+        let Some(mut selected) = self.game_picker else {
+            return;
+        };
+        let flavours = self.project_flavours();
+        // Project targets first, then the rest.
+        let mut order: Vec<usize> = (0..self.game_clients.len()).collect();
+        order.sort_by_key(|&i| {
+            let c = &self.game_clients[i];
+            let rank = c
+                .flavour
+                .as_ref()
+                .and_then(|f| flavours.iter().position(|x| x == f))
+                .unwrap_or(usize::MAX);
+            (rank, c.folder.clone())
+        });
+        let usable = |c: &crate::game::Client| {
+            c.exe.is_some() && c.flavour.as_ref().is_some_and(|f| flavours.contains(f))
+        };
+        if !self.game_clients.get(selected).is_some_and(&usable) {
+            selected = order
+                .iter()
+                .copied()
+                .find(|&i| usable(&self.game_clients[i]))
+                .unwrap_or(selected);
+        }
+        let mut result: Option<bool> = None;
+        egui::Modal::new(egui::Id::unique("game-picker")).show(ctx, |ui| {
+            ui.set_width(520.0);
+            ui.label(egui::RichText::new("Run in Game").size(16.0).strong());
+            ui.label(
+                egui::RichText::new("Which version of World of Warcraft?").color(palette::MUTED),
+            );
+            ui.add_space(8.0);
+            if self.game_clients.is_empty() {
+                ui.label(
+                    egui::RichText::new("No World of Warcraft install found.")
+                        .color(palette::WARNING),
+                );
+            }
+            for &i in &order {
+                let c = &self.game_clients[i];
+                let ok = usable(c);
+                let (r, resp) =
+                    ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), Sense::click());
+                let on = i == selected;
+                let p = ui.painter();
+                if on {
+                    p.rect_filled(r, 6.0, palette::ACCENT_SOFT);
+                    p.rect_stroke(
+                        r,
+                        6.0,
+                        Stroke::new(1.0, palette::ACCENT),
+                        StrokeKind::Inside,
+                    );
+                } else if resp.hovered() && ok {
+                    p.rect_filled(r, 6.0, palette::HOVER);
+                }
+                let title = c.flavour.clone().unwrap_or_else(|| "unknown".into());
+                let fg = if ok { palette::TEXT } else { palette::FAINT };
+                p.text(
+                    r.left_center() + Vec2::new(14.0, -8.0),
+                    Align2::LEFT_CENTER,
+                    &title,
+                    FontId::proportional(14.0),
+                    fg,
+                );
+                let detail = match (&c.exe, ok) {
+                    (None, _) => format!("{}  ·  no game executable", c.folder_name()),
+                    (Some(_), false) => format!(
+                        "{}  ·  not a target of this project (Project Settings)",
+                        c.folder_name()
+                    ),
+                    (Some(e), true) => format!(
+                        "{}  ·  {}",
+                        c.folder_name(),
+                        e.file_name()
+                            .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+                    ),
+                };
+                p.text(
+                    r.left_center() + Vec2::new(14.0, 9.0),
+                    Align2::LEFT_CENTER,
+                    detail,
+                    FontId::proportional(11.5),
+                    palette::MUTED,
+                );
+                if ok && resp.clicked() {
+                    selected = i;
+                }
+                if ok && resp.double_clicked() {
+                    selected = i;
+                    result = Some(true);
+                }
+            }
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let can = self.game_clients.get(selected).is_some_and(&usable);
+                let run = egui::Button::new(egui::RichText::new("Run").color(Color32::WHITE))
+                    .fill(palette::ACCENT);
+                if ui.add_enabled(can, run).clicked() {
+                    result = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    result = Some(false);
+                }
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add(egui::Button::new("Game Installs...").frame(false))
+                        .clicked()
+                    {
+                        self.games_open = true;
+                        result = Some(false);
+                    }
+                });
+            });
+            ui.input(|i| {
+                if i.key_pressed(Key::Enter) && result.is_none() {
+                    result = Some(true);
+                }
+                if i.key_pressed(Key::Escape) {
+                    result = Some(false);
+                }
+                // Up/Down move between usable entries.
+                let step = if i.key_pressed(Key::ArrowDown) {
+                    1i32
+                } else if i.key_pressed(Key::ArrowUp) {
+                    -1
+                } else {
+                    0
+                };
+                if step != 0
+                    && let Some(pos) = order.iter().position(|&x| x == selected)
+                {
+                    let mut k = pos as i32;
+                    loop {
+                        k += step;
+                        if k < 0 || k >= order.len() as i32 {
+                            break;
+                        }
+                        if usable(&self.game_clients[order[k as usize]]) {
+                            selected = order[k as usize];
+                            break;
+                        }
+                    }
+                }
+            });
+        });
+        match result {
+            Some(true) => {
+                self.game_picker = None;
+                if let Some(c) = self
+                    .game_clients
+                    .get(selected)
+                    .filter(|c| usable(c))
+                    .cloned()
+                {
+                    self.start_in_game(c);
+                }
+            }
+            Some(false) => self.game_picker = None,
+            None => self.game_picker = Some(selected),
+        }
     }
 
     /// After a successful build: copy the addon and start the game.

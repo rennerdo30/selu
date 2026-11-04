@@ -50,7 +50,8 @@ The window is laid out like a code editor:
   keeps its comments.
 
 - **Run in Game** (Ctrl+F5, Run menu, or the controller button in the title
-  bar): builds the project, copies the built addon into the matching game
+  bar): asks which version of the game to use (the project's targets on top,
+  your last choice preselected; Enter repeats it), then builds the project, copies the built addon into the matching game
   client's `Interface\AddOns` and starts that client through Battle.net, so
   you're logged in (or, if it's already
   running, tells you to type `/reload` in game). Studio finds the installs
