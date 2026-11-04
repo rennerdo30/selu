@@ -1,0 +1,5 @@
+## Interface: 120001
+## Title: Hello
+## Notes: Hand-written test addon for the simulator core.
+
+Hello.lua

@@ -74,7 +74,8 @@ fn hello_builds_runs_and_prints_on_login() {
 
 #[test]
 fn stubs_exit_nonzero_with_a_clear_message() {
-    for cmd in ["test", "debug", "probe"] {
+    // `test` and `debug` are wired now (tests/commands.rs).
+    for cmd in ["probe"] {
         let output = Command::new(env!("CARGO_BIN_EXE_selu"))
             .arg(cmd)
             .output()

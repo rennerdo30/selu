@@ -1,0 +1,309 @@
+//! Selu Studio's engine side (docs/SIMULATOR.md decisions 2, 6 and 17).
+//! Owner: package S5 (round 9); the debugger commands are S6 (round 10).
+//!
+//! Groundwork (round 8): the command/update protocol and the worker thread
+//! that owns the [`selu_sim::Session`]. The GUI never touches Lua: it sends
+//! [`Command`]s and draws from [`Update`]s. `selu-studio --headless` drives
+//! the same worker from JSON lines, which is also how the protocol is
+//! tested.
+
+use selu_sim::{Session, SessionConfig, SimValue, Snapshot, TraceRecord};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::thread::JoinHandle;
+
+/// An event or command argument, as a front end can write it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Arg {
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Nil(()),
+}
+
+/// Front end to worker.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum Command {
+    LoadAddon {
+        dir: PathBuf,
+    },
+    Login,
+    Reload,
+    Fire {
+        event: String,
+        #[serde(default)]
+        args: Vec<Arg>,
+    },
+    Slash {
+        line: String,
+    },
+    AdvanceTime {
+        seconds: f64,
+    },
+    /// Run Lua in the session (Studio's console).
+    Eval {
+        code: String,
+    },
+    Snapshot,
+    // Round 10 (S6) adds: SetBreakpoints, Pause, Resume, StepIn/Over/Out,
+    // Stack, Locals. While paused the worker serves only those and
+    // Snapshot (decision 17).
+    Shutdown,
+}
+
+/// Worker to front end. After every command the worker sends the new
+/// prints, logs and trace records it produced, then `Done`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "update", rename_all = "snake_case")]
+pub enum Update {
+    Prints {
+        lines: Vec<String>,
+    },
+    Logs {
+        lines: Vec<String>,
+    },
+    Trace {
+        records: Vec<TraceRecord>,
+    },
+    Snapshot {
+        snapshot: Box<Snapshot>,
+    },
+    /// A command failed; the session keeps running.
+    Error {
+        message: String,
+    },
+    /// The session generation changed (`reload()`): drop stale selections.
+    Generation {
+        generation: u64,
+    },
+    Done {
+        seq: u64,
+    },
+}
+
+pub struct Worker {
+    commands: Sender<Command>,
+    pub updates: Receiver<Update>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Worker {
+    /// Start a session on its own thread. The `Lua` VM is created on that
+    /// thread and never leaves it.
+    pub fn spawn(config: SessionConfig) -> Worker {
+        let (commands, inbox) = channel::<Command>();
+        let (outbox, updates) = channel::<Update>();
+        let thread = std::thread::spawn(move || run(config, inbox, outbox));
+        Worker {
+            commands,
+            updates,
+            thread: Some(thread),
+        }
+    }
+
+    pub fn send(&self, command: Command) {
+        let _ = self.commands.send(command);
+    }
+
+    /// Send a command and collect its updates up to and including `Done`.
+    pub fn call(&self, command: Command) -> Vec<Update> {
+        self.send(command);
+        let mut out = Vec::new();
+        while let Ok(update) = self.updates.recv() {
+            let done = matches!(update, Update::Done { .. });
+            out.push(update);
+            if done {
+                break;
+            }
+        }
+        out
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let _ = self.commands.send(Command::Shutdown);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+fn to_value(session: &Session, arg: &Arg) -> Result<SimValue, String> {
+    Ok(match arg {
+        Arg::Nil(()) => SimValue::Nil,
+        Arg::Bool(b) => SimValue::Boolean(*b),
+        Arg::Number(n) => SimValue::Number(*n),
+        Arg::String(s) => SimValue::String(
+            session
+                .sim()
+                .lua()
+                .create_string(s)
+                .map_err(|e| e.to_string())?,
+        ),
+    })
+}
+
+fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) {
+    let mut session = match Session::new(config) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = outbox.send(Update::Error {
+                message: format!("cannot start the session: {e}"),
+            });
+            return;
+        }
+    };
+    let (mut prints_seen, mut logs_seen, mut trace_seen) = (0, 0, 0);
+    let mut seq = 0;
+    while let Ok(command) = inbox.recv() {
+        if command == Command::Shutdown {
+            break;
+        }
+        let before = session.generation();
+        let result: Result<Option<Update>, String> = match command {
+            Command::LoadAddon { dir } => session
+                .load_addon_dir(&dir)
+                .map(|_| None)
+                .map_err(|e| e.to_string()),
+            Command::Login => session.login().map(|_| None).map_err(|e| e.to_string()),
+            Command::Reload => session.reload().map(|_| None).map_err(|e| e.to_string()),
+            Command::Fire { event, args } => args
+                .iter()
+                .map(|a| to_value(&session, a))
+                .collect::<Result<Vec<_>, _>>()
+                .and_then(|args| {
+                    session
+                        .fire(&event, args)
+                        .map(|_| None)
+                        .map_err(|e| e.to_string())
+                }),
+            Command::Slash { line } => session
+                .slash(&line)
+                .map(|_| None)
+                .map_err(|e| e.to_string()),
+            Command::AdvanceTime { seconds } => {
+                session.advance_time(seconds);
+                Ok(None)
+            }
+            Command::Eval { code } => session.eval(&code).map(|_| None).map_err(|e| e.to_string()),
+            Command::Snapshot => session
+                .snapshot()
+                .map(|s| {
+                    Some(Update::Snapshot {
+                        snapshot: Box::new(s),
+                    })
+                })
+                .map_err(|e| e.to_string()),
+            Command::Shutdown => unreachable!(),
+        };
+        if session.generation() != before {
+            // A new VM starts its buffers from zero.
+            (prints_seen, logs_seen, trace_seen) = (0, 0, 0);
+            let _ = outbox.send(Update::Generation {
+                generation: session.generation().0,
+            });
+        }
+        let prints = session.prints();
+        if prints.len() > prints_seen {
+            let _ = outbox.send(Update::Prints {
+                lines: prints[prints_seen..].to_vec(),
+            });
+            prints_seen = prints.len();
+        }
+        let logs = session.logs();
+        if logs.len() > logs_seen {
+            let _ = outbox.send(Update::Logs {
+                lines: logs[logs_seen..].to_vec(),
+            });
+            logs_seen = logs.len();
+        }
+        let records = session.trace_since(trace_seen);
+        if let Some(last) = records.last() {
+            trace_seen = last.seq + 1;
+            let _ = outbox.send(Update::Trace { records });
+        }
+        match result {
+            Ok(Some(update)) => {
+                let _ = outbox.send(update);
+            }
+            Ok(None) => {}
+            Err(message) => {
+                let _ = outbox.send(Update::Error { message });
+            }
+        }
+        let _ = outbox.send(Update::Done { seq });
+        seq += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hello() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../selu-sim/tests/addons/Hello")
+    }
+
+    #[test]
+    fn worker_runs_a_session_on_its_own_thread() {
+        let worker = Worker::spawn(SessionConfig {
+            trace: true,
+            ..SessionConfig::default()
+        });
+        let updates = worker.call(Command::LoadAddon { dir: hello() });
+        assert!(
+            updates.contains(&Update::Prints {
+                lines: vec!["Hello loaded".into()]
+            }),
+            "{updates:?}"
+        );
+        worker.call(Command::Login);
+        let updates = worker.call(Command::Snapshot);
+        let Some(Update::Snapshot { snapshot }) = updates
+            .iter()
+            .find(|u| matches!(u, Update::Snapshot { .. }))
+        else {
+            panic!("{updates:?}")
+        };
+        assert!(snapshot.regions.len() >= 2);
+
+        let updates = worker.call(Command::Reload);
+        assert!(
+            updates.contains(&Update::Generation { generation: 1 }),
+            "{updates:?}"
+        );
+        let updates = worker.call(Command::Eval {
+            code: "error('boom')".into(),
+        });
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, Update::Error { message } if message.contains("boom"))),
+            "{updates:?}"
+        );
+    }
+
+    #[test]
+    fn commands_read_from_json_lines() {
+        let c: Command = serde_json::from_str(
+            r#"{"command":"fire","event":"UNIT_HEALTH","args":["player", 3, true, null]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            c,
+            Command::Fire {
+                event: "UNIT_HEALTH".into(),
+                args: vec![
+                    Arg::String("player".into()),
+                    Arg::Number(3.0),
+                    Arg::Bool(true),
+                    Arg::Nil(())
+                ]
+            }
+        );
+    }
+}

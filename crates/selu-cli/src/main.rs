@@ -1,5 +1,7 @@
 //! `selu` command line. `build` works end to end for the current Selu
-//! subset; `test`, `debug` and `probe` are honest stubs for now.
+//! subset; `test` and `debug` are wired to the `selu-test` runner and the
+//! `selu-studio` binary (both groundwork until rounds 9 and 10), and `probe`
+//! is an honest stub.
 
 use clap::{Parser, Subcommand};
 use selu_diagnostics::Diagnostic;
@@ -37,12 +39,17 @@ enum Command {
         path: Option<PathBuf>,
         #[arg(long)]
         target: Option<String>,
+        /// Only tests whose name contains this text.
+        #[arg(long)]
+        filter: Option<String>,
     },
-    /// Build, then start Selu Studio, the virtual WoW simulator (not implemented yet).
+    /// Build, then start Selu Studio, the virtual WoW simulator (window not implemented yet).
     Debug {
         path: Option<PathBuf>,
         #[arg(long)]
         target: Option<String>,
+        #[arg(long)]
+        manifest_dir: Option<PathBuf>,
     },
     /// List every known flavour and build.
     Targets {
@@ -103,11 +110,24 @@ fn main() -> ExitCode {
             manifest_dir.as_deref(),
         ),
         Command::Targets { manifest_dir } => targets(manifest_dir.as_deref()),
-        Command::Test { .. } => Err(not_yet("selu test", "headless test scenarios")),
-        Command::Debug { .. } => Err(not_yet(
-            "selu debug",
-            "Selu Studio, the virtual WoW simulator app",
-        )),
+        Command::Test {
+            path,
+            target,
+            filter,
+        } => test(
+            path.as_deref().unwrap_or(Path::new(".")),
+            target.clone(),
+            filter.clone(),
+        ),
+        Command::Debug {
+            path,
+            target,
+            manifest_dir,
+        } => debug(
+            path.as_deref().unwrap_or(Path::new(".")),
+            target.as_deref(),
+            manifest_dir.as_deref(),
+        ),
         Command::Probe { .. } => Err(not_yet("selu probe", "in-game manifest probing")),
     };
     match result {
@@ -119,6 +139,129 @@ fn main() -> ExitCode {
 fn not_yet(cmd: &str, what: &str) -> ExitCode {
     eprintln!("{cmd}: not implemented yet ({what} is planned; see DESIGN.md)");
     ExitCode::from(2)
+}
+
+/// `selu test` (docs/SIMULATOR.md decision 11). The runner lives in the
+/// `selu-test` crate; until package S4 lands it discovers test files and
+/// says that it can't run them yet.
+fn test(
+    project_dir: &Path,
+    target: Option<String>,
+    filter: Option<String>,
+) -> Result<(), ExitCode> {
+    let options = selu_test::RunOptions {
+        project_dir: project_dir.to_path_buf(),
+        target,
+        filter,
+    };
+    match selu_test::run(&options) {
+        Ok(report) => {
+            print!("{}", report.to_human());
+            match report.exit_code() {
+                0 => Ok(()),
+                code => Err(ExitCode::from(code)),
+            }
+        }
+        Err(e @ selu_test::RunError::NotImplemented { .. }) => {
+            eprintln!("selu test: {e}");
+            Err(ExitCode::from(2))
+        }
+        Err(e) => {
+            eprintln!("selu test: {e}");
+            Err(ExitCode::FAILURE)
+        }
+    }
+}
+
+/// `selu debug` (docs/SIMULATOR.md decision 2): build, then start
+/// `selu-studio` with the built addon folder. Studio is a separate binary so
+/// the compiler doesn't carry GUI dependencies.
+fn debug(
+    project_dir: &Path,
+    target: Option<&str>,
+    manifest_dir: Option<&Path>,
+) -> Result<(), ExitCode> {
+    build(project_dir, target, manifest_dir)?;
+    let addon = built_addon(project_dir, target)?;
+    let studio = find_studio().ok_or_else(|| {
+        eprintln!(
+            "selu debug: selu-studio was not found next to selu or on the PATH; \
+             build it with `cargo build --release -p selu-debug` and put it beside selu"
+        );
+        ExitCode::FAILURE
+    })?;
+    let mut cmd = std::process::Command::new(&studio);
+    if let Some(t) = target {
+        cmd.arg("--target").arg(t);
+    }
+    cmd.arg(&addon);
+    let status = cmd.status().map_err(|e| {
+        eprintln!("selu debug: cannot start {}: {e}", studio.display());
+        ExitCode::FAILURE
+    })?;
+    match status.code() {
+        Some(0) => Ok(()),
+        Some(code) => Err(ExitCode::from(u8::try_from(code).unwrap_or(1))),
+        None => Err(ExitCode::FAILURE),
+    }
+}
+
+/// The built addon folder under `dist/`: the only one, or the one for the
+/// `--target` flavour when the project builds several.
+fn built_addon(project_dir: &Path, target: Option<&str>) -> Result<PathBuf, ExitCode> {
+    let dist = project_dir.join("dist");
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&dist)
+        .map_err(|e| {
+            eprintln!("selu debug: cannot read {}: {e}", dist.display());
+            ExitCode::FAILURE
+        })?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| !n.starts_with('.') && p.join(format!("{n}.toc")).is_file())
+        })
+        .collect();
+    found.sort();
+    if let Some(flavour) = target.and_then(|t| t.split('@').next())
+        && found.len() > 1
+    {
+        found.retain(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(&format!("-{flavour}")))
+        });
+    }
+    match found.len() {
+        1 => Ok(found.remove(0)),
+        0 => {
+            eprintln!("selu debug: no built addon folder under {}", dist.display());
+            Err(ExitCode::FAILURE)
+        }
+        _ => {
+            let names: Vec<_> = found
+                .iter()
+                .filter_map(|p| p.file_name()?.to_str())
+                .collect();
+            eprintln!(
+                "selu debug: several built targets ({}); pick one with --target",
+                names.join(", ")
+            );
+            Err(ExitCode::FAILURE)
+        }
+    }
+}
+
+fn find_studio() -> Option<PathBuf> {
+    let name = format!("selu-studio{}", std::env::consts::EXE_SUFFIX);
+    let beside = std::env::current_exe().ok()?.with_file_name(&name);
+    if beside.is_file() {
+        return Some(beside);
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(&name))
+        .find(|p| p.is_file())
 }
 
 fn fail(d: &Diagnostic, source: &str) -> ExitCode {

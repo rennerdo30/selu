@@ -999,7 +999,19 @@ entry, unless the package also adds language-facing features.
 | S2 sessions and world | `crates/selu-sim/src/session.rs`, `loader.rs`, `world.rs`, `trace.rs`, `snapshot.rs` (new), its tests | none |
 | S3 source maps | `crates/selu-sourcemap/` (new crate), `crates/selu-cli/tests/sourcemap.rs`, `docs/lang/output.md` (section "Source maps") | none |
 
-### S0: core contract and wiring
+**Groundwork done by the parent (2026-11-04):** S0 is implemented, and S1 to
+S5 each start from a compiling skeleton with tests; see the table "Code
+groundwork" in SIMULATOR.md. So round 8 is S1, S2 and S3, launched
+together (S1 before S2 at merge time). Each package **extends** the
+skeleton in its files rather than starting over; the shapes in `core.rs`,
+`Session`, `selu_test::Report` and `selu_debug::{Command, Update}` are the
+contract, and changing one goes to the parent first. Two traps found while
+building it: Lua 5.1 hooks are per coroutine (budget code inside addon
+coroutines is not counted yet: S2 wraps `coroutine.create`), and a test
+that can hang must run under a timeout (a runaway loop once spun a test
+binary for ten minutes before the hook fix).
+
+### S0: core contract and wiring (done in the groundwork)
 
 SIMULATOR.md decisions 5, 6, 15, 16, 17 and 18. Small and first, so S1 and
 S2 can then work in parallel without touching the same files. Acceptance:
@@ -1093,6 +1105,11 @@ only if the wrapper can't keep them unchanged. Not `lib.rs` (S0 wired it).
 
 SIMULATOR.md decision 9. Acceptance:
 
+0. Already in the groundwork: the crate with the format, reader, writer,
+   both lookups and `map_lua_error`, tested. S3 documents it, replaces the
+   lowering's own `selu_lower::SourceMap` and its `.lua.map.json` files
+   with it (keep the maps under `dist/.selu/`, out of the addon folder),
+   and does items 2 and 3.
 1. `crates/selu-sourcemap`: the format of decision 23 (documented in `docs/lang/output.md`),
    writer and reader, lookups both ways (generated line to source position,
    source line to generated lines), with unit tests.
@@ -1118,12 +1135,13 @@ since it doesn't touch `selu-sim`).
 
 ## Round 9 and 10 (outline, briefed after round 8)
 
-- **S4 `selu test`** (SIMULATOR.md decision 11): `*.test.selu`, `describe`,
+- **S4 `selu test`** (SIMULATOR.md decision 11; extends `crates/selu-test`): `*.test.selu`, `describe`,
   `test`, `beforeEach`, `expect` matchers from SPEC 8, `sim.*` helpers
   over the Session API, spies, human and `--json` output, source-mapped
   failures, exit codes. Codes `SELU0620`-`0639`.
 - **S5 Studio shell** (decisions 2, 6, 12): crate `selu-debug`, binary
-  `selu-studio`; `selu debug` builds and launches it; game screen from
+  `selu-studio` (the worker, protocol, headless mode and the `selu debug`
+  launcher exist; S5 adds the eframe window over them); game screen from
   snapshots, frame inspector with anchors drawn, event timeline with
   scrubbing, console, world panel, rebuild on save. Manual check list plus
   snapshot-level tests (no screenshot tests in v1).

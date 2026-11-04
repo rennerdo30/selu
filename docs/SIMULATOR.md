@@ -15,9 +15,27 @@ clock (`timers.rs`), SavedVariables helpers (`saved.rs`), `not simulated: X`
 logging, and round 7's combat and secret-value hooks. Tests drive it through
 `Sim::load_addon`, `fire`, `slash`, `eval`, `advance_time`, `prints`, `logs`.
 
-`selu test` and `selu debug` exist in the CLI as stubs. There are no source
-maps; generated Lua keeps descriptive names, and thrown `Error`s carry
-`file.selu:line`.
+The lowering already writes a simple line map per file
+(`dist/.selu/<Addon>/<file>.lua.map.json`, `selu_lower::SourceMap`: one
+entry per printed statement); generated Lua keeps descriptive names, and
+thrown `Error`s carry `file.selu:line`.
+
+### Code groundwork (2026-11-04, before round 8)
+
+So round 8 starts from compiling, tested code, not from prose:
+
+| Where | What exists | Who continues |
+|---|---|---|
+| `selu-sim/src/core.rs` | The S0 contract, done: `RegionId`, `Generation`, `Ctx` (install context: prints, logs, `not_simulated`, clock, trace, budget, flush queue), `dispatch` (outermost call resets the budget and flushes queued callbacks), `install_hooks` (count hook; once exhausted it fails on every instruction, so `pcall` can't keep a runaway loop alive), snapshot view types (serde), `RegionModel` trait, `Trace` ring buffer | contract changes go through the parent |
+| `selu-sim/src/lib.rs` | `Sim` uses `Ctx`; `eval`, `load_files`, `load_addon`, `slash`, `fire`, `advance_time` go through `dispatch`; `print` and `fire` record trace entries; `Sim::snapshot()` | S2 inverts `Sim`/`Session` |
+| `selu-sim/src/frames/` | `LuaTableModel`: `RegionModel` over today's Lua tables (frames and `UIParent`, parents, size, shown/visible, scripts; no layout, no textures) | S1 replaces it with the arena |
+| `selu-sim/src/session.rs`, `loader.rs`, `snapshot.rs` | `Session` wraps `Sim`: `SessionConfig`, `load_addon_dir` through `<Folder>.toc` (XML is a visible error), `login`, `reload` (new VM, new generation; no saved data yet), seeded `math.random`, `snapshot`, `trace_since` | S2 |
+| `selu-sim/src/world.rs`, `trace.rs` | owner notes only | S2 |
+| `selu-sim/tests/addons/Hello/` | plain Lua test addon with a `.toc` | everyone adds addons here |
+| `crates/selu-sourcemap` | decision 23's format, reader and writer, both lookups, `map_lua_error` | S3 makes the lowering and `selu build` emit it |
+| `crates/selu-test` | discovery of `*.test.selu`, the report model (human, `--json`), exit codes, replay record; `run` reports "not implemented" | S4 |
+| `crates/selu-debug` | binary `selu-studio`; `Worker` owns a `Session` on its own thread; JSON `Command`/`Update` protocol; `--headless` reads commands from stdin and writes updates to stdout; no GUI dependencies yet | S5 adds the window, S6 the debugger commands |
+| `selu test`, `selu debug` | wired: `selu test` calls `selu_test::run`; `selu debug` builds, finds the built folder, starts `selu-studio` beside `selu` or on the path | S4, S5 |
 
 ## Decisions
 

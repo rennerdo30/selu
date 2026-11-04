@@ -8,6 +8,9 @@ members = [
     "crates/selu-check",
     "crates/selu-lower",
     "crates/selu-sim",
+    "crates/selu-sourcemap",
+    "crates/selu-test",
+    "crates/selu-debug",
     "crates/selu-cli",
 ]
 exclude = ["placeholder"]
