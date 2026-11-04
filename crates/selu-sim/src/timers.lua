@@ -1,10 +1,13 @@
 local queue, frame = {}, 1
 local flush = __selu_sim_flush
+local beginCallback, endCallback = __selu_sim_begin_callback, __selu_sim_end_callback
 local frameTime = 1 / 60
 local function safe(fn, ...)
  __selu_sim_budget = __selu_sim_budget - 1
  if __selu_sim_budget < 0 then error('dispatch budget exceeded') end
+ beginCallback()
  local ok, err = pcall(fn, ...)
+ endCallback()
  if not ok then
   local converted, message = pcall(tostring, err)
   __selu_sim_error(converted and message or 'error object could not be formatted')

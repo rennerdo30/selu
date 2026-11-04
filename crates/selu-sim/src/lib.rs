@@ -208,7 +208,9 @@ impl Sim {
                 for a in args {
                     call.push_back(a.clone());
                 }
-                func.call::<()>(call)?;
+                let result = core::script_callback(&self.lua, &self.ctx, || func.call::<()>(call));
+                core::flush(&self.lua, &self.ctx);
+                result?;
                 delivered += 1;
             }
         }

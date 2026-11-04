@@ -21,7 +21,7 @@ fn boolean(v: Option<&Value>) -> bool {
 pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
     let name = name.to_owned();
     let ctx2 = ctx.clone();
-    ctx.queue(Box::new(move |_| {
+    ctx.queue(Box::new(move |lua| {
         if let Some(f) = t
             .raw_get::<Table>("__scripts")?
             .raw_get::<Option<Function>>(name.clone())?
@@ -29,7 +29,7 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
             ctx2.record(crate::TraceKind::Script, &name, vec![]);
             let mut call = MultiValue::from_vec(vec![Value::Table(t)]);
             call.extend(args);
-            f.call::<()>(call)?;
+            crate::core::script_callback(lua, &ctx2, || f.call::<()>(call))?;
         }
         Ok(())
     }));
@@ -277,13 +277,20 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                     Some(Value::Function(f)) => f.clone(),
                     _ => return Err(mlua::Error::runtime("function expected")),
                 };
+                let context = ctx.clone();
                 scripts.raw_set(
                     name,
-                    lua.create_function(move |_, args: MultiValue| {
+                    lua.create_function(move |lua, args: MultiValue| {
                         if let Some(old) = &old {
-                            old.call::<()>(args.clone())?;
+                            crate::core::script_callback(lua, &context, || {
+                                old.call::<()>(args.clone())
+                            })?;
+                            crate::core::flush(lua, &context);
                         }
-                        hook.call::<()>(args)
+                        let result =
+                            crate::core::script_callback(lua, &context, || hook.call::<()>(args));
+                        crate::core::flush(lua, &context);
+                        result
                     })?,
                 )?;
             }
@@ -573,7 +580,9 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             .raw_get::<Table>("__scripts")?
             .raw_get::<Option<Function>>(if new.visible { "OnShow" } else { "OnHide" })?
     {
-        f.call::<()>(t.clone())?;
+        let result = crate::core::script_callback(lua, ctx, || f.call::<()>(t.clone()));
+        crate::core::flush(lua, ctx);
+        result?;
     }
     if new.rect.is_none() && (old.width, old.height) != (new.width, new.height) {
         callback(

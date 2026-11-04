@@ -280,6 +280,9 @@ pub struct Budget {
     pub limit: u64,
     used: u64,
     callbacks: usize,
+    pending_tasks: usize,
+    callback_depth: usize,
+    failure: Option<&'static str>,
     /// The limit was hit in this dispatch; the hook now fails on every
     /// instruction.
     exhausted: bool,
@@ -324,6 +327,9 @@ impl Ctx {
                 limit: DEFAULT_BUDGET,
                 used: 0,
                 callbacks: 0,
+                pending_tasks: 0,
+                callback_depth: 0,
+                failure: None,
                 exhausted: false,
             }),
             pending: shared(VecDeque::new()),
@@ -402,7 +408,10 @@ fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
                 set_count_hook(lua, budget.clone(), 1);
                 b = lock(&budget);
             }
-            let limit = b.limit * u64::from(HOOK_INTERVAL);
+            if let Some(reason) = b.failure {
+                return Err(mlua::Error::runtime(reason));
+            }
+            let limit = b.limit.saturating_mul(u64::from(HOOK_INTERVAL));
             Err(mlua::Error::RuntimeError(format!(
                 "{BUDGET_ERROR} (more than {limit} instructions in one dispatch)"
             )))
@@ -416,6 +425,9 @@ fn reset_budget(lua: &Lua, ctx: &Ctx) {
     let mut b = lock(&ctx.budget);
     b.used = 0;
     b.callbacks = 0;
+    b.pending_tasks = 0;
+    b.callback_depth = 0;
+    b.failure = None;
     if b.exhausted {
         b.exhausted = false;
         drop(b);
@@ -457,6 +469,62 @@ pub fn dispatch<R>(
     result
 }
 
+/// Every script entry, including synchronous visibility and Lua-side timers,
+/// shares these limits. A small depth cap protects the native Rust/C stack.
+pub(crate) fn begin_callback(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    let (reason, new_failure) = {
+        let mut b = lock(&ctx.budget);
+        let reason = if b.exhausted {
+            Some(b.failure.unwrap_or(BUDGET_ERROR))
+        } else if b.callbacks >= 10_000 {
+            Some("dispatch callback budget exhausted")
+        } else if b.callback_depth >= 32 {
+            Some("script callbacks nested too deeply")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            let fresh = !b.exhausted;
+            b.exhausted = true;
+            b.failure = Some(reason);
+            (Some(reason), fresh)
+        } else {
+            b.callbacks += 1;
+            b.callback_depth += 1;
+            (None, false)
+        }
+    };
+    if let Some(reason) = reason {
+        if new_failure {
+            ctx.log(format!("error: {reason}"));
+            ctx.record(TraceKind::Error, "callback", vec![reason.into()]);
+            set_count_hook(lua, ctx.budget.clone(), 1);
+        }
+        return Err(mlua::Error::runtime(reason));
+    }
+    Ok(())
+}
+pub(crate) fn end_callback(ctx: &Ctx) {
+    let mut b = lock(&ctx.budget);
+    b.callback_depth = b.callback_depth.saturating_sub(1);
+}
+struct CallbackGuard<'a>(&'a Ctx);
+impl Drop for CallbackGuard<'_> {
+    fn drop(&mut self) {
+        end_callback(self.0);
+    }
+}
+/// Account before entering Lua; unwind the nesting count even on an error.
+pub(crate) fn script_callback<R>(
+    lua: &Lua,
+    ctx: &Ctx,
+    call: impl FnOnce() -> mlua::Result<R>,
+) -> mlua::Result<R> {
+    begin_callback(lua, ctx)?;
+    let _guard = CallbackGuard(ctx);
+    call()
+}
+
 /// Run queued callbacks until the queue is empty. Callbacks share the outer dispatch instruction and callback budgets;
 /// callbacks a callback queues run in the same flush.
 pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
@@ -466,8 +534,8 @@ pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
         };
         let stop = {
             let mut b = lock(&ctx.budget);
-            b.callbacks += 1;
-            b.exhausted || b.callbacks > 10_000
+            b.pending_tasks += 1;
+            b.exhausted || b.pending_tasks > 10_000
         };
         if stop {
             lock(&ctx.pending).clear();

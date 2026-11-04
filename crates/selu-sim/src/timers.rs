@@ -35,6 +35,21 @@ pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
             Ok(())
         })?,
     )?;
+    lua.globals().set(
+        "__selu_sim_begin_callback",
+        lua.create_function(|lua, ()| {
+            let ctx = lua.app_data_ref::<crate::Ctx>().unwrap().clone();
+            crate::core::begin_callback(lua, &ctx)
+        })?,
+    )?;
+    lua.globals().set(
+        "__selu_sim_end_callback",
+        lua.create_function(|lua, ()| {
+            let ctx = lua.app_data_ref::<crate::Ctx>().unwrap().clone();
+            crate::core::end_callback(&ctx);
+            Ok(())
+        })?,
+    )?;
     lua.load(include_str!("timers.lua")).exec()
 }
 

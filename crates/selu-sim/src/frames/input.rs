@@ -10,7 +10,9 @@ fn invoke(sim: &Sim, i: usize, name: &str, args: Vec<Value>) -> SimResult<()> {
     {
         let mut args = MultiValue::from_vec(args);
         args.push_front(Value::Table(t));
-        f.call::<()>(args)?;
+        let result = crate::core::script_callback(sim.lua(), sim.ctx(), || f.call::<()>(args));
+        crate::core::flush(sim.lua(), sim.ctx());
+        result?;
     }
     crate::core::flush(sim.lua(), sim.ctx());
     Ok(())
