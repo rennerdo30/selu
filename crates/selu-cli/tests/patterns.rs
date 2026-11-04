@@ -71,8 +71,7 @@ fn exact_lua_plain_iterator() {
 #[test]
 fn invalid_patterns() {
     for pat in [
-        "(", ")", "[a", "%", "%b(", "%1", "(%1)", "()%1", "%g", "%f[%a]", "a|b", "a{2}", r"\d",
-        "(?:x)",
+        "(", ")", "[a", "%", "%b(", "%1", "(%1)", "()%1", "%g", "a|b", "a{2}", r"\d", "(?:x)",
     ] {
         let src = format!("const x = luaPattern`{pat}`;");
         assert!(codes(&src).contains(&"SELU0560".into()), "{pat}");
@@ -146,7 +145,7 @@ fn capture_limits_and_raw_tagged_templates() {
     assert!(codes(&good).is_empty());
     let bad = format!("const x = luaPattern`{}`;", "()".repeat(33));
     assert!(codes(&bad).contains(&"SELU0560".into()));
-    assert!(selu_syntax::parse("t.selu", r"const x = `outer ${L`\d`}`;").is_ok());
+    assert!(selu_syntax::parse("t.selu", r"const x = `outer ${L`\d`}`;").is_err());
     assert!(selu_syntax::parse("t.selu", r"const x = L`outer ${`\d`}`;").is_err());
     let source = r"const x = luaPattern`\n|`;";
     let p = selu_syntax::parse("t.selu", source).unwrap();
@@ -185,4 +184,157 @@ on PLAYER_LOGIN() {
 #[test]
 fn iterator_is_not_a_string_union() {
     assert!(!codes("const value: string = \"a\".matchAll(luaPattern`%a`);").is_empty());
+}
+#[test]
+fn review_user_methods_keep_their_identity() {
+    assert_eq!(
+        run(r#"
+const obj = {match: (p: unknown): [number?, string?] => [10, "ok"], matchAll: (p: unknown) => "ab".matchAll(luaPattern`(%a)`)};
+function forward(): [number?, string?] {return obj.match(luaPattern`()(%a)`);}
+on PLAYER_LOGIN() {
+ const [p,s] = obj.match(luaPattern`()(%a)`); print(p ?? -1,s ?? "?");
+ const [q,t] = forward(); print(q ?? -1,t ?? "?");
+ for (const x of obj.matchAll(luaPattern`(%a)`)) {print(x);}
+}
+"#),
+        ["10\tok", "10\tok", "a", "b"]
+    );
+}
+#[test]
+fn review_scalar_captures_do_not_exhaust_lua_locals() {
+    for pattern in ["()".repeat(32), format!("(%a){}", "()".repeat(31))] {
+        let mut src = String::from("on PLAYER_LOGIN() {\n");
+        for i in 0..7 {
+            src.push_str(&format!(
+                "const x{i} = \"a\".match(luaPattern`{pattern}`); print(x{i} ?? {});\n",
+                if pattern.starts_with("()") {
+                    "-1"
+                } else {
+                    "\"?\""
+                }
+            ));
+        }
+        src.push('}');
+        assert_eq!(
+            run(&src),
+            vec![if pattern.starts_with("()") { "0" } else { "a" }; 7]
+        );
+        let lua = compile(&src);
+        assert!(!lua.contains(", __selu_t"));
+        assert_eq!(
+            lua.matches(" - 1").count(),
+            if pattern.starts_with("()") { 7 } else { 0 }
+        );
+    }
+}
+#[test]
+fn review_rest_callback_positions() {
+    assert_eq!(
+        run(r#"
+on PLAYER_LOGIN() {
+ print("ab".replaceAll(luaPattern`()`, (...ps: number[]) => `${ps[0]}`));
+ print("ab".replaceAll(luaPattern`()()`, (p, ...ps: number[]) => `${p}:${ps[0]}`));
+}
+"#),
+        ["0a1b2", "0:0a1:1b2:2"]
+    );
+}
+#[test]
+fn review_untyped_replacements() {
+    assert_eq!(
+        run(r#"
+function substitute(value): string {return "ab".replaceAll(luaPattern`()(%a)`,value);}
+function plain(value): string {return "ab".replaceAll(luaPattern`(%a)`,value);}
+on PLAYER_LOGIN() {
+ print(substitute("%1"));
+ print(substitute((p: number, s: string) => `${p}:${s}`));
+ print(plain("%1"));
+ print(plain((s: string) => s + s));
+}
+"#),
+        ["%1%1", "0:a1:b", "%1%1", "aabb"]
+    );
+}
+#[test]
+fn review_empty_bindings() {
+    assert_eq!(
+        run(r#"on PLAYER_LOGIN() {
+ const [] = "a".match(luaPattern`()a`);
+ let n=0; for (const [] of "aa".matchAll(luaPattern`(a)`)) {n+=1;} print(n);
+ }"#),
+        ["2"]
+    );
+}
+#[test]
+fn review_existing_tags_keep_escape_diagnostics() {
+    for tag in [
+        "",
+        "L",
+        "log.info",
+        "log.debug",
+        "log.warn",
+        "log.error",
+        "log.warnOnce",
+    ] {
+        for tail in ["", "${1}"] {
+            let src = format!("const x = {tag}`hello\\d{tail}`;");
+            let d = selu_syntax::parse("t.selu", &src).unwrap_err();
+            assert_eq!(d.code, "SELU0108");
+            assert_eq!(d.span.as_ref().unwrap().start, src.find('\\').unwrap());
+        }
+    }
+}
+#[test]
+fn review_regex_sets_have_exact_spans() {
+    for class in ["d", "w", "s"] {
+        let src = format!("const x = luaPattern`[\\{class}]`; ");
+        let p = selu_syntax::parse("t.selu", &src).unwrap();
+        let ds = selu_check::check(&p, &common::manifest());
+        let d = ds
+            .iter()
+            .find(|d| d.code == "SELU0560")
+            .expect("regex class must be rejected");
+        assert_eq!(d.span.as_ref().unwrap().start, src.find('\\').unwrap());
+        assert!(d.help.as_ref().unwrap().contains(&format!("%{class}")));
+    }
+}
+#[test]
+fn review_template_delimiters_and_offsets() {
+    assert_eq!(
+        run(r#"on PLAYER_LOGIN() {print("a`b".match(luaPattern`a\`b`) ?? "?");}"#),
+        ["a`b"]
+    );
+    assert_eq!(
+        run(r#"on PLAYER_LOGIN() {print("${value}".match(luaPattern`\${value}`) ?? "?");}"#),
+        ["${value}"]
+    );
+    let src = r"const x = luaPattern`a\`b[\d]`;";
+    let p = selu_syntax::parse("t.selu", src).unwrap();
+    let ds = selu_check::check(&p, &common::manifest());
+    assert_eq!(ds[0].span.as_ref().unwrap().start, src.rfind('\\').unwrap());
+}
+#[test]
+fn review_frontiers_are_supported() {
+    assert_eq!(
+        run(r#"on PLAYER_LOGIN() {
+ print(" hi there".match(luaPattern`%f[%a]%a+`) ?? "?");
+ print("x".search(luaPattern`%f[%a]`) ?? -1);
+ for (const word of "hi there".matchAll(luaPattern`%f[%a]%a+`)) {print(word);}
+ print("hi".replaceAll(luaPattern`%f[%a]`, ">"));
+ }"#),
+        ["hi", "0", "hi", "there", ">hi"]
+    );
+    for pat in ["%f", "%fa", "%f[", "%f[%g]"] {
+        assert!(codes(&format!("const p=luaPattern`{pat}`;")).contains(&"SELU0560".into()));
+    }
+}
+#[test]
+fn review_proof_document_encoding() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/proof/junksell.md"
+    ))
+    .unwrap();
+    assert!(!text.contains('\u{fffd}'));
+    assert!(text.contains("``const x = \"item:123\".match(luaPattern`item:(%d+)`);``"));
 }

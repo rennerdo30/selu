@@ -1107,6 +1107,9 @@ impl Parser {
                     }
                 }
                 Tok::Template(s) => {
+                    if e.dotted_name().as_deref() != Some("luaPattern") {
+                        self.validate_templates(self.pos, self.pos + 1)?;
+                    }
                     let raw_quasis = self.raw_templates(self.pos, self.pos + 1);
                     self.bump();
                     ExprKind::TaggedTemplate {
@@ -1120,6 +1123,9 @@ impl Parser {
                     let raw_start = self.pos;
                     self.bump();
                     let (quasis, exprs) = self.template_rest(s)?;
+                    if e.dotted_name().as_deref() != Some("luaPattern") {
+                        self.validate_templates(raw_start, self.pos)?;
+                    }
                     ExprKind::TaggedTemplate {
                         raw_quasis: self.raw_templates(raw_start, self.pos),
                         tag: Box::new(e),

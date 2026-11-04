@@ -934,22 +934,24 @@ pub fn generate_toc(addon_name: &str, manifest: &Manifest, lua_files: &[String])
 impl Lowerer<'_> {
     // Every protected runtime capture is emitted once, before source bindings.
     fn file_prelude(&mut self, program: &Program, out: &mut LBlock) {
-        fn inspect(c: visit::Child<'_>, found: &mut bool) {
+        fn inspect(c: visit::Child<'_>, found: &mut bool, types: &TypeTable) {
             match c {
                 visit::Child::Expr(e) => {
-                    if matches!(&e.kind, ExprKind::Unary {op,..} if op == "typeof") {
+                    if matches!(&e.kind, ExprKind::Unary {op,..} if op == "typeof")
+                        || patterns::needs_type(e, types)
+                    {
                         *found = true;
                     }
-                    visit::child_exprs_and_stmts(e, &mut |c| inspect(c, found));
+                    visit::child_exprs_and_stmts(e, &mut |c| inspect(c, found, types));
                 }
                 visit::Child::Stmt(s) => {
-                    visit::child_stmts_and_exprs(s, &mut |c| inspect(c, found))
+                    visit::child_stmts_and_exprs(s, &mut |c| inspect(c, found, types))
                 }
             }
         }
         let mut found = false;
         for s in &program.stmts {
-            inspect(visit::Child::Stmt(s), &mut found);
+            inspect(visit::Child::Stmt(s), &mut found, self.types);
         }
         if found {
             out.push(LStmt {

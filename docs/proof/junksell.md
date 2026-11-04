@@ -69,8 +69,8 @@ Numbered gaps encountered (4 language, 0 checker false errors, 2 manifests,
    Lua `type(x)` can be called, but does not supply the promised TypeScript
    narrowing. The proof primarily relies on API types and pcall, with less
    thorough validation than Core.SafeNumber/SafeBool. L may address this.
-4. **Language/library: string pattern match — closed by package S.**
-   `const x = "item:123".match(luaPattern`item:(%d+)`);` compiles on all six
+4. **Language/library: string pattern match - closed by package S.**
+   ``const x = "item:123".match(luaPattern`item:(%d+)`);`` compiles on all six
    flavours. Plain-string `.match("item:(%d+)")` remains an error and suggests
    `luaPattern`. The port retains its C_Item.GetItemInfoInstant workaround;
    it has not been rewritten. See `docs/lang/patterns.md`.

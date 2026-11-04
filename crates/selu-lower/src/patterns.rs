@@ -9,13 +9,22 @@ fn lib(method: &str, args: Vec<LExpr>) -> LExpr {
 fn one() -> LExpr {
     LExpr::Number("1".into())
 }
-fn pattern_call(e: &Expr) -> Option<(&Expr, &str, &[Expr])> {
+fn pattern_call<'a>(
+    e: &'a Expr,
+    types: &selu_check::TypeTable,
+) -> Option<(&'a Expr, &'a str, &'a [Expr])> {
     let ExprKind::Call { callee, args } = &e.kind else {
         return None;
     };
     let ExprKind::Member { object, name } = &callee.kind else {
         return None;
     };
+    if !matches!(
+        types.get(object.id).map(selu_check::shape_of),
+        Some(selu_check::Type::String)
+    ) {
+        return None;
+    }
     if !matches!(
         name.as_str(),
         "match" | "search" | "matchAll" | "replace" | "replaceAll"
@@ -27,7 +36,7 @@ fn pattern_call(e: &Expr) -> Option<(&Expr, &str, &[Expr])> {
 }
 impl Lowerer<'_> {
     pub(crate) fn pattern_template(&mut self, e: &Expr) -> Option<LExpr> {
-        selu_check::patterns::text(e).map(|(s, _)| LExpr::Str(s.into()))
+        selu_check::patterns::text(e).map(|(s, _)| LExpr::Str(s))
     }
     pub(crate) fn pattern_method(
         &mut self,
@@ -60,50 +69,60 @@ impl Lowerer<'_> {
                 return Some(bin(BinOp::And, name(&t), bin(BinOp::Sub, name(&t), one())));
             }
             "replace" | "replaceAll" => {
-                if let LExpr::Str(s) = &mut vs[2] {
-                    *s = s.replace('%', "%%");
-                } else if let LExpr::Function(f) = &mut vs[2] {
-                    let caps = selu_check::patterns::captures(s).unwrap();
-                    let mut adjustments = vec![];
-                    self.pattern_positions(&f.params, &caps, false, &callee.span, &mut adjustments);
-                    adjustments.append(&mut f.body);
-                    f.body = adjustments;
-                } else if matches!(self.types.get(args[1].id), Some(selu_check::Type::String)) {
-                    // Escape a dynamic replacement once; parentheses discard gsub's count.
-                    vs[2] = LExpr::Paren(Box::new(lib(
-                        "gsub",
-                        vec![
-                            vs[2].clone(),
-                            LExpr::Str("%%".into()),
-                            LExpr::Str("%%%%".into()),
-                        ],
-                    )));
-                }
-                let caps = selu_check::patterns::captures(s).unwrap();
-                if caps.contains(&true)
-                    && !matches!(vs[2], LExpr::Function(_))
-                    && matches!(
-                        self.types.get(args[1].id),
-                        Some(selu_check::Type::Function { .. })
-                    )
-                {
-                    let cb = self.hold(vs[2].clone(), &callee.span, pre);
-                    let params: Vec<_> = caps.iter().map(|_| self.temp()).collect();
-                    let mut body = vec![];
-                    self.pattern_positions(&params, &caps, false, &callee.span, &mut body);
-                    body.push(LStmt::new(
-                        LStmtKind::Return(vec![lua::call(
-                            name(&cb),
-                            params.iter().map(|n| name(n)).collect(),
-                        )]),
-                        &callee.span,
-                    ));
-                    vs[2] = LExpr::Function(lua::LFunction {
-                        params,
-                        vararg: false,
-                        body,
-                    });
-                }
+                let caps = selu_check::patterns::captures(&s).unwrap();
+                let ty = self.types.get(args[1].id).map(selu_check::shape_of);
+                vs[2] = match (&vs[2], ty) {
+                    (LExpr::Str(s), _) => LExpr::Str(s.replace('%', "%%")),
+                    (_, Some(selu_check::Type::String)) => escape_replacement(vs[2].clone()),
+                    (_, Some(selu_check::Type::Untyped)) => {
+                        let r = self.hold(vs[2].clone(), &callee.span, pre);
+                        let mut arms = vec![(
+                            bin(
+                                BinOp::Eq,
+                                lua::call(name("__selu_type"), vec![name(&r)]),
+                                LExpr::Str("string".into()),
+                            ),
+                            vec![LStmt::new(
+                                LStmtKind::Assign(
+                                    vec![name(&r)],
+                                    vec![escape_replacement(name(&r))],
+                                ),
+                                &callee.span,
+                            )],
+                        )];
+                        if caps.contains(&true) {
+                            let mut body = vec![];
+                            let cb =
+                                self.position_callback(name(&r), &caps, &callee.span, &mut body);
+                            body.push(LStmt::new(
+                                LStmtKind::Assign(vec![name(&r)], vec![cb]),
+                                &callee.span,
+                            ));
+                            arms.push((
+                                bin(
+                                    BinOp::Eq,
+                                    lua::call(name("__selu_type"), vec![name(&r)]),
+                                    LExpr::Str("function".into()),
+                                ),
+                                body,
+                            ));
+                        }
+                        pre.push(LStmt::new(LStmtKind::If(arms, None), &callee.span));
+                        name(&r)
+                    }
+                    (LExpr::Function(f), _) if !f.vararg => {
+                        let mut f = f.clone();
+                        let mut body = vec![];
+                        self.pattern_positions(&f.params, &caps, false, &callee.span, &mut body);
+                        body.append(&mut f.body);
+                        f.body = body;
+                        LExpr::Function(f)
+                    }
+                    _ if caps.contains(&true) => {
+                        self.position_callback(vs[2].clone(), &caps, &callee.span, pre)
+                    }
+                    _ => vs[2].clone(),
+                };
                 if method == "replace" {
                     vs.push(one());
                 }
@@ -112,9 +131,9 @@ impl Lowerer<'_> {
             "matchAll" => lib("gmatch", vs),
             _ => {
                 let v = lib("match", vs);
-                let caps = selu_check::patterns::captures(s).unwrap();
-                if caps.contains(&true) {
-                    let names: Vec<_> = caps.iter().map(|_| self.temp()).collect();
+                let caps = selu_check::patterns::captures(&s).unwrap();
+                if caps.first() == Some(&true) {
+                    let names = vec![self.temp()];
                     pre.push(LStmt::new(
                         LStmtKind::Local(names.clone(), vec![v]),
                         &callee.span,
@@ -126,6 +145,30 @@ impl Lowerer<'_> {
             }
         };
         Some(v)
+    }
+    fn position_callback(
+        &mut self,
+        value: LExpr,
+        caps: &[bool],
+        span: &selu_diagnostics::Span,
+        pre: &mut LBlock,
+    ) -> LExpr {
+        let cb = self.hold(value, span, pre);
+        let params: Vec<_> = caps.iter().map(|_| self.temp()).collect();
+        let mut body = vec![];
+        self.pattern_positions(&params, caps, false, span, &mut body);
+        body.push(LStmt::new(
+            LStmtKind::Return(vec![lua::call(
+                name(&cb),
+                params.iter().map(|n| name(n)).collect(),
+            )]),
+            span,
+        ));
+        LExpr::Function(lua::LFunction {
+            params,
+            vararg: false,
+            body,
+        })
     }
     fn pattern_positions(
         &mut self,
@@ -148,12 +191,17 @@ impl Lowerer<'_> {
         }
     }
     pub(crate) fn pattern_values(&mut self, e: &Expr, pre: &mut LBlock) -> Option<Vec<LExpr>> {
-        let (object, method, args) = pattern_call(e)?;
+        let (object, method, args) = pattern_call(e, self.types)?;
         if method != "match" {
             return None;
         }
         let (s, _) = selu_check::patterns::text(&args[0])?;
-        let caps = selu_check::patterns::captures(s).ok()?;
+        let caps = selu_check::patterns::captures(&s).ok()?;
+        let caps = if self.types.is_single_value(e.id) {
+            caps.into_iter().take(1).collect::<Vec<_>>()
+        } else {
+            caps
+        };
         if !caps.contains(&true) {
             return None;
         }
@@ -190,6 +238,17 @@ impl Lowerer<'_> {
         else {
             return false;
         };
+        if items.is_empty() && pattern_call(init, self.types).is_some() {
+            let ExprKind::Call { callee, args } = &init.kind else {
+                unreachable!()
+            };
+            let v = self.pattern_method(callee, args, out).unwrap();
+            // A position projection is already evaluated by its temporary prelude.
+            if matches!(v, LExpr::Call(..)) {
+                out.push(LStmt::new(LStmtKind::Call(v), &s.span));
+            }
+            return true;
+        }
         let Some(values) = self.pattern_values(init, out) else {
             return false;
         };
@@ -228,7 +287,7 @@ impl Lowerer<'_> {
         else {
             return false;
         };
-        let names = match binding {
+        let mut names = match binding {
             ForBinding::Name(n, _) => vec![n.clone()],
             ForBinding::Pattern(Pattern::Array(v)) => v
                 .iter()
@@ -240,8 +299,11 @@ impl Lowerer<'_> {
                 .collect(),
             _ => unreachable!(),
         };
+        if names.is_empty() {
+            names.push(self.temp());
+        }
         let mut pre = vec![];
-        let iterator = if let Some((object, "matchAll", args)) = pattern_call(iter) {
+        let iterator = if let Some((object, "matchAll", args)) = pattern_call(iter, self.types) {
             let vs = self.seq(&[object, &args[0]], &mut pre);
             lib("gmatch", vs)
         } else {
@@ -261,4 +323,22 @@ impl Lowerer<'_> {
         out.extend(pre);
         true
     }
+}
+
+fn escape_replacement(value: LExpr) -> LExpr {
+    LExpr::Paren(Box::new(lib(
+        "gsub",
+        vec![value, LExpr::Str("%%".into()), LExpr::Str("%%%%".into())],
+    )))
+}
+pub(crate) fn needs_type(e: &Expr, types: &selu_check::TypeTable) -> bool {
+    pattern_call(e, types).is_some_and(|(_, m, args)| {
+        matches!(m, "replace" | "replaceAll")
+            && args.get(1).is_some_and(|a| {
+                matches!(
+                    types.get(a.id).map(selu_check::shape_of),
+                    Some(selu_check::Type::Untyped)
+                )
+            })
+    })
 }

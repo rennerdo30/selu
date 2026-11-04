@@ -9,10 +9,9 @@ for (const word of chat.matchAll(luaPattern`%S+`)) { print(word); }
 
 `luaPattern` is a compiler intrinsic. Its raw template text is checked at compile
 time and emitted as a Lua string; it has no runtime object. Interpolation is
-forbidden. Pass the template directly to the method. Backslashes are raw, so
-`\d` is diagnosed at the backslash with the suggestion `%d`. Other tagged
-templates retain raw text and spans too. Untagged strings/templates retain their
-existing escape rules. A local binding named luaPattern shadows the intrinsic.
+forbidden. Pass the template directly to the method. Template delimiter escapes (\` and \${) produce literal delimiter characters; other backslashes are raw, so
+`\d` is diagnosed at the backslash with the suggestion `%d`. Other tags (L and logging) and untagged strings/templates retain their
+existing escape rules and diagnostics. A local binding named luaPattern shadows the intrinsic.
 
 | Method | Result |
 |---|---|
@@ -38,16 +37,23 @@ replacements are escaped once). Callbacks receive typed captures, or the whole
 match when there are none. Return a string to replace the match, or `null` to
 keep it. Lua gsub also treats false as keeping the match, but Selu's callback
 type permits only string or null. The substitution count includes kept matches.
-Position parameters are converted before calling the callback. Named callbacks
-with positions need an adapter closure per replacement operation, never per match.
+Position parameters, including rest arguments, are converted before calling the callback.
+Named callbacks and callbacks with rest parameters and positions need an adapter
+closure per replacement operation, never per match. Untyped replacement values
+are checked once at runtime: strings have percent signs escaped, functions get
+the position adapter when needed, and other values pass through to Lua gsub.
+Statically typed strings and fixed-parameter inline callbacks keep direct paths.
 
 Lua 5.1 supports `.`, sets (`[abc]`, `[^abc]`), classes `%a %c %d %l %p %s %u
 %w %x %z` and their uppercase complements, `* + - ?`, anchors `^ $`, captures,
 closed string-capture references `%1` through `%9`, and balanced pairs `%b()`.
 At most 32 captures are permitted. Sets, captures, references and escapes are
-validated. `%g` is unavailable in Lua 5.1; use `[!-~]`. `%f[set]` is deliberately
-rejected: the simulator probe supports it, but this undocumented Lua 5.1 feature
-has no verified contract across all six target clients. No client was launched.
+validated. `%g` is unavailable in Lua 5.1; use `[!-~]`. `%f[set]` matches a frontier from a byte outside the set to a byte inside it;
+input boundaries act as zero bytes. It is implemented in Lua 5.1 but undocumented
+in its manual: see the `case 'f'` branch in [Lua 5.1 lstrlib.c](https://www.lua.org/source/5.1/lstrlib.c.html#match).
+All supported WoW clients use this Lua 5.1 implementation (parent decision), and
+the mlua Lua 5.1 simulator probe and generated-method tests agree. `%g` remains
+rejected because it is a Lua 5.2+ class. No client was launched.
 
 Regex alternation `|`, counted repeats `{n}`, `\d` and non-capturing groups
 `(?:...)` are errors with character spans and suggested Lua syntax. Escape

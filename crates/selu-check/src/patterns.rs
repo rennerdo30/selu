@@ -3,7 +3,7 @@ use crate::{Ctx, Type, err};
 use selu_diagnostics::Span;
 use selu_syntax::{Expr, ExprKind};
 
-pub fn text(e: &Expr) -> Option<(&str, &Span)> {
+pub fn text(e: &Expr) -> Option<(String, &Span)> {
     match &e.kind {
         ExprKind::TaggedTemplate {
             tag,
@@ -11,12 +11,41 @@ pub fn text(e: &Expr) -> Option<(&str, &Span)> {
             exprs,
             ..
         } if tag.dotted_name().as_deref() == Some("luaPattern") && exprs.is_empty() => {
-            raw_quasis.first().map(|(s, sp)| (s.as_str(), sp))
+            raw_quasis.first().map(|(s, sp)| (template_text(s).0, sp))
         }
         _ => None,
     }
 }
 
+// Only template delimiter escapes are decoded; retain byte offsets into raw text.
+fn template_text(raw: &str) -> (String, Vec<usize>) {
+    let mut out = String::new();
+    let mut offsets = vec![];
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i..].starts_with("\\`") {
+            i += 1;
+        } else if raw[i..].starts_with("\\${") {
+            out.push_str("$%{");
+            offsets.extend([i + 1, i + 2, i + 2]);
+            i += 3;
+            continue;
+        }
+        let c = raw[i..].chars().next().unwrap();
+        out.push(c);
+        offsets.extend((0..c.len_utf8()).map(|n| i + n));
+        i += c.len_utf8();
+    }
+    offsets.push(raw.len());
+    (out, offsets)
+}
+fn regex_help(next: Option<&u8>) -> &'static str {
+    match next {
+        Some(b'w') => "use %w instead of \\w",
+        Some(b's') => "use %s instead of \\s",
+        _ => "use Lua classes such as %d instead of \\d",
+    }
+}
 // Each entry records whether a capture is a position capture.
 pub fn captures(s: &str) -> Result<Vec<bool>, (usize, &'static str)> {
     let b = s.as_bytes();
@@ -26,7 +55,7 @@ pub fn captures(s: &str) -> Result<Vec<bool>, (usize, &'static str)> {
     let mut i = 0;
     while i < b.len() {
         match b[i] {
-            b'\\' => return Err((i, "use Lua classes such as %d instead of \\d")),
+            b'\\' => return Err((i, regex_help(b.get(i + 1)))),
             b'|' => {
                 return Err((
                     i,
@@ -86,10 +115,14 @@ pub fn captures(s: &str) -> Result<Vec<bool>, (usize, &'static str)> {
                         i += 2;
                     }
                     b'f' => {
-                        return Err((
-                            i,
-                            "%f is not enabled across all supported clients; use an explicit boundary capture",
-                        ));
+                        if b.get(i + 2) != Some(&b'[') {
+                            return Err((
+                                i + 2.min(b.len() - i - 1),
+                                "%f needs a character set: %f[set]",
+                            ));
+                        }
+                        i = set(b, i + 2)? + 1;
+                        continue;
                     }
                     b'g' | b'G' => return Err((i + 1, "%g is unavailable in Lua 5.1; use [!-~]")),
                     c if c.is_ascii_alphabetic() && !b"aAcCdDlLpPsSuUwWxXzZ".contains(&c) => {
@@ -119,6 +152,9 @@ fn set(b: &[u8], start: usize) -> Result<usize, (usize, &'static str)> {
     while i < b.len() {
         if b[i] == b']' {
             return Ok(i);
+        }
+        if b[i] == b'\\' {
+            return Err((i, regex_help(b.get(i + 1))));
         }
         if b[i] == b'%' {
             i += 1;
@@ -178,13 +214,19 @@ fn capture_types(s: &str, optional: bool) -> Vec<Type> {
 impl Ctx<'_> {
     pub(crate) fn pattern_tag(&mut self, e: &Expr) -> Type {
         if let Some((s, sp)) = text(e) {
-            if let Err((i, help)) = captures(s) {
+            if let Err((i, help)) = captures(&s) {
                 let len = s[i..].chars().next().map_or(1, char::len_utf8);
+                let ExprKind::TaggedTemplate { raw_quasis, .. } = &e.kind else {
+                    unreachable!()
+                };
+                let (_, offsets) = template_text(&raw_quasis[0].0);
+                let start = offsets[i];
+                let end = offsets[(i + len).min(offsets.len() - 1)];
                 self.out.push(
                     err(
                         "SELU0560",
                         "Invalid Lua 5.1 pattern.",
-                        &Span::new(&sp.file, sp.start + i, sp.start + i + len),
+                        &Span::new(&sp.file, sp.start + start, sp.start + end),
                     )
                     .with_help(help),
                 );
@@ -251,12 +293,15 @@ impl Ctx<'_> {
                 .with_help("remove ^ or use match"),
             );
         }
-        let ts = capture_types(s, method == "match");
+        let ts = capture_types(&s, method == "match");
         let ret = match method {
             "search" => Type::optional(Type::Number),
             "replace" | "replaceAll" => {
-                let expected =
-                    function(capture_types(s, false), Type::optional(Type::String), false);
+                let expected = function(
+                    capture_types(&s, false),
+                    Type::optional(Type::String),
+                    false,
+                );
                 let got = self.value_expected(&args[1], Some(&expected));
                 if !got.assignable_to(&Type::String) && !got.assignable_to(&expected) {
                     self.out.push(err("SELU0564", "A replacement needs a string or a capture callback returning string or null.", &args[1].span).with_help("return null to keep the original match"));
@@ -272,7 +317,7 @@ impl Ctx<'_> {
                 ),
                 vec![],
             ),
-            _ if captures(s).unwrap_or_default().is_empty() => ts[0].clone(),
+            _ if captures(&s).unwrap_or_default().is_empty() => ts[0].clone(),
             _ => Type::Tuple(ts),
         };
         self.types.set(
