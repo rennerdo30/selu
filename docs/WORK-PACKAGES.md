@@ -870,3 +870,114 @@ test's status for gap 7.
 ### Merge order (round 6)
 
 Q first, then E and S in either order.
+
+## Round 7: frame templates, secret values and combat, leaner output
+
+From the toolkit survey and DESIGN.md section 3 (owner: "next round",
+2026-11-04). Codex is out of usage until 2026-11-08, so this round runs on
+Claude agents. "How every package works" applies unchanged, including the
+example rule.
+
+| Package | Owned files | Codes |
+|---|---|---|
+| F frame templates | `selu-check/src/frames.rs` (new), `crates/selu-cli/tests/frames.rs`, `docs/lang/frames.md`, `examples/templated-frames/` | `SELU0580`-`0599` |
+| G secret values and combat | `selu-check/src/restrictions.rs`, `selu-lower/src/restrictions.rs` (new), `crates/selu-cli/tests/restrictions.rs`, `docs/lang/restrictions.md`, `examples/combat-safe/` | `SELU0600`-`0619` |
+| K leaner output | `selu-lower/src/runtime.rs` (new), `crates/selu-cli/tests/runtime.rs`, `docs/lang/output.md` | none |
+
+### F: frame templates
+
+The manifests record XML templates with their mixins and inheritance
+(`templates`, `dataGlobals`, M3; `docs/manifests.md`). Acceptance:
+
+1. `CreateFrame("Frame", name, parent, "BackdropTemplate")` (and a
+   comma-separated template list, as the client accepts) returns the widget
+   type plus every member the templates add through mixins, following
+   template inheritance. Members from a template the target lacks are a
+   missing-API error naming the target, like other APIs; with several
+   targets, the strictest wins (T2's rule).
+2. Named frames from Blizzard's XML (`MerchantFrame`, `GameTooltip`) get
+   their templates' members too, and `$parent`-named children resolve as
+   fields where M3 recorded them.
+3. Unknown template names are a warning (manifests can't be complete; the
+   T1 warning policy), and a string that isn't a literal gives the plain
+   widget type.
+4. Mixin members are untyped unless the manifest has a signature (no
+   invented signatures); `strict_api` keeps its meaning.
+5. Example `examples/templated-frames/`: a backdrop panel and a button made
+   from `UIPanelButtonTemplate`, run in the simulator (extend the
+   simulator's widget model only as far as the example needs, and say so).
+
+Shared edits: one dispatch in `selu-check/src/api.rs` where `CreateFrame`'s
+result and global widget types are computed; reading the manifest's template
+data in `crates/selu-manifest/` if a loader accessor is missing; the
+simulator's widget stubs for the example.
+
+### G: secret values and combat lockdown
+
+DESIGN.md section 3, items 2 and 3. Acceptance:
+
+1. **Secret values.** A function whose manifest entry has `returnsSecret`
+   (or a `SecretWhen...`/`SecretIn...` restriction) on any built target
+   returns `T?` for the affected results (strictest target wins), so the
+   author handles "no value" with `??` or `if`, like `undefined`. The
+   lowering emits the guarded read the client needs: research how the
+   client exposes secret values (Blizzard's UI Lua in the read-only
+   `E:/Development/wow-ui-source`, e.g. `issecretvalue` / `canaccessvalue`
+   or equivalent in the 12.x branches; existing refs only, never check out
+   or modify it) and document the evidence. Where no runtime test exists on
+   a target, no guard is emitted there. Untyped results stay untyped.
+2. **Combat lockdown.** Calls the manifests mark as protected (find out
+   which flag means it: `HasRestrictions`, `SecureOnly`, `restrictions`
+   entries; document the mapping and the evidence) in code that can run in
+   combat are queued automatically and run after `PLAYER_REGEN_ENABLED`,
+   when `InCombatLockdown()` is true at the call; outside combat they run
+   directly. Debug builds (`selu build --debug` if it exists; otherwise a
+   `[build] debug = true` setting) log each deferral once. Calls whose
+   result is used can't be deferred: those are an error with a help line.
+   Document which contexts the compiler treats as "combat possible"
+   (default: everything except code proven to run at setup).
+3. **Hardware events.** Functions that need a hardware click (if the
+   manifests record it; otherwise list the gap and stop) called outside a
+   click handler are an error naming the target and the context.
+4. Simulator: `InCombatLockdown`, entering and leaving combat
+   (`Sim::set_combat(bool)` firing `PLAYER_REGEN_DISABLED`/`ENABLED`), and
+   secret values for tests.
+5. Example `examples/combat-safe/`.
+
+Shared edits: one dispatch in the checker's call handling (`api.rs`) for
+results and call contexts, one in the lowering's call lowering, the
+simulator hooks (`crates/selu-sim/src/lib.rs`, `wow_api.rs`), and the build
+setting if needed (`selu-cli`).
+
+### K: leaner output (proof gap 8)
+
+The JunkSell proof's generated Lua is dominated by runtime scaffolding
+(`docs/proof/junksell.md`, gap 8): the event dispatcher, the saved loader,
+the error runtime (about 45 lines per file using `try`), the `L` and log
+helpers, optional-value temporaries. Acceptance:
+
+1. Shared runtime pieces are emitted **once per addon**, in a generated
+   first file (for example `Selu.lua`, first in the `.toc`), only the pieces
+   the addon uses, and each module file aliases what it uses with one
+   `local` line per helper. A one-file addon may keep everything in one file
+   if that's smaller; decide and document.
+2. Unify the file-prelude mechanisms (HANDOFF "Next"): one ordered prelude
+   per file, built by one function.
+3. Measure before and after: line counts of every example's
+   `expected.lua` and of `proof/junksell`'s output; the proof's main file
+   should shrink substantially. Report the numbers in `docs/lang/output.md`.
+4. Fewer temporaries where a value is used once and has no side effects
+   (the purity rule in `purity.rs` decides), without changing evaluation
+   order.
+5. Behaviour stays identical: every example's `expected.txt` unchanged;
+   `expected.lua` files regenerate (`SELU_UPDATE_LUA=1`) and each diff is
+   reviewed by you for readability.
+
+Shared edits: the runtime emission points in the lowering crate (event
+dispatch, saved loader, errors, `L`/log, `has`), the CLI's `.toc` and file
+writing, the examples' `expected.lua` files.
+
+### Merge order (round 7)
+
+F and G in either order, K last (it rebases and regenerates every
+`expected.lua`, including F's and G's new examples).
