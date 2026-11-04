@@ -59,7 +59,7 @@ pub fn compiled_manifest_path(addon: &Path) -> PathBuf {
         .unwrap_or(Path::new("."))
         .join(".selu")
         .join(addon.file_name().unwrap_or_default())
-        .join("manifest.json")
+        .join("manifest.selum")
 }
 /// Select checked data without falling back to an unrelated target.
 pub fn select_checked_manifest<'a>(
@@ -93,7 +93,7 @@ pub fn load_checked_manifest(path: &Path, target: Option<&str>) -> Result<Manife
             format!("cannot read snapshot {}: {e}", path.display()),
         )
     })?;
-    let snapshot: Snapshot = serde_json::from_slice(&bytes).map_err(|e| {
+    let snapshot: Snapshot = crate::format::decode(&bytes).map_err(|e| {
         Diagnostic::error(
             "SELU0202",
             format!("invalid snapshot {}: {e}", path.display()),
@@ -109,7 +109,10 @@ pub fn compiled_manifest_for_target(
     addon: &Path,
     target: Option<&str>,
 ) -> Result<Option<Manifest>, Diagnostic> {
-    let path = compiled_manifest_path(addon);
+    let mut path = compiled_manifest_path(addon);
+    if !path.is_file() {
+        path.set_extension("json");
+    }
     if path.is_file() {
         load_checked_manifest(&path, target).map(Some)
     } else {

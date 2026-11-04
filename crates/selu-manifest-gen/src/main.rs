@@ -53,8 +53,14 @@ fn git_bytes(repo: &str, args: &[&str]) -> Result<Vec<u8>> {
 }
 fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.len() == 2 && args[0] == "dump" {
+        let bytes = std::fs::read(&args[1])?;
+        let value: serde_json::Value = selu_manifest::format::decode(&bytes)?;
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
     if args.len() != 4 {
-        return Err("usage: selu-manifest-gen <flavour> <ref-or-commit> <output.json> <source-repository> (reads overlay.toml beside output)".into());
+        return Err("usage: selu-manifest-gen <flavour> <ref-or-commit> <output.selum> <source-repository> (reads overlay.toml beside output)".into());
     }
     let (flavour, reference, output, repo) = (&args[0], &args[1], Path::new(&args[2]), &args[3]);
     let log = git(repo, &["log", "-1", "--format=%H%n%s", reference, "--"])?;

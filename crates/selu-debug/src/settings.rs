@@ -191,7 +191,7 @@ impl Settings {
 }
 
 /// Flavours and their builds, from the manifest file names
-/// (`manifests/retail/12.1.5.70391.json`).
+/// (`manifests/retail/12.1.5.70391.selum`).
 pub fn known_builds(manifests: &Path) -> BTreeMap<String, Vec<String>> {
     let mut out = BTreeMap::new();
     let Ok(entries) = std::fs::read_dir(manifests) else {
@@ -211,7 +211,9 @@ pub fn known_builds(manifests: &Path) -> BTreeMap<String, Vec<String>> {
             .flatten()
             .filter_map(|f| {
                 let name = f.file_name().to_string_lossy().into_owned();
-                name.strip_suffix(".json").map(String::from)
+                name.strip_suffix(".selum")
+                    .or_else(|| name.strip_suffix(".json"))
+                    .map(String::from)
             })
             .collect();
         builds.sort();
