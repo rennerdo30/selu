@@ -67,6 +67,7 @@ impl Session {
 
     fn start_vm(config: &SessionConfig) -> SimResult<Sim> {
         let sim = Sim::new()?;
+        crate::frames::configure_ui_size(sim.lua(), config.ui_size)?;
         lock(&sim.ctx().trace).enabled = config.trace;
         sim.lua()
             .load(format!("math.randomseed({})", config.seed))
@@ -157,6 +158,7 @@ impl Session {
     pub fn snapshot(&self) -> SimResult<Snapshot> {
         let model = LuaTableModel {
             generation: self.generation.0 as u32,
+            ui_size: self.config.ui_size,
         };
         snapshot::take(
             self.sim.lua(),

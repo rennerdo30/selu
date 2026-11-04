@@ -194,6 +194,11 @@ fn debug(
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
     }
+    // Lets Studio rebuild on save with this same compiler.
+    cmd.arg("--project").arg(project_dir);
+    if let Ok(selu) = std::env::current_exe() {
+        cmd.arg("--selu").arg(selu);
+    }
     cmd.arg(&addon);
     let status = cmd.status().map_err(|e| {
         eprintln!("selu debug: cannot start {}: {e}", studio.display());
@@ -253,7 +258,13 @@ fn built_addon(project_dir: &Path, target: Option<&str>) -> Result<PathBuf, Exit
     }
 }
 
+/// `$SELU_STUDIO` if set (it must exist), else `selu-studio` beside `selu`,
+/// else on the path.
 fn find_studio() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("SELU_STUDIO") {
+        let path = PathBuf::from(path);
+        return path.is_file().then_some(path);
+    }
     let name = format!("selu-studio{}", std::env::consts::EXE_SUFFIX);
     let beside = std::env::current_exe().ok()?.with_file_name(&name);
     if beside.is_file() {

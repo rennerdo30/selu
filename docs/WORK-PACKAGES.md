@@ -1140,8 +1140,9 @@ since it doesn't touch `selu-sim`).
   over the Session API, spies, human and `--json` output, source-mapped
   failures, exit codes. Codes `SELU0620`-`0639`.
 - **S5 Studio shell** (decisions 2, 6, 12): crate `selu-debug`, binary
-  `selu-studio` (the worker, protocol, headless mode and the `selu debug`
-  launcher exist; S5 adds the eframe window over them); game screen from
+  `selu-studio` (the worker, protocol, headless mode, the `selu debug`
+  launcher and a first window exist: see SIMULATOR.md "Code groundwork";
+  S5 completes and polishes it); game screen from
   snapshots, frame inspector with anchors drawn, event timeline with
   scrubbing, console, world panel, rebuild on save. Manual check list plus
   snapshot-level tests (no screenshot tests in v1).

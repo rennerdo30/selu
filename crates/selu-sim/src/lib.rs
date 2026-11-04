@@ -240,7 +240,10 @@ impl Sim {
     /// The region tree through the core's snapshot view (generation 0; a
     /// [`Session`] stamps its own).
     pub fn snapshot(&self) -> SimResult<Snapshot> {
-        let model = frames::LuaTableModel { generation: 0 };
+        let model = frames::LuaTableModel {
+            generation: 0,
+            ui_size: snapshot::DEFAULT_UI_SIZE,
+        };
         snapshot::take(
             &self.lua,
             &self.ctx,

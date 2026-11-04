@@ -242,3 +242,43 @@ fn checkbutton_toggles_after_down() {
     s.click(1., 1., "LeftButton").unwrap();
     assert_eq!(s.prints(), ["false", "true"]);
 }
+#[test]
+fn callback_count_bounds_small_callback_chains() {
+    let s = Sim::new().unwrap();
+    s.ctx().set_budget(100000);
+    s.eval("local f=CreateFrame('Frame');local count=0;f:SetScript('OnSizeChanged',function() count=count+1;if count<20000 then f:SetWidth(count%2+1) end end);f:SetWidth(1)").unwrap();
+    assert!(
+        s.logs()
+            .iter()
+            .any(|l| l.contains("callback/instruction budget exhausted")),
+        "{:?}",
+        s.logs()
+    );
+}
+#[test]
+fn secret_text_roundtrips_opaquely() {
+    let s = Sim::new().unwrap();
+    let secret = selu_sim::SimValue::LightUserData(mlua::LightUserData(std::ptr::dangling_mut::<
+        std::ffi::c_void,
+    >()));
+    s.lua().globals().set("opaque", secret).unwrap();
+    s.eval("local f=UIParent:CreateFontString();f:SetText(opaque);assert(f:GetText()==opaque)")
+        .unwrap();
+    assert!(s.snapshot().unwrap().regions[1].text.is_none());
+}
+#[test]
+fn texture_sublevel_is_preserved() {
+    lua(
+        "local t=UIParent:CreateTexture(nil,'OVERLAY',nil,3);local l,n=t:GetDrawLayer();assert(l=='OVERLAY' and n==3)",
+    );
+}
+#[test]
+fn configured_ui_size_applies_before_first_snapshot() {
+    let s = Session::new(SessionConfig {
+        ui_size: (800., 600.),
+        ..SessionConfig::default()
+    })
+    .unwrap();
+    s.eval("assert(UIParent:GetWidth()==800 and UIParent:GetHeight()==600)")
+        .unwrap();
+}

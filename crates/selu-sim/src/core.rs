@@ -665,7 +665,7 @@ pub fn measure_text(text: &str, font_size: f64) -> TextMeasurement {
 mod text_tests {
     #[test]
     fn unicode_and_markup() {
-        let m = super::measure_text("|cffffffffçŒ«Ã©|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
+        let m = super::measure_text("|cffffffff\u{732b}\u{e9}|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
         assert_eq!((m.width, m.height), (12.0, 24.0));
     }
 }

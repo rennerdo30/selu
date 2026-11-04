@@ -1,14 +1,19 @@
 //! `selu-studio`: Selu Studio, started by `selu debug` (docs/SIMULATOR.md
-//! decision 2). Owner: package S5 (round 9).
+//! decision 2).
 //!
 //! ```text
-//! selu-studio [--target flavour@version] [--headless] <addon folder>...
+//! selu-studio [--target flavour@version] [--project dir --selu exe] [--headless] <addon folder>...
 //! ```
 //!
-//! Groundwork (round 8): `--headless` loads the addons, logs in, then reads
-//! one JSON [`Command`] per line from stdin and writes one JSON [`Update`]
-//! per line to stdout. Without `--headless` it says that the window comes
-//! with S5 and exits with code 2.
+//! Opens the Studio window (`app.rs`). `--project` and `--selu` enable
+//! rebuild on save. `--headless` instead loads the addons, logs in, then
+//! reads one JSON [`Command`] per line from stdin and writes one JSON
+//! [`Update`] per line to stdout.
+
+mod app;
+mod editor;
+mod png;
+mod theme;
 
 use selu_debug::{Command, Update, Worker};
 use selu_sim::SessionConfig;
@@ -16,11 +21,13 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: selu-studio [--target flavour@version] [--headless] <addon folder>...";
+const USAGE: &str = "usage: selu-studio [--target flavour@version] [--project dir --selu exe] [--headless] <addon folder>...";
 
 fn main() -> ExitCode {
     let mut target = None;
     let mut headless = false;
+    let mut project = None;
+    let mut selu = None;
     let mut addons: Vec<PathBuf> = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -29,6 +36,17 @@ fn main() -> ExitCode {
                 Some(t) => target = Some(t),
                 None => {
                     eprintln!("selu-studio: --target needs a value\n{USAGE}");
+                    return ExitCode::from(2);
+                }
+            },
+            "--project" | "--selu" => match args.next() {
+                Some(v) if arg == "--project" => project = Some(PathBuf::from(v)),
+                Some(v) => selu = Some(PathBuf::from(v)),
+                None => {
+                    eprintln!(
+                        "selu-studio: {arg} needs a value
+{USAGE}"
+                    );
                     return ExitCode::from(2);
                 }
             },
@@ -49,11 +67,33 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     if !headless {
-        eprintln!(
-            "selu-studio: the Studio window is not implemented yet (round 9, package S5); \
-             `--headless` drives the simulator from JSON lines on stdin"
-        );
-        return ExitCode::from(2);
+        let options = app::Options {
+            addons,
+            target,
+            project,
+            selu,
+        };
+        let native = eframe::NativeOptions {
+            viewport: eframe::egui::ViewportBuilder::default()
+                .with_title("Selu Studio")
+                .with_inner_size([1600.0, 980.0])
+                .with_min_inner_size([900.0, 560.0]),
+            ..Default::default()
+        };
+        return match eframe::run_native(
+            "Selu Studio",
+            native,
+            Box::new(|cc| {
+                theme::install(&cc.egui_ctx);
+                Ok(Box::new(app::Studio::new(options, &cc.egui_ctx)))
+            }),
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("selu-studio: cannot open the window: {e}");
+                ExitCode::FAILURE
+            }
+        };
     }
 
     let worker = Worker::spawn(SessionConfig {

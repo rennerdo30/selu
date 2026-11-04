@@ -7,10 +7,19 @@ use crate::core::{Ctx, RegionId, RegionModel, RegionSnapshot};
 use mlua::Lua;
 pub struct LuaTableModel {
     pub generation: u32,
+    /// UIParent's size.
+    pub ui_size: (f64, f64),
 }
 impl RegionModel for LuaTableModel {
     fn resolve_layout(&self, lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
-        layout::resolve(&mut arena::store(lua).borrow_mut(), ctx);
+        let store = arena::store(lua);
+        let mut a = store.borrow_mut();
+        if (a.regions[0].width, a.regions[0].height) != self.ui_size {
+            a.regions[0].width = self.ui_size.0;
+            a.regions[0].height = self.ui_size.1;
+            a.dirty = true;
+        }
+        layout::resolve(&mut a, ctx);
         Ok(())
     }
     fn snapshot_regions(&self, lua: &Lua, ctx: &Ctx) -> mlua::Result<Vec<RegionSnapshot>> {
@@ -91,6 +100,79 @@ mod tests {
         assert_eq!(button.parent, Some(frame.id));
         assert!(button.shown && !button.visible, "hidden parent hides child");
     }
+
+    #[test]
+    fn basic_layout_from_points_and_size() {
+        let sim = Sim::new().unwrap();
+        sim.eval(
+            r#"
+            local f = CreateFrame("Frame", nil, UIParent)
+            f:SetSize(200, 100)
+            f:SetPoint("CENTER", UIParent, "CENTER", 10, -20)
+            local t = f:CreateTexture(nil, "BACKGROUND")
+            t:SetAllPoints()
+            t:SetColorTexture(1, 0, 0, 0.5)
+            local fs = f:CreateFontString()
+            fs:SetPoint("TOPLEFT", 4, -4)
+            fs:SetText("abcd")
+            local inset = CreateFrame("Frame", nil, f)
+            inset:SetPoint("TOPLEFT", f, "TOPLEFT", 5, -5)
+            inset:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -5, 5)
+            "#,
+        )
+        .unwrap();
+        let snap = sim.snapshot().unwrap();
+        let parent = snap
+            .regions
+            .iter()
+            .find(|r| r.widget == "Frame" && r.parent == Some(snap.regions[0].id))
+            .unwrap();
+        let inset = snap
+            .regions
+            .iter()
+            .find(|r| r.widget == "Frame" && r.parent == Some(parent.id))
+            .unwrap();
+        let texture = snap
+            .regions
+            .iter()
+            .find(|r| r.widget == "Texture" && r.parent == Some(parent.id))
+            .unwrap();
+        let font = snap
+            .regions
+            .iter()
+            .find(|r| r.widget == "FontString" && r.parent == Some(parent.id))
+            .unwrap();
+        let rect =
+            |r: &crate::RegionSnapshot| r.rect.map(|r| (r.left, r.bottom, r.width, r.height));
+        // UIParent 1920 x 1080; centre (960, 540) + (10, -20), 200 x 100.
+        assert_eq!(rect(parent), Some((870.0, 470.0, 200.0, 100.0)));
+        // Inset frame: 5 px inside on every side.
+        assert_eq!(rect(inset), Some((875.0, 475.0, 190.0, 90.0)));
+        // Texture fills the frame.
+        assert_eq!(rect(texture), Some((870.0, 470.0, 200.0, 100.0)));
+        assert_eq!(
+            texture.texture,
+            Some(crate::TextureFill::Color([1.0, 0.0, 0.0, 0.5]))
+        );
+        // Font string: top left at (874, 566), 4 chars x 6 px wide, 12 tall.
+        assert_eq!(rect(font), Some((874.0, 554.0, 24.0, 12.0)));
+    }
+
+    #[test]
+    fn anchor_cycles_get_no_rectangle() {
+        let sim = Sim::new().unwrap();
+        sim.eval(
+            r#"
+            local a = CreateFrame("Frame"); local b = CreateFrame("Frame")
+            a:SetSize(10, 10); b:SetSize(10, 10)
+            a:SetPoint("LEFT", b, "RIGHT"); b:SetPoint("LEFT", a, "RIGHT")
+            "#,
+        )
+        .unwrap();
+        let snap = sim.snapshot().unwrap();
+        assert_eq!(snap.regions[1].rect, None);
+        assert_eq!(snap.regions[2].rect, None);
+    }
 }
 
 /// Flattened widget method names (including inheritance), with empty return
@@ -133,4 +215,20 @@ mod fallback_tests {
         assert!(super::missing_method("Button", "Unmodelled", Some(&catalog)).is_some());
         assert!(super::missing_method("Button", "addonField", None).is_none());
     }
+}
+
+/// Initialize the viewport for a newly created VM, including reloads. S2's
+/// VM setup must preserve this call before loading any addon code.
+pub fn configure_ui_size(lua: &Lua, size: (f64, f64)) -> mlua::Result<()> {
+    if !size.0.is_finite() || !size.1.is_finite() || size.0 <= 0.0 || size.1 <= 0.0 {
+        return Err(mlua::Error::runtime("invalid UI size"));
+    }
+    let store = arena::store(lua);
+    let mut a = store.borrow_mut();
+    if (a.regions[0].width, a.regions[0].height) != size {
+        a.regions[0].width = size.0;
+        a.regions[0].height = size.1;
+        a.dirty = true;
+    }
+    Ok(())
 }
