@@ -641,11 +641,17 @@ impl Lowerer<'_> {
         if chain.len() > 1 && (declare || !reads_var(&chain[1..])) {
             let mut pre = Vec::new();
             let first = self.expr(chain[0], &mut pre);
+            let first = self.read_if_secret(chain[0], first);
             out.extend(pre);
             out.push(store(first));
-            for part in &chain[1..] {
+            for (index, part) in chain[1..].iter().enumerate() {
                 let mut part_pre = Vec::new();
                 let v = self.expr(part, &mut part_pre);
+                let v = if index + 2 < chain.len() {
+                    self.read_if_secret(part, v)
+                } else {
+                    v
+                };
                 part_pre.push(LStmt::new(
                     LStmtKind::Assign(vec![var.clone()], vec![v]),
                     span,
@@ -805,6 +811,11 @@ impl Lowerer<'_> {
         pre: &mut LBlock,
     ) -> LExpr {
         let a = self.expr(left, pre);
+        let a = if op == "??" {
+            self.read_if_secret(left, a)
+        } else {
+            a
+        };
         let mut right_pre = Vec::new();
         let b = self.expr(right, &mut right_pre);
         if right_pre.is_empty() {

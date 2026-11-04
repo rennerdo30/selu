@@ -1,1 +1,2 @@
+Hello Player
 Panel hidden or queued

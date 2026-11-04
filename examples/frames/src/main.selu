@@ -9,6 +9,10 @@ hookScript(panel, "OnShow", () => { print("Panel shown"); });
 panel.Hide();
 on PLAYER_LOGIN() {
   panel.Show();
-  print(panel.GetWidth(), panel.GetHeight(), texture.GetWidth(), texture.GetHeight());
-  print(label.GetText());
+  const width = panel.GetWidth() ?? 0;
+  const height = panel.GetHeight() ?? 0;
+  const textureWidth = texture.GetWidth() ?? 0;
+  const textureHeight = texture.GetHeight() ?? 0;
+  print(width, height, textureWidth, textureHeight);
+  print(label.GetText() ?? "");
 }

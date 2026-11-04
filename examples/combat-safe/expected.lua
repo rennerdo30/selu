@@ -1,21 +1,44 @@
 local __selu_addon, __selu_ns = ...
 __selu_ns = __selu_ns or {}
-local __selu_pending = {}
-local __selu_defer_frame = CreateFrame("Frame")
-__selu_defer_frame:RegisterEvent("PLAYER_REGEN_ENABLED")
-__selu_defer_frame:SetScript("OnEvent", function()
-  while #__selu_pending > 0 and not InCombatLockdown() do
-    local item = table.remove(__selu_pending, 1)
-    item.fn(unpack(item, 1, item.n))
-  end
-end)
-local function __selu_defer(fn, ...)
-  if not InCombatLockdown() then return fn(...) end
-  if false then print("Selu: deferred protected call") end
-  local item = { ... }
-  item.fn, item.n = fn, select("#", ...)
-  __selu_pending[#__selu_pending + 1] = item
+local function __selu_read(value)
+  if canaccessvalue and not canaccessvalue(value) then return nil end
+  return value
 end
+local _, __selu_restriction_ns = ...
+__selu_restriction_ns = __selu_restriction_ns or {}
+if not __selu_restriction_ns.__selu_restrictions then
+  local pending, protected = {}, {}
+  local frame = CreateFrame("Frame")
+  frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+  frame:SetScript("OnEvent", function()
+    while #pending > 0 and not InCombatLockdown() do
+      local item = table.remove(pending, 1)
+      local ok, err = pcall(item.fn, unpack(item, 1, item.n))
+      if not ok then pcall(geterrorhandler(), err) end
+    end
+  end)
+  local function defer(fn, ...)
+    if not InCombatLockdown() then return fn(...) end
+    if false then print("Selu: deferred protected call") end
+    local item = { ... }
+    item.fn, item.n = fn, select("#", ...)
+    pending[#pending + 1] = item
+  end
+  local function invoke(fn, ...)
+    if protected[fn] then return defer(fn, ...) end
+    return fn(...)
+  end
+  local function widget(fn, receiver, ...)
+    if InCombatLockdown() and receiver:IsProtected() then return defer(fn, receiver, ...) end
+    return fn(receiver, ...)
+  end
+  __selu_restriction_ns.__selu_restrictions = { defer = defer, invoke = invoke, widget = widget, protected = protected }
+end
+local __selu_restrictions = __selu_restriction_ns.__selu_restrictions
+if type(C_TooltipComparison) == "table" and type(C_TooltipComparison.CompareItem) == "function" then __selu_restrictions.protected[C_TooltipComparison.CompareItem] = true end
+local __selu_defer = __selu_restrictions.defer
+local __selu_invoke = __selu_restrictions.invoke
+local __selu_widget_call = __selu_restrictions.widget
 __selu_ns["main"] = {}
 if not __selu_ns.__selu_events then
   -- Selu: shared event frame and dispatch table
@@ -38,11 +61,19 @@ if not __selu_ns.__selu_events then
   __selu_ns.__selu_events = __selu_on
 end
 local __selu_on = __selu_ns.__selu_events
-local panel = CreateFrame("Frame")
+local panel = CreateFrame("Frame", nil, UIParent, "SecureHandlerBaseTemplate")
+local label = panel:CreateFontString()
 __selu_on("PLAYER_LOGIN", function()
   do
     local __selu_t1 = panel
-    __selu_defer(__selu_t1.Hide, __selu_t1)
+    __selu_widget_call(__selu_t1.Hide, __selu_t1)
+  end
+  local name = UnitName("player")
+  label:SetText(name)
+  do
+    local __selu_t2 = __selu_read(name)
+    if __selu_t2 == nil then __selu_t2 = "Player" end
+    print("Hello " .. __selu_t2)
   end
   print("Panel hidden or queued")
 end)

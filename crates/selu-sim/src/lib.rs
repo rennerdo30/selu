@@ -82,6 +82,19 @@ impl Sim {
             )?;
         }
 
+        {
+            let logs = logs.clone();
+            let handler = lua.create_function(move |_, error: Value| {
+                logs.lock()
+                    .unwrap()
+                    .push(format!("error: {}", value_string(&error)));
+                Ok(())
+            })?;
+            globals.set(
+                "geterrorhandler",
+                lua.create_function(move |_, ()| Ok(handler.clone()))?,
+            )?;
+        }
         globals.set("__selu_sim_combat", false)?;
         globals.set(
             "InCombatLockdown",
@@ -116,6 +129,11 @@ impl Sim {
                         frame.set("__events", lua.create_table()?)?;
                         frame.set("__scripts", lua.create_table()?)?;
                         frame.set("__shown", true)?;
+                        frame.set("__protected", false)?;
+                        frame.set(
+                            "IsProtected",
+                            lua.create_function(|_, this: Table| this.get::<bool>("__protected"))?,
+                        )?;
                         frame.set("__parent", parent)?;
                         regions::attach(lua, &frame)?;
                         frame.set(

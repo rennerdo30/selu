@@ -1,139 +1,180 @@
-//! Self-contained runtime emission, relocatable by the addon runtime pass.
+//! Restriction runtime emission, self-contained for addon-runtime relocation.
 use super::*;
-use selu_check::Type;
+use selu_check::{Type, restrictions::secret_inner};
 
-fn policy(types: &TypeTable, e: &Expr) -> Option<(bool, Vec<bool>)> {
-    match types.get(e.id) {
-        Some(Type::Function {
-            api_semantics: s, ..
-        }) if s.protected || s.secret_results.iter().any(|x| *x) => {
-            Some((s.protected, s.secret_results.clone()))
-        }
+fn semantics(types: &TypeTable, callee: &Expr) -> Option<selu_check::types::ApiSemantics> {
+    match types.get(callee.id) {
+        Some(Type::Function { api_semantics, .. }) => Some(api_semantics.clone()),
         _ => None,
     }
-}
-fn guard_name(mask: &[bool]) -> String {
-    format!(
-        "__selu_read_{}",
-        mask.iter()
-            .map(|x| if *x { 's' } else { 'v' })
-            .collect::<String>()
-    )
 }
 pub(super) fn emit_restriction_runtime(
     program: &Program,
     types: &TypeTable,
     manifest: &Manifest,
 ) -> LBlock {
-    fn walk(
-        c: visit::Child<'_>,
-        types: &TypeTable,
-        protected: &mut bool,
-        masks: &mut std::collections::BTreeSet<Vec<bool>>,
-    ) {
-        let mut next = |c| walk(c, types, protected, masks);
+    fn walk(c: visit::Child<'_>, types: &TypeTable, queue: &mut bool, read: &mut bool) {
         match c {
-            visit::Child::Stmt(s) => visit::child_stmts_and_exprs(s, &mut next),
+            visit::Child::Stmt(s) => {
+                visit::child_stmts_and_exprs(s, &mut |c| walk(c, types, queue, read))
+            }
             visit::Child::Expr(e) => {
-                if let ExprKind::Call { callee, .. } = &e.kind
-                    && let Some((p, mask)) = policy(types, callee)
-                {
-                    *protected |= p;
-                    if mask.iter().any(|x| *x) {
-                        masks.insert(mask);
+                match &e.kind {
+                    ExprKind::Call { callee, args } => {
+                        if let Some(s) = semantics(types, callee) {
+                            *queue |= s.protected || s.dynamic_protected;
+                        }
+                        if matches!(&callee.kind,ExprKind::Ident(n) if n=="readable")
+                            && types.get(callee.id).is_none()
+                        {
+                            *read |= args
+                                .first()
+                                .and_then(|a| types.get(a.id))
+                                .is_some_and(|t| secret_inner(t).is_some());
+                        }
                     }
+                    ExprKind::Binary { op, left, .. } if op == "??" => {
+                        *read |= types
+                            .get(left.id)
+                            .is_some_and(|t| secret_inner(t).is_some())
+                    }
+                    _ => {}
                 }
-                visit::child_exprs_and_stmts(e, &mut |c| walk(c, types, protected, masks));
+                visit::child_exprs_and_stmts(e, &mut |c| walk(c, types, queue, read));
             }
         }
     }
-    let mut protected = false;
-    let mut masks = Default::default();
+    let (mut queue, mut read) = (false, false);
     for s in &program.stmts {
-        walk(visit::Child::Stmt(s), types, &mut protected, &mut masks);
+        walk(visit::Child::Stmt(s), types, &mut queue, &mut read);
     }
     let mut out = Vec::new();
-    if !manifest
-        .function("canaccessvalue")
-        .is_some_and(|f| f.available)
+    if read
+        && manifest
+            .function("canaccessvalue")
+            .is_some_and(|f| f.available)
     {
-        masks.clear();
+        out.push(raw(READ_RUNTIME));
     }
-    for mask in masks {
-        let names: Vec<_> = (0..mask.len()).map(|i| format!("v{i}")).collect();
-        let mut code = format!(
-            "local function {}({})\n",
-            guard_name(&mask),
-            names.join(", ")
-        );
-        for (i, secret) in mask.iter().enumerate() {
-            if *secret {
-                code += &format!(
-                    "  if canaccessvalue and not canaccessvalue(v{i}) then v{i} = nil end\n"
-                );
+    if queue {
+        out.push(raw(DEFER_RUNTIME));
+        for f in &manifest.functions {
+            if f.signature.as_ref().is_some_and(|d| {
+                d.attributes
+                    .get("IsProtectedFunction")
+                    .and_then(|v| v.as_bool())
+                    == Some(true)
+            }) {
+                let parts: Vec<_> = f.name.split('.').collect();
+                let mut checks = Vec::new();
+                for i in 1..parts.len() {
+                    checks.push(format!("type({}) == \"table\"", parts[..i].join(".")));
+                }
+                checks.push(format!("type({}) == \"function\"", f.name));
+                out.push(raw(&format!(
+                    "if {} then __selu_restrictions.protected[{}] = true end",
+                    checks.join(" and "),
+                    f.name
+                )));
             }
         }
-        code += &format!("  return {}\nend", names.join(", "));
-        out.push(raw(&code));
-    }
-    if protected {
-        out.push(raw(DEFER_RUNTIME));
+        out.push(raw("local __selu_defer = __selu_restrictions.defer\nlocal __selu_invoke = __selu_restrictions.invoke\nlocal __selu_widget_call = __selu_restrictions.widget"));
     }
     out
 }
-const DEFER_RUNTIME: &str = r##"local __selu_pending = {}
-local __selu_defer_frame = CreateFrame("Frame")
-__selu_defer_frame:RegisterEvent("PLAYER_REGEN_ENABLED")
-__selu_defer_frame:SetScript("OnEvent", function()
-  while #__selu_pending > 0 and not InCombatLockdown() do
-    local item = table.remove(__selu_pending, 1)
-    item.fn(unpack(item, 1, item.n))
+const READ_RUNTIME: &str = r#"local function __selu_read(value)
+  if canaccessvalue and not canaccessvalue(value) then return nil end
+  return value
+end"#;
+const DEFER_RUNTIME: &str = r##"local _, __selu_restriction_ns = ...
+__selu_restriction_ns = __selu_restriction_ns or {}
+if not __selu_restriction_ns.__selu_restrictions then
+  local pending, protected = {}, {}
+  local frame = CreateFrame("Frame")
+  frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+  frame:SetScript("OnEvent", function()
+    while #pending > 0 and not InCombatLockdown() do
+      local item = table.remove(pending, 1)
+      local ok, err = pcall(item.fn, unpack(item, 1, item.n))
+      if not ok then pcall(geterrorhandler(), err) end
+    end
+  end)
+  local function defer(fn, ...)
+    if not InCombatLockdown() then return fn(...) end
+    if false then print("Selu: deferred protected call") end
+    local item = { ... }
+    item.fn, item.n = fn, select("#", ...)
+    pending[#pending + 1] = item
   end
-end)
-local function __selu_defer(fn, ...)
-  if not InCombatLockdown() then return fn(...) end
-  if false then print("Selu: deferred protected call") end
-  local item = { ... }
-  item.fn, item.n = fn, select("#", ...)
-  __selu_pending[#__selu_pending + 1] = item
-end"##;
+  local function invoke(fn, ...)
+    if protected[fn] then return defer(fn, ...) end
+    return fn(...)
+  end
+  local function widget(fn, receiver, ...)
+    if InCombatLockdown() and receiver:IsProtected() then return defer(fn, receiver, ...) end
+    return fn(receiver, ...)
+  end
+  __selu_restriction_ns.__selu_restrictions = { defer = defer, invoke = invoke, widget = widget, protected = protected }
+end
+local __selu_restrictions = __selu_restriction_ns.__selu_restrictions"##;
 impl Lowerer<'_> {
+    pub(super) fn read_if_secret(&self, expr: &Expr, value: LExpr) -> LExpr {
+        if self
+            .target
+            .universe
+            .function("canaccessvalue")
+            .is_some_and(|f| f.available)
+            && self
+                .types
+                .get(expr.id)
+                .is_some_and(|t| secret_inner(t).is_some())
+        {
+            lua::call(name("__selu_read"), vec![value])
+        } else {
+            value
+        }
+    }
+
     pub(super) fn restricted_call(
         &mut self,
         callee: &Expr,
         args: &[Expr],
         pre: &mut LBlock,
     ) -> LExpr {
-        let Some((protected, mask)) = policy(self.types, callee) else {
-            return self.call(callee, args, pre);
-        };
-        let mut result = self.call(callee, args, pre);
-        if protected {
-            result = match result {
-                LExpr::Call(f, mut args) => {
-                    args.insert(0, *f);
-                    lua::call(name("__selu_defer"), args)
-                }
-                LExpr::Method(obj, method, mut args) => {
-                    let held = self.hold(*obj, &callee.span, pre);
-                    let obj = name(&held);
-                    args.insert(0, obj.clone());
-                    args.insert(0, LExpr::Field(Box::new(obj), method));
-                    lua::call(name("__selu_defer"), args)
-                }
-                other => other,
-            };
-        }
-        if mask.iter().any(|x| *x)
-            && self
-                .target
-                .universe
-                .function("canaccessvalue")
-                .is_some_and(|f| f.available)
+        if matches!(&callee.kind,ExprKind::Ident(n) if n=="readable")
+            && self.types.get(callee.id).is_none()
         {
-            lua::call(name(&guard_name(&mask)), vec![result])
-        } else {
-            result
+            let value = self.expr(&args[0], pre);
+            return self.read_if_secret(&args[0], value);
+        }
+        let s = semantics(self.types, callee);
+        let result = self.call(callee, args, pre);
+        let Some(s) = s else {
+            return result;
+        };
+        if !(s.protected || s.dynamic_protected) {
+            return result;
+        }
+        match result {
+            LExpr::Call(f, mut args) => {
+                args.insert(0, *f);
+                lua::call(
+                    name(if s.dynamic_protected {
+                        "__selu_invoke"
+                    } else {
+                        "__selu_defer"
+                    }),
+                    args,
+                )
+            }
+            LExpr::Method(obj, method, mut args) => {
+                let held = self.hold(*obj, &callee.span, pre);
+                let obj = name(&held);
+                args.insert(0, obj.clone());
+                args.insert(0, LExpr::Field(Box::new(obj), method));
+                lua::call(name("__selu_widget_call"), args)
+            }
+            other => other,
         }
     }
 }

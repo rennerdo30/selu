@@ -92,12 +92,12 @@ fn compile(src: &str, flavour: &str) -> String {
 fn multiple_results_adjust_in_all_value_positions() {
     let src = r#"
 const alias = UnitName;
-const first: string = alias("player") ?? "";
+const first: string = alias("player");
 const [name, realm] = alias("player");
 print(first, name, realm);
 print(UnitName("player"));
 print(UnitName("player"), "end");
-const names = [UnitName("player") ?? ""];
+const names = [UnitName("player")];
 print(names.length);
 function one() { return UnitName("player"); }
 print(one());
@@ -105,7 +105,12 @@ function identity(f) { return f; }
 const passed = identity(alias);
 print(passed("player"));
 "#;
-    for flavour in ["retail", "forever"] {
+    for flavour in [
+        "classic-era",
+        "classic-anniversary",
+        "classic-titan",
+        "classic",
+    ] {
         let lua = compile(src, flavour);
         let sim = selu_sim::Sim::new().unwrap();
         sim.load_files(&[
@@ -163,7 +168,7 @@ fn imported_multiple_result_function_keeps_its_convention() {
             selu_lower::ModuleBindings::new("base".into(), BTreeMap::new(), &base),
         )
         .lua;
-        let main=selu_syntax::parse("main.selu", r#"import { nameOf } from "./base"; const maybeName = nameOf("player"); const name: string = maybeName != null ? maybeName : ""; const [a,b] = nameOf("player"); print(nameOf("player")); print(a,b);"#).unwrap();
+        let main=selu_syntax::parse("main.selu", r#"import { nameOf } from "./base"; const maybeName = readable(nameOf("player")); const name: string = maybeName != null ? maybeName : ""; const [a,b] = nameOf("player"); print(readable(nameOf("player"))); print(readable(a),readable(b));"#).unwrap();
         let imports = BTreeMap::from([("./base".into(), exports.clone())]);
         let (checked, _) = selu_check::check_module(
             &main,
@@ -343,9 +348,14 @@ fn api_origin_is_diagnostic_only_and_survives_aliases() {
 
 #[test]
 fn explicit_wrapper_returns_exactly_one_value() {
-    for flavour in ["retail", "forever"] {
+    for flavour in [
+        "classic-era",
+        "classic-anniversary",
+        "classic-titan",
+        "classic",
+    ] {
         let lua = compile(
-            r#"function one(unit: string): string { return UnitName(unit) ?? ""; } global wrapped = one;"#,
+            r#"function one(unit: string): string { return UnitName(unit); } global wrapped = one;"#,
             flavour,
         );
         let sim = selu_sim::Sim::new().unwrap();
@@ -359,13 +369,18 @@ fn explicit_wrapper_returns_exactly_one_value() {
 
 #[test]
 fn collections_reject_multiple_result_callbacks_and_accept_wrappers() {
-    for flavour in ["retail", "forever"] {
+    for flavour in [
+        "classic-era",
+        "classic-anniversary",
+        "classic-titan",
+        "classic",
+    ] {
         assert_eq!(
             codes(r#"const names = ["player"].map(UnitName);"#, flavour),
             vec!["SELU0485"]
         );
         let lua = compile(
-            r#"const names = ["player", "target"].map(u => UnitName(u) ?? ""); print(names.length, names[0], names[1]);"#,
+            r#"global mappedName = (u: string) => UnitName(u); const names = ["player", "target"].map(mappedName); print(names.length, names[0], names[1]);"#,
             flavour,
         );
         let sim = selu_sim::Sim::new().unwrap();
@@ -373,6 +388,9 @@ fn collections_reject_multiple_result_callbacks_and_accept_wrappers() {
             .unwrap();
         sim.load_files(&[("map.lua".into(), lua)]).unwrap();
         assert_eq!(sim.prints(), ["2\tplayer\ttarget"]);
+        sim.eval("print(select('#', mappedName('player')))")
+            .unwrap();
+        assert_eq!(sim.prints(), ["2\tplayer\ttarget", "1"]);
     }
 }
 

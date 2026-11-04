@@ -23,7 +23,7 @@ pub use aliases::shape_of;
 mod api;
 mod classes;
 mod modules;
-mod restrictions;
+pub mod restrictions;
 pub mod saved;
 pub use modules::{ModuleBindings, ModuleExport, ModuleExports, reserved_module_path};
 mod rules;
@@ -77,6 +77,8 @@ pub fn check_program_with_options(
     let mut ctx = Ctx {
         module: ModuleBindings::default(),
         manifest,
+        secret_capable: restrictions::has_secrets(manifest),
+        protected_functions: restrictions::protected_functions(manifest),
         options,
         availability: targets::Availability::new(std::slice::from_ref(manifest)),
         out: &mut out,
@@ -144,6 +146,8 @@ pub fn check_module_targets_with_options(
     let mut ctx = Ctx {
         module: imports,
         manifest,
+        secret_capable: restrictions::has_secrets(manifest),
+        protected_functions: restrictions::protected_functions(manifest),
         options,
         availability: targets::Availability::new(targets),
         out: &mut out,
@@ -219,6 +223,8 @@ struct Scope {
 type Narrowings = Vec<(String, Type)>;
 
 struct Ctx<'a> {
+    secret_capable: bool,
+    protected_functions: Vec<Type>,
     options: CheckOptions,
     module: ModuleBindings,
     aliases: aliases::Aliases,
@@ -996,6 +1002,7 @@ impl Ctx<'_> {
     fn expr(&mut self, e: &Expr) -> Type {
         let t = self.expr_inner(e);
         let t = self.refresh_class_type(t);
+        let t = self.restriction_value_type(e, t);
         self.types.set(e.id, t.clone());
         t
     }
@@ -1157,6 +1164,19 @@ impl Ctx<'_> {
             "??" => {
                 let l = self.value(left);
                 let r = self.value(right);
+                if let Some(inner) = restrictions::secret_inner(&l) {
+                    return Type::join(&inner.non_null(), &r).unwrap_or_else(|| {
+                        self.out.push(
+                            err(
+                                "SELU0602",
+                                "a secret fallback must match its readable type",
+                                &e.span,
+                            )
+                            .with_help("choose a fallback of the same type"),
+                        );
+                        Type::Error
+                    });
+                }
                 if !l.is_optional() && !l.is_open() {
                     self.out.push(
                         Diagnostic::warning("SELU0329", format!("the left side is {}, which is never null, so `??` never uses the right side", a(&l)))
@@ -1354,6 +1374,8 @@ impl Ctx<'_> {
             _ => self.value(callee),
         };
         let callee_type = self.alias_shape(callee_type);
+        let callee_type = self.restriction_value_type(callee, callee_type);
+        let callee_type = self.restriction_call_policy(e, &callee_type);
         self.types.set(callee.id, callee_type.clone());
         let arg_types = self.function_arguments(args, &callee_type);
         if self.api_check_call(e, args, &arg_types, &callee_type)

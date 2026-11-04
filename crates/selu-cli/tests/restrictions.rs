@@ -86,7 +86,7 @@ fn per_result_secret_policy_preserves_public_positions() {
     assert!(
         selu_lower::lower(&p, &m, &c.types)
             .lua
-            .contains("__selu_read_svv")
+            .contains("__selu_read(name)")
     );
     let sim = Sim::new().unwrap();
     sim.set_secret_global("hidden").unwrap();
