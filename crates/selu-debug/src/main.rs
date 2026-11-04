@@ -11,6 +11,7 @@
 //! [`Update`] per line to stdout.
 
 mod app;
+mod editor;
 mod png;
 
 use selu_debug::{Command, Update, Worker};
@@ -80,7 +81,7 @@ fn main() -> ExitCode {
         return match eframe::run_native(
             "Selu Studio",
             native,
-            Box::new(|_| Ok(Box::new(app::Studio::new(options)))),
+            Box::new(|cc| Ok(Box::new(app::Studio::new(options, &cc.egui_ctx)))),
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

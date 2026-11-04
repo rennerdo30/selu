@@ -43,8 +43,15 @@ struct Line {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
+    Problems,
     Console,
     Events,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum View {
+    Code,
+    Game,
 }
 
 /// Where a screenshot was saved, or why it couldn't be.
@@ -78,16 +85,22 @@ pub struct Studio {
     /// `SELU_STUDIO_SCREENSHOT=file.png`: save one screenshot once the
     /// session has settled, then close (for checks without a person).
     auto_shot: Option<(PathBuf, u32)>,
+    editor: crate::editor::Editor,
+    view: View,
+    /// The window was asked to close with unsaved edits.
+    confirm_close: bool,
 }
 
 impl Studio {
-    pub fn new(opts: Options) -> Studio {
+    pub fn new(opts: Options, ctx: &egui::Context) -> Studio {
         let worker = Worker::spawn(SessionConfig {
             target: opts.target.clone(),
             trace: true,
             ..SessionConfig::default()
         });
         let auto_rebuild = opts.project.is_some() && opts.selu.is_some();
+        let (opts_project, opts_selu, opts_target) =
+            (opts.project.clone(), opts.selu.clone(), opts.target.clone());
         let mut studio = Studio {
             sources_stamp: opts.project.as_deref().and_then(sources_stamp),
             opts,
@@ -107,10 +120,17 @@ impl Studio {
             speed: 1.0,
             auto_rebuild,
             last_poll: 0.0,
-            tab: Tab::Console,
+            tab: Tab::Problems,
             show_hidden: false,
             shots: channel(),
             auto_shot: std::env::var_os("SELU_STUDIO_SCREENSHOT").map(|p| (PathBuf::from(p), 20)),
+            view: if opts_project.is_some() {
+                View::Code
+            } else {
+                View::Game
+            },
+            editor: crate::editor::Editor::new(opts_project, opts_selu, opts_target, ctx),
+            confirm_close: false,
         };
         for dir in studio.opts.addons.clone() {
             studio.send(Command::LoadAddon { dir });
@@ -275,6 +295,7 @@ impl Studio {
         if let Some((path, frames)) = &mut self.auto_shot
             && self.snapshot.is_some()
             && self.in_flight == 0
+            && self.editor.settled()
         {
             if *frames == 0 {
                 let path = path.clone();
@@ -390,29 +411,109 @@ impl eframe::App for Studio {
         let ctx = ui.ctx().clone();
         self.drain();
         self.tick(&ctx);
+        self.editor.poll(&ctx);
+        for m in std::mem::take(&mut self.editor.messages) {
+            self.line(LineKind::Build, m);
+        }
+        self.close_guard(&ctx);
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("bottom")
             .resizable(true)
-            .default_size(220.0)
+            .default_size(200.0)
             .show(ui, |ui| self.bottom(ui));
-        egui::Panel::left("tree")
+        egui::Panel::left("side")
             .resizable(true)
-            .default_size(260.0)
-            .show(ui, |ui| self.tree(ui));
-        egui::Panel::right("inspector")
-            .resizable(true)
-            .default_size(280.0)
-            .show(ui, |ui| self.inspector(ui));
-        egui::CentralPanel::default().show(ui, |ui| self.screen(ui));
+            .default_size(240.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::CollapsingHeader::new("Files")
+                        .default_open(true)
+                        .show(ui, |ui| self.editor.ui_files(ui));
+                    egui::CollapsingHeader::new("Frames")
+                        .default_open(true)
+                        .show(ui, |ui| self.tree(ui));
+                });
+            });
+        if self.view == View::Game {
+            egui::Panel::right("inspector")
+                .resizable(true)
+                .default_size(280.0)
+                .show(ui, |ui| self.inspector(ui));
+        }
+        egui::CentralPanel::default().show(ui, |ui| match self.view {
+            View::Code => self.editor.ui_editor(ui),
+            View::Game => self.screen(ui),
+        });
     }
 }
 
 impl Studio {
+    /// Closing with unsaved edits asks first.
+    fn close_guard(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested())
+            && self.editor.any_dirty()
+            && self.auto_shot.is_none()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_close = true;
+        }
+        if !self.confirm_close {
+            return;
+        }
+        egui::Window::new("Unsaved changes")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Some files have unsaved changes.");
+                ui.horizontal(|ui| {
+                    if ui.button("Save all and close").clicked() {
+                        self.editor.save_all();
+                        self.confirm_close = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button("Close without saving").clicked() {
+                        self.editor.open.clear();
+                        self.confirm_close = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.confirm_close = false;
+                    }
+                });
+            });
+    }
+
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.strong("Selu Studio");
             ui.separator();
+            ui.selectable_value(&mut self.view, View::Code, "Code");
+            ui.selectable_value(&mut self.view, View::Game, "Game");
+            ui.separator();
+            if self.editor.has_project() {
+                let dirty = self.editor.any_dirty();
+                if ui
+                    .add_enabled(dirty, egui::Button::new("Save"))
+                    .on_hover_text("save all files (Ctrl+S); rebuilds and reloads the addon")
+                    .clicked()
+                {
+                    self.editor.save_all();
+                }
+                let (status, col) = self.editor.status();
+                if ui
+                    .add(
+                        egui::Label::new(egui::RichText::new(status).color(col))
+                            .sense(Sense::click()),
+                    )
+                    .on_hover_text(self.editor.api_status.clone())
+                    .clicked()
+                {
+                    self.tab = Tab::Problems;
+                }
+                ui.separator();
+            }
             if ui.button("/reload").clicked() {
                 self.act(Command::Reload);
             }
@@ -473,10 +574,7 @@ impl Studio {
     }
 
     fn tree(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading("Frames");
-            ui.checkbox(&mut self.show_hidden, "hidden");
-        });
+        ui.checkbox(&mut self.show_hidden, "show hidden");
         let Some(snap) = &self.snapshot else {
             ui.label("loading...");
             return;
@@ -744,11 +842,14 @@ impl Studio {
 
     fn bottom(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            let n = self.editor.problems.len();
+            ui.selectable_value(&mut self.tab, Tab::Problems, format!("Problems ({n})"));
             ui.selectable_value(&mut self.tab, Tab::Console, "Console");
             ui.selectable_value(&mut self.tab, Tab::Events, "Events");
         });
         ui.separator();
         match self.tab {
+            Tab::Problems => self.editor.ui_problems(ui),
             Tab::Console => self.console_tab(ui),
             Tab::Events => self.events_tab(ui),
         }

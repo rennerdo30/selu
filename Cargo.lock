@@ -2404,10 +2404,12 @@ name = "selu-debug"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "selu-manifest",
  "selu-sim",
  "selu-sourcemap",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

@@ -18,6 +18,15 @@ other setting.
 
 ## Studio at a glance
 
+- **Code** (the default view for a project): the project's files on the
+  left, tabs, syntax colours, line numbers. Errors appear while you type,
+  as red or yellow underlines and in the Problems tab (click one to jump
+  there). Completion pops up as you type (game API functions, `C_` namespace
+  members after a dot, events after `on`, keywords and your own names);
+  Ctrl+Space opens it, Up/Down pick, Enter or Tab accept, Esc closes. Hover a
+  game API name for its signature. Ctrl+S saves every file, which also
+  rebuilds and reloads the addon.
+- **Game:** the simulated screen (below).
 - **Toolbar:** `/reload`, Rebuild, rebuild on save, Play/Pause with speed,
   step time by 0.1, 1 or 10 seconds, Screenshot (saved under the project's
   `dist\.selu\`).
