@@ -1,0 +1,18 @@
+[saved.XPETAProof_history]
+version = 1
+per_character = true
+
+[saved.XPETAProof_history.fields]
+"" = "object"
+"/5:level" = "number"
+"/7:samples" = "{ t: number; xp: number }[]"
+
+[saved.XPETAProof_settings]
+version = 1
+per_character = false
+
+[saved.XPETAProof_settings.fields]
+"" = "object"
+"/1:x" = "number"
+"/1:y" = "number"
+"/7:enabled" = "boolean"
