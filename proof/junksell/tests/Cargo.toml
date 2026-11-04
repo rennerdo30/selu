@@ -1,0 +1,10 @@
+[package]
+name = "junksell-proof-test"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[dependencies]
+selu-sim = { path = "../../../crates/selu-sim" }
+selu-syntax = { path = "../../../crates/selu-syntax" }
+selu-check = { path = "../../../crates/selu-check" }
+selu-manifest = { path = "../../../crates/selu-manifest" }

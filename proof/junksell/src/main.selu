@@ -1,0 +1,146 @@
+// Port of Modules/JunkSell.lua and Core.lua, MIT, Copyright 2026 Renner.
+// Source commit df793af16fa1da0b9707e112ad483352e191620f.
+// Proof only: see docs/proof/junksell.md for unresolved safety gaps.
+saved settings = { enabled: true, maxQuality: 0, maxValue: 0, announce: true,
+    autoRepair: true, useGuildRepair: false, locks: new Map<number, boolean>() };
+let open = false;
+let generation = 0;
+let baseline = new Map<number, number>();
+function locked(id: number): boolean { return settings.locks.get(id) ?? false; }
+function itemID(link: string): number {
+    const [id] = C_Item.GetItemInfoInstant(link);
+    return id ?? 0;
+}
+function saySold(count: number, copper: number) {
+    if (!settings.announce) return;
+    if (GetLocale() == "deDE") print(`${count} Schrottgegenstand/-gegenstände für ${copper}c verkauft.`);
+    else print(`Sold ${count} junk item(s) for ${copper}c.`);
+}
+function repairUnchecked() {
+    if (!settings.autoRepair) return;
+    if (has(CanMerchantRepair) && has(RepairAllItems)) {
+        if (!CanMerchantRepair()) return;
+        const [cost] = GetRepairAllCost();
+        if (cost <= 0) return;
+        let guild = false;
+        if (has(CanGuildBankRepair)) guild = settings.useGuildRepair && CanGuildBankRepair();
+        RepairAllItems(guild);
+        if (settings.announce) {
+            if (GetLocale() == "deDE") {
+                const payer = guild ? "Gildenmitteln" : "eigenem Gold";
+                print(`Für ${cost}c repariert, bezahlt mit ${payer}.`);
+            } else {
+                const payer = guild ? "guild funds" : "your own gold";
+                print(`Repaired for ${cost}c using ${payer}.`);
+            }
+        }
+    }
+}
+function eligibleUnchecked(bag: number, slot: number): number {
+    const info = C_Container.GetContainerItemInfo(bag, slot);
+    if (info == null) return 0;
+    if (info.hyperlink == null) return 0;
+    const quest = C_Container.GetContainerItemQuestInfo(bag, slot);
+    if (quest != null) {
+        if (quest.isQuestItem || quest.isActive || (quest.questID ?? 0) > 0) return 0;
+    }
+    const [, , , , , cls] = C_Item.GetItemInfoInstant(info.hyperlink);
+    if (cls == 12) return 0;
+    if ((info.quality ?? 0) > settings.maxQuality || locked(info.itemID)) return 0;
+    const [, , , , , , , , , , price] = C_Item.GetItemInfo(info.hyperlink);
+    const value = (price ?? 0) * info.stackCount;
+    if (value <= 0 || (settings.maxValue > 0 && value > settings.maxValue)) return 0;
+    return value;
+}
+function repair() {
+    const [ok, err] = pcall(repairUnchecked);
+    if (!ok) log.warn`Repair failed`;
+}
+function eligible(bag: number, slot: number): number {
+    const [ok, value] = pcall(eligibleUnchecked, bag, slot);
+    if (!ok) return 0;
+    return value;
+}
+function snapshot(): Map<number, number> {
+    const counts = new Map<number, number>();
+    if (has(GetNumBuybackItems) && has(GetBuybackItemLink)) {
+        for (let i = 1; i <= GetNumBuybackItems(); i += 1) {
+            const link = GetBuybackItemLink(i);
+            if (link != null) {
+                const id = itemID(link);
+                counts.set(id, (counts.get(id) ?? 0) + 1);
+            }
+        }
+    }
+    return counts;
+}
+function recover() {
+    if (!open) return;
+    const current = snapshot();
+    const added = new Map<number, number>();
+    for (const [id, count] of current) added.set(id, Math.max(0, count - (baseline.get(id) ?? 0)));
+    if (has(GetNumBuybackItems) && has(GetBuybackItemLink)) {
+        for (let i = GetNumBuybackItems(); i >= 1; i -= 1) {
+            const link = GetBuybackItemLink(i);
+            if (link == null) continue;
+            const id = itemID(link);
+            const pending = added.get(id) ?? 0;
+            if (pending <= 0) continue;
+            added.set(id, pending - 1);
+            if (!locked(id)) continue;
+            if (has(BuybackItem)) {
+                BuybackItem(i);
+                if (GetLocale() == "deDE") print(`${link} zurückgekauft - der Gegenstand ist geschützt.`);
+                else print(`Bought back ${link} - it's protected.`);
+            } else {
+                if (GetLocale() == "deDE") print(`${link} ist geschützt und wurde gerade verkauft, aber dieser Client bietet keine Rückkauf-API. Kaufe den Gegenstand im Rückkauf-Tab des Händlers zurück.`);
+                else print(`${link} is protected and was just sold, but this client has no buyback API. Buy it back from the vendor's Buyback tab.`);
+            }
+        }
+    }
+    baseline = current;
+}
+on MERCHANT_SHOW() {
+    open = true;
+    generation += 1;
+    baseline = snapshot();
+    if (!settings.enabled) return;
+    repair();
+    const session = generation;
+    const queue: { bag: number, slot: number, id: number }[] = [];
+    for (let bag = 0; bag <= 4; bag += 1) {
+        for (let slot = 1; slot <= C_Container.GetContainerNumSlots(bag); slot += 1) {
+            if (eligible(bag, slot) > 0) {
+                const info = C_Container.GetContainerItemInfo(bag, slot);
+                if (info != null) queue.push({ bag: bag, slot: slot, id: info.itemID });
+            }
+        }
+    }
+    let count = 0;
+    let total = 0;
+    for (const entry of queue) {
+        const index = queue.indexOf(entry);
+        C_Timer.After(index * 0.2, () => {
+            if (!open || generation != session || !settings.enabled) return;
+            const info = C_Container.GetContainerItemInfo(entry.bag, entry.slot);
+            if (info != null && info.itemID == entry.id) {
+                const value = eligible(entry.bag, entry.slot);
+                if (value > 0) {
+                    const [ok, result] = pcall(C_Container.UseContainerItem, entry.bag, entry.slot);
+                    if (!ok || result == false) return;
+                    count += 1;
+                    total += value;
+                }
+            }
+            if (index == queue.length - 1) saySold(count, total);
+        });
+    }
+}
+on MERCHANT_CLOSED() { open = false; generation += 1; }
+function scans() {
+    if (!open) return;
+    for (const delay of [0.05, 0.20, 0.60]) C_Timer.After(delay, () => { recover(); });
+}
+on MERCHANT_UPDATE() { scans(); }
+on BAG_UPDATE_DELAYED() { scans(); }
+on PLAYER_MONEY() { scans(); }

@@ -1,0 +1,5 @@
+[addon]
+name = "JunkSellProof"
+targets = ["retail", "forever", "classic-era", "classic-anniversary", "classic-titan", "classic"]
+[build]
+layout = "shared"

@@ -1,0 +1,13 @@
+[saved.JunkSellProof_settings]
+version = 1
+per_character = false
+
+[saved.JunkSellProof_settings.fields]
+"" = "object"
+"/10:autoRepair" = "boolean"
+"/10:maxQuality" = "number"
+"/14:useGuildRepair" = "boolean"
+"/5:locks" = "Map<number, boolean>"
+"/7:enabled" = "boolean"
+"/8:announce" = "boolean"
+"/8:maxValue" = "number"
