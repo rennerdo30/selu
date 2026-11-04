@@ -77,7 +77,10 @@ pub fn read_toc_target(dir: &Path, target: Option<&str>) -> Result<Toc, String> 
         .to_string();
     let suffix = match target.unwrap_or("").split('@').next().unwrap_or("") {
         "retail" => "Mainline",
-        "forever" | "classic" => "Vanilla",
+        "forever" | "classic-era" => "Vanilla",
+        "classic" => "Mists",
+        "classic-anniversary" => "TBC",
+        "classic-titan" => "Wrath",
         _ => "",
     };
     let flavoured = dir.join(format!("{name}_{suffix}.toc"));

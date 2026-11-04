@@ -18,11 +18,72 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum HostCommand {
-    Fire { event: String, args: Vec<String> },
-    Slash { line: String },
-    AdvanceTime { seconds: f64 },
+    Fire {
+        event: String,
+        args: Vec<HostValue>,
+    },
+    SetUnit {
+        token: String,
+        unit: crate::world::Unit,
+    },
+    SetMoney {
+        copper: u64,
+    },
+    SetBag {
+        bag: i32,
+        items: Vec<u32>,
+    },
+    Slash {
+        line: String,
+    },
+    AdvanceTime {
+        seconds: f64,
+    },
     Reload,
-    Eval { code: String },
+    Eval {
+        code: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum HostValue {
+    Nil,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Table(Vec<(HostValue, HostValue)>),
+}
+impl HostValue {
+    fn capture(v: &Value) -> SimResult<Self> {
+        fn convert(v: crate::saved::SavedValue) -> HostValue {
+            use crate::saved::SavedValue as S;
+            match v {
+                S::Nil => HostValue::Nil,
+                S::Boolean(v) => HostValue::Bool(v),
+                S::Number(v) => HostValue::Number(v),
+                S::String(v) => HostValue::String(String::from_utf8_lossy(&v).into()),
+                S::Table(v) => HostValue::Table(
+                    v.into_iter()
+                        .map(|(k, v)| (convert(k), convert(v)))
+                        .collect(),
+                ),
+            }
+        }
+        Ok(convert(crate::saved::capture(
+            v.clone(),
+            &mut HashSet::new(),
+        )?))
+    }
+}
+#[derive(Default)]
+struct VmState {
+    loaded: Vec<PathBuf>,
+    loading: HashSet<PathBuf>,
+    commands: Vec<HostCommand>,
+    marks: std::collections::VecDeque<(u64, Snapshot)>,
+    generation: Generation,
+    ui_size: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,11 +119,8 @@ pub struct Session {
     config: SessionConfig,
     sim: Vm,
     generation: Generation,
-    addons: Vec<PathBuf>,
     logged_in: bool,
     saved: crate::saved::SavedSnapshot,
-    loading: HashSet<PathBuf>,
-    commands: std::cell::RefCell<Vec<HostCommand>>,
 }
 
 fn load_dynamic(
@@ -70,38 +128,47 @@ fn load_dynamic(
     dir: &Path,
     config: &SessionConfig,
     saved: &crate::saved::SavedSnapshot,
-    visiting: &mut HashSet<PathBuf>,
-) -> SimResult<()> {
+) -> SimResult<String> {
     let dir = dir.canonicalize().map_err(|e| runtime(e.to_string()))?;
-    let loaded: Table = vm.lua.globals().get("__selu_loaded_dirs")?;
-    if loaded
-        .raw_get::<Option<bool>>(dir.to_string_lossy().as_ref())?
-        .unwrap_or(false)
-    {
-        return Ok(());
-    }
-    if !visiting.insert(dir.clone()) {
-        return Err(runtime("cyclic addon dependencies".into()));
-    }
     let toc = loader::read_toc_target(&dir, config.target.as_deref()).map_err(runtime)?;
-    for dep in toc
-        .list("Dependencies")
-        .into_iter()
-        .chain(toc.list("RequiredDeps"))
     {
-        load_dynamic(
-            vm,
-            &dir.parent().unwrap().join(dep),
-            config,
-            saved,
-            visiting,
-        )?;
+        let mut state = lock(&vm.state);
+        if state.loading.contains(&dir) {
+            return Err(runtime("cyclic addon dependencies".into()));
+        }
+        if state.loaded.contains(&dir) {
+            return Ok(toc.name);
+        }
+        state.loading.insert(dir.clone());
     }
-    Session::load_into(vm, &dir, config, saved)?;
-    loaded.set(dir.to_string_lossy().as_ref(), true)?;
-    loaded.raw_set(loaded.raw_len() + 1, dir.to_string_lossy().as_ref())?;
-    visiting.remove(&dir);
-    Ok(())
+    let result = (|| {
+        for dep in toc
+            .list("Dependencies")
+            .into_iter()
+            .chain(toc.list("RequiredDeps"))
+        {
+            load_dynamic(vm, &dir.parent().unwrap().join(dep), config, saved)?;
+        }
+        lock(&vm.state).loaded.push(dir.clone());
+        Session::load_into(vm, &dir, config, saved)?;
+        lock(&vm.state).loading.remove(&dir);
+        vm.fire(
+            "ADDON_LOADED",
+            vec![
+                Value::String(vm.lua.create_string(&toc.name)?),
+                Value::Boolean(false),
+            ],
+        )?;
+        Ok(toc.name)
+    })();
+    {
+        let mut state = lock(&vm.state);
+        let unfinished = state.loading.remove(&dir);
+        if result.is_err() && unfinished {
+            state.loaded.retain(|path| path != &dir);
+        }
+    }
+    result
 }
 
 fn saved_key(config: &SessionConfig, toc: &loader::Toc, name: &str) -> String {
@@ -130,17 +197,15 @@ impl Session {
             config,
             sim,
             generation: Generation::default(),
-            addons: Vec::new(),
             logged_in: false,
             saved: Default::default(),
-            loading: HashSet::new(),
-            commands: Default::default(),
         })
     }
 
     fn start_vm(config: &SessionConfig) -> SimResult<Vm> {
         let sim = Vm::new()?;
         lock(&sim.ctx().trace).enabled = config.trace;
+        lock(&sim.state).ui_size = Some(config.ui_size);
         sim.lua()
             .load(format!("math.randomseed({})", config.seed))
             .exec()?;
@@ -183,8 +248,35 @@ impl Session {
             .call::<bool>(())?)
     }
 
+    pub fn snapshot_at(&self, seq: u64) -> Option<Snapshot> {
+        lock(&self.sim.state)
+            .marks
+            .iter()
+            .find(|(mark, _)| *mark == seq)
+            .map(|(_, snapshot)| snapshot.clone())
+    }
+    pub fn set_unit(&self, token: &str, unit: crate::world::Unit) -> SimResult<()> {
+        lock(&self.sim.state).commands.push(HostCommand::SetUnit {
+            token: token.into(),
+            unit: unit.clone(),
+        });
+        self.sim.set_unit(token, unit)
+    }
+    pub fn set_money(&self, copper: u64) -> SimResult<()> {
+        lock(&self.sim.state)
+            .commands
+            .push(HostCommand::SetMoney { copper });
+        self.sim.set_money(copper)
+    }
+    pub fn set_bag(&self, bag: i32, items: &[u32]) -> SimResult<()> {
+        lock(&self.sim.state).commands.push(HostCommand::SetBag {
+            bag,
+            items: items.to_vec(),
+        });
+        self.sim.set_bag(bag, items)
+    }
     pub fn host_commands(&self) -> Vec<HostCommand> {
-        self.commands.borrow().clone()
+        lock(&self.sim.state).commands.clone()
     }
 
     pub fn config(&self) -> &SessionConfig {
@@ -202,41 +294,17 @@ impl Session {
     /// Load an addon folder through its `.toc` and fire `ADDON_LOADED`.
     /// Returns the addon name.
     pub fn load_addon_dir(&mut self, dir: &Path) -> SimResult<String> {
-        let dir = dir.canonicalize().map_err(|e| runtime(e.to_string()))?;
-        let toc = loader::read_toc_target(&dir, self.config.target.as_deref()).map_err(runtime)?;
-        if self.addons.contains(&dir) {
-            return Ok(toc.name);
-        }
-        if !self.loading.insert(dir.clone()) {
-            return Err(runtime("cyclic addon dependencies".into()));
-        }
-        let result = (|| {
-            for dep in toc
-                .list("Dependencies")
-                .into_iter()
-                .chain(toc.list("RequiredDeps"))
-            {
-                self.load_addon_dir(&dir.parent().unwrap().join(dep))?;
-            }
-            Self::load_into(&self.sim, &dir, &self.config, &self.saved)?;
-            self.addons.push(dir.clone());
-            Ok(toc.name)
-        })();
-        self.loading.remove(&dir);
-        if result.is_ok() {
-            self.sim
-                .lua
-                .globals()
-                .get::<Table>("__selu_loaded_dirs")?
-                .set(dir.to_string_lossy().as_ref(), true)?;
-            self.install_lod(dir.parent().unwrap())?;
-        }
-        result
+        self.install_lod(
+            dir.parent()
+                .ok_or_else(|| runtime("addon has no parent".into()))?,
+        )?;
+        load_dynamic(&self.sim, dir, &self.config, &self.saved)
     }
 
     fn install_lod(&self, root: &Path) -> SimResult<()> {
         let root = root.to_path_buf();
         let ctx = self.sim.ctx.clone();
+        let state = self.sim.state.clone();
         let config = self.config.clone();
         let saved = self.saved.clone();
         let api: Table = self.sim.lua.create_table()?;
@@ -249,12 +317,15 @@ impl Session {
                     prints: ctx.prints.clone(),
                     logs: ctx.logs.clone(),
                     clock: ctx.clock.clone(),
+                    state: state.clone(),
                 };
                 if name.contains(['/', '\\']) || name == ".." {
-                    return Err(runtime("invalid addon name".into()));
+                    return Ok((None, Some("MISSING".to_string())));
                 }
-                load_dynamic(&vm, &root.join(name), &config, &saved, &mut HashSet::new())?;
-                Ok(true)
+                match load_dynamic(&vm, &root.join(name), &config, &saved) {
+                    Ok(_) => Ok((Some(true), None)),
+                    Err(error) => Ok((None, Some(error.to_string()))),
+                }
             })?,
         )?;
         self.sim.lua.globals().set("C_AddOns", api)
@@ -276,14 +347,20 @@ impl Session {
                 .globals()
                 .get::<Table>("__selu_saved_names")?
                 .raw_set(name.as_str(), true)?;
+        }
+        let files = loader::read_files(&toc).map_err(runtime)?;
+        sim.load_chunks(&toc.name, &files)?;
+        for name in toc
+            .list("SavedVariables")
+            .into_iter()
+            .chain(toc.list("SavedVariablesPerCharacter"))
+        {
             if let Some(value) = saved.0.get(&saved_key(config, &toc, &name)) {
                 sim.lua
                     .globals()
                     .raw_set(name, crate::saved::restore(&sim.lua, value)?)?;
             }
         }
-        let files = loader::read_files(&toc).map_err(runtime)?;
-        sim.load_addon(&toc.name, &files)?;
         Ok(toc.name)
     }
 
@@ -308,17 +385,11 @@ impl Session {
     /// Drop the VM, start a new one, load every addon again and log in again
     /// if the session had. The generation changes. Saved data is restored before ADDON_LOADED.
     pub fn reload(&mut self) -> SimResult<()> {
-        self.commands.borrow_mut().push(HostCommand::Reload);
-        let loaded: Table = self.sim.lua.globals().get("__selu_loaded_dirs")?;
-        for entry in loaded.sequence_values::<String>() {
-            let path = PathBuf::from(entry?);
-            if !self.addons.contains(&path) {
-                self.addons.push(path);
-            }
-        }
+        lock(&self.sim.state).commands.push(HostCommand::Reload);
+        let addons = lock(&self.sim.state).loaded.clone();
         self.sim.fire("PLAYER_LOGOUT", vec![])?;
         let mut saved = self.saved.clone();
-        for dir in &self.addons {
+        for dir in &addons {
             let toc =
                 loader::read_toc_target(dir, self.config.target.as_deref()).map_err(runtime)?;
             for name in toc
@@ -347,6 +418,17 @@ impl Session {
             ));
         }
         let replacement = Self::start_vm(&self.config)?;
+        *lock(&replacement.clock) = self.now();
+        {
+            let mut state = lock(&replacement.state);
+            state.commands = lock(&self.sim.state).commands.clone();
+            state.generation = self.generation.next();
+        }
+        replacement
+            .lua
+            .globals()
+            .get::<Function>("__selu_sim_set_time")?
+            .call::<()>(self.now())?;
         for (name, value) in world {
             let restored = crate::saved::restore(&replacement.lua, &value)?;
             // Unit API closures hold the original units table.
@@ -364,14 +446,9 @@ impl Session {
         }
         self.saved = saved;
         self.sim = replacement;
-        if let Some(dir) = self.addons.first() {
-            self.install_lod(dir.parent().unwrap())?;
-        }
         self.generation = self.generation.next();
-        for dir in &self.addons {
-            Self::load_into(&self.sim, dir, &self.config, &self.saved)?;
-            let loaded: Table = self.sim.lua.globals().get("__selu_loaded_dirs")?;
-            loaded.set(dir.to_string_lossy().as_ref(), true)?;
+        for dir in &addons {
+            self.load_addon_dir(dir)?;
         }
         if self.logged_in {
             self.logged_in = false;
@@ -381,27 +458,30 @@ impl Session {
     }
 
     pub fn fire(&self, event: &str, args: Vec<Value>) -> SimResult<usize> {
-        self.commands.borrow_mut().push(HostCommand::Fire {
+        lock(&self.sim.state).commands.push(HostCommand::Fire {
             event: event.into(),
-            args: args.iter().map(value_string).collect(),
+            args: args
+                .iter()
+                .map(HostValue::capture)
+                .collect::<SimResult<_>>()?,
         });
         self.sim.fire(event, args)
     }
     pub fn slash(&self, line: &str) -> SimResult<()> {
-        self.commands
-            .borrow_mut()
+        lock(&self.sim.state)
+            .commands
             .push(HostCommand::Slash { line: line.into() });
         self.sim.slash(line)
     }
     pub fn eval(&self, source: &str) -> SimResult<()> {
-        self.commands.borrow_mut().push(HostCommand::Eval {
+        lock(&self.sim.state).commands.push(HostCommand::Eval {
             code: source.into(),
         });
         self.sim.eval(source)
     }
     pub fn advance_time(&self, seconds: f64) {
-        self.commands
-            .borrow_mut()
+        lock(&self.sim.state)
+            .commands
             .push(HostCommand::AdvanceTime { seconds });
         self.sim.advance_time(seconds)
     }
@@ -430,7 +510,7 @@ impl Session {
 
     /// Trace records with `seq >= from` (empty unless `config.trace`).
     pub fn trace_since(&self, from: u64) -> Vec<TraceRecord> {
-        lock(&self.sim.ctx().trace).since(from)
+        crate::trace::since(&self.sim.lua, &self.sim.ctx, from)
     }
 }
 
@@ -441,6 +521,7 @@ pub struct Vm {
     pub(crate) prints: Shared<Vec<String>>,
     pub(crate) logs: Shared<Vec<String>>,
     pub(crate) clock: Shared<f64>,
+    state: Shared<VmState>,
 }
 
 impl Vm {
@@ -514,6 +595,7 @@ impl Vm {
             prints,
             logs,
             clock,
+            state: crate::core::shared(VmState::default()),
         })
     }
 
@@ -530,7 +612,7 @@ impl Vm {
     /// Load an addon's files in TOC order the way the client does: every
     /// file receives `...` = the addon's name and one table shared by all of
     /// its files.
-    pub fn load_addon(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
+    fn load_chunks(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
         let ns = self.lua.create_table()?;
         for (name, source) in files {
             dispatch(&self.lua, &self.ctx, || {
@@ -540,9 +622,16 @@ impl Vm {
                     .call::<()>((addon, ns.clone()))
             })?;
         }
+        Ok(())
+    }
+    pub fn load_addon(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
+        self.load_chunks(addon, files)?;
         self.fire(
             "ADDON_LOADED",
-            vec![Value::String(self.lua.create_string(addon)?)],
+            vec![
+                Value::String(self.lua.create_string(addon)?),
+                Value::Boolean(false),
+            ],
         )?;
         Ok(())
     }
@@ -565,8 +654,18 @@ impl Vm {
     /// Fire an event at every frame that registered for it.
     pub fn fire(&self, event: &str, args: Vec<Value>) -> SimResult<usize> {
         let rendered = args.iter().map(value_string).collect();
+        let seq = lock(&self.ctx.trace).count();
         self.ctx.record(TraceKind::Event, event, rendered);
-        self.fire_now(event, &args)
+        let result = self.fire_now(event, &args);
+        if lock(&self.ctx.trace).enabled {
+            let snapshot = self.snapshot()?;
+            let mut state = lock(&self.state);
+            if state.marks.len() == 128 {
+                state.marks.pop_front();
+            }
+            state.marks.push_back((seq, snapshot));
+        }
+        result
     }
 
     fn fire_now(&self, event: &str, args: &[Value]) -> SimResult<usize> {
@@ -605,7 +704,10 @@ impl Vm {
         *self.clock.lock().unwrap()
     }
     pub fn advance_time(&self, seconds: f64) {
-        timers::advance(&self.lua, &self.clock, &self.logs, seconds);
+        let _ = core::scheduler_dispatch(&self.lua, &self.ctx, || {
+            timers::advance(&self.lua, &self.clock, &self.logs, seconds);
+            Ok(())
+        });
     }
     pub fn lua(&self) -> &Lua {
         &self.lua
@@ -617,14 +719,17 @@ impl Vm {
     /// The region tree through the core's snapshot view (generation 0; a
     /// [`Session`] stamps its own).
     pub fn snapshot(&self) -> SimResult<Snapshot> {
-        let model = frames::LuaTableModel { generation: 0 };
-        snapshot::take(
-            &self.lua,
-            &self.ctx,
-            &model,
-            Generation::default(),
-            snapshot::DEFAULT_UI_SIZE,
-        )
+        let (generation, size) = {
+            let state = lock(&self.state);
+            (
+                state.generation,
+                state.ui_size.unwrap_or(snapshot::DEFAULT_UI_SIZE),
+            )
+        };
+        let model = frames::LuaTableModel {
+            generation: generation.0 as u32,
+        };
+        snapshot::take(&self.lua, &self.ctx, &model, generation, size)
     }
 }
 

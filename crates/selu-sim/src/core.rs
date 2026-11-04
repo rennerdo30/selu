@@ -371,45 +371,89 @@ impl Default for Ctx {
 /// debugger (round 10) join this hook here, in one place, because Lua has a
 /// single hook per thread.
 ///
-/// Limitation: Lua 5.1 hooks are per coroutine; code running inside a
-/// coroutine the addon created is not budgeted yet (S2 wraps
-/// `coroutine.create` to install the hook on new threads).
+/// Coroutine resume wrappers coordinate the VM's single mlua hook target
+/// here. Every thread charges the same sticky dispatch budget.
 pub fn install_hooks(lua: &Lua, ctx: &Ctx) {
     set_count_hook(lua, ctx.budget.clone(), HOOK_INTERVAL);
 }
 
-/// Once the budget is exhausted the hook fires on *every* instruction and
-/// fails each time, until the next dispatch restores the normal interval.
+/// The hook charges every instruction, including across coroutine switches.
+/// Exhaustion stays sticky until the next dispatch.
 /// That way the error surfaces in every frame up the stack: a `pcall`
 /// around a runaway loop catches it, but its caller's next instruction
 /// fails again, so `while true do pcall(f) end` can't keep running either.
-fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
-    lua.set_hook(
-        HookTriggers::new().every_nth_instruction(interval),
-        move |lua, _| {
-            let mut b = lock(&budget);
-            if !b.exhausted {
-                b.used += 1;
-                if b.used <= b.limit {
-                    return Ok(VmState::Continue);
-                }
-                b.exhausted = true;
-                drop(b);
-                // Safe inside a hook: mlua keeps the running callback alive
-                // and `lua_sethook` may be called at any time.
-                set_count_hook(lua, budget.clone(), 1);
-                b = lock(&budget);
-            }
-            let limit = b.limit * u64::from(HOOK_INTERVAL);
-            Err(mlua::Error::RuntimeError(format!(
-                "{BUDGET_ERROR} (more than {limit} instructions in one dispatch)"
-            )))
-        },
-    );
+fn budget_instruction(budget: &Shared<Budget>) -> mlua::Result<VmState> {
+    let mut b = lock(budget);
+    b.used = b.used.saturating_add(1);
+    if b.exhausted || b.used > b.limit.saturating_mul(u64::from(HOOK_INTERVAL)) {
+        b.exhausted = true;
+        return Err(mlua::Error::runtime(BUDGET_ERROR));
+    }
+    Ok(VmState::Continue)
 }
 
-/// Reset the budget for a new dispatch, restoring the normal hook interval
-/// if the previous dispatch exhausted it.
+// mlua 0.10 has one hook target per VM. Switch that target only at native
+// resume boundaries, restoring the caller before executing more Lua. Count
+// every instruction so repeated short coroutine resumes cannot lose credit.
+fn set_count_hook(lua: &Lua, budget: Shared<Budget>, _interval: u32) {
+    lua.set_hook(HookTriggers::new().every_nth_instruction(1), move |_, _| {
+        budget_instruction(&budget)
+    });
+}
+
+pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) {
+    let budget = ctx.budget.clone();
+    if let Some(thread) = thread {
+        thread.set_hook(HookTriggers::new().every_nth_instruction(1), move |_, _| {
+            budget_instruction(&budget)
+        });
+    } else {
+        set_count_hook(lua, budget, 1);
+    }
+}
+
+/// A scheduler host entry and each callback have independent budgets.
+/// Preserve scheduler usage around a callback; neither can consume the other.
+#[derive(Clone, Copy)]
+struct CallbackLimit(u64);
+pub(crate) fn scheduler_dispatch<R>(
+    lua: &Lua,
+    ctx: &Ctx,
+    call: impl FnOnce() -> mlua::Result<R>,
+) -> mlua::Result<R> {
+    let saved = *lock(&ctx.budget);
+    let previous = lua.remove_app_data::<CallbackLimit>();
+    lua.set_app_data(CallbackLimit(saved.limit));
+    lock(&ctx.budget).limit = DEFAULT_BUDGET;
+    let result = dispatch(lua, ctx, call);
+    lua.remove_app_data::<CallbackLimit>();
+    if let Some(previous) = previous {
+        lua.set_app_data(previous);
+    }
+    *lock(&ctx.budget) = saved;
+    set_count_hook(lua, ctx.budget.clone(), 1);
+    result
+}
+
+pub(crate) fn callback_dispatch<R>(
+    lua: &Lua,
+    ctx: &Ctx,
+    call: impl FnOnce() -> mlua::Result<R>,
+) -> mlua::Result<R> {
+    let scheduler = *lock(&ctx.budget);
+    if let Some(limit) = lua.app_data_ref::<CallbackLimit>() {
+        lock(&ctx.budget).limit = limit.0;
+    }
+    let depth = *lock(&ctx.depth);
+    *lock(&ctx.depth) = 0;
+    let result = dispatch(lua, ctx, call);
+    *lock(&ctx.budget) = scheduler;
+    *lock(&ctx.depth) = depth;
+    set_count_hook(lua, ctx.budget.clone(), 1);
+    result
+}
+
+/// Reset the shared instruction usage only at a new dispatch boundary.
 fn reset_budget(lua: &Lua, ctx: &Ctx) {
     let mut b = lock(&ctx.budget);
     b.used = 0;

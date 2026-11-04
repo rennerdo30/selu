@@ -1,9 +1,9 @@
 local queue, frame = {}, 1
 local frameTime = 1 / 60
-local function safe(fn, ...)
+local function safe(kind, fn, ...)
  __selu_sim_budget = __selu_sim_budget - 1
  if __selu_sim_budget < 0 then error('dispatch budget exceeded') end
- local ok, err = pcall(__selu_trace_callback, 'timer/OnUpdate', fn, ...)
+ local ok, err = pcall(__selu_trace_callback, kind, fn, ...)
  if not ok then
   local converted, message = pcall(tostring, err)
   __selu_sim_error(converted and message or 'error object could not be formatted')
@@ -65,7 +65,7 @@ function __selu_sim_step()
  for _, t in ipairs(due) do
   if not t.handle.cancelled then
    local ok
-   if t.after then ok = safe(t.fn) else ok = safe(t.fn, t.handle) end
+   if t.after then ok = safe('timer', t.fn) else ok = safe('timer', t.fn, t.handle) end
    if t.remaining then t.remaining = t.remaining - 1 end
    if ok and not t.handle.cancelled and (not t.remaining or t.remaining > 0) then
     t.due, t.origin, t.index, t.period = deadline(t.origin, t.index + 1, t.period, now)
@@ -79,7 +79,7 @@ function __selu_sim_step()
   for i, f in ipairs(__selu_sim_frames) do frames[i] = f end
   for _, f in ipairs(frames) do
    local fn = f.__scripts.OnUpdate
-   if visible(f) and fn then safe(fn, f, frameTime) end
+   if visible(f) and fn then safe('OnUpdate', fn, f, frameTime) end
   end
  end
 end
@@ -89,3 +89,5 @@ function __selu_sim_pending()
  for _, f in ipairs(__selu_sim_frames) do if visible(f) and f.__scripts.OnUpdate then return true end end
  return false
 end
+
+function __selu_sim_set_time(now) frame=math.floor(now/frameTime)+1 end

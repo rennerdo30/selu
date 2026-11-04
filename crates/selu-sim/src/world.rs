@@ -1,7 +1,7 @@
 //! Session-local world data. Event payloads follow the target manifests.
 use crate::{SimResult, session::Vm};
 use mlua::{Lua, Table, Value};
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Unit {
     pub name: String,
     pub class: String,
@@ -21,6 +21,21 @@ impl Vm {
         let units: Table = self.lua.globals().raw_get("__selu_world_units")?;
         let old: Option<Table> = units.raw_get(token)?;
         let next = self.lua.create_table()?;
+        let identity_changed = old
+            .as_ref()
+            .map(|old| old.raw_get::<String>("name"))
+            .transpose()?
+            .as_deref()
+            != Some(unit.name.as_str());
+        let old_auras = old
+            .as_ref()
+            .map(|old| {
+                old.raw_get::<Table>("auras")?
+                    .sequence_values::<String>()
+                    .collect::<mlua::Result<Vec<_>>>()
+            })
+            .transpose()?;
+        let aura_changed = old_auras.as_ref() != Some(&unit.auras);
         next.set("name", unit.name)?;
         next.set("class", unit.class)?;
         next.set("level", unit.level)?;
@@ -52,15 +67,34 @@ impl Vm {
                 self.fire(event, args)?;
             }
         }
-        let update = self.lua.create_table()?;
-        update.set("isFullUpdate", true)?;
-        self.fire(
-            "UNIT_AURA",
-            vec![
-                Value::String(self.lua.create_string(token)?),
-                Value::Table(update),
-            ],
-        )?;
+        if identity_changed {
+            match token {
+                "target" => {
+                    self.fire("PLAYER_TARGET_CHANGED", vec![])?;
+                }
+                "focus" => {
+                    self.fire("PLAYER_FOCUS_CHANGED", vec![])?;
+                }
+                "pet" => {
+                    self.fire(
+                        "UNIT_PET",
+                        vec![Value::String(self.lua.create_string("player")?)],
+                    )?;
+                }
+                _ => {}
+            }
+        }
+        if aura_changed {
+            let update = self.lua.create_table()?;
+            update.set("isFullUpdate", true)?;
+            self.fire(
+                "UNIT_AURA",
+                vec![
+                    Value::String(self.lua.create_string(token)?),
+                    Value::Table(update),
+                ],
+            )?;
+        }
         Ok(())
     }
     pub fn set_money(&self, copper: u64) -> SimResult<()> {
@@ -91,7 +125,8 @@ __selu_world_units = {}; __selu_world_money = 0; __selu_world_bags = {}
 local units = __selu_world_units
 function UnitExists(u) return units[u] ~= nil end
 function UnitName(u) return units[u] and units[u].name end
-function UnitClass(u) local c = units[u] and units[u].class; return c, c end
+local classes={WARRIOR={'Warrior',1},PALADIN={'Paladin',2},HUNTER={'Hunter',3},ROGUE={'Rogue',4},PRIEST={'Priest',5},DEATHKNIGHT={'Death Knight',6},SHAMAN={'Shaman',7},MAGE={'Mage',8},WARLOCK={'Warlock',9},MONK={'Monk',10},DRUID={'Druid',11},DEMONHUNTER={'Demon Hunter',12},EVOKER={'Evoker',13}}
+function UnitClass(u) local c=units[u] and units[u].class; local info=classes[c]; if info then return info[1],c,info[2] end end
 function UnitLevel(u) return units[u] and units[u].level or 0 end
 function UnitHealth(u) return units[u] and units[u].health or 0 end
 function UnitHealthMax(u) return units[u] and units[u].max_health or 0 end
@@ -106,7 +141,7 @@ local randomState = 1
 function math.randomseed(seed) randomState=math.floor(seed)%2147483647; if randomState==0 then randomState=1 end end
 function math.random(a,b)
  randomState=(randomState*16807)%2147483647
- local n=(randomState-1)/2147483646
+ local n=(randomState-1)/2147483647
  if a==nil then return n end
  if b==nil then b=a; a=1 end
  assert(a<=b, 'interval is empty'); return a+math.floor(n*(b-a+1))
@@ -125,6 +160,19 @@ function date(format, timestamp)
  if format=='*t' or format=='!*t' then return v end
  local fields={Y=string.format('%04d',y),m=string.format('%02d',m),d=string.format('%02d',v.day),H=string.format('%02d',v.hour),M=string.format('%02d',v.min),S=string.format('%02d',v.sec),['%']='%'}
  return (format or '%Y-%m-%d %H:%M:%S'):gsub('^!',''):gsub('%%(.)',function(k) assert(fields[k], 'unsupported date format'); return fields[k] end)
+end
+os = {time=time,date=date,clock=GetTime,difftime=function(a,b)return a-b end}
+-- No host filesystem, environment, process or native-module escape paths.
+io=nil; package=nil; require=nil; loadfile=nil; dofile=nil
+local native_tostring = tostring
+function tostring(value)
+ local kind=type(value)
+ if kind=='function' or kind=='thread' then return kind end
+ if kind=='table' then
+  local mt=getmetatable(value)
+  if type(mt)~='table' or not mt.__tostring then return 'table' end
+ end
+ return native_tostring(value)
 end
 "#).exec()
 }
