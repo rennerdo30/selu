@@ -77,6 +77,7 @@ pub fn check_program_with_options(
 ) -> Checked {
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
+        binding_statements: bindings::module_statements(program),
         module: ModuleBindings::default(),
         manifest,
         secret_capable: restrictions::has_secrets(manifest),
@@ -154,6 +155,7 @@ pub fn check_module_targets_with_options(
     let classes = classes::ClassContext::from_imports(&imports);
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
+        binding_statements: bindings::module_statements(program),
         module: imports,
         manifest,
         secret_capable: restrictions::has_secrets(manifest),
@@ -241,6 +243,7 @@ struct Scope {
 type Narrowings = Vec<(String, Type)>;
 
 struct Ctx<'a> {
+    binding_statements: std::collections::HashSet<selu_syntax::ExprId>,
     secret_capable: bool,
     protected_functions: Vec<Type>,
     protected_methods: bool,

@@ -114,3 +114,55 @@ fn project_layouts_names_and_simulator_loader() {
         fs::remove_file(root.join("src/other.selu")).unwrap();
     }
 }
+
+#[test]
+fn generated_public_names_cannot_be_shadowed() {
+    for declaration in [
+        "function Demo_A_Binding() {}",
+        "const BINDING_NAME_Demo_A = \"stolen\";",
+        "let BINDING_HEADER_Demo_A = \"stolen\";",
+    ] {
+        for source in [
+            format!("{declaration} keybinding(\"Demo_A\", \"Action\", () => {{}}, \"Demo\");"),
+            format!("keybinding(\"Demo_A\", \"Action\", () => {{}}, \"Demo\"); {declaration}"),
+        ] {
+            assert!(
+                common::codes(&source).iter().any(|c| c == "SELU0667"),
+                "{source}"
+            );
+        }
+    }
+}
+#[test]
+fn declarations_must_be_module_statements() {
+    for source in [
+        r#"function setup() { keybinding("Demo_A", "Action", () => {}); }"#,
+        r#"on PLAYER_LOGIN() { keybinding("Demo_A", "Action", () => {}); }"#,
+        r#"if (false) { keybinding("Demo_A", "Action", () => {}); }"#,
+        r#"{ keybinding("Demo_A", "Action", () => {}); }"#,
+        r#"const ignored = keybinding("Demo_A", "Action", () => {});"#,
+    ] {
+        assert!(
+            common::codes(source).iter().any(|c| c == "SELU0668"),
+            "{source}"
+        );
+    }
+}
+#[test]
+fn named_labels_headers_and_callbacks_work_from_another_chunk() {
+    let lua = common::compile(
+        r#"
+        type Label = string;
+        type Header = Label;
+        type Action = () => void;
+        const label: Label = "Action";
+        const header: Header = "Demo";
+        const action: Action = () => { print("pressed"); };
+        keybinding("Demo_A", label, action, header);
+    "#,
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("main.lua".into(), lua), ("input.lua".into(), "assert(BINDING_NAME_Demo_A == \"Action\"); assert(BINDING_HEADER_Demo_A == \"Demo\"); Demo_A_Binding()".into())]).unwrap();
+    assert_eq!(sim.prints(), ["pressed"]);
+    assert!(common::codes(r#"type Action = (n: number) => void; const action: Action = (n: number) => {}; keybinding("Demo_A", "Action", action);"#).iter().any(|c| c == "SELU0664"));
+}

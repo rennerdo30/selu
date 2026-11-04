@@ -30,11 +30,13 @@ its text lives in the header global. Labels and headers accept existing `L`
 templates and participate in locale key collection and the existing runtime
 translation table. They are evaluated at registration time.
 
-Declare bindings during module initialization, unconditionally, so every XML
+Bindings must be direct top-level module statements (SELU0668), so every XML
 entry has a registered callback before input begins. Binding callbacks close over
 ordinary module locals. These names are public client entry points: do not reuse
-them for your own globals. Bindings do not assign default keys or bypass secure
-client restrictions.
+them for your own declarations. Colliding source names are rejected (SELU0667),
+including declarations later in the module. Named types for labels, headers and
+callbacks are resolved to their underlying shapes. Bindings do not assign default
+keys or bypass secure client restrictions.
 
 The simulator does not model keyboard binding dispatch. Its TOC loader continues
 to load the Lua while ignoring the adjacent unlisted Bindings.xml. Tests can
