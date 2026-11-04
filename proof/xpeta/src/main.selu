@@ -1,0 +1,256 @@
+// Pilot of Modules/XPBarETA.lua at df793af. Standalone placement only.
+// Separate proof storage deliberately leaves the owner's database untouched.
+type Sample = { t: number, xp: number };
+saved settings = { enabled: true, x: 0, y: 64 };
+saved perCharacter history = { level: -1, samples: [{ t: 0, xp: 0 }] };
+
+// Core's numeric boundary rewritten as typed functions, including the
+// arithmetic usability probe: availability alone does not imply readable XP.
+function readXP(): number ? {
+  try {
+    return UnitXP("player") + 0;
+  } catch (e) {
+    return null;
+  }
+}
+
+function readMaximum() : number ? {
+  try {
+    return UnitXPMax("player") + 0;
+  } catch (e) {
+    return null;
+  }
+}
+
+function eligible() : boolean {
+  if (has(IsXPUserDisabled) && IsXPUserDisabled()) {
+    return false;
+  }
+  return (readMaximum() ?? 0) > 0;
+}
+
+function duration(seconds: number): string {
+  if (seconds < 60) {
+    return "<1m";
+  }
+  const total = Math.floor(seconds / 60);
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  if (hours > 0) {
+    return `~${hours}h ${minutes}m`;
+  }
+  return `~${minutes}m`;
+}
+
+function emptySamples(): Sample[] {
+  const result: Sample[] = [];
+  return result;
+}
+
+class RateWindow {
+  samples: Sample[] = emptySamples();
+  loaded = false;
+  warned = false;
+
+  prune(now: number) {
+    while (this.samples.length > 0 && now - this.samples[0].t > 900) {
+      this.samples.removeAt(0);
+    }
+  }
+
+  save() {
+    const offset = time() - GetTime();
+    const savedSamples: Sample[] = [];
+    for (const sample of this.samples) {
+      savedSamples.push({ t: sample.t + offset, xp: sample.xp });
+    }
+    history.level = UnitLevel("player");
+    history.samples = savedSamples;
+  }
+
+  load() {
+    if (this.loaded) {
+      return;
+    }
+    this.loaded = true;
+    const old = history.samples;
+    if (history.level != UnitLevel("player") || old.length == 0) {
+      return;
+    }
+    const newest = old[old.length - 1];
+    const xp = readXP();
+    if (time() - newest.t > 900 || xp == null || xp < newest.xp) {
+      return;
+    }
+    const offset = time() - GetTime();
+    this.samples = emptySamples();
+    for (const sample of old) {
+      this.samples.push({ t: sample.t - offset, xp: sample.xp });
+    }
+    this.prune(GetTime());
+  }
+
+  record() {
+    if (!eligible()) {
+      return;
+    }
+    const xp = readXP();
+    if (xp == null) {
+      if (!this.warned) {
+        print("xpeta: UnitXP cannot be read");
+        this.warned = true;
+      }
+      return;
+    }
+    const now = GetTime();
+    if (this.samples.length > 0 && xp < this.samples[this.samples.length - 1].xp) {
+      this.samples = emptySamples();
+    }
+    if (this.samples.length > 0) {
+      const last = this.samples[this.samples.length - 1];
+      if (xp == last.xp && now - last.t < 5) {
+        last.xp = xp;
+        this.save();
+        return;
+      }
+    }
+    this.samples.push({ t: now, xp: xp });
+    this.prune(now);
+    this.save();
+  }
+
+  text(): string {
+    if (!eligible()) {
+      return "";
+    }
+    this.prune(GetTime());
+    if (this.samples.length < 2) {
+      return "";
+    }
+    const first = this.samples[0];
+    const last = this.samples[this.samples.length - 1];
+    const span = last.t - first.t;
+    const gained = last.xp - first.xp;
+    if (span < 30 || gained <= 0) {
+      return "";
+    }
+    const xp = readXP();
+    const maximum = readMaximum();
+    if (xp == null || maximum == null) {
+      return "";
+    }
+    const remaining = maximum - xp;
+    if (remaining <= 0) {
+      return "";
+    }
+    const seconds = remaining / (gained / span);
+    if (seconds <= 0 || seconds != seconds) {
+      return "";
+    }
+    let gains = 0;
+    for (let i = 1; i < this.samples.length; i += 1) {
+      if (this.samples[i].xp > this.samples[i - 1].xp) {
+        gains += 1;
+      }
+    }
+    if (gains == 0) {
+      return "";
+    }
+    const kills = Math.ceil(remaining / (gained / gains));
+    if (GetLocale() == "deDE") {
+      return `${duration(seconds)} bis zum Level (~${kills} Kills)`;
+    }
+    return `${duration(seconds)} to level (~${kills} kills)`;
+  }
+}
+
+const rate = new RateWindow();
+const panel = CreateFrame("Frame", "XPETAProofPanel", UIParent);
+panel.SetSize(220, 19);
+panel.SetFrameStrata("HIGH");
+panel.SetMovable(true);
+panel.SetClampedToScreen(true);
+panel.RegisterForDrag("LeftButton");
+const label = panel.CreateFontString("XPETAProofText", "OVERLAY", "GameFontHighlightSmall");
+label.SetPoint("CENTER", panel, "CENTER", 0, 0);
+label.SetTextColor(0.20, 1, 0.60);
+panel.Hide();
+
+function position() {
+  panel.ClearAllPoints();
+  panel.SetPoint("BOTTOM", UIParent, "BOTTOM", settings.x, settings.y);
+}
+
+hookScript(panel, "OnDragStart", () => {
+  panel.StartMoving();
+});
+
+hookScript(panel, "OnDragStop", () => {
+  panel.StopMovingOrSizing();
+  const [rawX] = panel.GetCenter();
+  const x = readable(rawX);
+  const [rawParentX] = UIParent.GetCenter();
+  const parentX = readable(rawParentX);
+  const bottom = readable(panel.GetBottom());
+  const parentBottom = readable(UIParent.GetBottom());
+  if (x != null && parentX != null && bottom != null && parentBottom != null) {
+    settings.x = x - parentX;
+    settings.y = bottom - parentBottom;
+    position();
+  }
+});
+
+function refresh() {
+  const text = settings.enabled ? rate.text() : "";
+  label.SetText(text);
+  const visible = text != "";
+  panel.EnableMouse(visible);
+  panel.SetShown(visible);
+  if (visible) {
+    panel.SetWidth(Math.max(120, Math.ceil(label.GetStringWidth() ?? 0) + 18));
+  }
+}
+
+function update() {
+  rate.record();
+  refresh();
+}
+
+on PLAYER_LOGIN() {
+  position();
+  rate.load();
+  update();
+  C_Timer.NewTicker(15, (_ticker: () => void) => {
+    update();
+  });
+}
+
+on PLAYER_ENTERING_WORLD() {
+  rate.load();
+  update();
+}
+
+on PLAYER_XP_UPDATE() {
+  update();
+}
+
+on PLAYER_LEVEL_UP() {
+  rate.samples = emptySamples();
+  rate.save();
+  update();
+}
+
+// The original exposes positioning through Options; a proof command makes
+// the same reset reachable without porting the unrelated Options module.
+function configure(args: string) {
+  if (args == "reset") {
+    settings.x = 0;
+    settings.y = 64;
+    position();
+  } else {
+    settings.enabled = !settings.enabled;
+    refresh();
+  }
+}
+
+command("/xpeta", configure);
