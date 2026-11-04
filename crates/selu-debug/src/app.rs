@@ -13,8 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, SystemTime};
 
+use crate::theme::{caption, icon, icon_font, icon_text, palette};
 use eframe::egui::{
-    self, Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, StrokeKind, Vec2,
+    self, Align, Align2, Color32, FontId, Key, Modifiers, Pos2, Rect as ERect, Sense, Stroke,
+    StrokeKind, Vec2,
 };
 
 /// What `selu-studio` was started with.
@@ -49,9 +51,9 @@ enum Tab {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum View {
-    Code,
-    Game,
+enum Side {
+    Explorer,
+    Frames,
 }
 
 /// Where a screenshot was saved, or why it couldn't be.
@@ -86,7 +88,11 @@ pub struct Studio {
     /// session has settled, then close (for checks without a person).
     auto_shot: Option<(PathBuf, u32)>,
     editor: crate::editor::Editor,
-    view: View,
+    side: Side,
+    side_open: bool,
+    panel_open: bool,
+    preview_open: bool,
+    shortcuts_open: bool,
     /// The window was asked to close with unsaved edits.
     confirm_close: bool,
 }
@@ -124,11 +130,15 @@ impl Studio {
             show_hidden: false,
             shots: channel(),
             auto_shot: std::env::var_os("SELU_STUDIO_SCREENSHOT").map(|p| (PathBuf::from(p), 20)),
-            view: if opts_project.is_some() {
-                View::Code
+            side: if opts_project.is_some() {
+                Side::Explorer
             } else {
-                View::Game
+                Side::Frames
             },
+            side_open: true,
+            panel_open: true,
+            preview_open: true,
+            shortcuts_open: false,
             editor: crate::editor::Editor::new(opts_project, opts_selu, opts_target, ctx),
             confirm_close: false,
         };
@@ -415,40 +425,140 @@ impl eframe::App for Studio {
         for m in std::mem::take(&mut self.editor.messages) {
             self.line(LineKind::Build, m);
         }
+        self.global_shortcuts(&ctx);
         self.close_guard(&ctx);
-
-        egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
-        egui::Panel::bottom("bottom")
-            .resizable(true)
-            .default_size(200.0)
-            .show(ui, |ui| self.bottom(ui));
-        egui::Panel::left("side")
-            .resizable(true)
-            .default_size(240.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    egui::CollapsingHeader::new("Files")
-                        .default_open(true)
-                        .show(ui, |ui| self.editor.ui_files(ui));
-                    egui::CollapsingHeader::new("Frames")
-                        .default_open(true)
-                        .show(ui, |ui| self.tree(ui));
-                });
-            });
-        if self.view == View::Game {
-            egui::Panel::right("inspector")
-                .resizable(true)
-                .default_size(280.0)
-                .show(ui, |ui| self.inspector(ui));
+        self.editor.ui_quick_open(&ctx);
+        if self.shortcuts_open {
+            self.shortcuts_window(&ctx);
         }
-        egui::CentralPanel::default().show(ui, |ui| match self.view {
-            View::Code => self.editor.ui_editor(ui),
-            View::Game => self.screen(ui),
-        });
+
+        let has_project = self.editor.has_project();
+        egui::Panel::top("titlebar")
+            .exact_size(38.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette::SIDEBAR)
+                    .inner_margin(egui::Margin::symmetric(8, 0)),
+            )
+            .show_separator_line(false)
+            .show(ui, |ui| self.title_bar(ui));
+        egui::Panel::bottom("statusbar")
+            .exact_size(24.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette::ACCENT_SOFT)
+                    .inner_margin(egui::Margin::symmetric(8, 0)),
+            )
+            .show_separator_line(false)
+            .show(ui, |ui| self.status_bar(ui));
+        egui::Panel::left("activity")
+            .exact_size(46.0)
+            .resizable(false)
+            .frame(egui::Frame::new().fill(palette::BG))
+            .show_separator_line(false)
+            .show(ui, |ui| self.activity_bar(ui));
+        if self.side_open {
+            egui::Panel::left("sidebar")
+                .resizable(true)
+                .default_size(250.0)
+                .size_range(160.0..=480.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(palette::SIDEBAR)
+                        .inner_margin(egui::Margin::symmetric(8, 10)),
+                )
+                .show(ui, |ui| match self.side {
+                    Side::Explorer => self.editor.ui_explorer(ui),
+                    Side::Frames => {
+                        ui.horizontal(|ui| caption(ui, "Frames"));
+                        ui.add_space(4.0);
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| self.tree(ui));
+                    }
+                });
+        }
+        if self.panel_open {
+            egui::Panel::bottom("panel")
+                .resizable(true)
+                .default_size(210.0)
+                .size_range(90.0..=600.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(palette::PANEL)
+                        .inner_margin(egui::Margin::symmetric(12, 6)),
+                )
+                .show(ui, |ui| self.bottom(ui));
+        }
+        if has_project && self.preview_open {
+            egui::Panel::right("preview")
+                .resizable(true)
+                .default_size(560.0)
+                .size_range(320.0..=1200.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(palette::PANEL)
+                        .inner_margin(egui::Margin::symmetric(10, 8)),
+                )
+                .show(ui, |ui| self.preview(ui));
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(palette::BG))
+            .show(ui, |ui| {
+                if has_project {
+                    self.editor.ui_editor(ui);
+                } else {
+                    // No project: the game is the main view.
+                    egui::Panel::right("inspector")
+                        .resizable(true)
+                        .default_size(300.0)
+                        .frame(
+                            egui::Frame::new()
+                                .fill(palette::PANEL)
+                                .inner_margin(egui::Margin::symmetric(10, 8)),
+                        )
+                        .show(ui, |ui| self.inspector(ui));
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::new().fill(palette::BG).inner_margin(12))
+                        .show(ui, |ui| self.screen(ui));
+                }
+            });
     }
 }
 
 impl Studio {
+    fn global_shortcuts(&mut self, ctx: &egui::Context) {
+        self.editor.shortcuts(ctx);
+        let (run, reload, build, panel, side, preview) = ctx.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::NONE, Key::F5),
+                i.consume_key(Modifiers::COMMAND, Key::R),
+                i.consume_key(Modifiers::COMMAND, Key::B),
+                i.consume_key(Modifiers::COMMAND, Key::J),
+                i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::E),
+                i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::V),
+            )
+        });
+        if run {
+            self.playing = !self.playing;
+        }
+        if reload {
+            self.act(Command::Reload);
+        }
+        if build {
+            self.rebuild();
+        }
+        if panel {
+            self.panel_open = !self.panel_open;
+        }
+        if side {
+            self.side_open = !self.side_open;
+        }
+        if preview {
+            self.preview_open = !self.preview_open;
+        }
+    }
+
     /// Closing with unsaved edits asks first.
     fn close_guard(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested())
@@ -461,116 +571,408 @@ impl Studio {
         if !self.confirm_close {
             return;
         }
-        egui::Window::new("Unsaved changes")
+        egui::Modal::new(egui::Id::unique("unsaved")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.label(
+                egui::RichText::new("Save changes before closing?")
+                    .size(16.0)
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Your changes will be lost if you don't save them.")
+                    .color(palette::MUTED),
+            );
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("Save all").color(Color32::WHITE))
+                            .fill(palette::ACCENT),
+                    )
+                    .clicked()
+                {
+                    self.editor.save_all();
+                    self.confirm_close = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if ui.button("Don't save").clicked() {
+                    self.editor.open.clear();
+                    self.confirm_close = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if ui.button("Cancel").clicked() {
+                    self.confirm_close = false;
+                }
+            });
+        });
+    }
+
+    fn shortcuts_window(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        egui::Window::new("Keyboard shortcuts")
+            .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("Some files have unsaved changes.");
-                ui.horizontal(|ui| {
-                    if ui.button("Save all and close").clicked() {
+                egui::Grid::new("keys")
+                    .num_columns(2)
+                    .spacing([24.0, 6.0])
+                    .show(ui, |ui| {
+                        for (k, what) in [
+                            ("Ctrl+P", "Quick open a file"),
+                            ("Ctrl+S", "Save all, rebuild and /reload"),
+                            ("Ctrl+W", "Close the tab"),
+                            ("Ctrl+F", "Find in the file"),
+                            ("Ctrl+Space", "Complete a name"),
+                            ("Ctrl+= / Ctrl+- / Ctrl+0", "Zoom the code"),
+                            ("F5", "Run or pause the game clock"),
+                            ("Ctrl+R", "/reload the addon"),
+                            ("Ctrl+B", "Build"),
+                            ("Ctrl+J", "Show or hide the bottom panel"),
+                            ("Ctrl+Shift+E", "Show or hide the side bar"),
+                            ("Ctrl+Shift+V", "Show or hide the game preview"),
+                        ] {
+                            ui.label(egui::RichText::new(k).monospace().color(palette::TEXT));
+                            ui.label(egui::RichText::new(what).color(palette::MUTED));
+                            ui.end_row();
+                        }
+                    });
+            });
+        if !open {
+            self.shortcuts_open = false;
+        }
+    }
+
+    fn title_bar(&mut self, ui: &mut egui::Ui) {
+        let rect = ui.max_rect();
+        ui.horizontal_centered(|ui| {
+            ui.label(icon_text(icon::CODE, 15.0).color(palette::ACCENT));
+            ui.add_space(2.0);
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui
+                        .add(egui::Button::new("Quick Open...").shortcut_text("Ctrl+P"))
+                        .clicked()
+                    {
+                        self.editor.open_quick_open();
+                    }
+                    ui.separator();
+                    if ui
+                        .add(egui::Button::new("Save All").shortcut_text("Ctrl+S"))
+                        .clicked()
+                    {
                         self.editor.save_all();
-                        self.confirm_close = false;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    if ui.button("Close without saving").clicked() {
-                        self.editor.open.clear();
-                        self.confirm_close = false;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    if ui
+                        .add(egui::Button::new("Close Tab").shortcut_text("Ctrl+W"))
+                        .clicked()
+                    {
+                        let active = self.editor.active_index();
+                        self.editor.close_tab(active);
                     }
-                    if ui.button("Cancel").clicked() {
-                        self.confirm_close = false;
+                    ui.separator();
+                    if ui.button("Exit").clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add(egui::Button::new("Find").shortcut_text("Ctrl+F"))
+                        .clicked()
+                    {
+                        self.editor.open_find();
+                    }
+                    ui.label(
+                        egui::RichText::new("Undo Ctrl+Z, Redo Ctrl+Y")
+                            .small()
+                            .color(palette::FAINT),
+                    );
+                });
+                ui.menu_button("View", |ui| {
+                    ui.checkbox(&mut self.side_open, "Side Bar");
+                    ui.checkbox(&mut self.panel_open, "Bottom Panel");
+                    if self.editor.has_project() {
+                        ui.checkbox(&mut self.preview_open, "Game Preview");
+                    }
+                    ui.separator();
+                    if ui
+                        .add(egui::Button::new("Zoom In").shortcut_text("Ctrl+="))
+                        .clicked()
+                    {
+                        self.editor.zoom(1.0);
+                    }
+                    if ui
+                        .add(egui::Button::new("Zoom Out").shortcut_text("Ctrl+-"))
+                        .clicked()
+                    {
+                        self.editor.zoom(-1.0);
+                    }
+                });
+                ui.menu_button("Run", |ui| {
+                    let label = if self.playing { "Pause" } else { "Run" };
+                    if ui
+                        .add(egui::Button::new(label).shortcut_text("F5"))
+                        .clicked()
+                    {
+                        self.playing = !self.playing;
+                    }
+                    if ui
+                        .add(egui::Button::new("/reload").shortcut_text("Ctrl+R"))
+                        .clicked()
+                    {
+                        self.act(Command::Reload);
+                    }
+                    let can_build = self.opts.project.is_some() && self.opts.selu.is_some();
+                    if ui
+                        .add_enabled(
+                            can_build,
+                            egui::Button::new("Build").shortcut_text("Ctrl+B"),
+                        )
+                        .clicked()
+                    {
+                        self.rebuild();
+                    }
+                    ui.add_enabled(
+                        can_build,
+                        egui::Checkbox::new(&mut self.auto_rebuild, "Rebuild on Save"),
+                    );
+                    ui.separator();
+                    for (label, seconds) in [
+                        ("Advance 0.1 s", 0.1),
+                        ("Advance 1 s", 1.0),
+                        ("Advance 10 s", 10.0),
+                    ] {
+                        if ui.button(label).clicked() {
+                            self.act(Command::AdvanceTime { seconds });
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Save Screenshot").clicked() {
+                        let path = self.screenshot_path();
+                        self.screenshot(ui.ctx(), path);
+                    }
+                });
+                ui.menu_button("Help", |ui| {
+                    if ui.button("Keyboard Shortcuts").clicked() {
+                        self.shortcuts_open = true;
                     }
                 });
             });
+        });
+        // Centred run controls.
+        let center = rect.center();
+        let controls = egui::Rect::from_center_size(center, egui::vec2(300.0, 28.0));
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(controls)
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
+        child.spacing_mut().item_spacing.x = 4.0;
+        let (icon, tip) = if self.playing {
+            (icon::PAUSE, "Pause (F5)")
+        } else {
+            (icon::PLAY, "Run the game clock (F5)")
+        };
+        let play = egui::Button::new(icon_text(icon, 13.0).color(if self.playing {
+            palette::WARNING
+        } else {
+            palette::OK
+        }))
+        .min_size(egui::vec2(32.0, 26.0));
+        if child.add(play).on_hover_text(tip).clicked() {
+            self.playing = !self.playing;
+        }
+        if child
+            .add(egui::Button::new(icon_text(icon::REFRESH, 13.0)).min_size(egui::vec2(32.0, 26.0)))
+            .on_hover_text("/reload (Ctrl+R)")
+            .clicked()
+        {
+            self.act(Command::Reload);
+        }
+        let can_build = self.opts.project.is_some() && self.opts.selu.is_some();
+        if child
+            .add_enabled(
+                can_build,
+                egui::Button::new(icon_text(icon::BUILD, 13.0)).min_size(egui::vec2(32.0, 26.0)),
+            )
+            .on_hover_text("Build (Ctrl+B)")
+            .clicked()
+        {
+            self.rebuild();
+        }
+        let time = self.snapshot.as_ref().map_or(0.0, |s| s.time);
+        child.add_space(6.0);
+        child.label(
+            egui::RichText::new(format!("{time:.2} s"))
+                .monospace()
+                .color(palette::MUTED),
+        );
+        if self.in_flight > 0 {
+            child.spinner();
+        }
+        // Project name on the right.
+        let title = format!("{} — Selu Studio", self.editor.project_name());
+        ui.painter().text(
+            egui::pos2(rect.right() - 10.0, rect.center().y),
+            Align2::RIGHT_CENTER,
+            title,
+            FontId::proportional(12.5),
+            palette::FAINT,
+        );
     }
 
-    fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.strong("Selu Studio");
-            ui.separator();
-            ui.selectable_value(&mut self.view, View::Code, "Code");
-            ui.selectable_value(&mut self.view, View::Game, "Game");
-            ui.separator();
-            if self.editor.has_project() {
-                let dirty = self.editor.any_dirty();
-                if ui
-                    .add_enabled(dirty, egui::Button::new("Save"))
-                    .on_hover_text("save all files (Ctrl+S); rebuilds and reloads the addon")
-                    .clicked()
-                {
-                    self.editor.save_all();
+    fn activity_bar(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.vertical_centered(|ui| {
+            for (side, icon, tip) in [
+                (Side::Explorer, icon::FILES, "Explorer (Ctrl+Shift+E)"),
+                (Side::Frames, icon::FRAMES, "Frames"),
+            ] {
+                let active = self.side_open && self.side == side;
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(46.0, 42.0), Sense::click());
+                if active {
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(rect.left_top(), egui::vec2(2.0, rect.height())),
+                        0.0,
+                        palette::ACCENT,
+                    );
                 }
-                let (status, col) = self.editor.status();
-                if ui
-                    .add(
-                        egui::Label::new(egui::RichText::new(status).color(col))
-                            .sense(Sense::click()),
-                    )
-                    .on_hover_text(self.editor.api_status.clone())
-                    .clicked()
-                {
-                    self.tab = Tab::Problems;
-                }
-                ui.separator();
-            }
-            if ui.button("/reload").clicked() {
-                self.act(Command::Reload);
-            }
-            let can_build = self.opts.project.is_some() && self.opts.selu.is_some();
-            if ui
-                .add_enabled(can_build, egui::Button::new("Rebuild"))
-                .on_hover_text("build the project and /reload")
-                .clicked()
-            {
-                self.rebuild();
-            }
-            ui.add_enabled(
-                can_build,
-                egui::Checkbox::new(&mut self.auto_rebuild, "rebuild on save"),
-            );
-            ui.separator();
-            let play = if self.playing { "Pause" } else { "Play" };
-            if ui
-                .button(play)
-                .on_hover_text("run simulated time")
-                .clicked()
-            {
-                self.playing = !self.playing;
-            }
-            egui::ComboBox::from_id_salt("speed")
-                .selected_text(format!("{}x", self.speed))
-                .width(60.0)
-                .show_ui(ui, |ui| {
-                    for s in [0.25, 0.5, 1.0, 2.0, 5.0] {
-                        ui.selectable_value(&mut self.speed, s, format!("{s}x"));
+                let color = if active || resp.hovered() {
+                    Color32::WHITE
+                } else {
+                    palette::FAINT
+                };
+                ui.painter().text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    icon,
+                    icon_font(19.0),
+                    color,
+                );
+                if resp.on_hover_text(tip).clicked() {
+                    if self.side == side {
+                        self.side_open = !self.side_open;
+                    } else {
+                        self.side = side;
+                        self.side_open = true;
                     }
-                });
-            for (label, seconds) in [("+0.1 s", 0.1), ("+1 s", 1.0), ("+10 s", 10.0)] {
-                if ui.button(label).clicked() {
-                    self.act(Command::AdvanceTime { seconds });
                 }
-            }
-            if ui
-                .button("Screenshot")
-                .on_hover_text("save the window as a PNG")
-                .clicked()
-            {
-                let path = self.screenshot_path();
-                self.screenshot(ui.ctx(), path);
-            }
-            ui.separator();
-            if let Some(s) = &self.snapshot {
-                ui.label(format!("time {:.2} s", s.time));
-            }
-            ui.label(format!("session {}", self.generation));
-            if let Some(t) = &self.opts.target {
-                ui.label(t);
-            }
-            if self.in_flight > 0 {
-                ui.spinner();
             }
         });
+        // Preview toggle at the bottom.
+        if self.editor.has_project() {
+            let bottom = ui.max_rect().bottom();
+            let rect = egui::Rect::from_center_size(
+                egui::pos2(ui.max_rect().center().x, bottom - 28.0),
+                egui::vec2(46.0, 42.0),
+            );
+            let resp = ui.interact(rect, egui::Id::unique("preview-toggle"), Sense::click());
+            let color = if self.preview_open || resp.hovered() {
+                Color32::WHITE
+            } else {
+                palette::FAINT
+            };
+            ui.painter().text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                icon::PREVIEW,
+                icon_font(18.0),
+                color,
+            );
+            if resp.on_hover_text("Game preview (Ctrl+Shift+V)").clicked() {
+                self.preview_open = !self.preview_open;
+            }
+        }
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            let small = |t: String| {
+                egui::RichText::new(t)
+                    .size(12.0)
+                    .color(Color32::from_rgb(0xe6, 0xe0, 0xff))
+            };
+            if let Some(t) = self
+                .opts
+                .target
+                .clone()
+                .or_else(|| self.editor.target_label())
+            {
+                ui.label(small(format!("◎ {t}")));
+            }
+            if self.editor.has_project() {
+                let (e, w) = self.editor.counts();
+                let (status, _) = self.editor.status();
+                let text = if status == "checking..." {
+                    "checking...".to_string()
+                } else {
+                    format!("⊗ {e}   ⚠ {w}")
+                };
+                if ui
+                    .add(egui::Label::new(small(text)).sense(Sense::click()))
+                    .on_hover_text("Problems")
+                    .clicked()
+                {
+                    self.panel_open = true;
+                    self.tab = Tab::Problems;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                ui.label(small(format!("session {}", self.generation)));
+                if let Some(s) = &self.snapshot {
+                    ui.label(small(format!(
+                        "game {:.2} s{}",
+                        s.time,
+                        if self.playing { " ▶" } else { "" }
+                    )));
+                }
+                if self.editor.active_rel().is_some() {
+                    ui.label(small("Selu".into()));
+                    ui.label(small("UTF-8".into()));
+                    if let Some((l, c)) = self.editor.cursor_line_col() {
+                        ui.label(small(format!("Ln {l}, Col {c}")));
+                    }
+                }
+            });
+        });
+    }
+
+    fn preview(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            caption(ui, "Game preview");
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                for (label, seconds) in [("+10s", 10.0), ("+1s", 1.0)] {
+                    if ui
+                        .small_button(label)
+                        .on_hover_text("Advance the game clock")
+                        .clicked()
+                    {
+                        self.act(Command::AdvanceTime { seconds });
+                    }
+                }
+                if ui
+                    .small_button(icon_text(icon::CAMERA, 12.0))
+                    .on_hover_text("Save a screenshot")
+                    .clicked()
+                {
+                    let path = self.screenshot_path();
+                    self.screenshot(ui.ctx(), path);
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let screen_h = (ui.available_width() * 9.0 / 16.0).min(ui.available_height() * 0.6);
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), screen_h), Sense::hover());
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        self.screen(&mut child);
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.inspector(ui));
     }
 
     fn tree(&mut self, ui: &mut egui::Ui) {
@@ -650,7 +1052,8 @@ impl Studio {
     }
 
     fn inspector(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Inspector");
+        caption(ui, "Inspector");
+        ui.add_space(4.0);
         let Some(r) = self
             .snapshot
             .as_ref()
@@ -842,12 +1245,79 @@ impl Studio {
 
     fn bottom(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let n = self.editor.problems.len();
-            ui.selectable_value(&mut self.tab, Tab::Problems, format!("Problems ({n})"));
-            ui.selectable_value(&mut self.tab, Tab::Console, "Console");
-            ui.selectable_value(&mut self.tab, Tab::Events, "Events");
+            ui.spacing_mut().item_spacing.x = 18.0;
+            let (e, w) = self.editor.counts();
+            let tabs = [
+                (Tab::Problems, "PROBLEMS", e + w),
+                (Tab::Console, "CONSOLE", 0),
+                (Tab::Events, "EVENTS", 0),
+            ];
+            for (tab, label, count) in tabs {
+                let active = self.tab == tab;
+                let text = egui::RichText::new(label)
+                    .size(11.5)
+                    .strong()
+                    .color(if active {
+                        palette::TEXT
+                    } else {
+                        palette::MUTED
+                    });
+                let resp = ui.add(egui::Label::new(text).sense(Sense::click()));
+                if count > 0 {
+                    let badge = format!("{count}");
+                    let g = ui.painter().layout_no_wrap(
+                        badge,
+                        FontId::proportional(10.5),
+                        Color32::WHITE,
+                    );
+                    let r = egui::Rect::from_min_size(
+                        resp.rect.right_center() + Vec2::new(5.0, -8.0),
+                        egui::vec2(g.size().x + 10.0, 16.0),
+                    );
+                    ui.painter().rect_filled(
+                        r,
+                        8.0,
+                        if e > 0 {
+                            palette::ERROR
+                        } else {
+                            palette::WARNING
+                        },
+                    );
+                    ui.painter()
+                        .galley(r.center() - g.size() / 2.0, g, Color32::WHITE);
+                    ui.add_space(20.0);
+                }
+                if active {
+                    let r = resp.rect;
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(r.left(), r.bottom() + 3.0),
+                            egui::pos2(r.right(), r.bottom() + 5.0),
+                        ),
+                        0.0,
+                        palette::ACCENT,
+                    );
+                }
+                if resp.clicked() {
+                    self.tab = tab;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(egui::Button::new("×").frame(false))
+                    .on_hover_text("Hide the panel (Ctrl+J)")
+                    .clicked()
+                {
+                    self.panel_open = false;
+                }
+                if self.tab == Tab::Console
+                    && ui.add(egui::Button::new("Clear").frame(false)).clicked()
+                {
+                    self.console.clear();
+                }
+            });
         });
-        ui.separator();
+        ui.add_space(6.0);
         match self.tab {
             Tab::Problems => self.editor.ui_problems(ui),
             Tab::Console => self.console_tab(ui),

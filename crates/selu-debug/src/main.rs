@@ -13,6 +13,7 @@
 mod app;
 mod editor;
 mod png;
+mod theme;
 
 use selu_debug::{Command, Update, Worker};
 use selu_sim::SessionConfig;
@@ -75,13 +76,17 @@ fn main() -> ExitCode {
         let native = eframe::NativeOptions {
             viewport: eframe::egui::ViewportBuilder::default()
                 .with_title("Selu Studio")
-                .with_inner_size([1440.0, 900.0]),
+                .with_inner_size([1600.0, 980.0])
+                .with_min_inner_size([900.0, 560.0]),
             ..Default::default()
         };
         return match eframe::run_native(
             "Selu Studio",
             native,
-            Box::new(|cc| Ok(Box::new(app::Studio::new(options, &cc.egui_ctx)))),
+            Box::new(|cc| {
+                theme::install(&cc.egui_ctx);
+                Ok(Box::new(app::Studio::new(options, &cc.egui_ctx)))
+            }),
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
