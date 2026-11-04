@@ -75,6 +75,29 @@ fn run_example(example: &Path) -> Vec<String> {
             "{}",
             reference.display()
         );
+        let map_path = example
+            .join("dist/.selu")
+            .join(&name)
+            .join(format!("{line}.map"));
+        let map = selu_sourcemap::SourceMap::from_json(&std::fs::read_to_string(map_path).unwrap())
+            .unwrap();
+        assert!(!toc.contains(".map"));
+        let input = std::fs::read_to_string(example.join(&map.sources[0].path)).unwrap();
+        assert_eq!(map.sources[0].hash, selu_sourcemap::content_hash(&input));
+        for range in &map.ranges {
+            let generated = source.lines().nth(range.gen_start as usize - 1).unwrap();
+            assert!(!generated.trim().is_empty());
+            assert!(
+                input
+                    .lines()
+                    .nth(range.line as usize - 1)
+                    .is_some_and(|s| !s.trim().is_empty())
+            );
+            assert!(
+                map.generated_lines(&map.sources[0].path, range.line)
+                    .contains(&range.gen_start)
+            );
+        }
         files.push((line.to_string(), source));
     }
     let sim = Sim::new().unwrap();

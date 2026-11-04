@@ -1,0 +1,9 @@
+on PLAYER_LOGIN() {
+  const report = (label: string) => {
+    const show = () => {
+      print(label);
+    };
+    show();
+  };
+  report("Source maps keep callback lines");
+}

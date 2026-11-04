@@ -43,10 +43,10 @@ fn hello_builds_runs_and_prints_on_login() {
     let toc = std::fs::read_to_string(dist.join("Hello.toc")).unwrap();
     assert!(toc.contains("## Interface: 100000"), "{toc}");
     assert!(
-        !dist.join("main.lua.map.json").exists(),
+        !dist.join("main.lua.map").exists(),
         "source maps must stay out of the addon folder"
     );
-    assert!(example.join("dist/.selu/Hello/main.lua.map.json").exists());
+    assert!(example.join("dist/.selu/Hello/main.lua.map").exists());
 
     // Load in TOC order: the non-`##` lines of the .toc.
     let mut files = Vec::new();
@@ -75,7 +75,8 @@ fn hello_builds_runs_and_prints_on_login() {
 #[test]
 fn stubs_exit_nonzero_with_a_clear_message() {
     // `test` and `debug` are wired now (tests/commands.rs).
-    for cmd in ["probe"] {
+    {
+        let cmd = "probe";
         let output = Command::new(env!("CARGO_BIN_EXE_selu"))
             .arg(cmd)
             .output()

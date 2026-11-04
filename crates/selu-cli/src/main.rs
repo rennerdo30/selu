@@ -477,18 +477,23 @@ fn build(
         for (module, lowered) in compiled {
             let lua_name = format!("{}.lua", module.key);
             let output = out_dir.join(&lua_name);
-            let map = map_dir.join(format!("{lua_name}.map.json"));
+            let map = map_dir.join(format!("{lua_name}.map"));
             for path in [&output, &map] {
                 std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| {
                     eprintln!("selu: {e}");
                     ExitCode::FAILURE
                 })?;
             }
+            let source_map = lowered.source_map(
+                &lua_name,
+                &format!("src/{}.selu", module.key),
+                &module.source,
+            );
             std::fs::write(output, lowered.lua).map_err(|e| {
                 eprintln!("selu: {e}");
                 ExitCode::FAILURE
             })?;
-            std::fs::write(map, lowered.source_map.to_json()).map_err(|e| {
+            std::fs::write(map, source_map.to_json()).map_err(|e| {
                 eprintln!("selu: {e}");
                 ExitCode::FAILURE
             })?;

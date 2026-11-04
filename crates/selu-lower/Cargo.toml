@@ -11,3 +11,5 @@ selu-manifest = { path = "../selu-manifest" }
 selu-check = { path = "../selu-check" }
 serde.workspace = true
 serde_json.workspace = true
+
+selu-sourcemap = { path = "../selu-sourcemap" }

@@ -5,11 +5,7 @@
 //! a position in a `.selu` source. Lines that no range covers (the shared
 //! runtime, preludes, blank lines) are unmapped on purpose.
 //!
-//! Round 8 groundwork: the format, reader, writer, both lookups and
-//! [`map_lua_error`] are implemented and tested here. Package S3 makes the
-//! lowering and `selu build` emit this format (today the lowering writes its
-//! own simpler `dist/.selu/<Addon>/<file>.lua.map.json`, see
-//! `selu_lower::SourceMap`) and adds the end-to-end example tests.
+//! The lowering and CLI emit this format under `dist/.selu/<Addon>/`.
 
 use serde::{Deserialize, Serialize};
 
