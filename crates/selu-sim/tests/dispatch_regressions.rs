@@ -298,3 +298,8 @@ fn g_helpers_share_arena_state_and_secret_snapshot_markers() {
     assert_eq!(label.text.as_deref(), Some("<secret>"));
     assert!(label.rect.unwrap().width > 0.0);
 }
+#[test]
+fn timer_accounting_hooks_are_private() {
+    let s = Sim::new().unwrap();
+    s.eval("assert(rawget(_G,'__selu_sim_begin_callback')==nil);assert(rawget(_G,'__selu_sim_end_callback')==nil)").unwrap();
+}

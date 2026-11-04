@@ -50,7 +50,14 @@ pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
             Ok(())
         })?,
     )?;
-    lua.load(include_str!("timers.lua")).exec()
+    lua.load(include_str!("timers.lua")).exec()?;
+    // Timers retain private upvalues; addons must not be able to decrement
+    // the host's synchronous callback nesting counter.
+    lua.globals()
+        .raw_set("__selu_sim_begin_callback", mlua::Value::Nil)?;
+    lua.globals()
+        .raw_set("__selu_sim_end_callback", mlua::Value::Nil)?;
+    Ok(())
 }
 
 // Admission tolerance is one nanosecond, absolute, only at the advance endpoint.
