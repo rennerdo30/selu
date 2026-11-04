@@ -244,11 +244,10 @@ impl Ctx<'_> {
         }
         if method == "matchAll" && s.starts_with('^') {
             self.out.push(
-                err(
-                    "SELU0563",
-                    "matchAll cannot use a leading anchor.",
-                    text(&args[0]).unwrap().1,
-                )
+                err("SELU0563", "matchAll cannot use a leading anchor.", &{
+                    let sp = text(&args[0]).unwrap().1;
+                    Span::new(&sp.file, sp.start, sp.start + 1)
+                })
                 .with_help("remove ^ or use match"),
             );
         }

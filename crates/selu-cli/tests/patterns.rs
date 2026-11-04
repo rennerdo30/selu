@@ -136,6 +136,12 @@ on PLAYER_LOGIN() {
 }
 #[test]
 fn capture_limits_and_raw_tagged_templates() {
+    assert_eq!(
+        selu_syntax::parse("t.selu", r"const x = `\d${1}`;")
+            .unwrap_err()
+            .code,
+        "SELU0108"
+    );
     let good = format!("const x = luaPattern`{}`;", "()".repeat(32));
     assert!(codes(&good).is_empty());
     let bad = format!("const x = luaPattern`{}`;", "()".repeat(33));

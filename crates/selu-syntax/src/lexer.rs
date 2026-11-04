@@ -430,6 +430,7 @@ impl Lexer<'_> {
                         Tok::TemplateMiddle(s)
                     };
                     self.push(tok, start, self.i);
+                    self.out.last_mut().unwrap().template_error = invalid;
                     self.templates.push(0);
                     return Ok(());
                 }
