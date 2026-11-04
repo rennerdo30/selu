@@ -10,7 +10,6 @@ pub fn parse(file: &str, src: &str) -> Result<Program, Diagnostic> {
         pos: 0,
         file: file.to_string(),
         next_id: 0,
-        source: src.to_string(),
     };
     let mut stmts = Vec::new();
     while !p.at(&Tok::Eof) {
