@@ -78,6 +78,7 @@ pub fn create(
             .raw_get::<Option<Table>>("UIParent")
             .ok()
             .flatten()
+            .filter(|table| id(table).is_ok())
     });
     let pid = parent.as_ref().map(id).transpose()?;
     let name = name.map(|s| {
