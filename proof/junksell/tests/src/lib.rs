@@ -36,44 +36,59 @@ fn merchant_visit() {
 
 #[test]
 fn gap_reproductions() {
+    // Each gap from docs/proof/junksell.md with its current status. A closed
+    // gap must keep compiling on every real flavour; an open one must still
+    // fail, so the document can't drift from the compiler.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let manifests = selu_manifest::load_manifest_dir(&root.join("manifests")).unwrap();
-    for source in [
-        "try { print(1); } catch (e) { print(2); }",
-        "type Item = { id: number }; const x: Item = {id: 1};",
-        "function safe(x) { return typeof x == \"number\"; }",
-        "const [ok, value] = pcall(GetMoney);",
-        "const x = \"item:123\".match(\"item:(%d+)\");",
-        "const x = MerchantFrame; const y = NUM_TOTAL_EQUIPPED_BAG_SLOTS;",
-    ] {
+    // (source, open on these flavours; empty = closed everywhere)
+    let cases: [(&str, &[&str]); 7] = [
+        // Gap 1, open: `try` doesn't parse yet.
+        ("try { print(1); } catch (e) { print(2); }", &["*"]),
+        // Gaps 2 and 3, closed by package L.
+        ("type Item = { id: number }; const x: Item = {id: 1};", &[]),
+        ("function safe(x) { return typeof x == \"number\"; }", &[]),
+        // The workaround the port uses.
+        ("const [ok, value] = pcall(GetMoney);", &[]),
+        // Gap 4, open: no string patterns yet.
+        ("const x = \"item:123\".match(\"item:(%d+)\");", &["*"]),
+        // Gap 5, closed by package M3.
+        ("const x = MerchantFrame;", &[]),
+        // Gap 6: closed on retail and forever by M3; the classic branches
+        // only reference the constant, so it stays missing there.
+        (
+            "const y = NUM_TOTAL_EQUIPPED_BAG_SLOTS;",
+            &["classic-era", "classic-anniversary", "classic-titan", "classic"],
+        ),
+    ];
+    for (source, open_on) in cases {
         println!("REPRO: {source}");
-        match selu_syntax::parse("gap.selu", source) {
+        let program = match selu_syntax::parse("gap.selu", source) {
+            Ok(p) => p,
             Err(d) => {
-                assert!(
-                    source.starts_with("try ")
-                        || source.starts_with("type ")
-                        || source.contains("typeof")
-                );
+                assert_eq!(open_on, ["*"], "{source} no longer parses:\n{}", d.render(source));
                 println!("{}", d.render(source));
+                continue;
             }
-            Ok(p) => {
-                for m in &manifests {
-                    if m.fixture {
-                        continue;
-                    }
-                    let checked = selu_check::check_program(&p, m);
-                    assert_eq!(checked.diagnostics.is_empty(), source.contains("pcall"));
-                    println!(
-                        "{}: {}",
-                        m.target_string(),
-                        checked
-                            .diagnostics
-                            .iter()
-                            .map(|d| d.render(source))
-                            .collect::<String>()
-                    );
-                }
+        };
+        for m in &manifests {
+            if m.fixture {
+                continue;
             }
+            let checked = selu_check::check_program(&program, m);
+            let errors = checked.has_errors();
+            let expected = open_on == ["*"] || open_on.contains(&m.flavour.as_str());
+            assert_eq!(
+                errors,
+                expected,
+                "{source} on {}: {}",
+                m.target_string(),
+                checked
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.render(source))
+                    .collect::<String>()
+            );
         }
     }
 }
