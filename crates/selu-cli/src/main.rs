@@ -51,6 +51,14 @@ enum Command {
         #[arg(long)]
         manifest_dir: Option<PathBuf>,
     },
+    /// Format `.selu` files (default: the project in the current folder).
+    Fmt {
+        /// Files or folders; a project folder formats its `src/` and `tests/`.
+        paths: Vec<PathBuf>,
+        /// Change nothing; list the files that aren't formatted and fail if any.
+        #[arg(long)]
+        check: bool,
+    },
     /// List every known flavour and build.
     Targets {
         #[arg(long)]
@@ -68,6 +76,25 @@ struct Project {
     addon: AddonSection,
     #[serde(default)]
     build: BuildSection,
+    /// `[format]`: read by `selu fmt` and Studio (validated here so a typo
+    /// is an error rather than ignored).
+    #[serde(default)]
+    #[allow(dead_code)]
+    format: FormatSection,
+}
+
+/// The `[format]` table of `selu.toml`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FormatSection {
+    /// Spaces per indentation level (default 2).
+    #[serde(default)]
+    #[allow(dead_code)]
+    indent: Option<usize>,
+    /// Studio formats files when it saves them.
+    #[serde(default)]
+    #[allow(dead_code)]
+    on_save: bool,
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq)]
@@ -110,6 +137,7 @@ fn main() -> ExitCode {
             manifest_dir.as_deref(),
         ),
         Command::Targets { manifest_dir } => targets(manifest_dir.as_deref()),
+        Command::Fmt { paths, check } => fmt(paths, *check),
         Command::Test {
             path,
             target,
@@ -134,6 +162,104 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(code) => code,
     }
+}
+
+/// The `.selu` files `selu fmt` works on for one argument.
+fn fmt_files(path: &Path, out: &mut Vec<PathBuf>) {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for p in entries {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if p.is_dir() {
+                if !matches!(name, "dist" | "target" | ".git" | "node_modules") {
+                    walk(&p, out);
+                }
+            } else if name.ends_with(".selu") {
+                out.push(p);
+            }
+        }
+    }
+    if path.is_file() {
+        out.push(path.to_path_buf());
+    } else if path.join("selu.toml").is_file() {
+        walk(&path.join("src"), out);
+        walk(&path.join("tests"), out);
+    } else {
+        walk(path, out);
+    }
+}
+
+/// Formatter options from the nearest `selu.toml` above `file`.
+fn fmt_options(file: &Path) -> selu_fmt::Options {
+    let mut dir = file.parent();
+    while let Some(d) = dir {
+        if let Ok(text) = std::fs::read_to_string(d.join("selu.toml")) {
+            let indent = toml::from_str::<toml::Value>(&text)
+                .ok()
+                .and_then(|v| v.get("format")?.get("indent")?.as_integer())
+                .filter(|n| (1..=8).contains(n));
+            return selu_fmt::Options {
+                indent: indent.map_or(2, |n| n as usize),
+            };
+        }
+        dir = d.parent();
+    }
+    selu_fmt::Options::default()
+}
+
+/// `selu fmt`: format files in place, or check them with `--check`.
+fn fmt(paths: &[PathBuf], check: bool) -> Result<(), ExitCode> {
+    let mut files = Vec::new();
+    if paths.is_empty() {
+        fmt_files(Path::new("."), &mut files);
+    }
+    for p in paths {
+        if !p.exists() {
+            eprintln!("selu fmt: {} does not exist", p.display());
+            return Err(ExitCode::FAILURE);
+        }
+        fmt_files(p, &mut files);
+    }
+    let (mut changed, mut failed) = (0, 0);
+    for file in &files {
+        let text = match std::fs::read_to_string(file) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("selu fmt: cannot read {}: {e}", file.display());
+                failed += 1;
+                continue;
+            }
+        };
+        match selu_fmt::format(&text, &fmt_options(file)) {
+            Ok(out) if out == text => {}
+            Ok(out) => {
+                changed += 1;
+                if check {
+                    println!("not formatted: {}", file.display());
+                } else if let Err(e) = std::fs::write(file, out) {
+                    eprintln!("selu fmt: cannot write {}: {e}", file.display());
+                    failed += 1;
+                } else {
+                    println!("formatted {}", file.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("selu fmt: {}: {e}; left unchanged", file.display());
+                failed += 1;
+            }
+        }
+    }
+    if failed > 0 || (check && changed > 0) {
+        return Err(ExitCode::FAILURE);
+    }
+    if !check && changed == 0 {
+        println!("{} file(s) already formatted", files.len());
+    }
+    Ok(())
 }
 
 fn not_yet(cmd: &str, what: &str) -> ExitCode {

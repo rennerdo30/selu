@@ -13,6 +13,7 @@
 mod app;
 mod editor;
 mod png;
+mod settings;
 mod theme;
 
 use selu_debug::{Command, Update, Worker};

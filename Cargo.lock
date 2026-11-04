@@ -2389,6 +2389,7 @@ dependencies = [
  "clap",
  "selu-check",
  "selu-diagnostics",
+ "selu-fmt",
  "selu-lower",
  "selu-manifest",
  "selu-sim",
@@ -2404,12 +2405,14 @@ name = "selu-debug"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "selu-fmt",
  "selu-manifest",
  "selu-sim",
  "selu-sourcemap",
  "serde",
  "serde_json",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]
@@ -2419,6 +2422,10 @@ dependencies = [
  "codespan-reporting 0.11.1",
  "serde",
 ]
+
+[[package]]
+name = "selu-fmt"
+version = "0.1.0"
 
 [[package]]
 name = "selu-lower"
@@ -2877,6 +2884,7 @@ dependencies = [
  "indexmap 2.14.2",
  "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 
@@ -2891,9 +2899,9 @@ dependencies = [
 
 [[package]]
 name = "toml_writer"
-version = "1.1.3+spec-1.1.0"
+version = "1.2.0+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
+checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "tracing"

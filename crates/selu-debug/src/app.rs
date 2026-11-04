@@ -93,6 +93,7 @@ pub struct Studio {
     panel_open: bool,
     preview_open: bool,
     shortcuts_open: bool,
+    settings: Option<crate::settings::SettingsWindow>,
     /// The window was asked to close with unsaved edits.
     confirm_close: bool,
 }
@@ -139,9 +140,14 @@ impl Studio {
             panel_open: true,
             preview_open: true,
             shortcuts_open: false,
+            settings: None,
             editor: crate::editor::Editor::new(opts_project, opts_selu, opts_target, ctx),
             confirm_close: false,
         };
+        // For screenshots in checks: open Project Settings at start.
+        if std::env::var_os("SELU_STUDIO_OPEN_SETTINGS").is_some() {
+            studio.open_settings();
+        }
         for dir in studio.opts.addons.clone() {
             studio.send(Command::LoadAddon { dir });
         }
@@ -431,6 +437,17 @@ impl eframe::App for Studio {
         if self.shortcuts_open {
             self.shortcuts_window(&ctx);
         }
+        if let Some(w) = &mut self.settings {
+            match w.ui(&ctx) {
+                crate::settings::Outcome::Open => {}
+                crate::settings::Outcome::Saved => {
+                    self.settings = None;
+                    let now = ctx.input(|i| i.time);
+                    self.editor.config_changed(now);
+                }
+                crate::settings::Outcome::Closed => self.settings = None,
+            }
+        }
 
         let has_project = self.editor.has_project();
         egui::Panel::top("titlebar")
@@ -527,8 +544,20 @@ impl eframe::App for Studio {
 }
 
 impl Studio {
+    fn open_settings(&mut self) {
+        if let Some(dir) = self.editor.project_dir() {
+            match crate::settings::SettingsWindow::open(dir) {
+                Ok(w) => self.settings = Some(w),
+                Err(e) => self.line(LineKind::Error, e),
+            }
+        }
+    }
+
     fn global_shortcuts(&mut self, ctx: &egui::Context) {
         self.editor.shortcuts(ctx);
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Comma)) {
+            self.open_settings();
+        }
         let (run, reload, build, panel, side, preview) = ctx.input_mut(|i| {
             (
                 i.consume_key(Modifiers::NONE, Key::F5),
@@ -625,6 +654,8 @@ impl Studio {
                             ("Ctrl+S", "Save all, rebuild and /reload"),
                             ("Ctrl+W", "Close the tab"),
                             ("Ctrl+F", "Find in the file"),
+                            ("Shift+Alt+F", "Format the file"),
+                            ("Ctrl+,", "Project settings"),
                             ("Ctrl+Space", "Complete a name"),
                             ("Ctrl+= / Ctrl+- / Ctrl+0", "Zoom the code"),
                             ("F5", "Run or pause the game clock"),
@@ -653,6 +684,15 @@ impl Studio {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui
+                        .add_enabled(
+                            self.editor.has_project(),
+                            egui::Button::new("Project Settings..."),
+                        )
+                        .clicked()
+                    {
+                        self.open_settings();
+                    }
+                    if ui
                         .add(egui::Button::new("Quick Open...").shortcut_text("Ctrl+P"))
                         .clicked()
                     {
@@ -678,6 +718,13 @@ impl Studio {
                     }
                 });
                 ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add(egui::Button::new("Format Document").shortcut_text("Shift+Alt+F"))
+                        .clicked()
+                    {
+                        let now = ui.input(|i| i.time);
+                        self.editor.format_active(now);
+                    }
                     if ui
                         .add(egui::Button::new("Find").shortcut_text("Ctrl+F"))
                         .clicked()

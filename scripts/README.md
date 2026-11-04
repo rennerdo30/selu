@@ -42,7 +42,15 @@ The window is laid out like a code editor:
 - **Status bar:** target, error and warning counts, cursor position, game
   time.
 
+- **Format Document** (Shift+Alt+F, Edit menu) runs the same formatter as
+  `selu fmt`; Project Settings can turn on formatting when saving.
+- **Project Settings** (File menu or Ctrl+,): addon name, targets (flavour
+  and build picked from the manifests), output layout, strict API checks,
+  indent width and format on save. Saving edits `selu.toml` in place and
+  keeps its comments.
+
 Shortcuts: Ctrl+P open a file, Ctrl+S save all (rebuilds and reloads),
+Shift+Alt+F format, Ctrl+, project settings,
 Ctrl+W close the tab, Ctrl+F find, Ctrl+= / Ctrl+- / Ctrl+0 zoom, F5 run or
 pause, Ctrl+R /reload, Ctrl+B build, Ctrl+J bottom panel, Ctrl+Shift+E side
 bar, Ctrl+Shift+V game preview. Help > Keyboard Shortcuts lists them.

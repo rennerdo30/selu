@@ -90,6 +90,11 @@ impl Editor {
 
     /// Shortcuts that work anywhere in the window.
     pub fn shortcuts(&mut self, ctx: &egui::Context) {
+        let format = ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT | Modifiers::ALT, Key::F));
+        if format && !self.open.is_empty() {
+            let now = ctx.input(|i| i.time);
+            self.format_active(now);
+        }
         let (save, quick, find, close, zoom_in, zoom_out, zoom_reset) = ctx.input_mut(|i| {
             (
                 i.consume_key(Modifiers::COMMAND, Key::S),
