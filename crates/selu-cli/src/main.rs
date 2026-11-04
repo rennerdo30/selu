@@ -331,7 +331,15 @@ fn build(
             compiled.push((module, lowered));
         }
         validate_saved(&old_saved, &saved_shapes, &sources, &project.name)?;
-        for (module, lowered) in compiled {
+        let mut lowered_files: Vec<_> = compiled.iter().map(|(_, l)| l.clone()).collect();
+        if let Some(runtime) = selu_lower::runtime::share(&mut lowered_files) {
+            std::fs::write(out_dir.join("Selu.lua"), runtime).map_err(|e| {
+                eprintln!("selu: cannot write runtime: {e}");
+                ExitCode::FAILURE
+            })?;
+            lua_files.push("Selu.lua".to_string());
+        }
+        for ((module, _), lowered) in compiled.into_iter().zip(lowered_files) {
             let lua_name = format!("{}.lua", module.key);
             let output = out_dir.join(&lua_name);
             let map = map_dir.join(format!("{lua_name}.map.json"));

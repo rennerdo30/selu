@@ -1,0 +1,3 @@
+[addon]
+name = "SharedRuntime"
+targets = ["forever@1.0"]

@@ -568,14 +568,14 @@ impl Lowerer<'_> {
     }
 }
 // Shared by every file of the addon; the event dispatcher needs only this.
-const ERROR_STATE: &str = r#"if not __selu_ns.__selu_errors then
+pub(crate) const ERROR_STATE: &str = r#"if not __selu_ns.__selu_errors then
   __selu_ns.__selu_errors = { depth = 0, meta = {} }
   __selu_ns.__selu_errors.meta.__tostring = function(value)
     return (value.__selu_position or "") .. value.message
   end
 end
 local __selu_errors = __selu_ns.__selu_errors"#;
-const ERROR_ENTRY: &str = r#"local function __selu_entry(fn)
+pub(crate) const ERROR_ENTRY: &str = r#"local function __selu_entry(fn)
   return function(...)
     local depth = __selu_errors.depth
     __selu_errors.depth = 0
@@ -583,7 +583,7 @@ const ERROR_ENTRY: &str = r#"local function __selu_entry(fn)
     __selu_errors.depth = depth
   end
 end"#;
-const ERROR_RUNTIME: &str = r#"local function __selu_error_text(value)
+pub(crate) const ERROR_RUNTIME: &str = r#"local function __selu_error_text(value)
   return __selu_tostring(value) .. ""
 end
 local function __selu_safe_error_text(value)

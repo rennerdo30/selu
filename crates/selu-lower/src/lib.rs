@@ -26,6 +26,7 @@ mod loops;
 mod modules;
 mod patterns;
 mod purity;
+pub mod runtime;
 pub mod saved;
 pub use errors::uses_errors;
 pub use modules::ModuleBindings;
@@ -62,6 +63,8 @@ impl SourceMap {
 
 #[derive(Debug, Clone)]
 pub struct Lowered {
+    pub(crate) block: LBlock,
+    pub(crate) pieces: Vec<runtime::Piece>,
     pub locale_keys: Vec<String>,
     pub lua: String,
     pub source_map: SourceMap,
@@ -155,32 +158,12 @@ fn lower_addon_layout(
         addon_errors,
         error_entry: false,
     };
-    let mut out: LBlock = Vec::new();
-    l.file_prelude(program, &mut out);
-    let captures_end = out.len();
-    out.extend(saved::setup(program));
-    out.extend(l.error_setup(program));
-    let errors_index = out.len();
-    let has_handlers = program.stmts.iter().any(targets::contains_event);
-    if has_handlers {
-        out.push(raw(&event_prologue(addon_errors)));
-        out.push(raw(""));
-    }
-    out.extend(l.block(&program.stmts));
-    let entry = l.error_entry_setup(program, has_handlers);
-    let entry_state = !entry.is_empty();
-    out.splice(errors_index..errors_index, entry);
-    let wow = l.wow_prologue();
-    if wow.is_some() || saved::has_saved(program) || errors::uses_errors(program) || entry_state {
-        out.insert(0, raw("local __selu_addon, __selu_ns = ..."));
-        out.insert(captures_end + 1, raw("__selu_ns = __selu_ns or {}"));
-        out.splice(
-            captures_end + 2..captures_end + 2,
-            wow.into_iter().flatten(),
-        );
-    }
+    let out = l.assemble_file(program, false);
+    let pieces = l.runtime_pieces(program);
     let printed = lua::print_block(&out);
     Lowered {
+        block: out,
+        pieces,
         locale_keys: l.wow.keys,
         lua: printed.text,
         source_map: SourceMap {
@@ -253,42 +236,12 @@ pub fn lower_module_layout(
         addon_errors,
         error_entry: false,
     };
-    let mut out: LBlock = vec![LStmt {
-        kind: LStmtKind::Local(
-            vec!["__selu_addon".into(), "__selu_ns".into()],
-            vec![LExpr::Vararg],
-        ),
-        span: None,
-    }];
-    let namespace_fallback = LStmt {
-        kind: LStmtKind::Assign(
-            vec![name("__selu_ns")],
-            vec![bin(BinOp::Or, name("__selu_ns"), LExpr::Table(vec![]))],
-        ),
-        span: None,
-    };
-    l.file_prelude(program, &mut out);
-    if !l.module.type_only {
-        out.push(namespace_fallback);
-    }
-    let runtime_index = out.len();
-    out.extend(saved::setup(program));
-    out.extend(l.error_setup(program));
-    let errors_index = out.len();
-    l.module_prologue(&mut out);
-    let has_handlers = program.stmts.iter().any(targets::contains_event);
-    if has_handlers {
-        out.push(raw(&module_event_prologue(addon_errors)));
-        out.push(raw(""));
-    }
-    out.extend(l.block(&program.stmts));
-    let entry = l.error_entry_setup(program, has_handlers);
-    out.splice(errors_index..errors_index, entry);
-    if let Some(prologue) = l.wow_prologue() {
-        out.splice(runtime_index..runtime_index, prologue);
-    }
+    let out = l.assemble_file(program, true);
+    let pieces = l.runtime_pieces(program);
     let printed = lua::print_block(&out);
     Lowered {
+        block: out,
+        pieces,
         locale_keys: l.wow.keys,
         lua: printed.text,
         source_map: SourceMap {
@@ -798,6 +751,14 @@ impl Lowerer<'_> {
         pre: &mut LBlock,
     ) -> LExpr {
         let a = self.expr(left, pre);
+        // Literal nullish branches have no reads or calls to preserve.
+        if op == "??" && !self.may_run_code(left) {
+            match &a {
+                LExpr::Nil => return self.expr(right, pre),
+                LExpr::Bool(_) | LExpr::Number(_) | LExpr::Str(_) => return a,
+                _ => {}
+            }
+        }
         let mut right_pre = Vec::new();
         let b = self.expr(right, &mut right_pre);
         if right_pre.is_empty() {

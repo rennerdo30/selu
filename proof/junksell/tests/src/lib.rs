@@ -5,14 +5,21 @@ fn merchant_visit() {
     build_proof();
     let sim = Sim::new().unwrap();
     sim.eval(include_str!("../merchant.lua")).unwrap();
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../dist/JunkSellProof/main.lua");
-    let mut lua = std::fs::read_to_string(path).unwrap();
-    if std::env::var_os("JUNKSELL_BREAK").is_some() {
-        lua = lua.replace("count = count + 1", "count = count + 0");
-    }
-    sim.load_addon("JunkSellProof", &[("main.lua".into(), lua)])
-        .unwrap();
+    let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../dist/JunkSellProof");
+    let toc = std::fs::read_to_string(dist.join("JunkSellProof.toc")).unwrap();
+    let files: Vec<_> = toc
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let mut lua = std::fs::read_to_string(dist.join(line)).unwrap();
+            if std::env::var_os("JUNKSELL_BREAK").is_some() {
+                lua = lua.replace("count = count + 1", "count = count + 0");
+            }
+            (line.to_string(), lua)
+        })
+        .collect();
+    sim.load_addon("JunkSellProof", &files).unwrap();
     sim.eval("JunkSellProof_settings.locks[103] = true")
         .unwrap();
     sim.fire("MERCHANT_SHOW", vec![]).unwrap();
@@ -127,7 +134,19 @@ fn build_proof() {
         selu_lower::lower_with_addon(&program, manifest, &checked.types, "JunkSellProof");
     let output = project.join("dist/JunkSellProof");
     std::fs::create_dir_all(&output).unwrap();
-    std::fs::write(output.join("main.lua"), compiled.lua).unwrap();
+    let mut files = vec![compiled];
+    let mut names = vec![];
+    if let Some(runtime) = selu_lower::runtime::share(&mut files) {
+        std::fs::write(output.join("Selu.lua"), runtime).unwrap();
+        names.push("Selu.lua".to_string());
+    }
+    std::fs::write(output.join("main.lua"), &files[0].lua).unwrap();
+    names.push("main.lua".to_string());
+    std::fs::write(
+        output.join("JunkSellProof.toc"),
+        selu_lower::generate_toc("JunkSellProof", manifest, &names),
+    )
+    .unwrap();
 }
 
 #[test]
