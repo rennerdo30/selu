@@ -10,100 +10,106 @@ fn check(m: &Manifest, src: &str) -> selu_check::Checked {
     let p = selu_syntax::parse("factory.selu", src).unwrap();
     selu_check::check_program_with_options(&p, m, selu_check::CheckOptions { strict_api: true })
 }
+fn iterator_fixture() -> Manifest {
+    let mut m = retail();
+    let src = r#"
+local Pool={};
+function Pool:Init() self.active={ [self:CallCreate()]=true }; end
+function Pool:CallCreate() return CreateFrame("Frame"); end
+function Pool:EnumerateActive() return pairs(self.active); end
+function CreateProvenFramePool(frameType) local p=CreateFromMixins(Pool); p:Init(); return p; end
+local View={};
+function View:EnumerateFrames() return ipairs({}); end
+function CreateProvenScrollBoxListLinearView() return CreateFromMixins(View); end
+"#;
+    let mut source = selu_manifest_gen::source::Sources::default();
+    source.parse("iterator-fixture.lua", src).unwrap();
+    source.extend_manifest(&mut m);
+    selu_manifest_gen::factory::extend(&mut m, &[("iterator-fixture.lua".into(), src.into())]);
+    let ty = m
+        .function("CreateProvenFramePool")
+        .unwrap()
+        .signature
+        .as_ref()
+        .unwrap()
+        .returns[0]
+        .ty
+        .as_ref()
+        .unwrap();
+    let pool = m.widgets.iter().find(|w| &w.name == ty).unwrap();
+    assert_eq!(
+        pool.methods
+            .iter()
+            .find(|d| d.name == "EnumerateActive")
+            .unwrap()
+            .returns[0]
+            .attributes
+            .get("SeluIterator"),
+        Some(&serde_json::json!(["Frame", "bool"]))
+    );
+    m
+}
+fn assert_pool_methods_withheld(m: &Manifest, factory: &str) {
+    let f = m.function(factory).unwrap();
+    if let Some(signature) = &f.signature {
+        let ty = signature.returns[0].ty.as_ref().unwrap();
+        let w = m.widgets.iter().find(|w| &w.name == ty).unwrap();
+        for name in ["Acquire", "Release", "EnumerateActive"] {
+            assert!(
+                !w.methods.iter().any(|d| d.name == name),
+                "{factory}.{name} has no complete callback-effect proof"
+            );
+        }
+    }
+}
 #[test]
 fn toolkit_pool_and_scrollbox_shapes() {
     let m = retail();
-    for name in [
+    for factory in [
         "CreateObjectPool",
         "CreateFramePool",
         "CreateTexturePool",
         "CreateFontStringPool",
-        "CreateDataProvider",
-        "CreateScrollBoxListLinearView",
     ] {
+        assert_pool_methods_withheld(&m, factory);
+    }
+    for factory in ["CreateDataProvider", "CreateScrollBoxListLinearView"] {
         assert!(
-            m.function(name).unwrap().signature.is_some(),
-            "{name} remains untyped"
+            m.function(factory).unwrap().signature.is_some(),
+            "source-proven {factory} must stay checked"
         );
     }
-    // DialogKeys.lua:1066 enumerates a frame pool; :239 enumerates a ScrollBox.
     let src = r#"
-const create = CreateFramePool;
-const pool = create("Frame", UIParent);
-for (const [first, second] of pool.EnumerateActive()) { const row: Frame = first; row.Hide(); }
-const [frame, isNew] = pool.Acquire();
-if (frame != null) { frame.Hide(); pool.Release(frame); }
-pool.ReleaseAll();
-const view = CreateScrollBoxListLinearView();
-for (const [index, frame] of view.EnumerateFrames()) { const i: number = index; }
-const box = CreateFrame("Frame", null, UIParent, "WowScrollBoxList");
-for (const [first, second] of box.EnumerateFrames()) { }
-const provider = CreateDataProvider(); provider.Insert(42); provider.GetSize();
-GameTooltip.ClearLines(); const count: number = GameTooltip.NumLines();
+const view=CreateScrollBoxListLinearView();
+for (const [index,frame] of view.EnumerateFrames()) { const i:number=index; }
+const box=CreateFrame("Frame",null,UIParent,"WowScrollBoxList");
+for (const [index,frame] of box.EnumerateFrames()) {}
+const provider=CreateDataProvider();provider.Insert(42);provider.GetSize();
+GameTooltip.ClearLines();const count:number=GameTooltip.NumLines();
 "#;
     let p = selu_syntax::parse("toolkit.selu", src).unwrap();
-    let c = selu_check::check_program_with_options(
-        &p,
-        &m,
-        selu_check::CheckOptions { strict_api: true },
-    );
+    let c = check(&m, src);
     assert!(!c.has_errors(), "{:?}", c.diagnostics);
     let lua = selu_lower::lower(&p, &m, &c.types).lua;
-    assert!(lua.contains("in pool:EnumerateActive() do"), "{lua}");
-    assert!(lua.contains("in box:EnumerateFrames() do"), "{lua}");
-    assert!(!lua.contains("pairs(pool:EnumerateActive()"));
-    assert!(
-        check(
-            &m,
-            "const p = CreateFramePool(\"Frame\", UIParent); p.Release(42);"
-        )
-        .has_errors()
-    );
+    assert!(lua.contains("in view:EnumerateFrames() do"));
+    assert!(lua.contains("in box:EnumerateFrames() do"));
+    assert!(!lua.contains("pairs(view:EnumerateFrames()"));
     assert!(check(&m, "GameTooltip.NumLines(42);").has_errors());
     assert!(check(&m, "GameTooltip.ClearLines(42);").has_errors());
-    assert!(
-        check(
-            &m,
-            "const p = CreateFramePool(\"Frame\", UIParent); p.Undeclared();"
-        )
-        .has_errors()
-    );
-    assert!(
-        check(
-            &m,
-            "const p = CreateFramePool(\"Frame\"); const f: Frame = p.EnumerateActive();"
-        )
-        .has_errors()
-    );
-    // Saving one value would lose Lua's iterator state/control values.
-    assert!(check(&m,"const p = CreateFramePool(\"Frame\", UIParent); const it = p.EnumerateActive(); for (const x of it) {}").has_errors());
+    assert!(check(&m, "const p=CreateFramePool(\"Frame\"); p.Undeclared();").has_errors());
 }
 #[test]
-fn region_factories_return_checked_objects() {
+fn region_factories_withhold_unproven_callback_effect_contracts() {
     let m = retail();
-    for (factory, method) in [
-        ("CreateTexturePool", "SetTexture"),
-        ("CreateFontStringPool", "SetText"),
-        ("CreateMaskTexturePool", "SetTexture"),
+    for factory in [
+        "CreateFramePool",
+        "CreateObjectPool",
+        "CreateTexturePool",
+        "CreateFontStringPool",
+        "CreateMaskTexturePool",
     ] {
-        let src = format!(
-            "const p = {factory}(UIParent); const [v, fresh] = p.Acquire(); if (v != null) {{ v.{method}(\"test\"); p.Release(v); }}"
-        );
-        let c = check(&m, &src);
-        assert!(!c.has_errors(), "{factory}: {:?}", c.diagnostics);
-        assert!(
-            check(
-                &m,
-                &format!("const p = {factory}(UIParent); p.Release(42);")
-            )
-            .has_errors()
-        );
+        assert_pool_methods_withheld(&m, factory);
     }
-    let c = check(
-        &m,
-        "const p = CreateObjectPool(() => { return {}; }); const [item, fresh] = p.Acquire(); p.Release(item); p.EnumerateActive();",
-    );
-    assert!(!c.has_errors(), "{:?}", c.diagnostics);
 }
 #[test]
 fn scoped_aliases_proxy_surface_and_dynamic_results() {
@@ -145,8 +151,13 @@ function CreateReassigned() local result = Mix(Private); if flag then result = {
 
 #[test]
 fn iterator_lowering_preserves_state_and_control_values() {
-    let m = retail();
-    let src = r#"const pool = CreateFramePool("Frame"); let total = 0; for (const [frame, active] of pool.EnumerateActive()) { frame.Hide(); total += 1; } const view = CreateScrollBoxListLinearView(); for (const [index, frame] of view.EnumerateFrames()) { total += index; } print(total);"#;
+    let m = iterator_fixture();
+    let src = r#"const pool = CreateProvenFramePool("Frame"); let total = 0; for (const [frame, active] of pool.EnumerateActive()) { frame.Hide(); total += 1; } const view = CreateProvenScrollBoxListLinearView(); for (const [index, frame] of view.EnumerateFrames()) { total += index; } print(total);"#;
+    let wrapped = check(
+        &m,
+        "const p=CreateProvenFramePool(\"Frame\"); const e=()=>p.EnumerateActive(); for (const f of e()) {}",
+    );
+    assert!(wrapped.diagnostics.iter().any(|d| d.code == "SELU0357"));
     let p = selu_syntax::parse("iterator.selu", src).unwrap();
     let c = check(&m, src);
     assert!(!c.has_errors(), "{:?}", c.diagnostics);
@@ -160,8 +171,8 @@ fn iterator_lowering_preserves_state_and_control_values() {
 function InCombatLockdown() return false end
 function CreateFrame() return {RegisterEvent=function()end, UnregisterEvent=function()end, SetScript=function()end} end
 local a, b = {Hide=function()end}, {Hide=function()end}
-function CreateFramePool() return {EnumerateActive=function() return pairs({[a]=true,[b]=true}) end} end
-function CreateScrollBoxListLinearView() return {EnumerateFrames=function() return ipairs({a,b}) end} end
+function CreateProvenFramePool() return {EnumerateActive=function() return pairs({[a]=true,[b]=true}) end} end
+function CreateProvenScrollBoxListLinearView() return {EnumerateFrames=function() return ipairs({a,b}) end} end
 function print(value) result = value end
 "#).exec().unwrap();
     lua.load(&generated).exec().unwrap();

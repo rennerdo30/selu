@@ -166,6 +166,21 @@ impl Visitor for Scan {
         for v in n.variables() {
             if let Var::Name(t) = v {
                 self.assignments.push((name(t), start(n)));
+            } else if let Var::Expression(e) = v
+                && let Prefix::Name(root) = e.prefix()
+            {
+                let mut parts = vec![name(root)];
+                let mut known = true;
+                for suffix in e.suffixes() {
+                    if let Suffix::Index(Index::Dot { name: n, .. }) = suffix {
+                        parts.push(name(n));
+                    } else {
+                        known = false;
+                    }
+                }
+                if known {
+                    self.assignments.push((parts.join("."), start(n)));
+                }
             }
         }
         for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
@@ -259,6 +274,22 @@ pub struct Sources {
     calls: BTreeMap<String, String>,
     tables: BTreeMap<String, selu_manifest::Declaration>,
     scalars: BTreeMap<String, Vec<(Scalar, bool)>>,
+}
+pub(crate) fn helper_names(ast: &full_moon::ast::Ast) -> BTreeSet<String> {
+    let mut scan = Scan::default();
+    scan.visit_ast(ast);
+    let mut names = BTreeSet::new();
+    for (n, pos) in &scan.assignments {
+        if !scan.local(n.split('.').next().unwrap(), *pos) {
+            names.insert(n.clone());
+        }
+    }
+    for (n, pos, _) in &scan.signatures {
+        if !scan.local(n.split('.').next().unwrap(), *pos) {
+            names.insert(n.clone());
+        }
+    }
+    names
 }
 impl Sources {
     pub fn parse(&mut self, file: &str, source: &str) -> Result<(), String> {
@@ -443,13 +474,27 @@ impl Sources {
             let root = qualified.split('.').next().unwrap();
             if !scan.local(root, *pos) {
                 let mut signature = source_signature(qualified, body, &source[..*pos], file);
-                if ["pairs", "ipairs"].iter().any(|n| {
-                    scan.local(n, start(body))
-                        || scan
-                            .locals
-                            .iter()
-                            .any(|(v, a, b)| v == n && *a <= end(body) && *b >= start(body))
-                        || scan.assignments.iter().any(|(v, _)| v == n)
+                let builtin = body
+                    .block()
+                    .last_stmt()
+                    .and_then(|last| match last {
+                        LastStmt::Return(r) if r.returns().len() == 1 => r.returns().iter().next(),
+                        _ => None,
+                    })
+                    .and_then(|e| match e {
+                        Expression::FunctionCall(c) => match c.prefix() {
+                            Prefix::Name(n) => Some((name(n), start(c))),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                if builtin.as_ref().is_some_and(|(n, call_pos)| {
+                    ["pairs", "ipairs"].contains(&n.as_str())
+                        && (scan.local(n, *call_pos)
+                            || scan
+                                .assignments
+                                .iter()
+                                .any(|(v, pos)| v == n && !scan.local(n, *pos)))
                 }) {
                     for r in &mut signature.returns {
                         if r.attributes.remove("SeluIterator").is_some() {
@@ -763,7 +808,10 @@ pub(crate) fn source_signature(
         full_moon::visitors::Visit::visit(body, &mut bindings);
         if ["pairs", "ipairs"].contains(&builtin.as_str())
             && !bindings.local(&builtin, start(call))
-            && !bindings.assignments.iter().any(|(n, _)| n == &builtin)
+            && !bindings
+                .assignments
+                .iter()
+                .any(|(n, pos)| n == &builtin && !bindings.local(n, *pos))
             && call.suffixes().count() == 1
             && matches!(
                 call.suffixes().next(),

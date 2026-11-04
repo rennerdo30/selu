@@ -370,6 +370,8 @@ impl Ctx<'_> {
         {
             t = items[0].clone();
             self.types.set(iter.id, t.clone());
+        } else if crate::game_iterator(&t).is_none() {
+            t = crate::shape_of(&self.check_tuple_value(iter, iter_type));
         }
         if self.pattern_for_of(s, &t) {
             return;
