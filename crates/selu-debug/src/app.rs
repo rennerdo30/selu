@@ -77,6 +77,14 @@ enum Side {
     Frames,
 }
 
+/// Messages from the background build.
+enum BuildMsg {
+    /// One output line; `true` when it came from stderr.
+    Line(String, bool),
+    /// The build finished; `true` on success.
+    Done(bool),
+}
+
 /// Where a screenshot was saved, or why it couldn't be.
 type ShotResult = Result<PathBuf, String>;
 
@@ -100,6 +108,10 @@ pub struct Studio {
     event_filter: EventFilter,
     event_search: String,
     logo: Option<egui::TextureHandle>,
+    /// The running background build, if any.
+    build: Option<Receiver<BuildMsg>>,
+    build_failed: bool,
+    repaint: Option<egui::Context>,
     event_name: String,
     event_args: String,
     playing: bool,
@@ -152,6 +164,9 @@ impl Studio {
             console_search: String::new(),
             event_filter: EventFilter::All,
             event_search: String::new(),
+            build: None,
+            build_failed: false,
+            repaint: Some(ctx.clone()),
             logo: crate::theme::logo_image()
                 .map(|img| ctx.load_texture("selu-logo", img, egui::TextureOptions::LINEAR)),
             event_name: String::new(),
@@ -261,46 +276,117 @@ impl Studio {
         }
     }
 
+    /// Start `selu build` on a background thread. Output streams into the
+    /// console as it arrives; a successful build reloads the addon. The UI
+    /// thread never waits for it.
     fn rebuild(&mut self) {
+        if self.build.is_some() {
+            return; // one build at a time
+        }
         let (Some(project), Some(selu)) = (self.opts.project.clone(), self.opts.selu.clone())
         else {
             self.line(
                 LineKind::Error,
-                "rebuild needs a project (start Studio with `selu debug`)",
+                "building needs a project (start Studio with `selu debug`)",
             );
             return;
         };
-        let mut cmd = std::process::Command::new(&selu);
-        cmd.arg("build").arg(&project);
-        if let Some(t) = &self.opts.target {
-            cmd.arg("--target").arg(t);
-        }
+        let target = self.opts.target.clone();
+        let (tx, rx) = channel::<BuildMsg>();
+        let repaint = self.repaint.clone();
         self.line(LineKind::Build, format!("building {}", project.display()));
-        match cmd.output() {
-            Ok(out) => {
-                let text = String::from_utf8_lossy(&out.stderr).into_owned()
-                    + &String::from_utf8_lossy(&out.stdout);
-                for l in text.lines().filter(|l| !l.trim().is_empty()) {
-                    let kind = if out.status.success() {
-                        LineKind::Build
-                    } else {
-                        LineKind::Error
-                    };
-                    self.line(kind, l.to_string());
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let send = |m: BuildMsg| {
+                let _ = tx.send(m);
+                if let Some(ctx) = &repaint {
+                    ctx.request_repaint();
                 }
-                if out.status.success() {
-                    self.act(Command::Reload);
-                } else {
-                    self.line(
-                        LineKind::Error,
-                        "build failed; the running session is unchanged",
-                    );
+            };
+            let mut cmd = std::process::Command::new(&selu);
+            cmd.arg("build")
+                .arg(&project)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if let Some(t) = &target {
+                cmd.arg("--target").arg(t);
+            }
+            let mut child = match cmd.spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    send(BuildMsg::Line(
+                        format!("cannot run {}: {e}", selu.display()),
+                        true,
+                    ));
+                    send(BuildMsg::Done(false));
+                    return;
+                }
+            };
+            // Read stderr on its own thread so neither pipe can fill up.
+            let stderr = child.stderr.take().map(|err| {
+                let tx = tx.clone();
+                let repaint = repaint.clone();
+                std::thread::spawn(move || {
+                    for line in BufReader::new(err).lines().map_while(Result::ok) {
+                        if !line.trim().is_empty() {
+                            let _ = tx.send(BuildMsg::Line(line, true));
+                            if let Some(ctx) = &repaint {
+                                ctx.request_repaint();
+                            }
+                        }
+                    }
+                })
+            });
+            if let Some(out) = child.stdout.take() {
+                for line in BufReader::new(out).lines().map_while(Result::ok) {
+                    if !line.trim().is_empty() {
+                        send(BuildMsg::Line(line, false));
+                    }
                 }
             }
-            Err(e) => self.line(
-                LineKind::Error,
-                format!("cannot run {}: {e}", selu.display()),
-            ),
+            if let Some(h) = stderr {
+                let _ = h.join();
+            }
+            let ok = child.wait().map(|s| s.success()).unwrap_or(false);
+            send(BuildMsg::Done(ok));
+        });
+        self.build = Some(rx);
+        self.build_failed = false;
+    }
+
+    /// Take what the background build has produced so far.
+    fn poll_build(&mut self) {
+        let Some(rx) = &self.build else { return };
+        let mut msgs = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            msgs.push(m);
+        }
+        for m in msgs {
+            match m {
+                // stderr carries diagnostics; mark them as errors only when
+                // the build fails (warnings print there too).
+                BuildMsg::Line(text, from_stderr) => {
+                    let kind = if from_stderr && text.contains("error") {
+                        LineKind::Error
+                    } else {
+                        LineKind::Build
+                    };
+                    self.line(kind, text);
+                }
+                BuildMsg::Done(ok) => {
+                    self.build = None;
+                    self.build_failed = !ok;
+                    if ok {
+                        self.act(Command::Reload);
+                    } else {
+                        self.line(
+                            LineKind::Error,
+                            "build failed; the running addon is unchanged",
+                        );
+                    }
+                    return;
+                }
+            }
         }
     }
 
@@ -468,6 +554,10 @@ impl eframe::App for Studio {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.drain();
+        self.poll_build();
+        if self.build.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.tick(&ctx);
         self.editor.poll(&ctx);
         for m in std::mem::take(&mut self.editor.messages) {
@@ -996,15 +1086,34 @@ impl Studio {
             self.act(Command::Reload);
         }
         let can_build = self.opts.project.is_some() && self.opts.selu.is_some();
-        if child
-            .add_enabled(
-                can_build,
-                egui::Button::new(icon_text(icon::BUILD, 13.0)).min_size(egui::vec2(32.0, 26.0)),
-            )
-            .on_hover_text("Build (Ctrl+B)")
-            .clicked()
-        {
-            self.rebuild();
+        if self.build.is_some() {
+            let (r, _) = child.allocate_exact_size(egui::vec2(32.0, 26.0), Sense::hover());
+            egui::Spinner::new()
+                .size(14.0)
+                .color(palette::ACCENT)
+                .paint_at(&child, r.shrink(6.0));
+        } else {
+            let color = if self.build_failed {
+                palette::ERROR
+            } else {
+                palette::TEXT
+            };
+            let tip = if self.build_failed {
+                "The last build failed; see the console (Ctrl+B builds again)"
+            } else {
+                "Build (Ctrl+B)"
+            };
+            if child
+                .add_enabled(
+                    can_build,
+                    egui::Button::new(icon_text(icon::BUILD, 13.0).color(color))
+                        .min_size(egui::vec2(32.0, 26.0)),
+                )
+                .on_hover_text(tip)
+                .clicked()
+            {
+                self.rebuild();
+            }
         }
         let time = self.snapshot.as_ref().map_or(0.0, |s| s.time);
         child.add_space(6.0);
@@ -1128,6 +1237,11 @@ impl Studio {
                     self.panel_open = true;
                     self.tab = Tab::Problems;
                 }
+            }
+            if self.build.is_some() {
+                ui.label(small("Building...".into()));
+            } else if self.build_failed {
+                ui.label(small("Build failed".into()));
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 ui.label(small(format!("session {}", self.generation)));
@@ -1527,16 +1641,22 @@ impl Studio {
             });
         });
         ui.add_space(6.0);
+        // The tab draws into exactly the space left in the panel, and the
+        // panel claims exactly that space: content can neither shrink the
+        // panel nor grow it.
+        let area = ui.available_rect_before_wrap();
+        let mut content = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(area)
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
+        content.set_clip_rect(area.intersect(ui.clip_rect()));
         match self.tab {
-            Tab::Problems => self.editor.ui_problems(ui),
-            Tab::Console => self.console_tab(ui),
-            Tab::Events => self.events_tab(ui),
+            Tab::Problems => self.editor.ui_problems(&mut content),
+            Tab::Console => self.console_tab(&mut content),
+            Tab::Events => self.events_tab(&mut content),
         }
-        // Fill the rest so the panel keeps the height it was dragged to.
-        let rest = ui.available_size();
-        if rest.y > 0.0 {
-            ui.allocate_space(rest);
-        }
+        ui.allocate_rect(area, Sense::hover());
     }
 
     /// A fixed-width table cell with its content left-aligned

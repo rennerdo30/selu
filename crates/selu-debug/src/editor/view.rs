@@ -792,7 +792,12 @@ impl Editor {
     pub fn ui_problems(&mut self, ui: &mut egui::Ui) {
         if self.problems.is_empty() {
             ui.add_space(6.0);
-            let (text, c) = if self.check_ok.is_some() {
+            let (text, c) = if self.checker.is_none() {
+                (
+                    "Open a Selu project to see its problems here.",
+                    palette::FAINT,
+                )
+            } else if self.check_ok.is_some() {
                 (
                     "No problems have been detected in the project.",
                     palette::MUTED,
