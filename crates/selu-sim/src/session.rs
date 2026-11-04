@@ -52,9 +52,27 @@ pub enum HostValue {
     Bool(bool),
     Number(f64),
     String(String),
+    Bytes { bytes: Vec<u8> },
     Table(Vec<(HostValue, HostValue)>),
 }
 impl HostValue {
+    /// Reconstruct the original Lua value, including binary strings and keys.
+    pub fn to_lua(&self, lua: &Lua) -> SimResult<Value> {
+        Ok(match self {
+            Self::Nil => Value::Nil,
+            Self::Bool(v) => Value::Boolean(*v),
+            Self::Number(v) => Value::Number(*v),
+            Self::String(v) => Value::String(lua.create_string(v)?),
+            Self::Bytes { bytes } => Value::String(lua.create_string(bytes)?),
+            Self::Table(pairs) => {
+                let table = lua.create_table()?;
+                for (key, value) in pairs {
+                    table.raw_set(key.to_lua(lua)?, value.to_lua(lua)?)?;
+                }
+                Value::Table(table)
+            }
+        })
+    }
     fn capture(v: &Value) -> SimResult<Self> {
         fn convert(v: crate::saved::SavedValue) -> HostValue {
             use crate::saved::SavedValue as S;
@@ -62,7 +80,12 @@ impl HostValue {
                 S::Nil => HostValue::Nil,
                 S::Boolean(v) => HostValue::Bool(v),
                 S::Number(v) => HostValue::Number(v),
-                S::String(v) => HostValue::String(String::from_utf8_lossy(&v).into()),
+                S::String(v) => match String::from_utf8(v) {
+                    Ok(text) => HostValue::String(text),
+                    Err(error) => HostValue::Bytes {
+                        bytes: error.into_bytes(),
+                    },
+                },
                 S::Table(v) => HostValue::Table(
                     v.into_iter()
                         .map(|(k, v)| (convert(k), convert(v)))
@@ -603,7 +626,11 @@ impl Vm {
     pub fn load_files(&self, files: &[(String, String)]) -> SimResult<()> {
         for (name, source) in files {
             dispatch(&self.lua, &self.ctx, || {
-                self.lua.load(source).set_name(name).exec()
+                core::call_lua::<()>(
+                    &self.lua,
+                    self.lua.load(source).set_name(name).into_function()?,
+                    (),
+                )
             })?;
         }
         Ok(())
@@ -616,10 +643,11 @@ impl Vm {
         let ns = self.lua.create_table()?;
         for (name, source) in files {
             dispatch(&self.lua, &self.ctx, || {
-                self.lua
-                    .load(source)
-                    .set_name(name)
-                    .call::<()>((addon, ns.clone()))
+                core::call_lua::<()>(
+                    &self.lua,
+                    self.lua.load(source).set_name(name).into_function()?,
+                    (addon, ns.clone()),
+                )
             })?;
         }
         Ok(())
@@ -640,15 +668,18 @@ impl Vm {
         self.ctx
             .record(TraceKind::Host, "slash", vec![line.to_string()]);
         dispatch(&self.lua, &self.ctx, || {
-            self.lua
-                .globals()
-                .get::<Function>("__selu_sim_slash")?
-                .call(line)
+            core::call_lua(
+                &self.lua,
+                self.lua.globals().get::<Function>("__selu_sim_slash")?,
+                line,
+            )
         })
     }
 
     pub fn eval(&self, source: &str) -> SimResult<()> {
-        dispatch(&self.lua, &self.ctx, || self.lua.load(source).exec())
+        dispatch(&self.lua, &self.ctx, || {
+            core::call_lua::<()>(&self.lua, self.lua.load(source).into_function()?, ())
+        })
     }
 
     /// Fire an event at every frame that registered for it.
@@ -687,7 +718,9 @@ impl Vm {
                 }
                 self.ctx
                     .record(TraceKind::Script, "OnEvent", vec![event.into()]);
-                dispatch(&self.lua, &self.ctx, || func.call::<()>(call))?;
+                dispatch(&self.lua, &self.ctx, || {
+                    core::call_lua::<()>(&self.lua, func, call)
+                })?;
                 delivered += 1;
             }
         }

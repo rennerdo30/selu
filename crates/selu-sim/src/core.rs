@@ -464,6 +464,76 @@ fn reset_budget(lua: &Lua, ctx: &Ctx) {
     }
 }
 
+/// Protect Lua calls *before* mlua stringifies non-string error objects.
+/// The handler is only at the host boundary: addon pcall/coroutine code
+/// continues to receive the original error value unchanged.
+pub(crate) fn call_lua<R: mlua::FromLuaMulti>(
+    lua: &Lua,
+    function: mlua::Function,
+    args: impl mlua::IntoLuaMulti,
+) -> mlua::Result<R> {
+    const KEY: &str = "selu.host_boundary";
+    let protected = match lua.named_registry_value::<Option<mlua::Function>>(KEY)? {
+        Some(function) => function,
+        None => {
+            let render = lua.create_function(|lua, error: mlua::Value| {
+                if let mlua::Value::String(text) = error {
+                    return Ok(text.to_string_lossy());
+                }
+                let fallback = error.type_name().to_string();
+                let mut text = lua
+                    .globals()
+                    .get::<mlua::Function>("tostring")
+                    .and_then(|format| format.call::<mlua::Value>(error))
+                    .ok()
+                    .and_then(|v| {
+                        if let mlua::Value::String(s) = v {
+                            Some(s.to_string_lossy())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(fallback);
+                // xpcall invokes its handler before unwinding the failing stack.
+                text.push_str("\nstack traceback:");
+                for level in 0..128 {
+                    let Some(frame) = lua.inspect_stack(level) else {
+                        break;
+                    };
+                    let source = frame.source();
+                    if source.what == "C" {
+                        continue;
+                    }
+                    let name = source.short_src.as_deref().unwrap_or("?");
+                    text.push_str(&format!("\n\t{name}:{}", frame.curr_line()));
+                }
+                Ok(text)
+            })?;
+            let factory: mlua::Function = lua
+                .load(
+                    r#"
+local xpcall, error, unpack, select = xpcall, error, unpack, select
+return function(render)
+ return function(fn, ...)
+  local args, count = {...}, select('#', ...)
+  local function result(ok, ...) if not ok then error((...),0) end; return ... end
+  return result(xpcall(function() return fn(unpack(args,1,count)) end,render))
+ end
+end
+"#,
+                )
+                .set_name("=selu host boundary")
+                .eval()?;
+            let function: mlua::Function = factory.call(render)?;
+            lua.set_named_registry_value(KEY, function.clone())?;
+            function
+        }
+    };
+    let mut args = args.into_lua_multi(lua)?;
+    args.push_front(mlua::Value::Function(function));
+    protected.call(args)
+}
+
 /// Run one host-initiated call (an event, a timer advance, a script call, an
 /// input action, an `eval`). The outermost call resets the instruction
 /// budget, then flushes queued callbacks before control returns to the host.

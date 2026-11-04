@@ -61,7 +61,9 @@ pub(crate) fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
                         vec![],
                     );
                 }
-                crate::core::callback_dispatch(lua, &context, || callback.call::<MultiValue>(args))
+                crate::core::callback_dispatch(lua, &context, || {
+                    crate::core::call_lua::<MultiValue>(lua, callback, args)
+                })
             },
         )?,
     )?;
