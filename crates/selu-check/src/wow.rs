@@ -77,6 +77,9 @@ impl Ctx<'_> {
             return Some(t);
         }
         let n = self.wow_name(callee)?;
+        if n == "keybinding" {
+            return Some(self.binding_call(e, args));
+        }
         if !matches!(n.as_str(), "command" | "hook" | "hookScript") {
             return None;
         }

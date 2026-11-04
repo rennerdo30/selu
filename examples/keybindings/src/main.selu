@@ -1,0 +1,10 @@
+// Share the action with login so the simulator demonstrates the same callback.
+function togglePanel() {
+  print("Panel toggled");
+}
+
+keybinding("Keybindings_TOGGLE_PANEL", L`Toggle the panel`, togglePanel, L`Panel tools`);
+
+on PLAYER_LOGIN() {
+  togglePanel();
+}

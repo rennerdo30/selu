@@ -30,6 +30,7 @@ pub use modules::{ModuleBindings, ModuleExport, ModuleExports, reserved_module_p
 mod rules;
 // One file per language area. The central `stmt`/`expr_inner` matches only
 // dispatch; each area's checks live in its own file (docs/WORK-PACKAGES.md).
+mod bindings;
 mod data;
 mod errors;
 mod functions;

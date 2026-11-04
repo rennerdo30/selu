@@ -165,6 +165,9 @@ fn assert_statement_coverage(input: &str, path: &str, lua: &str, map: &selu_sour
                     if n == "hookScript" {
                         return "HookScript".into();
                     }
+                    if n == "keybinding" {
+                        return "BINDING_NAME_".into();
+                    }
                     if n == "command" {
                         return "__selu".into();
                     }

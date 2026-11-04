@@ -30,6 +30,7 @@ pub mod runtime;
 pub mod saved;
 pub use errors::uses_errors;
 pub use modules::ModuleBindings;
+pub mod bindings;
 pub mod targets;
 mod wow;
 
@@ -39,6 +40,7 @@ use lua::{BinOp, LBlock, LExpr, LFunction, LStmt, LStmtKind, UnOp, bin, name, no
 pub struct Lowered {
     pub(crate) block: LBlock,
     pub(crate) pieces: Vec<runtime::Piece>,
+    pub bindings: Vec<bindings::Binding>,
     pub locale_keys: Vec<String>,
     pub lua: String,
     pub statement_lines: Vec<(u32, Span)>,
@@ -158,6 +160,7 @@ fn lower_addon_layout(
     Lowered {
         block: out,
         pieces,
+        bindings: l.wow.bindings,
         locale_keys: l.wow.keys,
         lua: printed.text,
         statement_lines: printed.lines,
@@ -227,6 +230,7 @@ pub fn lower_module_layout(
     Lowered {
         block: out,
         pieces,
+        bindings: l.wow.bindings,
         locale_keys: l.wow.keys,
         lua: printed.text,
         statement_lines: printed.lines,
