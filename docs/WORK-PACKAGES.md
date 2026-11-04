@@ -660,3 +660,106 @@ Acceptance:
    demand (not committed).
 6. Report the sizes; plain JSON in git (it deltas well) unless the total
    exceeds 40 MB, then ask.
+
+## Round 5: proof port, named types, more manifest data
+
+Round 5 runs P, L and M3 side by side (owner's goal: port Renner's Toolkit;
+the owner was away and the parent decided the scope). "How every package
+works" applies unchanged.
+
+| Package | Owned files | Codes |
+|---|---|---|
+| P proof port | `proof/junksell/` (a Selu project), `docs/proof/junksell.md` | none |
+| L named types | `selu-check/src/aliases.rs` (new), `crates/selu-cli/tests/aliases.rs`, `docs/lang/types.md`, `examples/named-types/` | `SELU0520`-`0539` |
+| M3 manifest data | the generator crate, `crates/selu-manifest/`, `manifests/*/`, `docs/manifests.md` | `SELU02xx` |
+
+### P: proof port of `JunkSell`
+
+SPEC-V1 section 11 step 8. Source: `E:/Development/RennersAddons/Modules/JunkSell.lua`
+(read-only; the owner's MIT-licensed addon, which also needs the shared
+helpers it calls from `Core.lua`). Acceptance:
+
+1. `proof/junksell/` is a Selu project that reimplements the module's
+   behaviour (selling junk at a merchant, auto-repair, the protected-item
+   buyback, its settings and its English and German strings) as idiomatic
+   Selu, targeting every flavour in `manifests/` with the shared layout,
+   as the owner's addon does. A header comment names the source file and
+   commit it was ported from, and its MIT licence.
+2. **Don't change the compiler.** Every gap, bug, false error, missing API,
+   missing manifest entry or readability problem met while porting goes into
+   `docs/proof/junksell.md` as a numbered entry with a minimal Selu
+   reproduction, what happened, what was expected, and a workaround if one
+   was used. This list is the main result.
+3. It builds for all six flavours (record the warnings), and a simulator
+   test drives a merchant visit with mocked merchant and container APIs
+   (`Sim::eval` stubs) and checks what got sold and repaired.
+4. A comparison in `junksell.md`: lines of Selu versus the original Lua,
+   size and readability of the generated Lua, the `pcall`/`type(...)`
+   guards the original needed versus what `has(...)` and the manifests
+   replace, and anything the port can't express yet.
+
+Shared edits: none. Ask before touching anything outside `proof/` and
+`docs/proof/`.
+
+### L: named types
+
+SPEC-V1 2.1 (`interface`, object types, `unknown` with `typeof`).
+Acceptance:
+
+1. `type Name = <type>;` and `interface Name { field: T; optional?: U; method(a: A): R; }`
+   at the top level of a module, usable in every written type; generic
+   parameters on both (`type Pair<T> = [T, T];`), constraints with
+   `extends`. `export type`/`export interface` and importing them work with
+   D1's modules. Interfaces are structural (as object types today); an
+   interface may `extends` other interfaces. Recursive types
+   (`interface Node { next: Node? }`) work.
+2. `unknown`: a value of type `unknown` can only be passed around, stored or
+   compared with `==`/`!=`, until narrowed with `typeof x == "string"`
+   (`"number"`, `"boolean"`, `"table"`, `"function"`), `x != null`, or an
+   assignment to a declared type with an explicit check. Untyped game values
+   stay untyped (not `unknown`): `unknown` is for code that opts in, and for
+   `*.d.selu` declarations later.
+3. Diagnostics print type names, not their expansion, where a name exists.
+4. Example `examples/named-types/`.
+
+Shared edits allowed: parser and AST for `type`, `interface`, generic
+parameter lists and `typeof` (you own those additions; they are new
+syntax nobody else touches this round); one dispatch each in the checker's
+block predeclaration, statement match and written-type resolution; the
+`Type` representation in `types.rs` for named and generic types (keep
+existing variants working); module export/import of types in
+`modules.rs`.
+
+### M3: more manifest data
+
+Acceptance:
+
+1. Named frames and regions created by Blizzard's XML in each branch
+   (`<Frame name="MerchantFrame" ...>`, buttons such as
+   `QuestFrameAcceptButton`, `WorldMapFrame`), including `$parent` name
+   resolution, as globals with their widget type, evidence `source`, names
+   only. Use a real XML parser.
+2. Font objects (`GameFontNormal`, `GameFontHighlightSmall`...) from XML
+   `<Font>`/`<FontFamily>` definitions as globals of a font-object type.
+3. Global data tables assigned at top level in Blizzard Lua (`SOUNDKIT`,
+   constants tables), as globals with field names where they are literal
+   tables (values only for numbers and strings), evidence `source`.
+4. Templates: members that XML templates (`BackdropTemplate`,
+   `UIPanelButtonTemplate`, `GameTooltipTemplate`...) add through mixins
+   (`mixin="BackdropTemplateMixin"`), recorded per template, so the
+   checker can later type `CreateFrame("Frame", ..., "BackdropTemplate")`.
+   The checker change is not part of M3; record the data and its schema.
+5. Regenerate all six manifests from their pinned commits; deterministic;
+   report counts and size (ask the parent if the total passes 45 MB).
+   The owner's survey globals that were unresolved (`MerchantFrame`,
+   `WorldMapFrame`, `QuestFrameAcceptButton`, `GameFontNormal`, `SOUNDKIT`,
+   `ContainerFrameItemButton_Update`) resolve, or are listed with every
+   location searched.
+
+Shared edits: none outside the manifest crates and data. The data source
+`E:/Development/wow-ui-source` is read-only as before.
+
+### Merge order (round 5)
+
+M3 and L in any order; P last (it reports against `master` at its base and
+is merged as documentation plus the proof project).
