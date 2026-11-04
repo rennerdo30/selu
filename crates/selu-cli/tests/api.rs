@@ -65,7 +65,7 @@ fn results_widgets_events_and_namespaces() {
         );
         assert_eq!(
             codes(
-                r#"const name: string = UnitName("player"); const [a,b] = UnitName("player"); const f = UnitName; const n: string = f("player"); const w = CreateFrame("Button"); const t = w.CreateTexture(); t.SetSize(8, 8); const label = w.CreateFontString(); label.SetText(name);"#,
+                r#"const name: string = UnitName("player") ?? ""; const [a,b] = UnitName("player"); const f = UnitName; const n: string = f("player") ?? ""; const w = CreateFrame("Button"); const t = w.CreateTexture(); t.SetSize(8, 8); const label = w.CreateFontString(); label.SetText(name);"#,
                 flavour
             ),
             Vec::<String>::new()
@@ -105,7 +105,12 @@ function identity(f) { return f; }
 const passed = identity(alias);
 print(passed("player"));
 "#;
-    for flavour in ["retail", "forever"] {
+    for flavour in [
+        "classic-era",
+        "classic-anniversary",
+        "classic-titan",
+        "classic",
+    ] {
         let lua = compile(src, flavour);
         let sim = selu_sim::Sim::new().unwrap();
         sim.load_files(&[
@@ -163,7 +168,7 @@ fn imported_multiple_result_function_keeps_its_convention() {
             selu_lower::ModuleBindings::new("base".into(), BTreeMap::new(), &base),
         )
         .lua;
-        let main=selu_syntax::parse("main.selu", r#"import { nameOf } from "./base"; const name: string = nameOf("player"); const [a,b] = nameOf("player"); print(nameOf("player")); print(a,b);"#).unwrap();
+        let main=selu_syntax::parse("main.selu", r#"import { nameOf } from "./base"; const maybeName = readable(nameOf("player")); const name: string = maybeName != null ? maybeName : ""; const [a,b] = nameOf("player"); print(readable(nameOf("player"))); print(readable(a),readable(b));"#).unwrap();
         let imports = BTreeMap::from([("./base".into(), exports.clone())]);
         let (checked, _) = selu_check::check_module(
             &main,
@@ -217,7 +222,7 @@ fn primitive_aliases_and_scalar_unions() {
     for flavour in ["retail", "forever"] {
         assert_eq!(
             codes(
-                r#"const f = CreateFrame("Frame"); f.SetPoint("TOP", UIParent, "TOP", 0, -40); const health: number = UnitHealth("player"); C_Spell.GetSpellInfo(123); C_Spell.GetSpellInfo("Fireball");"#,
+                r#"const f = CreateFrame("Frame"); f.SetPoint("TOP", UIParent, "TOP", 0, -40); const health: number = UnitHealth("player") ?? 0; C_Spell.GetSpellInfo(123); C_Spell.GetSpellInfo("Fireball");"#,
                 flavour
             ),
             Vec::<String>::new()
@@ -236,17 +241,25 @@ fn returned_scalar_unions_require_all_members_to_fit() {
     )
     .unwrap();
     for mut m in all.into_iter().filter(|m| !m.fixture) {
+        let modern = matches!(m.flavour.as_str(), "retail" | "forever");
+        let api = if modern { "GetBuildInfo" } else { "UnitName" };
         // Model a documented API returning the same scalar union accepted by GetSpellInfo.
         let sig = m
             .functions
             .iter_mut()
-            .find(|f| f.name == "UnitName")
+            .find(|f| f.name == api)
             .unwrap()
             .signature
             .as_mut()
             .unwrap();
         sig.returns[0].ty = Some("SpellIdentifier".into());
-        let p=selu_syntax::parse("union.selu",r#"const onlyString: string = UnitName("player"); const onlyNumber: number = UnitName("player"); C_Spell.GetSpellInfo(UnitName("player"));"#).unwrap();
+        let source = r#"const onlyString: string = GetBuildInfo(); const onlyNumber: number = GetBuildInfo(); C_Spell.GetSpellInfo(GetBuildInfo());"#;
+        let source = if modern {
+            source.to_string()
+        } else {
+            source.replace("GetBuildInfo()", "UnitName(\"player\")")
+        };
+        let p = selu_syntax::parse("union.selu", &source).unwrap();
         assert_eq!(
             selu_check::check(&p, &m)
                 .iter()
@@ -335,7 +348,12 @@ fn api_origin_is_diagnostic_only_and_survives_aliases() {
 
 #[test]
 fn explicit_wrapper_returns_exactly_one_value() {
-    for flavour in ["retail", "forever"] {
+    for flavour in [
+        "classic-era",
+        "classic-anniversary",
+        "classic-titan",
+        "classic",
+    ] {
         let lua = compile(
             r#"function one(unit: string): string { return UnitName(unit); } global wrapped = one;"#,
             flavour,
@@ -351,13 +369,18 @@ fn explicit_wrapper_returns_exactly_one_value() {
 
 #[test]
 fn collections_reject_multiple_result_callbacks_and_accept_wrappers() {
-    for flavour in ["retail", "forever"] {
+    for flavour in [
+        "classic-era",
+        "classic-anniversary",
+        "classic-titan",
+        "classic",
+    ] {
         assert_eq!(
             codes(r#"const names = ["player"].map(UnitName);"#, flavour),
             vec!["SELU0485"]
         );
         let lua = compile(
-            r#"const names = ["player", "target"].map(u => UnitName(u)); print(names.length, names[0], names[1]);"#,
+            r#"global mappedName = (u: string) => UnitName(u); const names = ["player", "target"].map(mappedName); print(names.length, names[0], names[1]);"#,
             flavour,
         );
         let sim = selu_sim::Sim::new().unwrap();
@@ -365,6 +388,9 @@ fn collections_reject_multiple_result_callbacks_and_accept_wrappers() {
             .unwrap();
         sim.load_files(&[("map.lua".into(), lua)]).unwrap();
         assert_eq!(sim.prints(), ["2\tplayer\ttarget"]);
+        sim.eval("print(select('#', mappedName('player')))")
+            .unwrap();
+        assert_eq!(sim.prints(), ["2\tplayer\ttarget", "1"]);
     }
 }
 
@@ -570,15 +596,12 @@ fn review_parent_and_parentheses() {
 #[test]
 fn review_parentheses_only_in_expanding_positions() {
     let lua = compile(
-        r#"print(UnitName("player"), "end"); const o = { name: UnitName("player") }; print(UnitName("player") + "!");"#,
+        r#"print(GetBuildInfo(), "end"); const o = { name: GetBuildInfo() }; print(GetBuildInfo() + "!");"#,
         "retail",
     );
-    assert!(
-        lua.contains("print(UnitName(\"player\"), \"end\")"),
-        "{lua}"
-    );
-    assert!(lua.contains("name = UnitName(\"player\")"), "{lua}");
-    assert!(lua.contains("UnitName(\"player\") .. \"!\""), "{lua}");
+    assert!(lua.contains("print(GetBuildInfo(), \"end\")"), "{lua}");
+    assert!(lua.contains("name = GetBuildInfo()"), "{lua}");
+    assert!(lua.contains("GetBuildInfo() .. \"!\""), "{lua}");
 }
 
 #[test]
@@ -712,7 +735,7 @@ fn review_region_factory_return_identities() {
 #[test]
 fn review_scalar_conditions_and_index_keys() {
     let lua = compile(
-        r#"const names = new Map<string, string>(); const name = names.get(UnitName("player")); if (UnitExists("player")) { print("exists"); } while (UnitExists("target")) { break; }"#,
+        r#"const names = new Map<string, string>(); const name = names.get(UnitName("player") ?? ""); if (UnitExists("player")) { print("exists"); } while (UnitExists("target")) { break; }"#,
         "retail",
     );
     use selu_lower::lua::LExpr;
@@ -728,6 +751,6 @@ fn review_scalar_conditions_and_index_keys() {
 
 #[test]
 fn review_nonfinal_array_field_is_scalar() {
-    let lua = compile(r#"const values = [UnitName("player"), "end"];"#, "retail");
-    assert_eq!(lua, "local values = { UnitName(\"player\"), \"end\" }\n");
+    let lua = compile(r#"const values = [GetBuildInfo(), "end"];"#, "retail");
+    assert_eq!(lua, "local values = { GetBuildInfo(), \"end\" }\n");
 }

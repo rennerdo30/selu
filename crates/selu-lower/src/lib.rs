@@ -13,7 +13,6 @@ use selu_check::TypeTable;
 use selu_diagnostics::Span;
 use selu_manifest::Manifest;
 use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind, visit};
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 pub mod lua;
@@ -26,6 +25,7 @@ mod loops;
 mod modules;
 mod patterns;
 mod purity;
+mod restrictions;
 pub mod saved;
 pub use errors::uses_errors;
 pub use modules::ModuleBindings;
@@ -34,37 +34,31 @@ mod wow;
 
 use lua::{BinOp, LBlock, LExpr, LFunction, LStmt, LStmtKind, UnOp, bin, name, not};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SourceMapEntry {
-    /// 1-based line in the generated Lua.
-    pub generated_line: u32,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct SourceMap {
-    pub entries: Vec<SourceMapEntry>,
-}
-
-impl SourceMap {
-    /// The source span for a generated line: the exact entry, or the
-    /// nearest entry at or before it.
-    pub fn lookup(&self, generated_line: u32) -> Option<&Span> {
-        self.entries
-            .iter()
-            .rfind(|e| e.generated_line <= generated_line)
-            .map(|e| &e.span)
-    }
-    pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into())
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Lowered {
     pub locale_keys: Vec<String>,
     pub lua: String,
-    pub source_map: SourceMap,
+    pub statement_lines: Vec<(u32, Span)>,
+}
+
+impl Lowered {
+    /// Bind printed statement positions to the exact source text used by the build.
+    pub fn source_map(&self, chunk: &str, path: &str, text: &str) -> selu_sourcemap::SourceMap {
+        let mut map = selu_sourcemap::SourceMap::new(chunk);
+        let source = map.add_source(path, text);
+        for (generated, span) in &self.statement_lines {
+            let prefix = &text[..span.start.min(text.len())];
+            map.push(selu_sourcemap::Range {
+                gen_start: *generated,
+                gen_end: *generated,
+                source,
+                line: prefix.bytes().filter(|b| *b == b'\n').count() as u32 + 1,
+                column: prefix.rsplit('\n').next().unwrap_or("").chars().count() as u32 + 1,
+            });
+        }
+        map.finish();
+        map
+    }
 }
 
 const EVENT_PROLOGUE: &str = r#"-- Selu: shared event frame and dispatch table
@@ -160,6 +154,9 @@ fn lower_addon_layout(
     let captures_end = out.len();
     out.extend(saved::setup(program));
     out.extend(l.error_setup(program));
+    out.extend(restrictions::emit_restriction_runtime(
+        program, types, manifest,
+    ));
     let errors_index = out.len();
     let has_handlers = program.stmts.iter().any(targets::contains_event);
     if has_handlers {
@@ -183,16 +180,7 @@ fn lower_addon_layout(
     Lowered {
         locale_keys: l.wow.keys,
         lua: printed.text,
-        source_map: SourceMap {
-            entries: printed
-                .lines
-                .into_iter()
-                .map(|(generated_line, span)| SourceMapEntry {
-                    generated_line,
-                    span,
-                })
-                .collect(),
-        },
+        statement_lines: printed.lines,
     }
 }
 
@@ -274,6 +262,9 @@ pub fn lower_module_layout(
     let runtime_index = out.len();
     out.extend(saved::setup(program));
     out.extend(l.error_setup(program));
+    out.extend(restrictions::emit_restriction_runtime(
+        program, types, manifest,
+    ));
     let errors_index = out.len();
     l.module_prologue(&mut out);
     let has_handlers = program.stmts.iter().any(targets::contains_event);
@@ -291,16 +282,7 @@ pub fn lower_module_layout(
     Lowered {
         locale_keys: l.wow.keys,
         lua: printed.text,
-        source_map: SourceMap {
-            entries: printed
-                .lines
-                .into_iter()
-                .map(|(generated_line, span)| SourceMapEntry {
-                    generated_line,
-                    span,
-                })
-                .collect(),
-        },
+        statement_lines: printed.lines,
     }
 }
 
@@ -388,7 +370,13 @@ impl Lowerer<'_> {
         let span = &s.span;
         match &s.kind {
             StmtKind::Try { .. } | StmtKind::Throw { .. } => self.error_stmt(s, out),
-            StmtKind::Saved { .. } | StmtKind::Migrate { .. } => self.saved_stmt(s, forward, out),
+            StmtKind::Saved { .. } | StmtKind::Migrate { .. } => {
+                let start = out.len();
+                self.saved_stmt(s, forward, out);
+                for statement in &mut out[start..] {
+                    statement.span = Some(span.clone());
+                }
+            }
             StmtKind::VarDecl { init: None, .. } if forward => {}
             StmtKind::VarDecl {
                 name: n,
@@ -634,11 +622,17 @@ impl Lowerer<'_> {
         if chain.len() > 1 && (declare || !reads_var(&chain[1..])) {
             let mut pre = Vec::new();
             let first = self.expr(chain[0], &mut pre);
+            let first = self.read_if_secret(chain[0], first);
             out.extend(pre);
             out.push(store(first));
-            for part in &chain[1..] {
+            for (index, part) in chain[1..].iter().enumerate() {
                 let mut part_pre = Vec::new();
                 let v = self.expr(part, &mut part_pre);
+                let v = if index + 2 < chain.len() {
+                    self.read_if_secret(part, v)
+                } else {
+                    v
+                };
                 part_pre.push(LStmt::new(
                     LStmtKind::Assign(vec![var.clone()], vec![v]),
                     span,
@@ -724,7 +718,7 @@ impl Lowerer<'_> {
                 name: field,
             } => self.data_field(object, field, pre),
             ExprKind::Call { callee, args } => {
-                let v = self.call(callee, args, pre);
+                let v = self.restricted_call(callee, args, pre);
                 if self.types.is_single_value(e.id)
                     && matches!(v, LExpr::Call(..) | LExpr::Method(..))
                     && matches!(
@@ -798,6 +792,11 @@ impl Lowerer<'_> {
         pre: &mut LBlock,
     ) -> LExpr {
         let a = self.expr(left, pre);
+        let a = if op == "??" {
+            self.read_if_secret(left, a)
+        } else {
+            a
+        };
         let mut right_pre = Vec::new();
         let b = self.expr(right, &mut right_pre);
         if right_pre.is_empty() {
@@ -1048,10 +1047,9 @@ mod tests {
             assert!(out.lua.contains(want), "missing {want:?} in\n{}", out.lua);
         }
         assert!(
-            out.source_map
-                .entries
+            out.statement_lines
                 .iter()
-                .all(|e| e.span.file == "main.selu")
+                .all(|(_, span)| span.file == "main.selu")
         );
         // The handler's `print` line maps back to the source.
         let line = out
@@ -1060,7 +1058,11 @@ mod tests {
             .position(|l| l.contains("print(greet())"))
             .unwrap() as u32
             + 1;
-        assert!(out.source_map.lookup(line).is_some());
+        assert!(
+            out.statement_lines
+                .iter()
+                .any(|(generated, _)| *generated == line)
+        );
     }
 
     #[test]

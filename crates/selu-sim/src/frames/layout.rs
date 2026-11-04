@@ -155,7 +155,7 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
         }
         Some((pos - f * size, size))
     }
-    let metric = crate::core::measure_text(r.text.as_deref().unwrap_or(""), r.font_size);
+    let metric = crate::core::measure_text(r.display_text().unwrap_or(""), r.font_size);
     let intrinsic = r.kind == "FontString";
     let width = if intrinsic && r.width == 0.0 {
         metric.width

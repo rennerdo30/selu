@@ -67,3 +67,36 @@ Both entry paths order their prelude as loader, protected class/saved captures,
 namespace initialization, then runtimes. The class capture precedes the WoW
 runtime even for a standalone lowering. Saved runtime setup follows namespace initialization; captures occur
 once even when both saved declarations and classes occur in the same file.
+
+## Source maps
+
+`selu build` writes readable JSON maps to
+`dist/.selu/<Addon>/<module>.lua.map` (including module subdirectories).
+Maps never go inside the addon folder or its `.toc`. The shared runtime and
+preludes have no source positions.
+
+Version 1 has `version`, `chunk`, `sources` and `ranges`. `chunk` is the
+reported Lua filename. Each source has a normalized project-relative `path`
+and `hash` (`fnv1a64:` followed by 16 hexadecimal digits over the UTF-8 source).
+Each range has `gen_start`, `gen_end` (inclusive, one-based generated lines),
+`source` (zero-based source index), and one-based `line` and `column`.
+Columns count Unicode characters. The printer emits a range for each printed
+statement line, sorted by generated start; nested statement positions win on
+shared lines. Callback bodies map to their own statements, including nested
+callbacks. Synthetic statements carrying an originating span map to that span;
+runtime statements without one are absent. Generated syntax such as `end`
+maps to its containing statement. Erased types and imports emit no executable
+statement and have no generated position.
+
+`selu-sourcemap` reads and writes this format, looks up positions in both
+directions, and rewrites Lua error positions through `map_lua_error`.
+Unmapped positions remain unchanged. Hashes allow consumers to detect stale
+source text; they are not security hashes.
+
+Distinct source statements use distinct generated lines when a compact `if`
+would otherwise make one position hide the other. Multi-line conditions retain
+their body positions after all condition lines. Saved declarations and migration
+registrations map to their declarations; shared saved runtime setup stays unmapped.
+Error chunk selection prefers normalized exact paths, then a unique most-specific
+path suffix. Ambiguous basenames stay unchanged. Quoted chunk names are delimited
+by `[string "` and `"]`, so addon folder names may contain spaces.

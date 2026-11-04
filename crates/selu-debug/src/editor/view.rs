@@ -6,12 +6,82 @@ use super::check::{Problem, Severity};
 use super::complete::{self, Context};
 use super::highlight::{self, Kind};
 use super::{Completion, Editor, byte_to_char, char_to_byte, color, problem_range};
-use crate::theme::{caption, icon, icon_font, palette};
+use crate::theme::{caption, icon, icon_font, icon_text, palette};
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Key, Modifiers, Sense, Shape, Stroke,
     TextFormat, Vec2, text::LayoutJob,
 };
 use std::collections::BTreeMap;
+
+/// What the Explorer is editing inline.
+pub enum Edit {
+    /// Naming a new file or folder in `dir`.
+    New {
+        dir: String,
+        folder: bool,
+        name: String,
+    },
+    Rename {
+        path: String,
+        name: String,
+    },
+}
+
+/// Explorer actions, collected while drawing and applied afterwards.
+enum Action {
+    Open(String),
+    Toggle(String),
+    StartNew(String, bool),
+    StartRename(String),
+    CommitEdit,
+    CancelEdit,
+    AskDelete(String),
+    Reveal(String),
+    CopyPath(String),
+    Settings,
+}
+
+/// The Explorer's folder tree, built from the project listing.
+struct Node {
+    name: String,
+    /// Project-relative, forward slashes, no trailing slash.
+    path: String,
+    dir: bool,
+    children: BTreeMap<(bool, String), Node>,
+}
+
+impl Node {
+    /// `entries` are files, and folders with a trailing `/`.
+    fn build(entries: &[String]) -> Node {
+        let mut root = Node {
+            name: String::new(),
+            path: String::new(),
+            dir: true,
+            children: BTreeMap::new(),
+        };
+        for e in entries {
+            let is_dir = e.ends_with('/');
+            let parts: Vec<&str> = e.trim_end_matches('/').split('/').collect();
+            let mut node = &mut root;
+            for (i, part) in parts.iter().enumerate() {
+                let last = i + 1 == parts.len();
+                let dir = !last || is_dir;
+                let path = parts[..=i].join("/");
+                // Folders sort before files.
+                node = node
+                    .children
+                    .entry((!dir, part.to_lowercase()))
+                    .or_insert_with(|| Node {
+                        name: part.to_string(),
+                        path,
+                        dir,
+                        children: BTreeMap::new(),
+                    });
+            }
+        }
+        root
+    }
+}
 
 pub struct Find {
     pub query: String,
@@ -34,6 +104,13 @@ fn file_icon(name: &str) -> (&'static str, Color32) {
     } else {
         (icon::DOCUMENT, palette::MUTED)
     }
+}
+
+/// Remove this frame's typed text. Some shortcuts arrive both as a key and
+/// as text (Shift+Alt+F also types "F" on Windows); without this the code
+/// editor would insert the character.
+fn swallow_typed_text(ctx: &egui::Context) {
+    ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
 }
 
 fn find_matches(text: &str, find: &Find) -> Vec<std::ops::Range<usize>> {
@@ -91,6 +168,11 @@ impl Editor {
     /// Shortcuts that work anywhere in the window.
     pub fn shortcuts(&mut self, ctx: &egui::Context) {
         let format = ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT | Modifiers::ALT, Key::F));
+        if format {
+            // The shortcut also arrives as typed text ("F"); drop it so the
+            // editor doesn't insert it.
+            swallow_typed_text(ctx);
+        }
         if format && !self.open.is_empty() {
             let now = ctx.input(|i| i.time);
             self.format_active(now);
@@ -107,6 +189,9 @@ impl Editor {
                 i.consume_key(Modifiers::COMMAND, Key::Num0),
             )
         });
+        if save || quick || find || close || zoom_in || zoom_out || zoom_reset {
+            swallow_typed_text(ctx);
+        }
         if save {
             self.save_all();
         }
@@ -186,19 +271,25 @@ impl Editor {
     // -----------------------------------------------------------------
 
     pub fn ui_explorer(&mut self, ui: &mut egui::Ui) {
+        let mut actions: Vec<Action> = Vec::new();
         ui.horizontal(|ui| {
             caption(ui, "Explorer");
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if self.project.is_some()
-                    && ui
-                        .add(
-                            egui::Button::new(crate::theme::icon_text(icon::ADD, 12.0))
-                                .frame(false),
-                        )
+                if self.project.is_some() {
+                    if ui
+                        .add(egui::Button::new(icon_text(icon::NEW_FOLDER, 13.0)).frame(false))
+                        .on_hover_text("New folder in src/")
+                        .clicked()
+                    {
+                        actions.push(Action::StartNew("src".into(), true));
+                    }
+                    if ui
+                        .add(egui::Button::new(icon_text(icon::NEW_FILE, 13.0)).frame(false))
                         .on_hover_text("New file in src/")
                         .clicked()
-                {
-                    self.new_file = Some(String::new());
+                    {
+                        actions.push(Action::StartNew("src".into(), false));
+                    }
                 }
             });
         });
@@ -215,128 +306,416 @@ impl Editor {
             return;
         }
         ui.add_space(2.0);
-        ui.label(
-            egui::RichText::new(self.project_name().to_uppercase())
-                .strong()
-                .size(12.0)
-                .color(palette::TEXT),
+        let header = ui.add(
+            egui::Label::new(
+                egui::RichText::new(self.project_name().to_uppercase())
+                    .strong()
+                    .size(12.0)
+                    .color(palette::TEXT),
+            )
+            .sense(Sense::click()),
         );
+        header.context_menu(|ui| self.background_menu(ui, &mut actions));
         ui.add_space(2.0);
 
-        if let Some(name) = &mut self.new_file {
-            let mut done = None;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("src/").color(palette::MUTED));
-                let r = ui.add(
-                    egui::TextEdit::singleline(name)
-                        .hint_text("name.selu")
-                        .desired_width(140.0),
-                );
-                r.request_focus();
-                if r.lost_focus() {
-                    done = Some(ui.input(|i| i.key_pressed(Key::Enter)));
-                }
-            });
-            match done {
-                Some(true) => {
-                    let mut n = self.new_file.take().unwrap_or_default().trim().to_string();
-                    if !n.is_empty() {
-                        if !n.ends_with(".selu") {
-                            n.push_str(".selu");
-                        }
-                        self.create_file(&format!("src/{n}"));
-                    }
-                }
-                Some(false) => self.new_file = None,
-                None => {}
-            }
-        }
-
-        // Folder tree from the flat file list.
-        let mut tree: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for f in &self.files {
-            let dir = f.rsplit_once('/').map_or("", |(d, _)| d).to_string();
-            tree.entry(dir).or_default().push(f.clone());
-        }
-        let mut open_file = None;
-        let mut toggle = None;
+        let root = Node::build(&self.files);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let dirs: Vec<String> = tree.keys().cloned().collect();
-                for dir in dirs {
-                    let depth = if dir.is_empty() {
-                        0
-                    } else {
-                        dir.matches('/').count() + 1
-                    };
-                    if !dir.is_empty() {
-                        let collapsed = self.collapsed.contains(&dir);
-                        // Hide folders inside a collapsed folder.
-                        if self
-                            .collapsed
-                            .iter()
-                            .any(|c| dir.starts_with(&format!("{c}/")))
-                        {
-                            continue;
-                        }
-                        let name = dir.rsplit('/').next().unwrap_or(&dir);
-                        let row = self.tree_row(
-                            ui,
-                            depth - 1,
-                            if collapsed {
-                                icon::CHEVRON_RIGHT
-                            } else {
-                                icon::CHEVRON_DOWN
-                            },
-                            palette::MUTED,
-                            name,
-                            false,
-                            false,
-                            0,
-                        );
-                        if row.clicked() {
-                            toggle = Some(dir.clone());
-                        }
-                        if collapsed {
-                            continue;
-                        }
-                    }
-                    if self
-                        .collapsed
-                        .iter()
-                        .any(|c| dir.starts_with(&format!("{c}/")) || &dir == c)
-                    {
-                        continue;
-                    }
-                    for f in &tree[&dir] {
-                        let name = f.rsplit('/').next().unwrap_or(f);
-                        let (icon, icon_color) = file_icon(name);
-                        let active = self.open.get(self.active).is_some_and(|b| &b.rel == f);
-                        let dirty = self.open.iter().any(|b| &b.rel == f && b.dirty());
-                        let errors = self
-                            .problems
-                            .iter()
-                            .filter(|p| {
-                                p.file.as_deref() == Some(f.as_str())
-                                    && p.severity == Severity::Error
-                            })
-                            .count();
-                        let row =
-                            self.tree_row(ui, depth, icon, icon_color, name, active, dirty, errors);
-                        if row.clicked() {
-                            open_file = Some(f.clone());
-                        }
-                    }
+                for child in root.children.values() {
+                    self.ui_node(ui, child, 0, &mut actions);
+                }
+                // Right-click on empty space.
+                let rest = ui.available_size().max(egui::vec2(0.0, 40.0));
+                let bg = ui.allocate_response(rest, Sense::click());
+                bg.context_menu(|ui| self.background_menu(ui, &mut actions));
+            });
+        self.ui_delete_confirm(ui.ctx());
+        for a in actions {
+            self.apply(ui.ctx(), a);
+        }
+    }
+
+    fn background_menu(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        if ui.button("New File...").clicked() {
+            actions.push(Action::StartNew("src".into(), false));
+        }
+        if ui.button("New Folder...").clicked() {
+            actions.push(Action::StartNew("src".into(), true));
+        }
+        ui.separator();
+        if ui.button("Project Settings...").clicked() {
+            actions.push(Action::Settings);
+        }
+        if ui.button("Reveal in File Explorer").clicked() {
+            actions.push(Action::Reveal(String::new()));
+        }
+    }
+
+    fn ui_node(&mut self, ui: &mut egui::Ui, node: &Node, depth: usize, actions: &mut Vec<Action>) {
+        // Inline rename replaces the row.
+        if let Some(Edit::Rename { path, name }) = &mut self.edit
+            && *path == node.path
+        {
+            let icon_glyph = if node.dir {
+                icon::FOLDER
+            } else {
+                file_icon(&node.name).0
+            };
+            if let Some(done) = Self::inline_input(ui, depth, icon_glyph, name, "") {
+                actions.push(if done {
+                    Action::CommitEdit
+                } else {
+                    Action::CancelEdit
+                });
+            }
+            return;
+        }
+        if node.dir {
+            let collapsed = self.collapsed.contains(&node.path);
+            let errors = self
+                .problems
+                .iter()
+                .filter(|p| {
+                    p.severity == Severity::Error
+                        && p.file
+                            .as_deref()
+                            .is_some_and(|f| f.starts_with(&format!("{}/", node.path)))
+                })
+                .count();
+            let row = self.tree_row(
+                ui,
+                depth,
+                if collapsed {
+                    icon::CHEVRON_RIGHT
+                } else {
+                    icon::CHEVRON_DOWN
+                },
+                palette::MUTED,
+                &node.name,
+                false,
+                false,
+                if collapsed { errors } else { 0 },
+            );
+            if row.clicked() {
+                actions.push(Action::Toggle(node.path.clone()));
+            }
+            let path = node.path.clone();
+            row.context_menu(|ui| {
+                if ui.button("New File...").clicked() {
+                    actions.push(Action::StartNew(path.clone(), false));
+                }
+                if ui.button("New Folder...").clicked() {
+                    actions.push(Action::StartNew(path.clone(), true));
+                }
+                ui.separator();
+                let top = path == "src";
+                if ui
+                    .add_enabled(!top, egui::Button::new("Rename..."))
+                    .clicked()
+                {
+                    actions.push(Action::StartRename(path.clone()));
+                }
+                if ui.add_enabled(!top, egui::Button::new("Delete")).clicked() {
+                    actions.push(Action::AskDelete(path.clone()));
+                }
+                ui.separator();
+                if ui.button("Reveal in File Explorer").clicked() {
+                    actions.push(Action::Reveal(path.clone()));
+                }
+                if ui.button("Copy Path").clicked() {
+                    actions.push(Action::CopyPath(path.clone()));
                 }
             });
-        if let Some(d) = toggle
-            && !self.collapsed.remove(&d)
-        {
-            self.collapsed.insert(d);
+            if collapsed {
+                return;
+            }
+            // New file or folder being named in this folder.
+            if let Some(Edit::New { dir, folder, name }) = &mut self.edit
+                && *dir == node.path
+            {
+                let glyph = if *folder { icon::FOLDER } else { icon::CODE };
+                let hint = if *folder { "folder name" } else { "name.selu" };
+                if let Some(done) = Self::inline_input(ui, depth + 1, glyph, name, hint) {
+                    actions.push(if done {
+                        Action::CommitEdit
+                    } else {
+                        Action::CancelEdit
+                    });
+                }
+            }
+            for child in node.children.values() {
+                self.ui_node(ui, child, depth + 1, actions);
+            }
+        } else {
+            let f = &node.path;
+            let (glyph, icon_color) = file_icon(&node.name);
+            let active = self.open.get(self.active).is_some_and(|b| &b.rel == f);
+            let dirty = self.open.iter().any(|b| &b.rel == f && b.dirty());
+            let errors = self
+                .problems
+                .iter()
+                .filter(|p| p.file.as_deref() == Some(f.as_str()) && p.severity == Severity::Error)
+                .count();
+            let row = self.tree_row(
+                ui, depth, glyph, icon_color, &node.name, active, dirty, errors,
+            );
+            if row.clicked() {
+                actions.push(Action::Open(f.clone()));
+            }
+            let path = f.clone();
+            let is_config = path == "selu.toml";
+            row.context_menu(|ui| {
+                if ui.button("Open").clicked() {
+                    actions.push(Action::Open(path.clone()));
+                }
+                if is_config && ui.button("Project Settings...").clicked() {
+                    actions.push(Action::Settings);
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(!is_config, egui::Button::new("Rename..."))
+                    .clicked()
+                {
+                    actions.push(Action::StartRename(path.clone()));
+                }
+                if ui
+                    .add_enabled(!is_config, egui::Button::new("Delete"))
+                    .clicked()
+                {
+                    actions.push(Action::AskDelete(path.clone()));
+                }
+                ui.separator();
+                if ui.button("Reveal in File Explorer").clicked() {
+                    actions.push(Action::Reveal(path.clone()));
+                }
+                if ui.button("Copy Path").clicked() {
+                    actions.push(Action::CopyPath(path.clone()));
+                }
+            });
         }
-        if let Some(f) = open_file {
-            self.open_file(&f);
+    }
+
+    /// A text field in a tree row. `Some(true)` when Enter confirms it,
+    /// `Some(false)` when it is dismissed.
+    fn inline_input(
+        ui: &mut egui::Ui,
+        depth: usize,
+        glyph: &str,
+        name: &mut String,
+        hint: &str,
+    ) -> Option<bool> {
+        let mut result = None;
+        ui.horizontal(|ui| {
+            ui.add_space(8.0 + depth as f32 * 14.0);
+            ui.label(icon_text(glyph, 12.0).color(palette::ACCENT));
+            let r = ui.add(
+                egui::TextEdit::singleline(name)
+                    .hint_text(hint)
+                    .desired_width(ui.available_width() - 8.0),
+            );
+            if !r.has_focus() && !r.lost_focus() {
+                r.request_focus();
+            }
+            if r.lost_focus() {
+                result = Some(ui.input(|i| i.key_pressed(Key::Enter)));
+            }
+        });
+        result
+    }
+
+    fn ui_delete_confirm(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.confirm_delete.clone() else {
+            return;
+        };
+        let mut close = false;
+        egui::Modal::new(egui::Id::unique("confirm-delete")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.label(
+                egui::RichText::new(format!("Delete {path}?"))
+                    .size(16.0)
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("It goes to the Recycle Bin, so you can restore it.")
+                    .color(palette::MUTED),
+            );
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let delete = egui::Button::new(
+                    egui::RichText::new("Move to Recycle Bin").color(Color32::WHITE),
+                )
+                .fill(palette::ERROR.gamma_multiply(0.8));
+                if ui.add(delete).clicked() {
+                    self.delete_entry(&path);
+                    close = true;
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                    close = true;
+                }
+            });
+        });
+        if close {
+            self.confirm_delete = None;
+        }
+    }
+
+    /// Open Project Settings: asked for from the Explorer; the app opens it.
+    pub fn take_settings_request(&mut self) -> bool {
+        std::mem::take(&mut self.settings_request)
+    }
+
+    fn apply(&mut self, ctx: &egui::Context, action: Action) {
+        match action {
+            Action::Open(path) => self.open_file(&path),
+            Action::Toggle(dir) => {
+                if !self.collapsed.remove(&dir) {
+                    self.collapsed.insert(dir);
+                }
+            }
+            Action::StartNew(dir, folder) => {
+                self.collapsed.remove(&dir);
+                self.edit = Some(Edit::New {
+                    dir,
+                    folder,
+                    name: String::new(),
+                });
+            }
+            Action::StartRename(path) => {
+                let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+                self.edit = Some(Edit::Rename { path, name });
+            }
+            Action::CommitEdit => {
+                if let Some(edit) = self.edit.take() {
+                    self.commit_edit(edit);
+                }
+            }
+            Action::CancelEdit => self.edit = None,
+            Action::AskDelete(path) => self.confirm_delete = Some(path),
+            Action::Reveal(path) => {
+                if let Some(project) = &self.project {
+                    let abs = if path.is_empty() {
+                        project.clone()
+                    } else {
+                        project.join(&path)
+                    };
+                    let mut cmd = std::process::Command::new("explorer");
+                    if abs.is_file() {
+                        cmd.arg(format!("/select,{}", abs.display()));
+                    } else {
+                        cmd.arg(&abs);
+                    }
+                    let _ = cmd.spawn();
+                }
+            }
+            Action::CopyPath(path) => {
+                if let Some(project) = &self.project {
+                    ctx.copy_text(project.join(&path).display().to_string());
+                    self.messages.push(format!("copied the path of {path}"));
+                }
+            }
+            Action::Settings => self.settings_request = true,
+        }
+    }
+
+    fn commit_edit(&mut self, edit: Edit) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        let valid = |n: &str| {
+            !n.is_empty()
+                && !n.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+                && n != "."
+                && n != ".."
+        };
+        match edit {
+            Edit::New { dir, folder, name } => {
+                let mut name = name.trim().to_string();
+                if !valid(&name) {
+                    if !name.is_empty() {
+                        self.messages.push(format!("`{name}` is not a valid name"));
+                    }
+                    return;
+                }
+                if !folder && !name.contains('.') && dir.starts_with("src") {
+                    name.push_str(".selu");
+                }
+                let rel = format!("{dir}/{name}");
+                let abs = project.join(&rel);
+                if abs.exists() {
+                    self.messages.push(format!("{rel} already exists"));
+                    return;
+                }
+                let result = if folder {
+                    std::fs::create_dir_all(&abs)
+                } else {
+                    std::fs::write(&abs, "")
+                };
+                match result {
+                    Ok(()) => {
+                        self.refresh_files();
+                        if !folder {
+                            self.open_file(&rel);
+                        }
+                        self.messages.push(format!("created {rel}"));
+                    }
+                    Err(e) => self.messages.push(format!("cannot create {rel}: {e}")),
+                }
+            }
+            Edit::Rename { path, name } => {
+                let name = name.trim().to_string();
+                let old_name = path.rsplit('/').next().unwrap_or(&path);
+                if name == old_name || !valid(&name) {
+                    return;
+                }
+                let parent = path.rsplit_once('/').map_or("", |(d, _)| d);
+                let new_rel = if parent.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{parent}/{name}")
+                };
+                let (from, to) = (project.join(&path), project.join(&new_rel));
+                if to.exists() {
+                    self.messages.push(format!("{new_rel} already exists"));
+                    return;
+                }
+                match std::fs::rename(&from, &to) {
+                    Ok(()) => {
+                        // Open tabs follow the file or folder.
+                        for b in &mut self.open {
+                            if b.rel == path {
+                                b.rel = new_rel.clone();
+                            } else if let Some(rest) = b.rel.strip_prefix(&format!("{path}/")) {
+                                b.rel = format!("{new_rel}/{rest}");
+                            }
+                        }
+                        self.refresh_files();
+                        self.edited_at = Some(0.0);
+                        self.messages.push(format!("renamed {path} to {new_rel}"));
+                    }
+                    Err(e) => self.messages.push(format!("cannot rename {path}: {e}")),
+                }
+            }
+        }
+    }
+
+    fn delete_entry(&mut self, path: &str) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        match trash::delete(project.join(path)) {
+            Ok(()) => {
+                let prefix = format!("{path}/");
+                self.open
+                    .retain(|b| b.rel != path && !b.rel.starts_with(&prefix));
+                self.active = self.active.min(self.open.len().saturating_sub(1));
+                self.refresh_files();
+                self.edited_at = Some(0.0);
+                self.messages
+                    .push(format!("moved {path} to the Recycle Bin"));
+            }
+            Err(e) => self.messages.push(format!("cannot delete {path}: {e}")),
         }
     }
 

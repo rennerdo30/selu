@@ -36,11 +36,32 @@ enum LineKind {
     Error,
     Input,
     Build,
+    /// A divider such as "/reload".
+    Separator,
 }
 
 struct Line {
     kind: LineKind,
     text: String,
+    /// Game time when the line arrived.
+    time: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConsoleFilter {
+    All,
+    Output,
+    Errors,
+    Logs,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EventFilter {
+    All,
+    Events,
+    Output,
+    Timers,
+    Errors,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -73,6 +94,12 @@ pub struct Studio {
     selected: Option<u32>,
     input: String,
     history: Vec<String>,
+    history_pos: Option<usize>,
+    console_filter: ConsoleFilter,
+    console_search: String,
+    event_filter: EventFilter,
+    event_search: String,
+    logo: Option<egui::TextureHandle>,
     event_name: String,
     event_args: String,
     playing: bool,
@@ -120,6 +147,13 @@ impl Studio {
             selected: None,
             input: String::new(),
             history: Vec::new(),
+            history_pos: None,
+            console_filter: ConsoleFilter::All,
+            console_search: String::new(),
+            event_filter: EventFilter::All,
+            event_search: String::new(),
+            logo: crate::theme::logo_image()
+                .map(|img| ctx.load_texture("selu-logo", img, egui::TextureOptions::LINEAR)),
             event_name: String::new(),
             event_args: String::new(),
             playing: false,
@@ -144,6 +178,12 @@ impl Studio {
             editor: crate::editor::Editor::new(opts_project, opts_selu, opts_target, ctx),
             confirm_close: false,
         };
+        // For screenshots in checks: pick the bottom tab.
+        match std::env::var("SELU_STUDIO_TAB").as_deref() {
+            Ok("console") => studio.tab = Tab::Console,
+            Ok("events") => studio.tab = Tab::Events,
+            _ => {}
+        }
         // For screenshots in checks: open Project Settings at start.
         if std::env::var_os("SELU_STUDIO_OPEN_SETTINGS").is_some() {
             studio.open_settings();
@@ -171,9 +211,11 @@ impl Studio {
         if self.console.len() == CONSOLE_KEEP {
             self.console.pop_front();
         }
+        let time = self.snapshot.as_ref().map_or(0.0, |s| s.time);
         self.console.push_back(Line {
             kind,
             text: text.into(),
+            time,
         });
     }
 
@@ -210,8 +252,8 @@ impl Studio {
                     self.trace.clear();
                     self.selected = None;
                     self.line(
-                        LineKind::Log,
-                        format!("-- /reload (session {generation}) --"),
+                        LineKind::Separator,
+                        format!("/reload · session {generation}"),
                     );
                 }
                 Update::Done { .. } => self.in_flight = self.in_flight.saturating_sub(1),
@@ -433,7 +475,11 @@ impl eframe::App for Studio {
         }
         self.global_shortcuts(&ctx);
         self.close_guard(&ctx);
+        self.edge_resize(&ctx);
         self.editor.ui_quick_open(&ctx);
+        if self.editor.take_settings_request() {
+            self.open_settings();
+        }
         if self.shortcuts_open {
             self.shortcuts_window(&ctx);
         }
@@ -676,10 +722,111 @@ impl Studio {
         }
     }
 
+    /// Resize from the window edges (the window has no system frame).
+    fn edge_resize(&self, ctx: &egui::Context) {
+        use egui::{CursorIcon, ResizeDirection as D};
+        if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+            return;
+        }
+        let screen = ctx.content_rect();
+        let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
+        let m = 5.0;
+        let (w, e) = (pos.x - screen.left() < m, screen.right() - pos.x < m);
+        let (n, s) = (pos.y - screen.top() < m, screen.bottom() - pos.y < m);
+        let dir = match (n, s, w, e) {
+            (true, _, true, _) => D::NorthWest,
+            (true, _, _, true) => D::NorthEast,
+            (_, true, true, _) => D::SouthWest,
+            (_, true, _, true) => D::SouthEast,
+            (true, ..) => D::North,
+            (_, true, ..) => D::South,
+            (_, _, true, _) => D::West,
+            (_, _, _, true) => D::East,
+            _ => return,
+        };
+        ctx.set_cursor_icon(match dir {
+            D::North | D::South => CursorIcon::ResizeVertical,
+            D::East | D::West => CursorIcon::ResizeHorizontal,
+            D::NorthWest | D::SouthEast => CursorIcon::ResizeNwSe,
+            D::NorthEast | D::SouthWest => CursorIcon::ResizeNeSw,
+        });
+        if ctx.input(|i| i.pointer.primary_pressed()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+        }
+    }
+
+    /// Minimize, maximize/restore and close, drawn like Windows 11's.
+    fn window_buttons(&self, ui: &mut egui::Ui, bar: egui::Rect) {
+        let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+        let w = 46.0;
+        let buttons = [
+            (icon::WIN_MINIMIZE, "Minimize", 0),
+            (
+                if maximized {
+                    icon::WIN_RESTORE
+                } else {
+                    icon::WIN_MAXIMIZE
+                },
+                if maximized { "Restore" } else { "Maximize" },
+                1,
+            ),
+            (icon::WIN_CLOSE, "Close", 2),
+        ];
+        for (k, (glyph, tip, action)) in buttons.into_iter().enumerate() {
+            let right = bar.right() - (2 - k) as f32 * w;
+            let r = egui::Rect::from_min_max(
+                egui::pos2(right - w, bar.top()),
+                egui::pos2(right, bar.bottom()),
+            );
+            let resp = ui.interact(r, egui::Id::unique(("window-button", k)), Sense::click());
+            let (fill, fg) = match (action, resp.hovered(), resp.is_pointer_button_down_on()) {
+                (2, true, _) => (Color32::from_rgb(0xc4, 0x2b, 0x1c), Color32::WHITE),
+                (_, _, true) => (palette::RAISED, Color32::WHITE),
+                (_, true, _) => (palette::HOVER, Color32::WHITE),
+                _ => (Color32::TRANSPARENT, palette::TEXT),
+            };
+            ui.painter().rect_filled(r, 0.0, fill);
+            ui.painter().text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                glyph,
+                icon_font(10.0),
+                fg,
+            );
+            if resp.on_hover_text(tip).clicked() {
+                let cmd = match action {
+                    0 => egui::ViewportCommand::Minimized(true),
+                    1 => egui::ViewportCommand::Maximized(!maximized),
+                    _ => egui::ViewportCommand::Close,
+                };
+                ui.ctx().send_viewport_cmd(cmd);
+            }
+        }
+    }
+
     fn title_bar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
+        // The bar itself moves the window and maximizes on double-click.
+        // Widgets added after this take precedence over it.
+        let bar = ui.interact(rect, egui::Id::unique("title-bar"), Sense::click_and_drag());
+        if bar.double_clicked() {
+            let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+        } else if bar.drag_started_by(egui::PointerButton::Primary) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
         ui.horizontal_centered(|ui| {
-            ui.label(icon_text(icon::CODE, 15.0).color(palette::ACCENT));
+            match &self.logo {
+                Some(t) => {
+                    ui.add(egui::Image::new(t).fit_to_exact_size(egui::vec2(20.0, 20.0)));
+                }
+                None => {
+                    ui.label(icon_text(icon::CODE, 15.0).color(palette::ACCENT));
+                }
+            }
             ui.add_space(2.0);
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -757,20 +904,7 @@ impl Studio {
                         self.editor.zoom(-1.0);
                     }
                 });
-                ui.menu_button("Run", |ui| {
-                    let label = if self.playing { "Pause" } else { "Run" };
-                    if ui
-                        .add(egui::Button::new(label).shortcut_text("F5"))
-                        .clicked()
-                    {
-                        self.playing = !self.playing;
-                    }
-                    if ui
-                        .add(egui::Button::new("/reload").shortcut_text("Ctrl+R"))
-                        .clicked()
-                    {
-                        self.act(Command::Reload);
-                    }
+                ui.menu_button("Build", |ui| {
                     let can_build = self.opts.project.is_some() && self.opts.selu.is_some();
                     if ui
                         .add_enabled(
@@ -785,6 +919,29 @@ impl Studio {
                         can_build,
                         egui::Checkbox::new(&mut self.auto_rebuild, "Rebuild on Save"),
                     );
+                    ui.separator();
+                    if ui
+                        .add(egui::Button::new("Format Document").shortcut_text("Shift+Alt+F"))
+                        .clicked()
+                    {
+                        let now = ui.input(|i| i.time);
+                        self.editor.format_active(now);
+                    }
+                });
+                ui.menu_button("Run", |ui| {
+                    let label = if self.playing { "Pause" } else { "Run" };
+                    if ui
+                        .add(egui::Button::new(label).shortcut_text("F5"))
+                        .clicked()
+                    {
+                        self.playing = !self.playing;
+                    }
+                    if ui
+                        .add(egui::Button::new("/reload").shortcut_text("Ctrl+R"))
+                        .clicked()
+                    {
+                        self.act(Command::Reload);
+                    }
                     ui.separator();
                     for (label, seconds) in [
                         ("Advance 0.1 s", 0.1),
@@ -859,10 +1016,15 @@ impl Studio {
         if self.in_flight > 0 {
             child.spinner();
         }
-        // Project name on the right.
+        // Window buttons, and the project name left of them.
+        let bar_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.left() - 8.0, rect.top()),
+            egui::pos2(rect.right() + 8.0, rect.bottom()),
+        );
+        self.window_buttons(ui, bar_rect);
         let title = format!("{} — Selu Studio", self.editor.project_name());
         ui.painter().text(
-            egui::pos2(rect.right() - 10.0, rect.center().y),
+            egui::pos2(bar_rect.right() - 3.0 * 46.0 - 14.0, rect.center().y),
             Align2::RIGHT_CENTER,
             title,
             FontId::proportional(12.5),
@@ -1370,81 +1532,457 @@ impl Studio {
             Tab::Console => self.console_tab(ui),
             Tab::Events => self.events_tab(ui),
         }
+        // Fill the rest so the panel keeps the height it was dragged to.
+        let rest = ui.available_size();
+        if rest.y > 0.0 {
+            ui.allocate_space(rest);
+        }
+    }
+
+    /// A fixed-width table cell with its content left-aligned
+    /// (`add_sized` would centre it).
+    fn cell(ui: &mut egui::Ui, width: f32, widget: impl egui::Widget) {
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, 18.0),
+            egui::Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_min_width(width);
+                ui.add(widget);
+            },
+        );
+    }
+
+    fn chip(ui: &mut egui::Ui, on: bool, label: &str) -> bool {
+        let text = egui::RichText::new(label).size(12.0).color(if on {
+            Color32::WHITE
+        } else {
+            palette::MUTED
+        });
+        let button = egui::Button::new(text)
+            .fill(if on {
+                palette::ACCENT_SOFT
+            } else {
+                palette::RAISED
+            })
+            .corner_radius(10.0)
+            .min_size(egui::vec2(0.0, 22.0));
+        ui.add(button).clicked()
+    }
+
+    fn search_box(ui: &mut egui::Ui, text: &mut String, hint: &str) {
+        ui.add(
+            egui::TextEdit::singleline(text)
+                .hint_text(hint)
+                .desired_width(200.0)
+                .margin(egui::Margin::symmetric(8, 3)),
+        );
     }
 
     fn console_tab(&mut self, ui: &mut egui::Ui) {
-        let entry = ui.horizontal(|ui| {
-            ui.label(">");
-            let edit = egui::TextEdit::singleline(&mut self.input)
-                .hint_text("Lua code, or a slash command like /js")
-                .desired_width(f32::INFINITY);
-            ui.add(edit)
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (f, label) in [
+                (ConsoleFilter::All, "All"),
+                (ConsoleFilter::Output, "Output"),
+                (ConsoleFilter::Errors, "Errors"),
+                (ConsoleFilter::Logs, "Logs"),
+            ] {
+                if Self::chip(ui, self.console_filter == f, label) {
+                    self.console_filter = f;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                Self::search_box(ui, &mut self.console_search, "Filter output");
+            });
         });
-        let submitted = entry.inner.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if submitted && !self.input.trim().is_empty() {
+        ui.add_space(4.0);
+        let input_height = 34.0;
+        let list_height = (ui.available_height() - input_height - 6.0).max(40.0);
+        let needle = self.console_search.to_lowercase();
+        egui::Frame::new()
+            .fill(palette::BG)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("console")
+                    .max_height(list_height - 12.0)
+                    .auto_shrink([false, false])
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        let mut shown = 0;
+                        for l in &self.console {
+                            let keep = match self.console_filter {
+                                ConsoleFilter::All => true,
+                                ConsoleFilter::Output => {
+                                    matches!(l.kind, LineKind::Print | LineKind::Input)
+                                }
+                                ConsoleFilter::Errors => l.kind == LineKind::Error,
+                                ConsoleFilter::Logs => matches!(
+                                    l.kind,
+                                    LineKind::Log | LineKind::Build | LineKind::Separator
+                                ),
+                            } && (needle.is_empty() || l.text.to_lowercase().contains(&needle));
+                            if !keep {
+                                continue;
+                            }
+                            shown += 1;
+                            Self::console_row(ui, l);
+                        }
+                        if shown == 0 {
+                            ui.label(
+                                egui::RichText::new(if self.console.is_empty() {
+                                    "Nothing printed yet. The addon's print() output, errors and notes appear here."
+                                } else {
+                                    "No lines match the filter."
+                                })
+                                .color(palette::FAINT),
+                            );
+                        }
+                    });
+            });
+        ui.add_space(6.0);
+        // Input at the bottom, as in a terminal.
+        let mut submit = false;
+        egui::Frame::new()
+            .fill(palette::RAISED)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("›").size(16.0).color(palette::ACCENT));
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut self.input)
+                            .id(egui::Id::unique("console-input"))
+                            .hint_text("Run Lua, or a slash command such as /reload")
+                            .frame(egui::Frame::NONE)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY),
+                    );
+                    if r.has_focus() {
+                        ui.input_mut(|i| {
+                            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+                                && !self.history.is_empty()
+                            {
+                                self.history_pos = Some(
+                                    self.history_pos
+                                        .map_or(self.history.len() - 1, |p| p.saturating_sub(1)),
+                                );
+                            }
+                            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                                self.history_pos = self
+                                    .history_pos
+                                    .map(|p| p + 1)
+                                    .filter(|p| *p < self.history.len());
+                                if self.history_pos.is_none() {
+                                    self.input.clear();
+                                }
+                            }
+                        });
+                        if let Some(p) = self.history_pos
+                            && let Some(h) = self.history.get(p)
+                            && self.input != *h
+                        {
+                            self.input = h.clone();
+                        }
+                    }
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        submit = true;
+                        r.request_focus();
+                    }
+                });
+            });
+        if submit && !self.input.trim().is_empty() {
             let text = std::mem::take(&mut self.input);
-            self.line(LineKind::Input, format!("> {text}"));
+            self.history_pos = None;
+            self.line(LineKind::Input, text.clone());
             self.history.push(text.clone());
             if text.trim_start().starts_with('/') {
                 self.act(Command::Slash { line: text });
             } else {
                 self.act(Command::Eval { code: text });
             }
-            entry.inner.request_focus();
         }
-        egui::ScrollArea::vertical()
-            .stick_to_bottom(true)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for l in &self.console {
-                    let color = match l.kind {
-                        LineKind::Print => Color32::from_gray(230),
-                        LineKind::Log => Color32::from_gray(140),
-                        LineKind::Error => Color32::from_rgb(255, 110, 100),
-                        LineKind::Input => Color32::from_rgb(120, 200, 255),
-                        LineKind::Build => Color32::from_rgb(150, 210, 150),
-                    };
-                    ui.label(egui::RichText::new(&l.text).monospace().color(color));
-                }
+    }
+
+    fn console_row(ui: &mut egui::Ui, l: &Line) {
+        if l.kind == LineKind::Separator {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let w = ui.available_width();
+                let (r, _) = ui.allocate_exact_size(egui::vec2(w, 16.0), Sense::hover());
+                let p = ui.painter();
+                let g =
+                    p.layout_no_wrap(l.text.clone(), FontId::proportional(11.5), palette::MUTED);
+                let mid = r.center();
+                let half = g.size().x / 2.0 + 10.0;
+                p.line_segment(
+                    [egui::pos2(r.left(), mid.y), egui::pos2(mid.x - half, mid.y)],
+                    Stroke::new(1.0, palette::BORDER),
+                );
+                p.line_segment(
+                    [
+                        egui::pos2(mid.x + half, mid.y),
+                        egui::pos2(r.right(), mid.y),
+                    ],
+                    Stroke::new(1.0, palette::BORDER),
+                );
+                p.galley(mid - g.size() / 2.0, g, palette::MUTED);
             });
+            ui.add_space(4.0);
+            return;
+        }
+        let (glyph, glyph_color, text_color, tint) = match l.kind {
+            LineKind::Print => ("", palette::FAINT, palette::TEXT, None),
+            LineKind::Error => (
+                icon::ERROR,
+                palette::ERROR,
+                Color32::from_rgb(0xff, 0xb4, 0xb0),
+                Some(palette::ERROR),
+            ),
+            LineKind::Log if l.text.starts_with("not simulated") => {
+                (icon::WARNING, palette::WARNING, palette::MUTED, None)
+            }
+            LineKind::Log => ("", palette::FAINT, palette::MUTED, None),
+            LineKind::Input => (
+                "›",
+                palette::ACCENT,
+                Color32::from_rgb(0xc9, 0xbd, 0xff),
+                None,
+            ),
+            LineKind::Build => (icon::BUILD, palette::OK, palette::MUTED, None),
+            LineKind::Separator => unreachable!(),
+        };
+        let frame = egui::Frame::new()
+            .fill(tint.map_or(Color32::TRANSPARENT, |c| c.gamma_multiply(0.10)))
+            .corner_radius(4.0)
+            .inner_margin(egui::Margin::symmetric(4, 2));
+        frame.show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                Self::cell(
+                    ui,
+                    56.0,
+                    egui::Label::new(
+                        egui::RichText::new(format!("{:>7.2}s", l.time))
+                            .monospace()
+                            .size(11.5)
+                            .color(palette::FAINT),
+                    ),
+                );
+                let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::hover());
+                if !glyph.is_empty() {
+                    let font = if glyph == "›" {
+                        FontId::proportional(15.0)
+                    } else {
+                        icon_font(11.0)
+                    };
+                    ui.painter()
+                        .text(r.center(), Align2::CENTER_CENTER, glyph, font, glyph_color);
+                }
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&l.text)
+                            .monospace()
+                            .size(13.0)
+                            .color(text_color),
+                    )
+                    .wrap()
+                    .selectable(true),
+                );
+            });
+        });
     }
 
     fn events_tab(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Fire");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.event_name)
-                    .hint_text("EVENT_NAME")
-                    .desired_width(200.0),
-            );
-            ui.add(
-                egui::TextEdit::singleline(&mut self.event_args)
-                    .hint_text("args: player 42 true")
-                    .desired_width(240.0),
-            );
-            if ui.button("Fire").clicked() && !self.event_name.trim().is_empty() {
-                let event = self.event_name.trim().to_string();
-                let args = parse_args(&self.event_args);
-                self.act(Command::Fire { event, args });
-            }
-            if ui.button("Clear").clicked() {
-                self.trace.clear();
-            }
-        });
-        egui::ScrollArea::vertical()
-            .stick_to_bottom(true)
-            .auto_shrink([false, false])
+        // Fire bar.
+        egui::Frame::new()
+            .fill(palette::RAISED)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
-                for r in &self.trace {
-                    let text = format!(
-                        "{:>9.3}  {:<14} {} {}",
-                        r.time,
-                        format!("{:?}", r.kind).to_lowercase(),
-                        r.target,
-                        r.args.join(", ")
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Fire event").color(palette::MUTED));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.event_name)
+                            .hint_text("EVENT_NAME")
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(220.0),
                     );
-                    ui.label(egui::RichText::new(text).monospace());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.event_args)
+                            .hint_text("arguments: player 42 true \"two words\"")
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(300.0),
+                    );
+                    let fire = egui::Button::new(egui::RichText::new("Fire").color(Color32::WHITE))
+                        .fill(palette::ACCENT);
+                    if ui
+                        .add_enabled(!self.event_name.trim().is_empty(), fire)
+                        .clicked()
+                    {
+                        let event = self.event_name.trim().to_string();
+                        let args = parse_args(&self.event_args);
+                        self.act(Command::Fire { event, args });
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(egui::Button::new("Clear").frame(false)).clicked() {
+                            self.trace.clear();
+                        }
+                    });
+                });
+            });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (f, label) in [
+                (EventFilter::All, "All"),
+                (EventFilter::Events, "Events"),
+                (EventFilter::Output, "Prints"),
+                (EventFilter::Timers, "Timers & scripts"),
+                (EventFilter::Errors, "Errors"),
+            ] {
+                if Self::chip(ui, self.event_filter == f, label) {
+                    self.event_filter = f;
                 }
+            }
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                Self::search_box(ui, &mut self.event_search, "Filter by name or argument");
+            });
+        });
+        ui.add_space(4.0);
+        let needle = self.event_search.to_lowercase();
+        egui::Frame::new()
+            .fill(palette::BG)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(ui, |ui| {
+                // Header.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    for (w, h) in [(64.0, "TIME"), (96.0, "KIND"), (260.0, "NAME"), (0.0, "ARGUMENTS")] {
+                        let t = egui::RichText::new(h).size(10.5).strong().color(palette::FAINT);
+                        if w > 0.0 {
+                            Self::cell(ui, w, egui::Label::new(t));
+                        } else {
+                            ui.label(t);
+                        }
+                    }
+                });
+                crate::theme::rule(ui);
+                egui::ScrollArea::vertical()
+                    .id_salt("events")
+                    .auto_shrink([false, false])
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        use selu_sim::TraceKind as K;
+                        let mut shown = 0;
+                        for (i, r) in self.trace.iter().enumerate() {
+                            let keep = match self.event_filter {
+                                EventFilter::All => true,
+                                EventFilter::Events => matches!(r.kind, K::Event | K::Host),
+                                EventFilter::Output => r.kind == K::Print,
+                                EventFilter::Timers => {
+                                    matches!(r.kind, K::Timer | K::Script | K::Hook)
+                                }
+                                EventFilter::Errors => {
+                                    matches!(r.kind, K::Error | K::NotSimulated)
+                                }
+                            };
+                            let hay = format!("{} {}", r.target, r.args.join(" ")).to_lowercase();
+                            if !keep || (!needle.is_empty() && !hay.contains(&needle)) {
+                                continue;
+                            }
+                            shown += 1;
+                            let (label, color) = match r.kind {
+                                K::Event => ("event", palette::ACCENT),
+                                K::Host => ("command", Color32::from_rgb(0x4f, 0xc1, 0xff)),
+                                K::Print => ("print", palette::MUTED),
+                                K::Timer => ("timer", palette::WARNING),
+                                K::Script => ("script", palette::OK),
+                                K::Hook => ("hook", palette::OK),
+                                K::ProtectedCall => ("protected", Color32::from_rgb(0xd7, 0xba, 0x7d)),
+                                K::Deferred => ("deferred", Color32::from_rgb(0xd7, 0xba, 0x7d)),
+                                K::Error => ("error", palette::ERROR),
+                                K::NotSimulated => ("not simulated", palette::WARNING),
+                            };
+                            let row = egui::Frame::new()
+                                .fill(if i % 2 == 0 {
+                                    Color32::TRANSPARENT
+                                } else {
+                                    Color32::from_white_alpha(4)
+                                })
+                                .inner_margin(egui::Margin::symmetric(0, 2));
+                            row.show(ui, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    Self::cell(ui, 64.0,
+                                        egui::Label::new(
+                                            egui::RichText::new(format!("{:>7.3}", r.time))
+                                                .monospace()
+                                                .size(11.5)
+                                                .color(palette::FAINT),
+                                        ),
+                                    );
+                                    // Kind pill.
+                                    let (cell, _) =
+                                        ui.allocate_exact_size(egui::vec2(96.0, 18.0), Sense::hover());
+                                    let p = ui.painter();
+                                    let g = p.layout_no_wrap(
+                                        label.to_string(),
+                                        FontId::proportional(11.0),
+                                        color,
+                                    );
+                                    let pill = egui::Rect::from_min_size(
+                                        cell.left_center() - egui::vec2(0.0, 9.0),
+                                        egui::vec2(g.size().x + 14.0, 18.0),
+                                    );
+                                    p.rect_filled(pill, 9.0, color.gamma_multiply(0.18));
+                                    p.galley(pill.center() - g.size() / 2.0, g, color);
+                                    let (name, args) = if r.kind == K::Print {
+                                        (String::new(), r.args.join("\t"))
+                                    } else {
+                                        (r.target.clone(), r.args.join(", "))
+                                    };
+                                    Self::cell(ui, 260.0,
+                                        egui::Label::new(
+                                            egui::RichText::new(name)
+                                                .monospace()
+                                                .size(13.0)
+                                                .strong()
+                                                .color(palette::TEXT),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(args)
+                                                .monospace()
+                                                .size(13.0)
+                                                .color(if r.kind == K::Print {
+                                                    palette::TEXT
+                                                } else {
+                                                    palette::MUTED
+                                                }),
+                                        )
+                                        .truncate(),
+                                    );
+                                });
+                            });
+                        }
+                        if shown == 0 {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(if self.trace.is_empty() {
+                                    "No events yet. Events, prints, timers and errors appear here in order."
+                                } else {
+                                    "No entries match the filter."
+                                })
+                                .color(palette::FAINT),
+                            );
+                        }
+                    });
             });
     }
 }

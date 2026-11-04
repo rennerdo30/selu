@@ -419,7 +419,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         }
         "GetFont" => out!((r.font_path.clone(), r.font_size, r.font_flags.clone())),
         "GetStringWidth" => {
-            out!(crate::core::measure_text(r.text.as_deref().unwrap_or(""), r.font_size).width)
+            out!(crate::core::measure_text(r.display_text().unwrap_or(""), r.font_size).width)
         }
         "GetStringHeight" => out!(layout::text_height(
             r,

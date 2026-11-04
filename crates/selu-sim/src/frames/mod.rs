@@ -57,7 +57,7 @@ impl RegionModel for LuaTableModel {
                     layer: Some(r.layer),
                     alpha: r.effective_alpha,
                     texture: r.texture.clone(),
-                    text: r.text.clone(),
+                    text: r.display_text().map(str::to_owned),
                     scripts,
                     created_at: r.created_at.clone(),
                 })
@@ -156,6 +156,24 @@ mod tests {
         );
         // Font string: top left at (874, 566), 4 chars x 6 px wide, 12 tall.
         assert_eq!(rect(font), Some((874.0, 554.0, 24.0, 12.0)));
+    }
+
+    #[test]
+    fn secret_text_is_shown_as_a_marker() {
+        let sim = Sim::new().unwrap();
+        sim.set_secret_global("SECRET").unwrap();
+        sim.eval(
+            "local f = CreateFrame('Frame'); local t = f:CreateFontString(); t:SetText(SECRET)",
+        )
+        .unwrap();
+        let snap = sim.snapshot().unwrap();
+        assert!(
+            snap.regions
+                .iter()
+                .any(|r| r.text.as_deref() == Some("<secret>")),
+            "{:?}",
+            snap.regions
+        );
     }
 
     #[test]

@@ -6,5 +6,5 @@ on PLAYER_LOGIN() {
   const button = CreateFrame("Button", null, panel, "UIPanelButtonTemplate");
   button.SetSize(120, 24);
   button.SetText("Sell junk");
-  print(panel.GetWidth(), button.GetText());
+  print(panel.GetWidth() ?? 0, button.GetText() ?? "");
 }

@@ -87,3 +87,14 @@ pub fn focus(a: &mut Arena, ctx: &crate::Ctx, target: Option<usize>) {
         super::widgets::callback(ctx, a.regions[i].table.clone(), "OnEditFocusGained", vec![]);
     }
 }
+
+impl Region {
+    /// Display placeholders never stringify or expose opaque secret payloads.
+    pub fn display_text(&self) -> Option<&str> {
+        if matches!(self.text_value, mlua::Value::LightUserData(_)) {
+            Some("<secret>")
+        } else {
+            self.text.as_deref()
+        }
+    }
+}

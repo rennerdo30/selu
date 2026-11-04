@@ -133,7 +133,7 @@ fn review_global_children_are_not_fields_and_run_as_globals() {
             d.diagnostics
         );
     }
-    let src = "MerchantFrameTab1.SetText(\"ok\"); print(MerchantFrameTab1.GetText());";
+    let src = "MerchantFrameTab1.SetText(\"ok\"); print(MerchantFrameTab1.GetText() ?? \"\");";
     let p = selu_syntax::parse("frames.selu", src).unwrap();
     let c = check(src, std::slice::from_ref(&m), false);
     assert!(!c.has_errors(), "{:?}", c.diagnostics);
@@ -322,7 +322,7 @@ assert(f:GetBackdrop() == nil and f:GetBackdropColor() == nil)
 #[test]
 fn review_widget_annotations_accept_templates_and_preserve_assignability() {
     let m = retail();
-    let src = r#"function style(f: Frame) { f.SetSize(12, 24); } const f = CreateFrame("Frame", null, null, "BackdropTemplate"); style(f); print(f.GetWidth()); function text(t: FontString, texture: Texture, b: Button) {}"#;
+    let src = r#"function style(f: Frame) { f.SetSize(12, 24); } const f = CreateFrame("Frame", null, null, "BackdropTemplate"); style(f); print(f.GetWidth() ?? 0); function text(t: FontString, texture: Texture, b: Button) {}"#;
     let d = check(src, std::slice::from_ref(&m), true);
     assert!(d.diagnostics.is_empty(), "{:?}", d.diagnostics);
     let program = selu_syntax::parse("frames.selu", src).unwrap();

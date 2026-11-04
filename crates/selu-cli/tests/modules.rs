@@ -76,16 +76,18 @@ fn run(label: &str, files: &[(&str, &str)]) -> (Vec<String>, Vec<String>) {
         .collect();
     for n in &names {
         let map: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.join("dist/.selu/Modules").join(format!("{n}.map.json")))
+            &std::fs::read_to_string(dir.join("dist/.selu/Modules").join(format!("{n}.map")))
                 .unwrap(),
         )
         .unwrap();
-        let entries = map["entries"].as_array().unwrap();
+        let entries = map["ranges"].as_array().unwrap();
         assert!(!entries.is_empty());
         for entry in entries {
             assert_eq!(
-                entry["span"]["file"].as_str().unwrap(),
-                n.replace(".lua", ".selu")
+                map["sources"][entry["source"].as_u64().unwrap() as usize]["path"]
+                    .as_str()
+                    .unwrap(),
+                format!("src/{}", n.replace(".lua", ".selu"))
             );
         }
     }

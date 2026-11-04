@@ -91,6 +91,10 @@ struct FormatSection {
     #[serde(default)]
     #[allow(dead_code)]
     indent: Option<usize>,
+    /// Line width before lists are wrapped (default 100).
+    #[serde(default)]
+    #[allow(dead_code)]
+    width: Option<usize>,
     /// Studio formats files when it saves them.
     #[serde(default)]
     #[allow(dead_code)]
@@ -112,6 +116,8 @@ enum BuildLayout {
 struct BuildSection {
     #[serde(default)]
     strict_api: bool,
+    #[serde(default)]
+    debug: bool,
     #[serde(default)]
     layout: BuildLayout,
 }
@@ -198,12 +204,20 @@ fn fmt_options(file: &Path) -> selu_fmt::Options {
     let mut dir = file.parent();
     while let Some(d) = dir {
         if let Ok(text) = std::fs::read_to_string(d.join("selu.toml")) {
-            let indent = toml::from_str::<toml::Value>(&text)
-                .ok()
-                .and_then(|v| v.get("format")?.get("indent")?.as_integer())
-                .filter(|n| (1..=8).contains(n));
+            let value = toml::from_str::<toml::Value>(&text).ok();
+            let get = |key: &str| {
+                value
+                    .as_ref()
+                    .and_then(|v| v.get("format")?.get(key)?.as_integer())
+            };
+            let defaults = selu_fmt::Options::default();
             return selu_fmt::Options {
-                indent: indent.map_or(2, |n| n as usize),
+                indent: get("indent")
+                    .filter(|n| (1..=8).contains(n))
+                    .map_or(defaults.indent, |n| n as usize),
+                width: get("width")
+                    .filter(|n| (40..=400).contains(n))
+                    .map_or(defaults.width, |n| n as usize),
             };
         }
         dir = d.parent();
@@ -473,6 +487,7 @@ fn build(
         strict_api: project.build.strict_api,
     };
     let shared = project.build.layout == BuildLayout::Shared;
+    let debug = project.build.debug;
     let project = project.addon;
 
     let src_dir = project_dir.join("src");
@@ -614,18 +629,35 @@ fn build(
         for (module, lowered) in compiled {
             let lua_name = format!("{}.lua", module.key);
             let output = out_dir.join(&lua_name);
-            let map = map_dir.join(format!("{lua_name}.map.json"));
+            let map = map_dir.join(format!("{lua_name}.map"));
             for path in [&output, &map] {
                 std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| {
                     eprintln!("selu: {e}");
                     ExitCode::FAILURE
                 })?;
             }
-            std::fs::write(output, lowered.lua).map_err(|e| {
+            let source_map = lowered.source_map(
+                &lua_name,
+                &format!("src/{}.selu", module.key),
+                &module.source,
+            );
+            // The debug toggle keeps line counts, so the map stays valid.
+            std::fs::write(
+                output,
+                if debug {
+                    lowered.lua.replace(
+                        "if false then print(\"Selu: deferred protected call\") end",
+                        "if true then print(\"Selu: deferred protected call\") end",
+                    )
+                } else {
+                    lowered.lua
+                },
+            )
+            .map_err(|e| {
                 eprintln!("selu: {e}");
                 ExitCode::FAILURE
             })?;
-            std::fs::write(map, lowered.source_map.to_json()).map_err(|e| {
+            std::fs::write(map, source_map.to_json()).map_err(|e| {
                 eprintln!("selu: {e}");
                 ExitCode::FAILURE
             })?;

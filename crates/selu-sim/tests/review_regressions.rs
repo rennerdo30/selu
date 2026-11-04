@@ -262,7 +262,10 @@ fn secret_text_roundtrips_opaquely() {
     s.lua().globals().set("opaque", secret).unwrap();
     s.eval("local f=UIParent:CreateFontString();f:SetText(opaque);assert(f:GetText()==opaque)")
         .unwrap();
-    assert!(s.snapshot().unwrap().regions[1].text.is_none());
+    assert_eq!(
+        s.snapshot().unwrap().regions[1].text.as_deref(),
+        Some("<secret>")
+    );
 }
 #[test]
 fn texture_sublevel_is_preserved() {
