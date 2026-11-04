@@ -229,6 +229,7 @@ impl Session {
         let sim = Vm::new()?;
         lock(&sim.ctx().trace).enabled = config.trace;
         lock(&sim.state).ui_size = Some(config.ui_size);
+        frames::configure_ui_size(sim.lua(), config.ui_size)?;
         sim.lua()
             .load(format!("math.randomseed({})", config.seed))
             .exec()?;
@@ -434,6 +435,7 @@ impl Session {
             "__selu_world_units",
             "__selu_world_money",
             "__selu_world_bags",
+            "__selu_sim_combat",
         ] {
             world.push((
                 name,
@@ -521,6 +523,7 @@ impl Session {
     pub fn snapshot(&self) -> SimResult<Snapshot> {
         let model = LuaTableModel {
             generation: self.generation.0 as u32,
+            ui_size: self.config.ui_size,
         };
         snapshot::take(
             self.sim.lua(),
@@ -581,7 +584,12 @@ impl Vm {
             )?;
         }
 
-        crate::install_frames(&lua, &logs, &warned)?;
+        globals.set("__selu_sim_frames", lua.create_table()?)?;
+        frames::install(&lua, &ctx)?;
+        let create: Function = globals.get("CreateFrame")?;
+        globals.set("UIParent", create.call::<Table>("Frame")?)?;
+        let registry: Table = globals.get("__selu_sim_frames")?;
+        registry.raw_set(registry.raw_len(), Value::Nil)?;
         // Unknown globals: log once, hand back a callable no-op so the
         // addon keeps running and the gap is visible.
         {
@@ -610,6 +618,7 @@ impl Vm {
         lua.globals()
             .set("__selu_loaded_dirs", lua.create_table()?)?;
         crate::world::install(&lua)?;
+        crate::world::install_restrictions(&lua, &ctx)?;
         crate::trace::install(&lua, &ctx)?;
 
         Ok(Vm {
@@ -687,7 +696,7 @@ impl Vm {
         let rendered = args.iter().map(value_string).collect();
         let seq = lock(&self.ctx.trace).count();
         self.ctx.record(TraceKind::Event, event, rendered);
-        let result = self.fire_now(event, &args);
+        let result = dispatch(&self.lua, &self.ctx, || self.fire_now(event, &args));
         if lock(&self.ctx.trace).enabled {
             let snapshot = self.snapshot()?;
             let mut state = lock(&self.state);
@@ -718,9 +727,11 @@ impl Vm {
                 }
                 self.ctx
                     .record(TraceKind::Script, "OnEvent", vec![event.into()]);
-                dispatch(&self.lua, &self.ctx, || {
+                let result = core::script_callback(&self.lua, &self.ctx, || {
                     core::call_lua::<()>(&self.lua, func, call)
-                })?;
+                });
+                core::flush(&self.lua, &self.ctx);
+                result?;
                 delivered += 1;
             }
         }
@@ -761,6 +772,7 @@ impl Vm {
         };
         let model = frames::LuaTableModel {
             generation: generation.0 as u32,
+            ui_size: size,
         };
         snapshot::take(&self.lua, &self.ctx, &model, generation, size)
     }

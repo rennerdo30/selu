@@ -111,7 +111,7 @@ impl Lowerer<'_> {
         if !matches!(n.as_str(), "command" | "hook" | "hookScript") {
             return None;
         }
-        self.wow.used = true;
+        self.wow.used |= n == "command";
         let refs: Vec<_> = args.iter().collect();
         let mut vals = self.seq(&refs, pre);
         self.error_entry_callback(&mut vals);
@@ -125,7 +125,7 @@ impl Lowerer<'_> {
         })
     }
 }
-const RUNTIME: &str = r##"if not __selu_ns.__selu_wow then
+pub(crate) const RUNTIME: &str = r##"if not __selu_ns.__selu_wow then
   local w = { buffer = {}, levels = { info = true, warn = true, error = true, warnOnce = true }, once = {}, commands = 0, locales = {}, formats = {} }
   __selu_ns.__selu_wow = w
   function w.enabled(level, key)

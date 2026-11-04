@@ -1,12 +1,35 @@
-type Scores = number[];
-interface Entry { label: string; points: number; }
-function score(value: unknown): number {
-    if (typeof value == "number") { return value; }
-    return 0;
+// Summarise a sample quest route with checked labels and reward points.
+// Shows structural interfaces, an array alias and narrowing at an unknown boundary.
+// Try: selu build examples/named-types, install the addon and log in.
+// Offline: scripts\studio.bat examples\named-types, then fire PLAYER_LOGIN.
+
+// These declarations disappear from Lua; the entries remain ordinary tables.
+interface QuestEntry {
+  label: string;
+  points: number;
 }
+
+type QuestRoute = QuestEntry[];
+
+// A missing or malformed imported reward must not enter the numeric total.
+// Selu typeof uses Lua names; number is shared with TypeScript.
+function rewardPoints(value: unknown): number {
+  if (typeof value == "number") {
+    return value;
+  }
+  return 0;
+}
+
+const route: QuestRoute = [
+  { label: "Supply delivery", points: rewardPoints(7) },
+  { label: "Unconfirmed reward", points: rewardPoints("pending") },
+];
+
 on PLAYER_LOGIN() {
-    const entry: Entry = { label: "Quest", points: score(7) };
-    const scores: Scores = [];
-    scores.push(entry.points);
-    print(entry.label, scores[0]);
+  let totalPoints = 0;
+  for (const quest of route) {
+    print(`${quest.label}: ${quest.points}`);
+    totalPoints += quest.points;
+  }
+  print(`Route reward: ${totalPoints} points`);
 }

@@ -134,7 +134,17 @@ pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     Type::Untyped
 }
 pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
-    let mut returns: Vec<Type> = d.returns.iter().map(|r| map(m, r, depth + 1)).collect();
+    let secret = crate::restrictions::secret_results(m, d);
+    let mut returns: Vec<Type> = d
+        .returns
+        .iter()
+        .zip(&secret)
+        .map(|(r, secret)| {
+            let t = map(m, r, depth + 1);
+            if *secret { Type::secret(t) } else { t }
+        })
+        .collect();
+
     if flag(d, "MayReturnNothing") {
         returns = returns.into_iter().map(Type::optional).collect();
     }
@@ -143,6 +153,12 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         unspecified_callback: false,
         api_semantics: crate::types::ApiSemantics {
             frame_factory: false,
+            secret_results: crate::restrictions::secret_results(m, d),
+            protected: flag(d, "IsProtectedFunction"),
+            widget_protected: false,
+            dynamic_protected: false,
+            accepts_secrets: crate::restrictions::accepts_secrets(d),
+            plain_result: false,
             overloads: d
                 .overloads
                 .iter()
@@ -179,7 +195,7 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         ret: Box::new(Type::Tuple(returns)),
     }
 }
-fn signature_for(m: &Manifest, name: &str, d: &Declaration) -> Type {
+pub(crate) fn signature_for(m: &Manifest, name: &str, d: &Declaration) -> Type {
     let mut ty = signature(m, d, 0);
     if let Type::Function { api, .. } = &mut ty
         && let Some(origin) = &mut api.0
@@ -288,7 +304,33 @@ impl Ctx<'_> {
             return None;
         };
         if let Some(d) = method(self.manifest, widget, name, &mut Vec::new()) {
-            return Some(signature(self.manifest, d, 0));
+            let mut ty = signature(self.manifest, d, 0);
+            if let Type::Function { api_semantics, .. } = &mut ty {
+                api_semantics.widget_protected = api_semantics.protected;
+                let receiver = if self.types.is_method_call(object.id) {
+                    match &object.kind {
+                        ExprKind::Member { object, .. } => object.as_ref(),
+                        _ => object,
+                    }
+                } else {
+                    object
+                };
+                let stable_receiver = match &receiver.kind {
+                    ExprKind::Ident(n) => self.lookup(n).is_some_and(|(_, b)| {
+                        matches!(b.kind, crate::Kind::Const | crate::Kind::Import)
+                    }),
+                    ExprKind::Call { .. } => true,
+                    _ => false,
+                };
+                if stable_receiver
+                    && matches!(t, Type::Widget(_, bases) if bases.iter().any(|b| b == "@selu_plain"))
+                {
+                    api_semantics.protected = false;
+                    api_semantics.widget_protected = false;
+                    api_semantics.plain_result = d.name.starts_with("Create");
+                }
+            }
+            return Some(ty);
         }
         if let Some(member) = self.frame_member(t, name, object) {
             return Some(member);
@@ -348,6 +390,9 @@ impl Ctx<'_> {
         Some(self.api_result(e, args, &ty, (**ret).clone()))
     }
     pub(crate) fn api_result(&mut self, e: &Expr, args: &[Expr], ty: &Type, ret: Type) -> Type {
+        if matches!(ty, Type::Function {api_semantics,..} if api_semantics.plain_result) {
+            return crate::restrictions::plain_results(ret);
+        }
         if !matches!(ty,Type::Function { api_semantics, .. } if api_semantics.frame_factory) {
             return ret;
         }
@@ -369,7 +414,11 @@ impl Ctx<'_> {
             );
             return Type::Tuple(vec![widget(self.manifest, "Frame")]);
         }
-        let base = widget(self.manifest, name);
+        let mut base = widget(self.manifest, name);
+        let plain = args.get(3).is_none_or(|e| matches!(&e.kind, ExprKind::Str(s) if s.split(',').all(|t| !t.trim().starts_with("Secure"))));
+        if plain && let Type::Widget(_, bases) = &mut base {
+            bases.push("@selu_plain".into());
+        }
         Type::Tuple(vec![self.frame_templates(base, args)])
     }
     fn api_diagnostic(
@@ -417,7 +466,7 @@ impl Ctx<'_> {
                             params
                                 .get(*i)
                                 .or(rest.as_deref())
-                                .is_some_and(|p| !api_assignable(t, p))
+                                .is_some_and(|p| !api_argument_assignable(t, p, ty))
                         })
                         .count()
             } else {
@@ -453,7 +502,7 @@ impl Ctx<'_> {
         }
         for (i, (t, arg)) in ts.iter().zip(args).enumerate() {
             if let Some(p) = params.get(i).or(rest.as_deref())
-                && !api_assignable(t, p)
+                && !api_argument_assignable(t, p, ty)
             {
                 let parameter = origin
                     .parameters
@@ -522,6 +571,17 @@ pub(crate) fn mismatch_help(
     have: &Type,
     want: &Type,
 ) -> selu_diagnostics::Diagnostic {
+    if crate::restrictions::secret_inner(have).is_some() {
+        let mut result = selu_diagnostics::Diagnostic::error(
+            "SELU0601",
+            format!("{have} cannot be read as {want}"),
+        )
+        .with_help("use `value ?? fallback` or `readable(value)` before reading it");
+        if let Some(span) = &d.span {
+            result = result.with_span(span.clone());
+        }
+        return result;
+    }
     if let Some(fix) = result_wrapper_fix(have, want) {
         let mut diagnostic = selu_diagnostics::Diagnostic::error(
             "SELU0485",
@@ -549,7 +609,19 @@ fn edit_distance(a: &str, b: &str) -> usize {
     }
     *row.last().unwrap()
 }
+fn api_argument_assignable(have: &Type, want: &Type, function: &Type) -> bool {
+    if matches!(function,Type::Function {api_semantics,..} if api_semantics.accepts_secrets)
+        && let Some(inner) = crate::restrictions::secret_inner(have)
+    {
+        return api_assignable(&inner, want);
+    }
+    api_assignable(have, want)
+}
 fn api_assignable(have: &Type, want: &Type) -> bool {
+    if let Type::Secret(inner) = crate::shape_of(want) {
+        let have = crate::restrictions::secret_inner(have).unwrap_or_else(|| have.clone());
+        return api_assignable(&have, &inner);
+    }
     have.assignable_to(want)
         || matches!(
             (crate::shape_of(have), crate::shape_of(&want.non_null())),

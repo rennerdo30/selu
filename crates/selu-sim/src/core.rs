@@ -279,6 +279,10 @@ pub struct Budget {
     /// Hook calls allowed per dispatch.
     pub limit: u64,
     used: u64,
+    callbacks: usize,
+    pending_tasks: usize,
+    callback_depth: usize,
+    failure: Option<&'static str>,
     /// The limit was hit in this dispatch; the hook now fails on every
     /// instruction.
     exhausted: bool,
@@ -322,6 +326,10 @@ impl Ctx {
             budget: shared(Budget {
                 limit: DEFAULT_BUDGET,
                 used: 0,
+                callbacks: 0,
+                pending_tasks: 0,
+                callback_depth: 0,
+                failure: None,
                 exhausted: false,
             }),
             pending: shared(VecDeque::new()),
@@ -371,14 +379,14 @@ impl Default for Ctx {
 /// debugger (round 10) join this hook here, in one place, because Lua has a
 /// single hook per thread.
 ///
-/// Coroutine resume wrappers coordinate the VM's single mlua hook target
-/// here. Every thread charges the same sticky dispatch budget.
+/// Coroutine resume wrappers coordinate the VM's single mlua hook target;
+/// instruction usage remains shared with synchronous and queued scripts.
 pub fn install_hooks(lua: &Lua, ctx: &Ctx) {
     set_count_hook(lua, ctx.budget.clone(), HOOK_INTERVAL);
 }
 
-/// The hook charges every instruction, including across coroutine switches.
-/// Exhaustion stays sticky until the next dispatch.
+/// Once the budget is exhausted the hook fires on *every* instruction and
+/// fails each time, until the next dispatch restores the normal interval.
 /// That way the error surfaces in every frame up the stack: a `pcall`
 /// around a runaway loop catches it, but its caller's next instruction
 /// fails again, so `while true do pcall(f) end` can't keep running either.
@@ -387,7 +395,7 @@ fn budget_instruction(budget: &Shared<Budget>) -> mlua::Result<VmState> {
     b.used = b.used.saturating_add(1);
     if b.exhausted || b.used > b.limit.saturating_mul(u64::from(HOOK_INTERVAL)) {
         b.exhausted = true;
-        return Err(mlua::Error::runtime(BUDGET_ERROR));
+        return Err(mlua::Error::runtime(b.failure.unwrap_or(BUDGET_ERROR)));
     }
     Ok(VmState::Continue)
 }
@@ -412,56 +420,77 @@ pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) 
     }
 }
 
-/// A scheduler host entry and each callback have independent budgets.
-/// Preserve scheduler usage around a callback; neither can consume the other.
-#[derive(Clone, Copy)]
-struct CallbackLimit(u64);
-pub(crate) fn scheduler_dispatch<R>(
-    lua: &Lua,
-    ctx: &Ctx,
-    call: impl FnOnce() -> mlua::Result<R>,
-) -> mlua::Result<R> {
-    let saved = *lock(&ctx.budget);
-    let previous = lua.remove_app_data::<CallbackLimit>();
-    lua.set_app_data(CallbackLimit(saved.limit));
-    lock(&ctx.budget).limit = DEFAULT_BUDGET;
-    let result = dispatch(lua, ctx, call);
-    lua.remove_app_data::<CallbackLimit>();
-    if let Some(previous) = previous {
-        lua.set_app_data(previous);
-    }
-    *lock(&ctx.budget) = saved;
-    set_count_hook(lua, ctx.budget.clone(), 1);
-    result
-}
-
-pub(crate) fn callback_dispatch<R>(
-    lua: &Lua,
-    ctx: &Ctx,
-    call: impl FnOnce() -> mlua::Result<R>,
-) -> mlua::Result<R> {
-    let scheduler = *lock(&ctx.budget);
-    if let Some(limit) = lua.app_data_ref::<CallbackLimit>() {
-        lock(&ctx.budget).limit = limit.0;
-    }
-    let depth = *lock(&ctx.depth);
-    *lock(&ctx.depth) = 0;
-    let result = dispatch(lua, ctx, call);
-    *lock(&ctx.budget) = scheduler;
-    *lock(&ctx.depth) = depth;
-    set_count_hook(lua, ctx.budget.clone(), 1);
-    result
-}
-
-/// Reset the shared instruction usage only at a new dispatch boundary.
+/// Reset the budget for a new dispatch, restoring the normal hook interval
+/// if the previous dispatch exhausted it.
 fn reset_budget(lua: &Lua, ctx: &Ctx) {
     let mut b = lock(&ctx.budget);
     b.used = 0;
+    b.callbacks = 0;
+    b.pending_tasks = 0;
+    b.callback_depth = 0;
+    b.failure = None;
     if b.exhausted {
         b.exhausted = false;
         drop(b);
         set_count_hook(lua, ctx.budget.clone(), HOOK_INTERVAL);
     }
+}
+
+#[derive(Clone, Copy)]
+struct CallbackInstructions {
+    limit: u64,
+    used: u64,
+}
+/// One outer timer dispatch retains S1 callback/nesting/task accounting.
+/// Scheduler instructions have their own allowance; all addon callbacks and
+/// their queued continuations share the configured instruction allowance.
+pub(crate) fn scheduler_dispatch<R>(
+    lua: &Lua,
+    ctx: &Ctx,
+    call: impl FnOnce() -> mlua::Result<R>,
+) -> mlua::Result<R> {
+    let limit = lock(&ctx.budget).limit;
+    let previous = lua.remove_app_data::<CallbackInstructions>();
+    lua.set_app_data(CallbackInstructions { limit, used: 0 });
+    lock(&ctx.budget).limit = DEFAULT_BUDGET;
+    let result = dispatch(lua, ctx, call);
+    let instructions = lua.remove_app_data::<CallbackInstructions>().unwrap();
+    {
+        let mut b = lock(&ctx.budget);
+        b.limit = limit;
+        b.used = instructions.used;
+    }
+    if let Some(previous) = previous {
+        lua.set_app_data(previous);
+    }
+    result
+}
+pub(crate) fn callback_dispatch<R>(
+    lua: &Lua,
+    ctx: &Ctx,
+    call: impl FnOnce() -> mlua::Result<R>,
+) -> mlua::Result<R> {
+    let Some(instructions) = lua.app_data_ref::<CallbackInstructions>().map(|v| *v) else {
+        return call();
+    };
+    let (limit, used) = {
+        let mut b = lock(&ctx.budget);
+        let saved = (b.limit, b.used);
+        b.limit = instructions.limit;
+        b.used = instructions.used;
+        saved
+    };
+    let result = call();
+    flush(lua, ctx);
+    let callback_used = {
+        let mut b = lock(&ctx.budget);
+        let callback_used = b.used;
+        b.limit = limit;
+        b.used = used;
+        callback_used
+    };
+    lua.app_data_mut::<CallbackInstructions>().unwrap().used = callback_used;
+    result
 }
 
 /// Protect Lua calls *before* mlua stringifies non-string error objects.
@@ -568,14 +597,84 @@ pub fn dispatch<R>(
     result
 }
 
-/// Run queued callbacks until the queue is empty. Each gets a fresh budget;
+/// Every script entry, including synchronous visibility and Lua-side timers,
+/// shares these limits. A small depth cap protects the native Rust/C stack.
+pub(crate) fn begin_callback(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    let (reason, new_failure) = {
+        let mut b = lock(&ctx.budget);
+        let reason = if b.exhausted {
+            Some(b.failure.unwrap_or(BUDGET_ERROR))
+        } else if b.callbacks >= 10_000 {
+            Some("dispatch callback budget exhausted")
+        } else if b.callback_depth >= 32 {
+            Some("script callbacks nested too deeply")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            let fresh = !b.exhausted;
+            b.exhausted = true;
+            b.failure = Some(reason);
+            (Some(reason), fresh)
+        } else {
+            b.callbacks += 1;
+            b.callback_depth += 1;
+            (None, false)
+        }
+    };
+    if let Some(reason) = reason {
+        if new_failure {
+            ctx.log(format!("error: {reason}"));
+            ctx.record(TraceKind::Error, "callback", vec![reason.into()]);
+            set_count_hook(lua, ctx.budget.clone(), 1);
+        }
+        return Err(mlua::Error::runtime(reason));
+    }
+    Ok(())
+}
+pub(crate) fn end_callback(ctx: &Ctx) {
+    let mut b = lock(&ctx.budget);
+    b.callback_depth = b.callback_depth.saturating_sub(1);
+}
+struct CallbackGuard<'a>(&'a Ctx);
+impl Drop for CallbackGuard<'_> {
+    fn drop(&mut self) {
+        end_callback(self.0);
+    }
+}
+/// Account before entering Lua; unwind the nesting count even on an error.
+pub(crate) fn script_callback<R>(
+    lua: &Lua,
+    ctx: &Ctx,
+    call: impl FnOnce() -> mlua::Result<R>,
+) -> mlua::Result<R> {
+    begin_callback(lua, ctx)?;
+    let _guard = CallbackGuard(ctx);
+    call()
+}
+
+/// Run queued callbacks until the queue is empty. Callbacks share the outer dispatch instruction and callback budgets;
 /// callbacks a callback queues run in the same flush.
-fn flush(lua: &Lua, ctx: &Ctx) {
+pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
     loop {
         let Some(next) = lock(&ctx.pending).pop_front() else {
             break;
         };
-        reset_budget(lua, ctx);
+        let stop = {
+            let mut b = lock(&ctx.budget);
+            b.pending_tasks += 1;
+            b.exhausted || b.pending_tasks > 10_000
+        };
+        if stop {
+            lock(&ctx.pending).clear();
+            ctx.log("error: dispatch callback/instruction budget exhausted");
+            ctx.record(
+                TraceKind::Error,
+                "flush",
+                vec!["dispatch budget exhausted".into()],
+            );
+            break;
+        }
         if let Err(e) = next(lua) {
             let text = e.to_string();
             ctx.log(format!("error: {text}"));
@@ -702,5 +801,67 @@ mod tests {
         assert!(json.contains("\"FULLSCREEN_DIALOG\""), "{json}");
         let back: Snapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(back, snap);
+    }
+}
+
+/// Fixed-width metric shared with Studio: Unicode characters have width
+/// `0.5 * font_size`, lines have height `font_size`. WoW markup is ignored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextMeasurement {
+    pub width: f64,
+    pub height: f64,
+}
+pub fn measure_text(text: &str, font_size: f64) -> TextMeasurement {
+    let mut chars = text.chars().peekable();
+    let (mut width, mut longest, mut lines) = (0usize, 0usize, 1usize);
+    while let Some(c) = chars.next() {
+        if c == '|' {
+            match chars.peek().copied() {
+                Some('c') => {
+                    chars.next();
+                    for _ in 0..8 {
+                        chars.next();
+                    }
+                    continue;
+                }
+                Some('r') | Some('h') => {
+                    chars.next();
+                    continue;
+                }
+                Some('T') | Some('H') => {
+                    let end = if chars.next() == Some('T') { 't' } else { 'h' };
+                    while let Some(c) = chars.next() {
+                        if c == '|' && chars.peek() == Some(&end) {
+                            chars.next();
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                Some('|') => {
+                    chars.next();
+                }
+                _ => {}
+            }
+        }
+        if c == '\n' {
+            longest = longest.max(width);
+            width = 0;
+            lines += 1;
+        } else {
+            width += 1;
+        }
+    }
+    TextMeasurement {
+        width: longest.max(width) as f64 * 0.5 * font_size,
+        height: lines as f64 * font_size,
+    }
+}
+#[cfg(test)]
+mod text_tests {
+    #[test]
+    fn unicode_and_markup() {
+        let m = super::measure_text("|cffffffff\u{732b}\u{e9}|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
+        assert_eq!((m.width, m.height), (12.0, 24.0));
     }
 }

@@ -1,5 +1,5 @@
 //! Session-local world data. Event payloads follow the target manifests.
-use crate::{SimResult, session::Vm};
+use crate::{SimResult, session::Vm, value_string};
 use mlua::{Lua, Table, Value};
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Unit {
@@ -13,7 +13,69 @@ pub struct Unit {
     pub auras: Vec<String>,
     pub combat: bool,
 }
+pub(crate) fn install_restrictions(lua: &Lua, ctx: &crate::Ctx) -> SimResult<()> {
+    let globals = lua.globals();
+    {
+        let logs = ctx.logs.clone();
+        let handler = lua.create_function(move |_, error: Value| {
+            logs.lock()
+                .unwrap()
+                .push(format!("error: {}", value_string(&error)));
+            Ok(())
+        })?;
+        globals.set(
+            "geterrorhandler",
+            lua.create_function(move |_, ()| Ok(handler.clone()))?,
+        )?;
+    }
+    globals.set("__selu_sim_combat", false)?;
+    globals.set(
+        "InCombatLockdown",
+        lua.create_function(|lua, ()| lua.globals().get::<bool>("__selu_sim_combat"))?,
+    )?;
+    globals.set(
+        "canaccessvalue",
+        lua.create_function(|_, value: Value| Ok(!matches!(value, Value::LightUserData(_))))?,
+    )?;
+    globals.set(
+        "issecretvalue",
+        lua.create_function(|_, value: Value| Ok(matches!(value, Value::LightUserData(_))))?,
+    )?;
+
+    Ok(())
+}
 impl Vm {
+    /// Toggle combat and dispatch the matching transition event once.
+    pub fn set_combat(&self, combat: bool) -> SimResult<()> {
+        let old = self.lua.globals().get::<bool>("__selu_sim_combat")?;
+        self.lua.globals().set("__selu_sim_combat", combat)?;
+        let units: Table = self.lua.globals().get("__selu_world_units")?;
+        if let Some(player) = units.raw_get::<Option<Table>>("player")? {
+            player.raw_set("combat", combat)?;
+        }
+        if old != combat {
+            self.fire(
+                if combat {
+                    "PLAYER_REGEN_DISABLED"
+                } else {
+                    "PLAYER_REGEN_ENABLED"
+                },
+                vec![],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Make a named test value inaccessible to the simulated client predicates.
+    pub fn set_secret_global(&self, name: &str) -> SimResult<()> {
+        self.lua.globals().set(name, self.secret_value())
+    }
+
+    /// Opaque sentinel; only the secret predicates may inspect it.
+    pub fn secret_value(&self) -> Value {
+        Value::LightUserData(mlua::LightUserData(std::ptr::null_mut()))
+    }
+
     pub fn set_unit(&self, token: &str, unit: Unit) -> SimResult<()> {
         if !valid_token(token) {
             return Err(mlua::Error::runtime("unsupported unit token"));
@@ -54,6 +116,9 @@ impl Vm {
             ("max_power", "UNIT_MAXPOWER"),
         ];
         units.set(token, next.clone())?;
+        if token == "player" {
+            self.set_combat(unit.combat)?;
+        }
         for (field, event) in changes {
             let changed = match &old {
                 Some(old) => old.raw_get::<Value>(field)? != next.raw_get::<Value>(field)?,
@@ -144,7 +209,7 @@ function UnitHealth(u) return units[u] and units[u].health or 0 end
 function UnitHealthMax(u) return units[u] and units[u].max_health or 0 end
 function UnitPower(u) return units[u] and units[u].power or 0 end
 function UnitPowerMax(u) return units[u] and units[u].max_power or 0 end
-function UnitAffectingCombat(u) return units[u] and units[u].combat or false end
+function UnitAffectingCombat(u) if u=="player" then return InCombatLockdown() end; return units[u] and units[u].combat or false end
 function GetMoney() return __selu_world_money end
 C_Container = {}
 function C_Container.GetContainerNumSlots(b) return #(__selu_world_bags[b] or {}) end

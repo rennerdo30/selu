@@ -1,10 +1,9 @@
-// Cooldowns: at login, lists spells that are still cooling down with a
-// readable time, and counts the ones that are ready.
-//
-// Shows: functions with tuple returns and destructuring, `? :`, `continue`,
-// `+=`/`++`, closures that keep their own state, and sorting with a compare
-// function.
+// Print a sorted sample cooldown list at login; these are not live spell cooldowns.
+// Shows tuple returns, closures, sorting and loop control.
+// Try: selu build examples/cooldowns, install the addon and log in.
+// Offline: scripts\studio.bat examples\cooldowns, then fire PLAYER_LOGIN.
 
+// Fixed sample data makes the report reproducible without live bag or spell APIs.
 const cooldowns = [
   { spell: "Hearthstone", seconds: 754 },
   { spell: "Feign Death", seconds: 0 },
@@ -14,36 +13,39 @@ const cooldowns = [
 ];
 
 /** Minutes and seconds of a duration. */
-function split(seconds: number): [number, number] {
+function splitDuration(seconds: number): [number, number] {
+  // Written tuple returns become Lua multiple results, without a tuple table.
   return [Math.floor(seconds / 60), seconds % 60];
 }
 
 function readable(seconds: number): string {
-  const [minutes, rest] = split(seconds);
-  return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
+  const [minutes, remainingSeconds] = splitDuration(seconds);
+  return minutes > 0 ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
 }
 
-/** A counter that remembers its value between calls. */
-function counter(): () => number {
-  let n = 0;
+// Each returned closure owns an independent counter captured as a Lua upvalue.
+function makeCounter(): () => number {
+  let nextNumber = 0;
   return () => {
-    n++;
-    return n;
+    nextNumber++;
+    return nextNumber;
   };
 }
 
+// Register after setup so callbacks see initialized helpers and frames.
 on PLAYER_LOGIN() {
-  const waiting = cooldowns.filter(c => c.seconds > 0);
+  // filter creates a new array; sorting it leaves the sample order unchanged.
+  const waiting = cooldowns.filter(cooldown => cooldown.seconds > 0);
   waiting.sort((a, b) => a.seconds - b.seconds);
 
-  const line = counter();
-  for (const c of waiting) {
-    print(`${line()}. ${c.spell}: ${readable(c.seconds)}`);
+  const nextLineNumber = makeCounter();
+  for (const cooldown of waiting) {
+    print(`${nextLineNumber()}. ${cooldown.spell}: ${readable(cooldown.seconds)}`);
   }
 
   let ready = 0;
-  for (const c of cooldowns) {
-    if (c.seconds > 0) {
+  for (const cooldown of cooldowns) {
+    if (cooldown.seconds > 0) {
       continue;
     }
     ready += 1;

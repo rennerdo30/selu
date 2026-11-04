@@ -43,10 +43,10 @@ fn hello_builds_runs_and_prints_on_login() {
     let toc = std::fs::read_to_string(dist.join("Hello.toc")).unwrap();
     assert!(toc.contains("## Interface: 100000"), "{toc}");
     assert!(
-        !dist.join("main.lua.map.json").exists(),
+        !dist.join("main.lua.map").exists(),
         "source maps must stay out of the addon folder"
     );
-    assert!(example.join("dist/.selu/Hello/main.lua.map.json").exists());
+    assert!(example.join("dist/.selu/Hello/main.lua.map").exists());
 
     // Load in TOC order: the non-`##` lines of the .toc.
     let mut files = Vec::new();
@@ -58,18 +58,25 @@ fn hello_builds_runs_and_prints_on_login() {
         let source = std::fs::read_to_string(dist.join(line)).unwrap();
         files.push((line.to_string(), source));
     }
-    assert_eq!(files.len(), 1);
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].0, "Selu.lua");
     assert!(
-        files[0].1.contains("__selu_on(\"PLAYER_LOGIN\""),
+        files[1].1.contains("__selu_on(\"PLAYER_LOGIN\""),
         "{}",
-        files[0].1
+        files[1].1
     );
 
     let sim = Sim::new().unwrap();
-    sim.load_files(&files).unwrap();
+    sim.load_addon("Hello", &files).unwrap();
     assert!(sim.prints().is_empty(), "nothing prints before login");
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
-    assert_eq!(sim.prints(), vec!["Hello from Selu!".to_string()]);
+    assert_eq!(
+        sim.prints(),
+        vec![
+            "Welcome, adventurer!".to_string(),
+            "Before your next quest: check your bags and repair your gear.".to_string(),
+        ]
+    );
 }
 
 #[test]

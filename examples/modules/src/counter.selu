@@ -1,5 +1,9 @@
+// The module owns this session-only tally; it is not a SavedVariable.
+// Exports live in the shared addon namespace and load before their importer.
 export let count = 0;
-export const greeting = "Hello from modules!";
+export const greeting = "Quest journal: sample route complete";
+
+// Keep mutations with the state so callers need no knowledge of its storage.
 export function increment(): void {
   count += 1;
 }

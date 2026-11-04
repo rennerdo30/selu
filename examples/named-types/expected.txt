@@ -1,1 +1,3 @@
-Quest\t7
+Supply delivery: 7
+Unconfirmed reward: 0
+Route reward: 7 points

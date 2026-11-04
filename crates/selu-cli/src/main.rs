@@ -51,6 +51,14 @@ enum Command {
         #[arg(long)]
         manifest_dir: Option<PathBuf>,
     },
+    /// Format `.selu` files (default: the project in the current folder).
+    Fmt {
+        /// Files or folders; a project folder formats its `src/` and `tests/`.
+        paths: Vec<PathBuf>,
+        /// Change nothing; list the files that aren't formatted and fail if any.
+        #[arg(long)]
+        check: bool,
+    },
     /// List every known flavour and build.
     Targets {
         #[arg(long)]
@@ -68,6 +76,29 @@ struct Project {
     addon: AddonSection,
     #[serde(default)]
     build: BuildSection,
+    /// `[format]`: read by `selu fmt` and Studio (validated here so a typo
+    /// is an error rather than ignored).
+    #[serde(default)]
+    #[allow(dead_code)]
+    format: FormatSection,
+}
+
+/// The `[format]` table of `selu.toml`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FormatSection {
+    /// Spaces per indentation level (default 2).
+    #[serde(default)]
+    #[allow(dead_code)]
+    indent: Option<usize>,
+    /// Line width before lists are wrapped (default 100).
+    #[serde(default)]
+    #[allow(dead_code)]
+    width: Option<usize>,
+    /// Studio formats files when it saves them.
+    #[serde(default)]
+    #[allow(dead_code)]
+    on_save: bool,
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq)]
@@ -85,6 +116,8 @@ enum BuildLayout {
 struct BuildSection {
     #[serde(default)]
     strict_api: bool,
+    #[serde(default)]
+    debug: bool,
     #[serde(default)]
     layout: BuildLayout,
 }
@@ -110,6 +143,7 @@ fn main() -> ExitCode {
             manifest_dir.as_deref(),
         ),
         Command::Targets { manifest_dir } => targets(manifest_dir.as_deref()),
+        Command::Fmt { paths, check } => fmt(paths, *check),
         Command::Test {
             path,
             target,
@@ -134,6 +168,112 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(code) => code,
     }
+}
+
+/// The `.selu` files `selu fmt` works on for one argument.
+fn fmt_files(path: &Path, out: &mut Vec<PathBuf>) {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for p in entries {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if p.is_dir() {
+                if !matches!(name, "dist" | "target" | ".git" | "node_modules") {
+                    walk(&p, out);
+                }
+            } else if name.ends_with(".selu") {
+                out.push(p);
+            }
+        }
+    }
+    if path.is_file() {
+        out.push(path.to_path_buf());
+    } else if path.join("selu.toml").is_file() {
+        walk(&path.join("src"), out);
+        walk(&path.join("tests"), out);
+    } else {
+        walk(path, out);
+    }
+}
+
+/// Formatter options from the nearest `selu.toml` above `file`.
+fn fmt_options(file: &Path) -> selu_fmt::Options {
+    let mut dir = file.parent();
+    while let Some(d) = dir {
+        if let Ok(text) = std::fs::read_to_string(d.join("selu.toml")) {
+            let value = toml::from_str::<toml::Value>(&text).ok();
+            let get = |key: &str| {
+                value
+                    .as_ref()
+                    .and_then(|v| v.get("format")?.get(key)?.as_integer())
+            };
+            let defaults = selu_fmt::Options::default();
+            return selu_fmt::Options {
+                indent: get("indent")
+                    .filter(|n| (1..=8).contains(n))
+                    .map_or(defaults.indent, |n| n as usize),
+                width: get("width")
+                    .filter(|n| (40..=400).contains(n))
+                    .map_or(defaults.width, |n| n as usize),
+            };
+        }
+        dir = d.parent();
+    }
+    selu_fmt::Options::default()
+}
+
+/// `selu fmt`: format files in place, or check them with `--check`.
+fn fmt(paths: &[PathBuf], check: bool) -> Result<(), ExitCode> {
+    let mut files = Vec::new();
+    if paths.is_empty() {
+        fmt_files(Path::new("."), &mut files);
+    }
+    for p in paths {
+        if !p.exists() {
+            eprintln!("selu fmt: {} does not exist", p.display());
+            return Err(ExitCode::FAILURE);
+        }
+        fmt_files(p, &mut files);
+    }
+    let (mut changed, mut failed) = (0, 0);
+    for file in &files {
+        let text = match std::fs::read_to_string(file) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("selu fmt: cannot read {}: {e}", file.display());
+                failed += 1;
+                continue;
+            }
+        };
+        match selu_fmt::format(&text, &fmt_options(file)) {
+            Ok(out) if out == text => {}
+            Ok(out) => {
+                changed += 1;
+                if check {
+                    println!("not formatted: {}", file.display());
+                } else if let Err(e) = std::fs::write(file, out) {
+                    eprintln!("selu fmt: cannot write {}: {e}", file.display());
+                    failed += 1;
+                } else {
+                    println!("formatted {}", file.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("selu fmt: {}: {e}; left unchanged", file.display());
+                failed += 1;
+            }
+        }
+    }
+    if failed > 0 || (check && changed > 0) {
+        return Err(ExitCode::FAILURE);
+    }
+    if !check && changed == 0 {
+        println!("{} file(s) already formatted", files.len());
+    }
+    Ok(())
 }
 
 fn not_yet(cmd: &str, what: &str) -> ExitCode {
@@ -194,6 +334,11 @@ fn debug(
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
     }
+    // Lets Studio rebuild on save with this same compiler.
+    cmd.arg("--project").arg(project_dir);
+    if let Ok(selu) = std::env::current_exe() {
+        cmd.arg("--selu").arg(selu);
+    }
     cmd.arg(&addon);
     let status = cmd.status().map_err(|e| {
         eprintln!("selu debug: cannot start {}: {e}", studio.display());
@@ -253,7 +398,13 @@ fn built_addon(project_dir: &Path, target: Option<&str>) -> Result<PathBuf, Exit
     }
 }
 
+/// `$SELU_STUDIO` if set (it must exist), else `selu-studio` beside `selu`,
+/// else on the path.
 fn find_studio() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("SELU_STUDIO") {
+        let path = PathBuf::from(path);
+        return path.is_file().then_some(path);
+    }
     let name = format!("selu-studio{}", std::env::consts::EXE_SUFFIX);
     let beside = std::env::current_exe().ok()?.with_file_name(&name);
     if beside.is_file() {
@@ -336,6 +487,7 @@ fn build(
         strict_api: project.build.strict_api,
     };
     let shared = project.build.layout == BuildLayout::Shared;
+    let debug = project.build.debug;
     let project = project.addon;
 
     let src_dir = project_dir.join("src");
@@ -474,21 +626,58 @@ fn build(
             compiled.push((module, lowered));
         }
         validate_saved(&old_saved, &saved_shapes, &sources, &project.name)?;
-        for (module, lowered) in compiled {
+        let mut lowered_files: Vec<_> = compiled.iter().map(|(_, l)| l.clone()).collect();
+        if let Some(mut runtime) = selu_lower::runtime::share(&mut lowered_files) {
+            if debug {
+                runtime = runtime.replace(
+                    "if false then print(\"Selu: deferred protected call\") end",
+                    "if true then print(\"Selu: deferred protected call\") end",
+                );
+            }
+            // __selu module paths are reserved, so the fallback cannot collide.
+            let runtime_name = if sources.iter().any(|m| m.key.eq_ignore_ascii_case("Selu")) {
+                "__selu_runtime.lua"
+            } else {
+                "Selu.lua"
+            };
+            std::fs::write(out_dir.join(runtime_name), runtime).map_err(|e| {
+                eprintln!("selu: cannot write runtime: {e}");
+                ExitCode::FAILURE
+            })?;
+            lua_files.push(runtime_name.to_string());
+        }
+        for ((module, _), lowered) in compiled.into_iter().zip(lowered_files) {
             let lua_name = format!("{}.lua", module.key);
             let output = out_dir.join(&lua_name);
-            let map = map_dir.join(format!("{lua_name}.map.json"));
+            let map = map_dir.join(format!("{lua_name}.map"));
             for path in [&output, &map] {
                 std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| {
                     eprintln!("selu: {e}");
                     ExitCode::FAILURE
                 })?;
             }
-            std::fs::write(output, lowered.lua).map_err(|e| {
+            let source_map = lowered.source_map(
+                &lua_name,
+                &format!("src/{}.selu", module.key),
+                &module.source,
+            );
+            // The debug toggle keeps line counts, so the map stays valid.
+            std::fs::write(
+                output,
+                if debug {
+                    lowered.lua.replace(
+                        "if false then print(\"Selu: deferred protected call\") end",
+                        "if true then print(\"Selu: deferred protected call\") end",
+                    )
+                } else {
+                    lowered.lua
+                },
+            )
+            .map_err(|e| {
                 eprintln!("selu: {e}");
                 ExitCode::FAILURE
             })?;
-            std::fs::write(map, lowered.source_map.to_json()).map_err(|e| {
+            std::fs::write(map, source_map.to_json()).map_err(|e| {
                 eprintln!("selu: {e}");
                 ExitCode::FAILURE
             })?;

@@ -1,1 +1,1 @@
-Sale queued
+Bag check queued; no items will be sold.

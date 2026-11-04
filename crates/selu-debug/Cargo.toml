@@ -5,7 +5,7 @@ license.workspace = true
 edition.workspace = true
 
 # Selu Studio. The GUI dependencies (eframe/egui on wgpu, docs/SIMULATOR.md
-# decision 12) are added here by package S5 and nowhere else, so the `selu`
+# decision 12) live here and nowhere else, so the `selu`
 # compiler binary stays lean.
 
 [[bin]]
@@ -15,5 +15,12 @@ path = "src/main.rs"
 [dependencies]
 selu-sim = { path = "../selu-sim" }
 selu-sourcemap = { path = "../selu-sourcemap" }
+selu-manifest = { path = "../selu-manifest" }
+toml.workspace = true
+toml_edit = "0.25"
+# Explorer deletes go to the Recycle Bin.
+trash = "5"
+selu-fmt = { path = "../selu-fmt" }
 serde.workspace = true
 serde_json.workspace = true
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "clipboard", "x11", "wayland"] }

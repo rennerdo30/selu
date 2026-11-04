@@ -1,27 +1,6 @@
 local __selu_addon, __selu_ns = ...
-__selu_ns = __selu_ns or {}
-__selu_ns["main"] = {}
-if not __selu_ns.__selu_events then
-  -- Selu: shared event frame and dispatch table
-  local __selu_handlers = {}
-  local __selu_frame = CreateFrame("Frame")
-  __selu_frame:SetScript("OnEvent", function(self, event, ...)
-    local handlers = __selu_handlers[event]
-    if not handlers then return end
-    for i = 1, #handlers do handlers[i](...) end
-  end)
-  local function __selu_on(event, fn)
-    local handlers = __selu_handlers[event]
-    if not handlers then
-      handlers = {}
-      __selu_handlers[event] = handlers
-      __selu_frame:RegisterEvent(event)
-    end
-    handlers[#handlers + 1] = fn
-  end
-  __selu_ns.__selu_events = __selu_on
-end
 local __selu_on = __selu_ns.__selu_events
+__selu_ns["main"] = {}
 local loot = {
   { name = "Linen Cloth", quality = 1, count = 12, price = 13 },
   { name = "Broken Fang", quality = 0, count = 3, price = 5 },
@@ -69,7 +48,9 @@ __selu_on("PLAYER_LOGIN", function()
       do
         local count = countByQuality[quality]
         if count == nil then count = 0 end
-        if count > 0 then print(string.format("  %s: %s", qualityNames[quality + 1], count)) end
+        if count > 0 then
+          print(string.format("  %s: %s", qualityNames[quality + 1], count))
+        end
       end
       quality = quality + 1
     end

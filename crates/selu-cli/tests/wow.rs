@@ -240,7 +240,7 @@ fn modules_share_wow_runtime_in_toc_order() {
     for (file, lua) in &files[..files.len() - 1] {
         assert_eq!(lua.matches(" = ...").count(), 1, "loader in {file}: {lua}");
         assert!(
-            lua.starts_with("local __selu_addon, __selu_ns = ...\n__selu_ns = __selu_ns or {}"),
+            lua.starts_with("local __selu_addon, __selu_ns = ...\n"),
             "{lua}"
         );
     }

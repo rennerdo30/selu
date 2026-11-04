@@ -27,7 +27,37 @@ pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
             Ok(())
         })?,
     )?;
-    lua.load(include_str!("timers.lua")).exec()
+    lua.globals().set(
+        "__selu_sim_flush",
+        lua.create_function(|lua, ()| {
+            let ctx = lua.app_data_ref::<crate::Ctx>().unwrap().clone();
+            crate::core::flush(lua, &ctx);
+            Ok(())
+        })?,
+    )?;
+    lua.globals().set(
+        "__selu_sim_begin_callback",
+        lua.create_function(|lua, ()| {
+            let ctx = lua.app_data_ref::<crate::Ctx>().unwrap().clone();
+            crate::core::begin_callback(lua, &ctx)
+        })?,
+    )?;
+    lua.globals().set(
+        "__selu_sim_end_callback",
+        lua.create_function(|lua, ()| {
+            let ctx = lua.app_data_ref::<crate::Ctx>().unwrap().clone();
+            crate::core::end_callback(&ctx);
+            Ok(())
+        })?,
+    )?;
+    lua.load(include_str!("timers.lua")).exec()?;
+    // Timers retain private upvalues; addons must not be able to decrement
+    // the host's synchronous callback nesting counter.
+    lua.globals()
+        .raw_set("__selu_sim_begin_callback", mlua::Value::Nil)?;
+    lua.globals()
+        .raw_set("__selu_sim_end_callback", mlua::Value::Nil)?;
+    Ok(())
 }
 
 // Admission tolerance is one nanosecond, absolute, only at the advance endpoint.

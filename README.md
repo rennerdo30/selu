@@ -102,6 +102,12 @@ error[SELU0328]: a condition must be a `boolean` or a value that may be null, no
   the target) and a source map
 - A headless Lua 5.1 simulator that loads the addon in `.toc` order and fires
   events; the test suite runs every language rule through it
+- `selu fmt [paths] [--check]`: formats `.selu` files (indentation, spacing,
+  one statement per line; comments and line breaks kept; `[format] indent`
+  in `selu.toml`)
+- Selu Studio (`selu debug`, or `scripts\studio.bat`): a code editor with
+  errors while typing, completion and hover from the game API, Format
+  Document, Project Settings for `selu.toml`, and a live game preview
 
 ## Planned for version 1
 

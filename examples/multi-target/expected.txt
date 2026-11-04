@@ -1,1 +1,2 @@
-Client clock available
+Adventure journal ready on this client.
+Session clock: 0 seconds since client startup
