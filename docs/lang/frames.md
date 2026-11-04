@@ -157,3 +157,22 @@ Missing, incompatible or wrong-target snapshots fail without replacing that VM.
 The new VM receives the complete validated registry before any addon executes,
 and uses that same checked set throughout loading. Rebuilds publish snapshots
 only after all target compilations succeed.
+
+Pool and view factories carry generated checked object types. For example:
+
+```selu
+const pool = CreateFramePool("Frame", UIParent);
+for (const [frame, active] of pool.EnumerateActive()) {
+  frame.Hide();
+}
+const [frame, fresh] = pool.Acquire();
+if (frame != null) { pool.Release(frame); }
+```
+
+Acquire may return null at capacity. Texture and font-string pool allocators
+retain their respective base widget types. ObjectPool's arbitrary element data
+and source results without a determined type use the existing API untyped rule.
+ScrollBox views and DataProviders also retain their generated method surfaces.
+Call an enumerator directly in `for ... of` so its Lua iterator triple survives;
+saving just its first result and iterating it is rejected. NumLines and ClearLines
+are supplied by pin-cited engine overlays; NumLines returns a number.

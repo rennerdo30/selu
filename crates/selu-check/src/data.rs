@@ -366,7 +366,34 @@ impl Ctx<'_> {
         if self.pattern_for_of(s, &t) {
             return;
         }
+        let iterator = crate::game_iterator(&t);
+        if iterator.is_some() && !matches!(iter.kind, ExprKind::Call { .. }) {
+            self.out.push(err(
+                "SELU0357",
+                "an API iterator triple must be called directly in the loop",
+                &iter.span,
+            ));
+            return;
+        }
         let bindings = match (&t, binding) {
+            (_, ForBinding::Name(n, sp)) if iterator.is_some() => vec![(
+                n.clone(),
+                sp.clone(),
+                iterator.unwrap().first().cloned().unwrap_or(Type::Untyped),
+            )],
+            (_, ForBinding::Pattern(Pattern::Array(items))) if iterator.is_some() => items
+                .iter()
+                .enumerate()
+                .filter_map(|(i, item)| {
+                    item.as_ref().map(|(n, sp)| {
+                        (
+                            n.clone(),
+                            sp.clone(),
+                            iterator.unwrap().get(i).cloned().unwrap_or(Type::Untyped),
+                        )
+                    })
+                })
+                .collect(),
             (Type::Array(t) | Type::Set(t), ForBinding::Name(n, sp)) => {
                 vec![(n.clone(), sp.clone(), (**t).clone())]
             }

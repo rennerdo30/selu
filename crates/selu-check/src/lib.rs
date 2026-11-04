@@ -1575,6 +1575,14 @@ fn capital(s: &str) -> String {
     }
 }
 
+/// Yield types for a pinned-source API iterator triple (not a collection).
+pub fn game_iterator(t: &Type) -> Option<&[Type]> {
+    match t {
+        Type::ApiIterator(items) => Some(items),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

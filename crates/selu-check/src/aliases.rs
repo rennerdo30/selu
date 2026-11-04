@@ -514,7 +514,7 @@ pub(crate) fn identity_key(t: &Type) -> String {
             .iter()
             .map(|(n, t)| format!("{n:?}:{}", identity_key(t)))
             .collect(),
-        Type::Tuple(ts) => ts.iter().map(identity_key).collect(),
+        Type::Tuple(ts) | Type::ApiIterator(ts) => ts.iter().map(identity_key).collect(),
         Type::ApiOpaque(n, ts) => std::iter::once(n.clone())
             .chain(ts.iter().map(identity_key))
             .collect(),

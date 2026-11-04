@@ -274,3 +274,15 @@ widget = "GameTooltip"
 evidence = "source"
 note = "Pinned e5d9b3a22c3f0f6f41ebac0e454f4969594261cf: Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.xml:184; tooltip methods/optional trailing colours used by Blizzard UI; owner review 2026-11-04."
 entry = { name = "SetText", type = "Function", arguments = [{ name = "text", type = "cstring", attributes = { Nilable = false } }, { name = "colorR", type = "number", attributes = { Nilable = false } }, { name = "colorG", type = "number", attributes = { Nilable = false } }, { name = "colorB", type = "number", attributes = { Nilable = false } }, { name = "alpha", type = "number", attributes = { Default = 1, Nilable = false } }, { name = "wrap", type = "bool", attributes = { Default = false, Nilable = false } }], attributes = { Environment = "All" }, overloads = [{ name = "SetText", type = "Function", arguments = [{ name = "text", type = "cstring" }, { name = "r", type = "number", attributes = { Nilable = true } }, { name = "g", type = "number", attributes = { Nilable = true } }, { name = "b", type = "number", attributes = { Nilable = true } }] }] }
+
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "Pinned e5d9b3a22c3f0f6f41ebac0e454f4969594261cf: Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.lua:2419, if ( GameTooltip:NumLines() > 0 ) then; zero-argument Blizzard call. Interface/AddOns/Blizzard_SharedXML/UI.xsd defines GameTooltipType extending FrameType; XSD has no method declarations. Numeric comparison proves number result."
+entry = { name = "NumLines", type = "Function", arguments = [], returns = [{ name = "count", type = "number" }] }
+
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "Pinned e5d9b3a22c3f0f6f41ebac0e454f4969594261cf: Interface/AddOns/Blizzard_Calendar/Classic/Blizzard_Calendar.lua:2108, GameTooltip:ClearLines();; zero-argument Blizzard call. Interface/AddOns/Blizzard_SharedXML/UI.xsd defines GameTooltipType extending FrameType; XSD has no method declarations. No return contract evidenced; result follows untyped game-value policy."
+entry = { name = "ClearLines", type = "Function", arguments = [], returns = [{ name = "result" }] }

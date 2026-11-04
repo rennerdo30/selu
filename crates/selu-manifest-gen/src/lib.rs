@@ -1,3 +1,4 @@
+pub mod coverage;
 pub mod factory;
 pub mod xml;
 use mlua::{Lua, LuaOptions, StdLib, Table, Value};

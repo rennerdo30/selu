@@ -33,6 +33,14 @@ fn map(m: &Manifest, d: &Declaration, depth: usize) -> Type {
     if depth > 12 {
         return Type::Untyped;
     }
+    if let Some(types) = d.attributes.get("SeluIterator").and_then(|v| v.as_array()) {
+        return Type::ApiIterator(
+            types
+                .iter()
+                .map(|t| named(m, t.as_str().unwrap_or(""), depth + 1))
+                .collect(),
+        );
+    }
     let name = d.ty.as_deref().unwrap_or("");
     let t = primitive(name).unwrap_or_else(|| match name {
         "Function" | "function" => signature(m, d, depth + 1),

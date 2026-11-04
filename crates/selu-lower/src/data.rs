@@ -622,6 +622,44 @@ impl Lowerer<'_> {
         };
         let mut pre = vec![];
         let v = self.expr(iter, &mut pre);
+        if self
+            .types
+            .get(iter.id)
+            .and_then(selu_check::game_iterator)
+            .is_some()
+        {
+            // Preserve Lua's iterator/state/control results. A scalar temporary
+            // or parentheses here would discard the state and break pairs/ipairs.
+            let iterator = match v {
+                LExpr::Paren(v) => *v,
+                v => v,
+            };
+            let mut names = match binding {
+                ForBinding::Name(n, _) => vec![n.clone()],
+                ForBinding::Pattern(Pattern::Array(items)) => items
+                    .iter()
+                    .map(|v| {
+                        v.as_ref()
+                            .map(|(n, _)| n.clone())
+                            .unwrap_or_else(|| self.temp())
+                    })
+                    .collect(),
+                _ => unreachable!(),
+            };
+            if names.is_empty() {
+                names.push(self.temp());
+            }
+            pre.push(LStmt::new(
+                LStmtKind::GenFor {
+                    names,
+                    exprs: vec![iterator],
+                    body: self.loop_body(body, &s.span),
+                },
+                &s.span,
+            ));
+            out.extend(pre);
+            return;
+        }
         let t = self.hold(v, &iter.span, &mut pre);
         let obj = name(&t);
         let mut body = self.loop_body(body, &s.span);

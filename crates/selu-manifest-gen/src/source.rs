@@ -28,11 +28,14 @@ struct Scan {
     definitions: Vec<(String, usize, Vec<String>, bool)>,
     calls: Vec<(String, usize)>,
     frame_calls: Vec<FunctionCall>,
+    method_calls: Vec<FunctionCall>,
+    initializers: Vec<(String, usize, Expression)>,
     numeric_loops: Vec<NumericFor>,
     assignments: Vec<(String, usize)>,
     function_bodies: Vec<(usize, usize)>,
     tables: Vec<(String, usize, TableConstructor)>,
     members: Vec<(String, String, usize)>,
+    implemented_names: BTreeSet<String>,
     signatures: Vec<(String, usize, FunctionBody)>,
     scalars: Vec<(String, usize, Expression)>,
     mixins: Vec<(String, usize, Vec<String>, String)>,
@@ -72,6 +75,9 @@ impl Visitor for Scan {
         self.blocks.pop();
     }
     fn visit_local_assignment(&mut self, n: &LocalAssignment) {
+        for (t, e) in n.names().iter().zip(n.expressions().iter()) {
+            self.initializers.push((name(t), end(n), e.clone()));
+        }
         let to = self.blocks.last().unwrap().1;
         for t in n.names() {
             self.bind(name(t), end(n), to);
@@ -94,6 +100,12 @@ impl Visitor for Scan {
         self.depth -= 1;
     }
     fn visit_function_declaration(&mut self, n: &FunctionDeclaration) {
+        if let Some(m) = n.name().method_name() {
+            self.implemented_names.insert(name(m));
+        } else if n.name().names().len() > 1 {
+            self.implemented_names
+                .insert(name(n.name().names().iter().last().unwrap()));
+        }
         if self.depth == 0 {
             let names: Vec<_> = n.name().names().iter().map(name).collect();
             if let Some(method) = n.name().method_name() {
@@ -138,6 +150,19 @@ impl Visitor for Scan {
         }
     }
     fn visit_assignment(&mut self, n: &Assignment) {
+        for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
+            if matches!(e, Expression::Function(_))
+                && let Var::Expression(v) = v
+                && let Some(Suffix::Index(Index::Dot { name: t, .. })) = v.suffixes().last()
+            {
+                self.implemented_names.insert(name(t));
+            }
+        }
+        for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
+            if let Var::Name(t) = v {
+                self.initializers.push((name(t), end(n), e.clone()));
+            }
+        }
         for v in n.variables() {
             if let Var::Name(t) = v {
                 self.assignments.push((name(t), start(n)));
@@ -185,6 +210,9 @@ impl Visitor for Scan {
         }
     }
     fn visit_function_call(&mut self, n: &FunctionCall) {
+        if matches!(n.suffixes().next(), Some(Suffix::Call(Call::MethodCall(_)))) {
+            self.method_calls.push(n.clone());
+        }
         if matches!(n.prefix(), Prefix::Name(t) if name(t) == "CreateFrame") {
             self.frame_calls.push(n.clone());
         }
@@ -222,6 +250,8 @@ impl Visitor for Scan {
 }
 #[derive(Default)]
 pub struct Sources {
+    pub widget_calls: Vec<crate::coverage::WidgetCall>,
+    pub source_methods: BTreeSet<String>,
     signatures: BTreeMap<String, selu_manifest::Declaration>,
     runtime_frames: Vec<(String, String, String, String, String)>,
     definitions: BTreeMap<String, (String, Vec<String>)>,
@@ -236,6 +266,55 @@ impl Sources {
             .map_err(|e| format!("{file}: Lua parse error: {e:?}"))?;
         let mut scan = Scan::default();
         scan.visit_ast(&ast);
+        self.source_methods
+            .extend(scan.implemented_names.iter().cloned());
+        for c in &scan.method_calls {
+            let (Prefix::Name(root), Some(Suffix::Call(Call::MethodCall(method)))) =
+                (c.prefix(), c.suffixes().next())
+            else {
+                continue;
+            };
+            let root = name(root);
+            let pos = start(c);
+            let initializer = scan
+                .initializers
+                .iter()
+                .filter(|(n, p, _)| {
+                    n == &root && *p <= pos && scan.binding(n, *p) == scan.binding(n, pos)
+                })
+                .max_by_key(|(_, p, _)| *p);
+            let mut ty = None;
+            let mut templates = vec![];
+            if let Some((_, p, Expression::FunctionCall(call))) = initializer
+                && matches!(call.prefix(),Prefix::Name(t) if name(t)=="CreateFrame" && !scan.local("CreateFrame",*p))
+                && let Some(Suffix::Call(Call::AnonymousCall(args))) = call.suffixes().next()
+                && let FunctionArgs::Parentheses { arguments, .. } = args.as_ref()
+            {
+                ty = arguments
+                    .iter()
+                    .next()
+                    .and_then(literal)
+                    .and_then(|v| v.as_str().map(str::to_owned));
+                templates = arguments
+                    .iter()
+                    .nth(3)
+                    .and_then(literal)
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(|s| s.split(',').map(|s| s.trim().to_owned()).collect())
+                    })
+                    .unwrap_or_default();
+            }
+            self.widget_calls.push(crate::coverage::WidgetCall {
+                receiver: root.clone(),
+                local: scan.local(&root, pos),
+                ty,
+                templates,
+                method: name(method.name()),
+                file: file.into(),
+                line: c.start_position().map_or(0, |p| p.line()),
+            });
+        }
         for call in &scan.frame_calls {
             if scan.local("CreateFrame", start(call)) {
                 continue;
@@ -541,6 +620,24 @@ impl Sources {
         counts
     }
 }
+#[derive(Default)]
+struct ReturnArity {
+    depth: usize,
+    max: usize,
+}
+impl Visitor for ReturnArity {
+    fn visit_function_body(&mut self, _: &FunctionBody) {
+        self.depth += 1;
+    }
+    fn visit_function_body_end(&mut self, _: &FunctionBody) {
+        self.depth -= 1;
+    }
+    fn visit_return(&mut self, r: &Return) {
+        if self.depth == 1 {
+            self.max = self.max.max(r.returns().len());
+        }
+    }
+}
 // Source-only signatures preserve arity and primitive EmmyLua annotations.
 // Unspecified types use the checker's existing untyped-game-value rule.
 pub(crate) fn source_signature(
@@ -590,7 +687,9 @@ pub(crate) fn source_signature(
         d.arguments.push(a);
     }
     if returns.is_empty() {
-        returns.push(String::new());
+        let mut arity = ReturnArity::default();
+        full_moon::visitors::Visit::visit(body, &mut arity);
+        returns.resize(arity.max.max(1), String::new());
     }
     returns.reverse();
     for ty in returns {
@@ -598,9 +697,35 @@ pub(crate) fn source_signature(
         r.attributes.clear();
         d.returns.push(r);
     }
+    if let Some(LastStmt::Return(r)) = body.block().last_stmt()
+        && r.returns().len() == 1
+        && let Some(Expression::FunctionCall(call)) = r.returns().iter().next()
+    {
+        let builtin = match call.prefix() {
+            Prefix::Name(t) => name(t),
+            _ => String::new(),
+        };
+        if ["pairs", "ipairs"].contains(&builtin.as_str()) {
+            let types = if builtin == "ipairs" {
+                vec!["number", ""]
+            } else {
+                vec!["", ""]
+            };
+            let mut ret = crate::xml::declaration("result", "Function", "");
+            ret.attributes.clear();
+            ret.attributes
+                .insert("SeluIterator".into(), serde_json::json!(types));
+            d.returns = vec![ret];
+        } else if let Some(Suffix::Call(Call::MethodCall(m))) = call.suffixes().last()
+            && name(m.name()) == d.name
+        {
+            d.attributes
+                .insert("SeluIteratorForward".into(), true.into());
+        }
+    }
     d
 }
-fn entry(name: String, file: String, kind: &str, params: Vec<String>) -> FunctionEntry {
+pub(crate) fn entry(name: String, file: String, kind: &str, params: Vec<String>) -> FunctionEntry {
     FunctionEntry {
         name,
         params,

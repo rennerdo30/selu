@@ -52,8 +52,8 @@ fn git_bytes(repo: &str, args: &[&str]) -> Result<Vec<u8>> {
     Ok(text)
 }
 fn generate(args: &[String]) -> Result<()> {
-    if args.len() != 4 {
-        return Err("usage: selu-manifest-gen <flavour> <ref-or-commit> <output.selum> <source-repository> (reads overlay.toml beside output)".into());
+    if !(4..=5).contains(&args.len()) {
+        return Err("usage: selu-manifest-gen <flavour> <ref-or-commit> <output.selum> <source-repository> (reads overlay.toml beside output; optional fifth argument: engine-gap-report.json)".into());
     }
     let (flavour, reference, output, repo) = (&args[0], &args[1], Path::new(&args[2]), &args[3]);
     let log = git(repo, &["log", "-1", "--format=%H%n%s", reference, "--"])?;
@@ -131,7 +131,9 @@ fn generate(args: &[String]) -> Result<()> {
             continue;
         }
         source_globals.parse(&path, &text)?;
-        if text.contains("CreateFromMixins") { factory_sources.push((path.clone(),text.clone())); }
+        if text.contains("CreateFromMixins") {
+            factory_sources.push((path.clone(), text.clone()));
+        }
         files += 1;
         if path.starts_with("Interface/AddOns/Blizzard_APIDocumentationGenerated/") {
             sources.push(text);
@@ -144,6 +146,8 @@ fn generate(args: &[String]) -> Result<()> {
     for system in systems {
         merge_system(&mut m, system);
     }
+    let widget_calls = source_globals.widget_calls.clone();
+    let source_methods = source_globals.source_methods.clone();
     let (defined, called) = source_globals.extend_manifest(&mut m);
     eprintln!("source globals: {defined} defined, {called} called; parsed {files} Lua files");
     xml.extend_manifest(&mut m);
@@ -162,6 +166,16 @@ fn generate(args: &[String]) -> Result<()> {
     }
     if m.interface == 0 {
         return Err("interface requires a sourced overlay".into());
+    }
+    if let Some(report) = args.get(4) {
+        std::fs::write(
+            report,
+            serde_json::to_vec_pretty(&selu_manifest_gen::coverage::inventory(
+                &m,
+                &widget_calls,
+                &source_methods,
+            ))?,
+        )?;
     }
     let bytes = encode(&mut m)?;
     std::fs::write(output, &bytes)?;
@@ -319,7 +333,8 @@ fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() == 2 && args[0] == "dump" {
         let value: serde_json::Value = selu_manifest::format::decode(&std::fs::read(&args[1])?)?;
-        println!("{}",serde_json::to_string_pretty(&value)?); return Ok(());
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
     }
     if args.first().is_some_and(|a| a == "update") {
         update(&args[1..])
