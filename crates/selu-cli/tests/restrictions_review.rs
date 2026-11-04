@@ -249,3 +249,25 @@ fn review_secret_policy_does_not_require_a_known_inner_type() {
     sim.load_files(&[("test.lua".into(), lua)]).unwrap();
     assert_eq!(sim.prints(), ["read"]);
 }
+
+#[test]
+fn review_unspecified_function_results_keep_unknown_policy() {
+    let mut m = manifest();
+    let mut f = m.function("GetTime").unwrap().clone();
+    f.name = "GetCallback".into();
+    let d = f.signature.as_mut().unwrap();
+    d.name = "GetCallback".into();
+    d.returns[0].ty = Some("LuaFunctionReference".into());
+    m.functions.push(f);
+    let lua = compile("const callback=GetCallback(); callback();", &m);
+    let sim = Sim::new().unwrap();
+    sim.eval(
+        "function Restricted() print('ran') end; function GetCallback() return Restricted end",
+    )
+    .unwrap();
+    sim.set_combat(true).unwrap();
+    sim.load_files(&[("test.lua".into(), lua)]).unwrap();
+    assert!(sim.prints().is_empty());
+    sim.set_combat(false).unwrap();
+    assert_eq!(sim.prints(), ["ran"]);
+}

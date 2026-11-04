@@ -379,7 +379,10 @@ impl crate::Ctx<'_> {
             .any(|candidate| candidate.assignable_to(ty));
         let mut ty = ty.clone();
         if let crate::Type::Function {
-            api, api_semantics, ..
+            api,
+            api_semantics,
+            unspecified_callback,
+            ..
         } = &mut ty
         {
             let dynamic = match &callee.kind {
@@ -395,7 +398,8 @@ impl crate::Ctx<'_> {
                 _ => true,
             };
             api_semantics.dynamic_protected = (api_semantics.dynamic_protected
-                || dynamic && api.0.is_some())
+                || dynamic && api.0.is_some()
+                || *unspecified_callback)
                 && can_defer
                 && !api_semantics.widget_protected;
             if dynamic || api_semantics.dynamic_protected {
