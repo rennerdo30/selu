@@ -66,12 +66,26 @@ pub fn parse_toc(name: &str, dir: &Path, text: &str) -> Toc {
 }
 
 pub fn read_toc(dir: &Path) -> Result<Toc, String> {
+    read_toc_target(dir, None)
+}
+
+pub fn read_toc_target(dir: &Path, target: Option<&str>) -> Result<Toc, String> {
     let name = dir
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("{} is not an addon folder", dir.display()))?
         .to_string();
-    let path = dir.join(format!("{name}.toc"));
+    let suffix = match target.unwrap_or("").split('@').next().unwrap_or("") {
+        "retail" => "Mainline",
+        "forever" | "classic" => "Vanilla",
+        _ => "",
+    };
+    let flavoured = dir.join(format!("{name}_{suffix}.toc"));
+    let path = if !suffix.is_empty() && flavoured.is_file() {
+        flavoured
+    } else {
+        dir.join(format!("{name}.toc"))
+    };
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     Ok(parse_toc(&name, dir, &text))
@@ -95,7 +109,15 @@ pub fn read_files(toc: &Toc) -> Result<Vec<(String, String)>, String> {
                 toc.name
             ));
         }
-        let path = toc.dir.join(file);
+        let root = toc.dir.canonicalize().map_err(|e| e.to_string())?;
+        let path = toc
+            .dir
+            .join(file)
+            .canonicalize()
+            .map_err(|e| e.to_string())?;
+        if !path.starts_with(&root) {
+            return Err(format!("file escapes addon folder: {file}"));
+        }
         let source = std::fs::read_to_string(&path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         out.push((file.clone(), source));

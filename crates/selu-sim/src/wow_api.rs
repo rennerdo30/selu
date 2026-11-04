@@ -9,7 +9,7 @@ function hooksecurefunc(target, name, hook)
   local original = target[name]
   target[name] = function(...)
     local args, count = {...}, select("#", ...)
-    local function after(...) hook(unpack(args, 1, count)); return ... end
+    local function after(...) __selu_trace_hook(); hook(unpack(args, 1, count)); return ... end
     return after(original(...))
   end
 end

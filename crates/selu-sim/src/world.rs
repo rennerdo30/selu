@@ -1,6 +1,130 @@
-//! World state: units, combat, secret values, money, bags (docs/SIMULATOR.md
-//! decision 5, SPEC-V1.md section 8). Owner: package S2.
-//!
-//! Empty in the groundwork. Round 7's combat and secret-value hooks
-//! (`Sim::set_combat`, `Sim::set_secret_global`) move here; every setter
-//! fires the events the client would, with payloads from the manifest.
+//! Session-local world data. Event payloads follow the target manifests.
+use crate::{SimResult, session::Vm};
+use mlua::{Lua, Table, Value};
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unit {
+    pub name: String,
+    pub class: String,
+    pub level: u32,
+    pub health: u32,
+    pub max_health: u32,
+    pub power: u32,
+    pub max_power: u32,
+    pub auras: Vec<String>,
+    pub combat: bool,
+}
+impl Vm {
+    pub fn set_unit(&self, token: &str, unit: Unit) -> SimResult<()> {
+        if !valid_token(token) {
+            return Err(mlua::Error::runtime("unsupported unit token"));
+        }
+        let units: Table = self.lua.globals().raw_get("__selu_world_units")?;
+        let old: Option<Table> = units.raw_get(token)?;
+        let next = self.lua.create_table()?;
+        next.set("name", unit.name)?;
+        next.set("class", unit.class)?;
+        next.set("level", unit.level)?;
+        next.set("health", unit.health)?;
+        next.set("max_health", unit.max_health)?;
+        next.set("power", unit.power)?;
+        next.set("max_power", unit.max_power)?;
+        next.set("combat", unit.combat)?;
+        next.set("auras", self.lua.create_sequence_from(unit.auras)?)?;
+        let changes = [
+            ("name", "UNIT_NAME_UPDATE"),
+            ("level", "UNIT_LEVEL"),
+            ("health", "UNIT_HEALTH"),
+            ("max_health", "UNIT_MAXHEALTH"),
+            ("power", "UNIT_POWER_UPDATE"),
+            ("max_power", "UNIT_MAXPOWER"),
+        ];
+        units.set(token, next.clone())?;
+        for (field, event) in changes {
+            let changed = match &old {
+                Some(old) => old.raw_get::<Value>(field)? != next.raw_get::<Value>(field)?,
+                None => true,
+            };
+            if changed {
+                let mut args = vec![Value::String(self.lua.create_string(token)?)];
+                if field == "power" || field == "max_power" {
+                    args.push(Value::String(self.lua.create_string("MANA")?));
+                }
+                self.fire(event, args)?;
+            }
+        }
+        let update = self.lua.create_table()?;
+        update.set("isFullUpdate", true)?;
+        self.fire(
+            "UNIT_AURA",
+            vec![
+                Value::String(self.lua.create_string(token)?),
+                Value::Table(update),
+            ],
+        )?;
+        Ok(())
+    }
+    pub fn set_money(&self, copper: u64) -> SimResult<()> {
+        self.lua.globals().set("__selu_world_money", copper)?;
+        self.fire("PLAYER_MONEY", vec![])?;
+        Ok(())
+    }
+    pub fn set_bag(&self, bag: i32, items: &[u32]) -> SimResult<()> {
+        let bags: Table = self.lua.globals().raw_get("__selu_world_bags")?;
+        bags.set(bag, self.lua.create_sequence_from(items.iter().copied())?)?;
+        self.fire("BAG_UPDATE", vec![Value::Integer(bag as i64)])?;
+        self.fire("BAG_UPDATE_DELAYED", vec![])?;
+        Ok(())
+    }
+}
+fn valid_token(t: &str) -> bool {
+    matches!(t, "player" | "target" | "focus" | "pet")
+        || t.strip_prefix("party")
+            .and_then(|s| s.parse::<u8>().ok())
+            .is_some_and(|n| (1..=4).contains(&n))
+        || t.strip_prefix("raid")
+            .and_then(|s| s.parse::<u8>().ok())
+            .is_some_and(|n| (1..=40).contains(&n))
+}
+pub(crate) fn install(lua: &Lua) -> SimResult<()> {
+    lua.load(r#"
+__selu_world_units = {}; __selu_world_money = 0; __selu_world_bags = {}
+local units = __selu_world_units
+function UnitExists(u) return units[u] ~= nil end
+function UnitName(u) return units[u] and units[u].name end
+function UnitClass(u) local c = units[u] and units[u].class; return c, c end
+function UnitLevel(u) return units[u] and units[u].level or 0 end
+function UnitHealth(u) return units[u] and units[u].health or 0 end
+function UnitHealthMax(u) return units[u] and units[u].max_health or 0 end
+function UnitPower(u) return units[u] and units[u].power or 0 end
+function UnitPowerMax(u) return units[u] and units[u].max_power or 0 end
+function UnitAffectingCombat(u) return units[u] and units[u].combat or false end
+function GetMoney() return __selu_world_money end
+C_Container = {}
+function C_Container.GetContainerNumSlots(b) return #(__selu_world_bags[b] or {}) end
+function C_Container.GetContainerItemID(b,s) return (__selu_world_bags[b] or {})[s] end
+local randomState = 1
+function math.randomseed(seed) randomState=math.floor(seed)%2147483647; if randomState==0 then randomState=1 end end
+function math.random(a,b)
+ randomState=(randomState*16807)%2147483647
+ local n=(randomState-1)/2147483646
+ if a==nil then return n end
+ if b==nil then b=a; a=1 end
+ assert(a<=b, 'interval is empty'); return a+math.floor(n*(b-a+1))
+end
+function UnitAura(u,i) return units[u] and units[u].auras[i] end
+function time() return 946684800 + math.floor(GetTime()) end
+function date(format, timestamp)
+ local t = timestamp or time()
+ local days = math.floor(t / 86400)
+ local y = 1970
+ local function leap(n) return n%4==0 and (n%100~=0 or n%400==0) end
+ for _=1,10000 do local n=leap(y) and 366 or 365; if days<n then break end; days=days-n; y=y+1 end
+ local months={31,leap(y) and 29 or 28,31,30,31,30,31,31,30,31,30,31}; local m=1
+ for _=1,11 do if days<months[m] then break end; days=days-months[m]; m=m+1 end
+ local v={year=y,month=m,day=days+1,hour=math.floor(t/3600)%24,min=math.floor(t/60)%60,sec=t%60,isdst=false}
+ if format=='*t' or format=='!*t' then return v end
+ local fields={Y=string.format('%04d',y),m=string.format('%02d',m),d=string.format('%02d',v.day),H=string.format('%02d',v.hour),M=string.format('%02d',v.min),S=string.format('%02d',v.sec),['%']='%'}
+ return (format or '%Y-%m-%d %H:%M:%S'):gsub('^!',''):gsub('%%(.)',function(k) assert(fields[k], 'unsupported date format'); return fields[k] end)
+end
+"#).exec()
+}

@@ -56,15 +56,7 @@ pub enum Outcome {
 
 /// One host command a test sent to the session, in order. A failing test's
 /// list plus its seed lets `selu debug --test` replay it (decision 22).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "command", rename_all = "snake_case")]
-pub enum HostCommand {
-    Fire { event: String, args: Vec<String> },
-    Slash { line: String },
-    AdvanceTime { seconds: f64 },
-    Reload,
-    Eval { code: String },
-}
+pub use selu_sim::session::HostCommand;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Replay {
