@@ -1,5 +1,9 @@
 local __selu_addon, __selu_ns = ...
 __selu_ns = __selu_ns or {}
+local function __selu_read(value)
+  if canaccessvalue and not canaccessvalue(value) then return nil end
+  return value
+end
 __selu_ns["main"] = {}
 if not __selu_ns.__selu_events then
   -- Selu: shared event frame and dispatch table
@@ -30,5 +34,12 @@ __selu_on("PLAYER_LOGIN", function()
   local button = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
   button:SetSize(120, 24)
   button:SetText("Sell junk")
-  print(panel:GetWidth(), (button:GetText()))
+  do
+    local __selu_t1 = __selu_read((panel:GetWidth()))
+    if __selu_t1 == nil then __selu_t1 = 0 end
+    local __selu_t3 = __selu_t1
+    local __selu_t2 = __selu_read((button:GetText()))
+    if __selu_t2 == nil then __selu_t2 = "" end
+    print(__selu_t3, __selu_t2)
+  end
 end)

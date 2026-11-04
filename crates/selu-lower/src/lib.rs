@@ -26,6 +26,7 @@ mod loops;
 mod modules;
 mod patterns;
 mod purity;
+mod restrictions;
 pub mod saved;
 pub use errors::uses_errors;
 pub use modules::ModuleBindings;
@@ -160,6 +161,9 @@ fn lower_addon_layout(
     let captures_end = out.len();
     out.extend(saved::setup(program));
     out.extend(l.error_setup(program));
+    out.extend(restrictions::emit_restriction_runtime(
+        program, types, manifest,
+    ));
     let errors_index = out.len();
     let has_handlers = program.stmts.iter().any(targets::contains_event);
     if has_handlers {
@@ -274,6 +278,9 @@ pub fn lower_module_layout(
     let runtime_index = out.len();
     out.extend(saved::setup(program));
     out.extend(l.error_setup(program));
+    out.extend(restrictions::emit_restriction_runtime(
+        program, types, manifest,
+    ));
     let errors_index = out.len();
     l.module_prologue(&mut out);
     let has_handlers = program.stmts.iter().any(targets::contains_event);
@@ -634,11 +641,17 @@ impl Lowerer<'_> {
         if chain.len() > 1 && (declare || !reads_var(&chain[1..])) {
             let mut pre = Vec::new();
             let first = self.expr(chain[0], &mut pre);
+            let first = self.read_if_secret(chain[0], first);
             out.extend(pre);
             out.push(store(first));
-            for part in &chain[1..] {
+            for (index, part) in chain[1..].iter().enumerate() {
                 let mut part_pre = Vec::new();
                 let v = self.expr(part, &mut part_pre);
+                let v = if index + 2 < chain.len() {
+                    self.read_if_secret(part, v)
+                } else {
+                    v
+                };
                 part_pre.push(LStmt::new(
                     LStmtKind::Assign(vec![var.clone()], vec![v]),
                     span,
@@ -724,7 +737,7 @@ impl Lowerer<'_> {
                 name: field,
             } => self.data_field(object, field, pre),
             ExprKind::Call { callee, args } => {
-                let v = self.call(callee, args, pre);
+                let v = self.restricted_call(callee, args, pre);
                 if self.types.is_single_value(e.id)
                     && matches!(v, LExpr::Call(..) | LExpr::Method(..))
                     && matches!(
@@ -798,6 +811,11 @@ impl Lowerer<'_> {
         pre: &mut LBlock,
     ) -> LExpr {
         let a = self.expr(left, pre);
+        let a = if op == "??" {
+            self.read_if_secret(left, a)
+        } else {
+            a
+        };
         let mut right_pre = Vec::new();
         let b = self.expr(right, &mut right_pre);
         if right_pre.is_empty() {

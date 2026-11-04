@@ -113,6 +113,8 @@ struct BuildSection {
     #[serde(default)]
     strict_api: bool,
     #[serde(default)]
+    debug: bool,
+    #[serde(default)]
     layout: BuildLayout,
 }
 
@@ -473,6 +475,7 @@ fn build(
         strict_api: project.build.strict_api,
     };
     let shared = project.build.layout == BuildLayout::Shared;
+    let debug = project.build.debug;
     let project = project.addon;
 
     let src_dir = project_dir.join("src");
@@ -621,7 +624,18 @@ fn build(
                     ExitCode::FAILURE
                 })?;
             }
-            std::fs::write(output, lowered.lua).map_err(|e| {
+            std::fs::write(
+                output,
+                if debug {
+                    lowered.lua.replace(
+                        "if false then print(\"Selu: deferred protected call\") end",
+                        "if true then print(\"Selu: deferred protected call\") end",
+                    )
+                } else {
+                    lowered.lua
+                },
+            )
+            .map_err(|e| {
                 eprintln!("selu: {e}");
                 ExitCode::FAILURE
             })?;

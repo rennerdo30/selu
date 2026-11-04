@@ -1,0 +1,3 @@
+[addon]
+name = "CombatSafe"
+targets = ["retail"]

@@ -255,7 +255,12 @@ impl RegionModel for LuaTableModel {
             let widget = t
                 .raw_get::<Option<String>>("__kind")?
                 .unwrap_or_else(|| "Frame".into());
-            let text = t.raw_get::<Option<String>>("__text")?;
+            // Secret values (round 7) are opaque: show a marker, never the value.
+            let text = match t.raw_get::<Value>("__text")? {
+                Value::String(s) => Some(s.to_str()?.to_string()),
+                Value::Nil => None,
+                _ => Some("<secret>".to_string()),
+            };
             let text_width = (widget == "FontString")
                 .then(|| {
                     text.as_ref()
@@ -405,6 +410,24 @@ mod tests {
         );
         // Font string: top left at (874, 566), 4 chars x 6 px wide, 12 tall.
         assert_eq!(rect(4), Some((874.0, 554.0, 24.0, 12.0)));
+    }
+
+    #[test]
+    fn secret_text_is_shown_as_a_marker() {
+        let sim = Sim::new().unwrap();
+        sim.set_secret_global("SECRET").unwrap();
+        sim.eval(
+            "local f = CreateFrame('Frame'); local t = f:CreateFontString(); t:SetText(SECRET)",
+        )
+        .unwrap();
+        let snap = sim.snapshot().unwrap();
+        assert!(
+            snap.regions
+                .iter()
+                .any(|r| r.text.as_deref() == Some("<secret>")),
+            "{:?}",
+            snap.regions
+        );
     }
 
     #[test]

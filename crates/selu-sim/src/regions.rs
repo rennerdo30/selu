@@ -11,6 +11,7 @@ function methods:GetWidth() return self.__width or 0 end
 function methods:GetHeight() return self.__height or 0 end
 function methods:GetParent() return self.__parent end
 function methods:SetText(text)
+  if issecretvalue and issecretvalue(text) then self.__text = text; return end
   if text == nil then self.__text = nil else self.__text = tostring(text) end
 end
 function methods:GetText() return self.__text end

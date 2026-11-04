@@ -1,0 +1,10 @@
+// A secure template keeps receiver-dependent operations safe during combat.
+const panel = CreateFrame("Frame", null, UIParent, "SecureHandlerBaseTemplate");
+const label = panel.CreateFontString();
+on PLAYER_LOGIN() {
+  panel.Hide();
+  const name = UnitName("player");
+  label.SetText(name);
+  print("Hello " + (name ?? "Player"));
+  print("Panel hidden or queued");
+}

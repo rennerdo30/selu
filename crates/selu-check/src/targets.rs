@@ -77,6 +77,7 @@ pub fn with_fallbacks(primary: &Manifest, targets: &[Manifest]) -> Manifest {
             }
         }
     }
+    crate::restrictions::strictest_policies(&mut m, targets);
     m
 }
 impl Ctx<'_> {

@@ -23,6 +23,12 @@ impl PartialEq for ApiOrigin {
 #[derive(Debug, Clone, Default)]
 pub struct ApiSemantics {
     pub frame_factory: bool,
+    pub secret_results: Vec<bool>,
+    pub protected: bool,
+    pub widget_protected: bool,
+    pub dynamic_protected: bool,
+    pub accepts_secrets: bool,
+    pub plain_result: bool,
     pub overloads: Vec<Type>,
 }
 impl PartialEq for ApiSemantics {
@@ -96,6 +102,7 @@ pub enum Type {
     Null,
     /// `T?`: a `T` or `null`.
     Optional(Box<Type>),
+    Secret(Box<Type>),
     /// `T[]`: a 0-based array without holes, a Lua sequence.
     Array(Box<Type>),
     /// `[A, B]`; also what a call with several results returns.
@@ -149,9 +156,19 @@ impl Type {
         }
     }
 
+    pub fn secret(t: Type) -> Type {
+        if matches!(t, Type::Error | Type::Secret(_)) {
+            t
+        } else {
+            Type::Secret(Box::new(t))
+        }
+    }
     pub fn optional(t: Type) -> Type {
         if t.is_optional() {
             return t;
+        }
+        if let Type::Secret(inner) = t {
+            return Type::Secret(Box::new(Type::optional(*inner)));
         }
         match t {
             Type::Optional(_) | Type::Untyped | Type::Error => t,
@@ -178,10 +195,11 @@ impl Type {
     }
 
     pub fn is_optional(&self) -> bool {
-        matches!(
-            crate::aliases::shape_of(self),
-            Type::Optional(_) | Type::Null
-        )
+        match crate::aliases::shape_of(self) {
+            Type::Optional(_) | Type::Null => true,
+            Type::Secret(t) => t.is_optional(),
+            _ => false,
+        }
     }
 
     /// Whether a value of type `self` may be stored where `to` is expected.
@@ -203,6 +221,11 @@ impl Type {
             )
         {
             return true;
+        }
+        if matches!(to, Type::Unknown | Type::Untyped)
+            && crate::restrictions::secret_inner(self).is_some()
+        {
+            return false;
         }
         if matches!(to, Type::Unknown) {
             return true;
@@ -254,6 +277,12 @@ impl Type {
                 members.iter().any(|t| source.assignable_seen(t, seen))
             }
             (Type::Widget(a, bases), Type::Widget(b, _)) => a == b || bases.contains(b),
+            (Type::Secret(a), Type::Optional(b)) => {
+                Type::Secret(a.clone()).assignable_seen(b, seen)
+            }
+            (Type::Secret(a), Type::Secret(b)) => a.assignable_seen(b, seen),
+            (Type::Secret(_), _) => false,
+            (t, Type::Secret(b)) => t.assignable_seen(b, seen),
             (Type::Null, Type::Optional(_)) => true,
             (Type::Optional(a), Type::Optional(b)) => a.assignable_seen(b, seen),
             (t, Type::Optional(inner)) => t.assignable_seen(inner, seen),
@@ -321,13 +350,61 @@ impl Type {
     /// The narrowest type both `a` and `b` fit in, if there is one.
     pub fn join(a: &Type, b: &Type) -> Option<Type> {
         if a.is_open() || b.is_open() {
+            if !matches!(crate::shape_of(a), Type::Error)
+                && !matches!(crate::shape_of(b), Type::Error)
+                && (crate::restrictions::secret_inner(a).is_some()
+                    || crate::restrictions::secret_inner(b).is_some())
+            {
+                return Some(Type::secret(Type::Untyped));
+            }
             return Some(Type::Untyped);
         }
+        // A conditional function value may select either API. Preserve the
+        // strictest runtime policy even though policy is identity-neutral.
+        let policy = |mut ty: Type| {
+            if let (Type::Widget(_, left), Type::Widget(_, right), Type::Widget(_, result)) =
+                (a, b, &mut ty)
+                && !(left.iter().any(|b| b == "@selu_plain")
+                    && right.iter().any(|b| b == "@selu_plain"))
+            {
+                result.retain(|b| b != "@selu_plain");
+            }
+            if let (
+                Type::Function {
+                    api_semantics: left,
+                    ..
+                },
+                Type::Function {
+                    api_semantics: right,
+                    ..
+                },
+                Type::Function {
+                    api_semantics: result,
+                    ..
+                },
+            ) = (a, b, &mut ty)
+            {
+                result.protected = left.protected || right.protected;
+                result.widget_protected = left.widget_protected || right.widget_protected;
+                result.dynamic_protected = left.dynamic_protected || right.dynamic_protected;
+                result.accepts_secrets = left.accepts_secrets && right.accepts_secrets;
+                result.plain_result = left.plain_result && right.plain_result;
+                result.frame_factory = left.frame_factory && right.frame_factory;
+                let count = left.secret_results.len().max(right.secret_results.len());
+                result.secret_results = (0..count)
+                    .map(|i| {
+                        left.secret_results.get(i) == Some(&true)
+                            || right.secret_results.get(i) == Some(&true)
+                    })
+                    .collect();
+            }
+            ty
+        };
         if b.assignable_to(a) {
-            return Some(a.clone());
+            return Some(policy(a.clone()));
         }
         if a.assignable_to(b) {
-            return Some(b.clone());
+            return Some(policy(b.clone()));
         }
         match (a, b) {
             (Type::Null, t) | (t, Type::Null) => Some(Type::optional(t.clone())),
@@ -353,6 +430,7 @@ impl fmt::Display for Type {
             Type::Boolean => write!(f, "boolean"),
             Type::Null => write!(f, "null"),
             Type::Optional(t) => write!(f, "{t}?"),
+            Type::Secret(t) => write!(f, "Secret<{t}>"),
             Type::Array(t) => write!(f, "{t}[]"),
             Type::Tuple(ts) => {
                 let ts: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
@@ -489,7 +567,7 @@ pub fn is_void(t: &TypeExpr) -> bool {
 fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>) -> Type {
     let want = match name {
         "Error" | "unknown" | "number" | "string" | "boolean" | "null" => 0,
-        "Set" => 1,
+        "Set" | "Secret" => 1,
         "Map" | "WeakMap" => 2,
         _ => {
             out.push(
@@ -522,6 +600,7 @@ fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>
         "string" => Type::String,
         "boolean" => Type::Boolean,
         "null" => Type::Null,
+        "Secret" => Type::secret(*next()),
         "Set" => Type::Set(next()),
         "Map" => Type::Map(next(), next()),
         _ => Type::WeakMap(next(), next()),

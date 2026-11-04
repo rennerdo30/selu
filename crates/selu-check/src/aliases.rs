@@ -201,11 +201,12 @@ impl Ctx<'_> {
             names = all;
         }
         // Keep class resolution's lexical namespace and replace only named-type leaves.
-        if names.is_empty() {
+        let ty = if names.is_empty() {
             self.class_resolve(&rewritten)
         } else {
             self.class_resolve_with_aliases(&rewritten, &names)
-        }
+        };
+        crate::restrictions::collapse_secrets(ty, self.secret_capable)
     }
     fn alias_rewrite(
         &mut self,
@@ -505,7 +506,9 @@ pub(crate) fn identity_key(t: &Type) -> String {
     let parts = match t {
         Type::Named(_, s) => return s.key.clone(),
         Type::Class(n, ..) | Type::ClassObject(n) | Type::Widget(n, _) => vec![n.clone()],
-        Type::Optional(t) | Type::Array(t) | Type::Set(t) => vec![identity_key(t)],
+        Type::Optional(t) | Type::Secret(t) | Type::Array(t) | Type::Set(t) => {
+            vec![identity_key(t)]
+        }
         Type::Map(k, v) | Type::WeakMap(k, v) => vec![identity_key(k), identity_key(v)],
         Type::Object(fs) => fs
             .iter()
@@ -550,7 +553,7 @@ fn unguarded_cycle(t: &Type) -> bool {
                 };
                 t = next;
             }
-            Type::Optional(inner) => t = *inner,
+            Type::Optional(inner) | Type::Secret(inner) => t = *inner,
             _ => return false,
         }
     }
@@ -576,7 +579,9 @@ fn validate_resolved(
             }
             validate_resolved(&t, span, seen, out);
         }
-        Type::Optional(t) | Type::Set(t) => validate_resolved(&t, span, seen, out),
+        Type::Optional(t) | Type::Secret(t) | Type::Set(t) => {
+            validate_resolved(&t, span, seen, out)
+        }
         Type::Map(k, v) | Type::WeakMap(k, v) => {
             validate_resolved(&k, span, seen, out);
             validate_resolved(&v, span, seen, out);
