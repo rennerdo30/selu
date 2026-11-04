@@ -222,9 +222,7 @@ fn callback_chain_is_bounded_as_one_dispatch() {
     s.ctx().set_budget(10);
     s.eval("local f=CreateFrame('Frame');local count=0;f:SetScript('OnSizeChanged',function() count=count+1;if count<20000 then f:SetWidth(count%2+1) end end);f:SetWidth(1)").unwrap();
     assert!(
-        s.logs()
-            .iter()
-            .any(|l| l.contains("budget") || l.contains("script ran too long")),
+        s.logs().iter().any(|l| l.contains("script ran too long")),
         "{:?}",
         s.logs()
     );
