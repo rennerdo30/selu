@@ -58,27 +58,7 @@ pub(super) fn emit_restriction_runtime(
     }
     if queue {
         out.push(raw(DEFER_RUNTIME));
-        for f in &manifest.functions {
-            if f.signature.as_ref().is_some_and(|d| {
-                d.attributes
-                    .get("IsProtectedFunction")
-                    .and_then(|v| v.as_bool())
-                    == Some(true)
-            }) {
-                let parts: Vec<_> = f.name.split('.').collect();
-                let mut checks = Vec::new();
-                for i in 1..parts.len() {
-                    checks.push(format!("type({}) == \"table\"", parts[..i].join(".")));
-                }
-                checks.push(format!("type({}) == \"function\"", f.name));
-                out.push(raw(&format!(
-                    "if {} then __selu_restrictions.protected[{}] = true end",
-                    checks.join(" and "),
-                    f.name
-                )));
-            }
-        }
-        out.push(raw("local __selu_defer = __selu_restrictions.defer\nlocal __selu_invoke = __selu_restrictions.invoke\nlocal __selu_widget_call = __selu_restrictions.widget"));
+        out.push(raw("local __selu_defer = __selu_restrictions.defer\nlocal __selu_invoke = __selu_restrictions.defer\nlocal __selu_widget_call = __selu_restrictions.widget"));
     }
     out
 }
@@ -89,7 +69,7 @@ end"#;
 const DEFER_RUNTIME: &str = r##"local _, __selu_restriction_ns = ...
 __selu_restriction_ns = __selu_restriction_ns or {}
 if not __selu_restriction_ns.__selu_restrictions then
-  local pending, protected = {}, {}
+  local pending = {}
   local frame = CreateFrame("Frame")
   frame:RegisterEvent("PLAYER_REGEN_ENABLED")
   frame:SetScript("OnEvent", function()
@@ -106,15 +86,11 @@ if not __selu_restriction_ns.__selu_restrictions then
     item.fn, item.n = fn, select("#", ...)
     pending[#pending + 1] = item
   end
-  local function invoke(fn, ...)
-    if protected[fn] then return defer(fn, ...) end
-    return fn(...)
-  end
   local function widget(fn, receiver, ...)
     if InCombatLockdown() and receiver:IsProtected() then return defer(fn, receiver, ...) end
     return fn(receiver, ...)
   end
-  __selu_restriction_ns.__selu_restrictions = { defer = defer, invoke = invoke, widget = widget, protected = protected }
+  __selu_restriction_ns.__selu_restrictions = { defer = defer, widget = widget }
 end
 local __selu_restrictions = __selu_restriction_ns.__selu_restrictions"##;
 impl Lowerer<'_> {

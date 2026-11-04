@@ -87,11 +87,14 @@ possible. `const x = CreateFrame("Frame").ClearAttribute("x");` does not get it.
 All execution contexts may run during combat, including load-on-demand setup,
 ADDON_LOADED, PLAYER_LOGIN, events, commands, hooks, timers and click handlers.
 
-Mutable function slots (locals, object fields and collection elements) use an
-identity check against the manifest's protected globals, rather than trusting the
-initial value's policy. No protected global is inferred from spelling. Immutable
-known global calls use their policy directly. Used potentially deferred results
-remain errors. Unmarked globals and untyped API operations remain unchecked.
+Mutable function slots (locals, object fields and collection elements) keep a
+conservative may-be-protected policy instead of trusting their initial value.
+When the signature can hold a protected function, calls defer during combat.
+This deliberately allows unnecessary deferral, and does not depend on function
+identity remaining stable after hooks. Unspecified function references can also
+hold widget operations, including on classic clients with zero flagged globals.
+Immutable known global calls use their policy directly. Used potentially deferred
+results remain errors. Unmarked globals and untyped API operations remain unchecked.
 
 One FIFO and one PLAYER_REGEN_ENABLED registration live in the shared addon
 namespace `__selu_ns` (the addon table supplied as the second chunk argument).

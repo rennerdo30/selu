@@ -271,3 +271,40 @@ fn review_unspecified_function_results_keep_unknown_policy() {
     sim.set_combat(false).unwrap();
     assert_eq!(sim.prints(), ["ran"]);
 }
+
+#[test]
+fn review_hooks_cannot_invalidate_function_protection() {
+    let m = manifest();
+    let lua = compile(
+        "hook(\"Restricted\",()=>{}); let f=Free; f=Restricted; f();",
+        &m,
+    );
+    let sim = Sim::new().unwrap();
+    sim.eval("function Restricted() print('ran') end; function Free() end")
+        .unwrap();
+    sim.set_combat(true).unwrap();
+    sim.load_addon("Hooked", &[("test.lua".into(), lua)])
+        .unwrap();
+    assert!(sim.prints().is_empty());
+    sim.set_combat(false).unwrap();
+    assert_eq!(sim.prints(), ["ran"]);
+}
+#[test]
+fn review_unspecified_callbacks_can_refer_to_widget_operations_on_classic() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+    let mut m = selu_manifest::load_manifest(&root.join("classic-era/1.15.9.70576.json")).unwrap();
+    let mut f = manifest().function("GetTime").unwrap().clone();
+    f.name = "GetCallback".into();
+    let d = f.signature.as_mut().unwrap();
+    d.name = "GetCallback".into();
+    d.returns[0].ty = Some("LuaFunctionReference".into());
+    m.functions.push(f);
+    let lua = compile("const cb=GetCallback(); cb(UIParent);", &m);
+    let sim = Sim::new().unwrap();
+    sim.eval("UIParent.__protected=true; UIParent.Hide=function(self) print('hidden') end; function GetCallback() return UIParent.Hide end").unwrap();
+    sim.set_combat(true).unwrap();
+    sim.load_files(&[("test.lua".into(), lua)]).unwrap();
+    assert!(sim.prints().is_empty());
+    sim.set_combat(false).unwrap();
+    assert_eq!(sim.prints(), ["hidden"]);
+}

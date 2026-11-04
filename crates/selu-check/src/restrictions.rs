@@ -376,7 +376,15 @@ impl crate::Ctx<'_> {
         let can_defer = self
             .protected_functions
             .iter()
-            .any(|candidate| candidate.assignable_to(ty));
+            .any(|candidate| candidate.assignable_to(ty))
+            || self.protected_methods
+                && matches!(
+                    ty,
+                    crate::Type::Function {
+                        unspecified_callback: true,
+                        ..
+                    }
+                );
         let mut ty = ty.clone();
         if let crate::Type::Function {
             api,

@@ -79,6 +79,14 @@ pub fn check_program_with_options(
         manifest,
         secret_capable: restrictions::has_secrets(manifest),
         protected_functions: restrictions::protected_functions(manifest),
+        protected_methods: manifest.widgets.iter().any(|w| {
+            w.methods.iter().any(|d| {
+                d.attributes
+                    .get("IsProtectedFunction")
+                    .and_then(|v| v.as_bool())
+                    == Some(true)
+            })
+        }),
         options,
         availability: targets::Availability::new(std::slice::from_ref(manifest)),
         out: &mut out,
@@ -148,6 +156,14 @@ pub fn check_module_targets_with_options(
         manifest,
         secret_capable: restrictions::has_secrets(manifest),
         protected_functions: restrictions::protected_functions(manifest),
+        protected_methods: manifest.widgets.iter().any(|w| {
+            w.methods.iter().any(|d| {
+                d.attributes
+                    .get("IsProtectedFunction")
+                    .and_then(|v| v.as_bool())
+                    == Some(true)
+            })
+        }),
         options,
         availability: targets::Availability::new(targets),
         out: &mut out,
@@ -225,6 +241,7 @@ type Narrowings = Vec<(String, Type)>;
 struct Ctx<'a> {
     secret_capable: bool,
     protected_functions: Vec<Type>,
+    protected_methods: bool,
     options: CheckOptions,
     module: ModuleBindings,
     aliases: aliases::Aliases,

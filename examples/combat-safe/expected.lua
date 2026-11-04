@@ -7,7 +7,7 @@ end
 local _, __selu_restriction_ns = ...
 __selu_restriction_ns = __selu_restriction_ns or {}
 if not __selu_restriction_ns.__selu_restrictions then
-  local pending, protected = {}, {}
+  local pending = {}
   local frame = CreateFrame("Frame")
   frame:RegisterEvent("PLAYER_REGEN_ENABLED")
   frame:SetScript("OnEvent", function()
@@ -24,20 +24,15 @@ if not __selu_restriction_ns.__selu_restrictions then
     item.fn, item.n = fn, select("#", ...)
     pending[#pending + 1] = item
   end
-  local function invoke(fn, ...)
-    if protected[fn] then return defer(fn, ...) end
-    return fn(...)
-  end
   local function widget(fn, receiver, ...)
     if InCombatLockdown() and receiver:IsProtected() then return defer(fn, receiver, ...) end
     return fn(receiver, ...)
   end
-  __selu_restriction_ns.__selu_restrictions = { defer = defer, invoke = invoke, widget = widget, protected = protected }
+  __selu_restriction_ns.__selu_restrictions = { defer = defer, widget = widget }
 end
 local __selu_restrictions = __selu_restriction_ns.__selu_restrictions
-if type(C_TooltipComparison) == "table" and type(C_TooltipComparison.CompareItem) == "function" then __selu_restrictions.protected[C_TooltipComparison.CompareItem] = true end
 local __selu_defer = __selu_restrictions.defer
-local __selu_invoke = __selu_restrictions.invoke
+local __selu_invoke = __selu_restrictions.defer
 local __selu_widget_call = __selu_restrictions.widget
 __selu_ns["main"] = {}
 if not __selu_ns.__selu_events then
