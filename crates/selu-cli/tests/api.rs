@@ -459,7 +459,7 @@ fn review_api_mismatches_are_warnings() {
 #[test]
 fn review_widgets_reject_undeclared_members_and_unknown_frames_use_frame() {
     let c = review_checked(
-        r#"const f = CreateFrame("Frame", null, UIParent, "BackdropTemplate"); f.customFlag = true; f.SetBackdrop({}); f.SetSze(20, 30); const unknown = CreateFrame("UnrecordedFrame"); unknown.custom = 1;"#,
+        r#"const f = CreateFrame("Frame", null, UIParent, "BackdropTemplate"); f.customFlag = true; f.UndeclaredBackdrop({}); f.SetSze(20, 30); const unknown = CreateFrame("UnrecordedFrame"); unknown.custom = 1;"#,
         "retail",
     );
     assert!(c.has_errors(), "{:?}", c.diagnostics);

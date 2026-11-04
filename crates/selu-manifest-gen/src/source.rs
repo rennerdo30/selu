@@ -33,6 +33,7 @@ struct Scan {
     function_bodies: Vec<(usize, usize)>,
     tables: Vec<(String, usize, TableConstructor)>,
     members: Vec<(String, String, usize)>,
+    signatures: Vec<(String, usize, FunctionBody)>,
     scalars: Vec<(String, usize, Expression)>,
     mixins: Vec<(String, usize, Vec<String>, String)>,
 }
@@ -97,10 +98,17 @@ impl Visitor for Scan {
             let names: Vec<_> = n.name().names().iter().map(name).collect();
             if let Some(method) = n.name().method_name() {
                 if names.len() == 1 {
+                    self.signatures.push((
+                        format!("{}.{}", names[0], name(method)),
+                        start(n),
+                        n.body().clone(),
+                    ));
                     self.members
                         .push((names[0].clone(), name(method), start(n)));
                 }
             } else if names.len() == 2 {
+                self.signatures
+                    .push((names.join("."), start(n), n.body().clone()));
                 self.members
                     .push((names[0].clone(), names[1].clone(), start(n)));
             }
@@ -214,6 +222,7 @@ impl Visitor for Scan {
 }
 #[derive(Default)]
 pub struct Sources {
+    signatures: BTreeMap<String, selu_manifest::Declaration>,
     runtime_frames: Vec<(String, String, String, String, String)>,
     definitions: BTreeMap<String, (String, Vec<String>)>,
     all_definitions: BTreeSet<String>,
@@ -349,6 +358,15 @@ impl Sources {
                         }
                     }
                 }
+            }
+        }
+        for (qualified, pos, body) in &scan.signatures {
+            let root = qualified.split('.').next().unwrap();
+            if !scan.local(root, *pos) {
+                let signature = source_signature(qualified, body, &source[..*pos], file);
+                self.signatures
+                    .entry(qualified.clone())
+                    .or_insert(signature);
             }
         }
         for (root, member, pos) in &scan.members {
@@ -494,6 +512,18 @@ impl Sources {
                 m.data_globals.push(entry);
             }
         }
+        for (name, signature) in self.signatures {
+            if !m.functions.iter().any(|f| f.name == name) {
+                let mut f = entry(
+                    name,
+                    String::new(),
+                    "defined",
+                    signature.arguments.iter().map(|a| a.name.clone()).collect(),
+                );
+                f.signature = Some(signature);
+                m.functions.push(f);
+            }
+        }
         let mut known: BTreeSet<String> = m.functions.iter().map(|f| f.name.clone()).collect();
         let mut counts = (0, 0);
         for (n, (file, args)) in self.definitions {
@@ -510,6 +540,65 @@ impl Sources {
         }
         counts
     }
+}
+// Source-only signatures preserve arity and primitive EmmyLua annotations.
+// Unspecified types use the checker's existing untyped-game-value rule.
+fn source_signature(
+    qualified: &str,
+    body: &FunctionBody,
+    prefix: &str,
+    file: &str,
+) -> selu_manifest::Declaration {
+    let mut d = crate::xml::declaration(qualified.rsplit('.').next().unwrap(), "Function", file);
+    let mut annotations = BTreeMap::new();
+    let mut returns = Vec::new();
+    for line in prefix
+        .lines()
+        .rev()
+        .skip_while(|line| line.trim().is_empty())
+    {
+        let line = line.trim();
+        if !line.starts_with("--") {
+            break;
+        }
+        if let Some(param) = line.strip_prefix("---@param ") {
+            let mut words = param.split_whitespace();
+            if let (Some(n), Some(t)) = (words.next(), words.next()) {
+                annotations.insert(n.to_owned(), t.to_owned());
+            }
+        }
+        if let Some(ret) = line.strip_prefix("---@return ")
+            && let Some(t) = ret.split_whitespace().next()
+        {
+            returns.push(t.to_owned());
+        }
+    }
+    for param in body.parameters() {
+        let n = match param {
+            Parameter::Name(t) => name(t),
+            _ => "...".into(),
+        };
+        let mut a = crate::xml::declaration(
+            &n,
+            annotations.get(&n).map(String::as_str).unwrap_or(""),
+            "",
+        );
+        a.attributes.clear();
+        if a.ty.as_deref() == Some("") {
+            a.attributes.insert("Nilable".into(), true.into());
+        }
+        d.arguments.push(a);
+    }
+    if returns.is_empty() {
+        returns.push(String::new());
+    }
+    returns.reverse();
+    for ty in returns {
+        let mut r = crate::xml::declaration("result", &ty, "");
+        r.attributes.clear();
+        d.returns.push(r);
+    }
+    d
 }
 fn entry(name: String, file: String, kind: &str, params: Vec<String>) -> FunctionEntry {
     FunctionEntry {
@@ -652,6 +741,25 @@ impl Scalar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn member_signature_preserves_annotations_and_shadowing() {
+        let mut sources = Sources::default();
+        sources.parse("mixin.lua", "WidgetMixin = {};\n---@param value number\n---@return boolean\nfunction WidgetMixin:SetValue(value) return value > 0 end\ndo local Hidden = {}; function Hidden:Nope() end end").unwrap();
+        let mut m: Manifest = serde_json::from_str(
+            r#"{"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1}"#,
+        )
+        .unwrap();
+        sources.extend_manifest(&mut m);
+        let d = m
+            .function("WidgetMixin.SetValue")
+            .unwrap()
+            .signature
+            .as_ref()
+            .unwrap();
+        assert_eq!(d.arguments[0].ty.as_deref(), Some("number"));
+        assert_eq!(d.returns[0].ty.as_deref(), Some("boolean"));
+        assert!(m.function("Hidden.Nope").is_none());
+    }
     #[test]
     fn lexical_globals_and_first_provenance() {
         let mut s = Sources::default();

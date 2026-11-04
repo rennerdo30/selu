@@ -50,8 +50,8 @@ Widget declarations, class names and type aliases retain their usual precedence.
 
 The templated-frames example runs offline using declared Texture methods for
 its background and UIPanelButtonTemplate for the button. SetBackdrop and
-SetBackdropColor are source-only mixin names in the shipped manifests and cannot
-be called from checked Selu. The simulator's Lua fixtures still model BackdropTemplate
+SetBackdropColor have source signatures in the shipped manifests; unannotated
+parameter and result types follow the untyped game value policy in api.md. The simulator's Lua fixtures still model BackdropTemplate
 SetBackdrop/GetBackdrop and SetBackdropColor/GetBackdropColor as stored data (getters return no colour without a backdrop, clearing removes
 colour, and GetBackdrop returns a deep copy);
 UIPanelButtonTemplate uses the existing button text and geometry model. XML

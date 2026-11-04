@@ -25,7 +25,7 @@ hold typed function arguments and multiple returns, or typed event payloads.
 `inherits` list. Canonical widget aliases in overlays connect `Frame` to
 `SimpleFrameAPI` and the ScriptRegion groups; `CreateFontString` returns
 `SimpleFontString`, which connects to the documented FontString methods.
-All method signatures and policies come from generated documentation. No checker or lowering behavior changes.
+Native method signatures and policies come from generated documentation; source member signatures are described below. No checker or lowering behavior changes.
 
 Declarations preserve Blizzard `type` names. Their `attributes` preserve metadata
 keys such as `Nilable`, `Default`, `InnerType`, `KeyType`, `EnumValue`,
@@ -225,3 +225,24 @@ Scalar entries with values retain the individual object form. The manifest
 loader expands both forms into the same GlobalEntry list; existing manifests
 and fixtures remain readable. This lossless grouping keeps inherited child
 names below the 40 MB package cap. XML EOF with open elements is an error.
+
+## Release updates
+
+The owner fetches `E:/Development/wow-ui-source` first. Then run
+`cargo run -p selu-manifest-gen -- update` (or `scripts/update-manifests.bat`).
+Optional flavour or branch names select a subset; `--keep-old` retains old builds.
+The command reads existing `origin/*` tracking refs without fetching or checking
+out the source clone. A tip older than 14 days prints a fetch reminder; this is
+an age heuristic, not a claim that the remote has no newer commits.
+It regenerates JSON through `encode`, updates this pin table, removes superseded
+builds by default, and prints function/event name additions and removals.
+Run the workspace and proof tests, review the diff, then commit the manifests,
+extraction changes and pin table together. No publication is performed.
+
+Source Lua member declarations now emit qualified function signatures, which
+existing template/mixin resolution consumes. Parameter names and variadic tails
+come from the AST; contiguous EmmyLua parameter/return annotations supply types.
+Unannotated types follow the existing untyped game value policy in lang/api.md;
+unannotated parameters permit omission because Lua bodies may supply defaults.
+A missing return annotation remains untyped rather than claiming a void result.
+This does not type the Lua Mixin/CreateFromMixins helpers for Selu consumption.
