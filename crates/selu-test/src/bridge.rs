@@ -69,6 +69,32 @@ pub(crate) fn value(v: Value, from: &Lua, to: &Lua, s: &State) -> mlua::Result<V
             {
                 meta.raw_set("__selu_test_frame", true)?;
             }
+            let origin = from.weak();
+            let destination = to.weak();
+            let cache = s.clone();
+            let held = original.clone();
+            // Lua 5.1 pairs ignores __pairs. Matchers use this explicit iterator
+            // snapshot; nested/cyclic values retain canonical cached handles.
+            meta.set(
+                "__selu_test_entries",
+                to.create_function(move |_, ()| {
+                    let (origin, destination) = upgrade(&origin, &destination, &cache)?;
+                    let table: Table = origin.registry_value(&held)?;
+                    let rows = destination.create_table()?;
+                    for (i, pair) in table.pairs::<Value, Value>().enumerate() {
+                        let (key, item) = pair?;
+                        let row = destination.create_table()?;
+                        row.raw_set(1, value(key, &origin, &destination, &cache)?)?;
+                        row.raw_set(2, value(item, &origin, &destination, &cache)?)?;
+                        rows.raw_set(i + 1, row)?;
+                    }
+                    Ok(rows)
+                })?,
+            )?;
+            let origin = from.weak();
+            let destination = to.weak();
+            let cache = s.clone();
+            let held = original.clone();
             meta.set(
                 "__index",
                 to.create_function(move |_, (_, k): (Value, Value)| {

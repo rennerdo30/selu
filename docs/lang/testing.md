@@ -56,6 +56,8 @@ API alias), invoking an imported function from that VM, or calling a method on
 an old frame raises **SELU0623: stale reference**. Stale code never silently reads
 an obsolete clock or world. This explicit rejection is the current fallback;
 transparent rebinding of imported code across reload is not implemented.
+If addon loading or login throws after VM replacement, the retired generation is
+still invalidated. An error before replacement leaves the existing generation current.
 
 Use Session helpers after reload. `sim.now()` reads the current clock, and
 `sim.frame(name)` looks up the current generation's frame. Lookups are canonical
@@ -66,7 +68,9 @@ frames, scripts and callbacks between the Session and test VMs. For example,
 
 Spy arguments remain owned by their VM. Functions, frames, cyclic tables and
 trailing null arguments are recorded without SavedVariables serialisation. Spy
-wrappers preserve the original return values. Bridge handles use registry keys,
+wrappers preserve the original return values. Cross-VM table values are traversed
+through an explicit Lua 5.1 bridge iterator, so deep comparison and negation
+compare their entries, including nested and cyclic tables. Bridge handles use registry keys,
 weak VM references and explicit cleanup when each test file ends.
 
 Tests use strict API checking. Registration callbacks must be functions; matcher
@@ -81,7 +85,7 @@ helper modules under `tests/`.
 `not simulated: perf.allocations`, also included in the report notes. No guessed
 allocation counts are returned. Other SPEC performance helpers are future work.
 
-Assertions and registration run under the simulator instruction budget. Structured runtime failures from timers, OnUpdate and queued/flushed frame callbacks fail their owning test, including after reload. Addon load/login exceptions become source-mapped setup failures (exit 1); other test files still run. Failures
+Assertions and registration run under the simulator instruction budget. Structured runtime failures from timers, OnUpdate and queued/flushed frame callbacks fail their owning test, including after reload. Addon load/login exceptions become source-mapped setup failures (exit 1); other test files still run. Registration dispatch is checked before observations are cleared; failures raised during PLAYER_LOGOUT and its final flush are collected after every reload attempt, including failed attempts. Failures
 include source-mapped Lua errors, expected/actual assertion text, simulator gap
 notes, and a replay record containing the seed and Session host commands. Replay
 records cover host interaction, not arbitrary mutations made by imported Lua

@@ -297,6 +297,10 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
                 .set_name(&chunk)
                 .call::<()>((name, namespace))
         });
+        let mut registration_failures = registrations.borrow().failures.clone();
+        registration_failures.extend(test_ctx.runtime_failures());
+        registration_failures.extend(session.borrow().sim().ctx().runtime_failures());
+        let load = load.and_then(|_| failures_result(registration_failures));
         if let Err(e) = load {
             report.results.push(failure(
                 &file,
@@ -542,21 +546,34 @@ fn install(
     sim.set(
         "reload",
         lua.create_function(move |_, ()| {
-            observations.borrow_mut().notes.extend(gaps(&s));
-            observations
-                .borrow_mut()
-                .failures
-                .extend(s.borrow().sim().ctx().runtime_failures());
             let old = s.borrow().sim().ctx().clone();
-            s.try_borrow_mut()
-                .map_err(|_| mlua::Error::runtime("cannot reload during a Session callback"))?
-                .reload()?;
-            stale.set(true);
-            old.stale_sources
-                .lock()
-                .unwrap()
-                .extend(observations.borrow().sources.clone());
-            Ok(())
+            let generation = s.borrow().generation();
+            let result = match s.try_borrow_mut() {
+                Ok(mut session) => session.reload(),
+                Err(_) => Err(mlua::Error::runtime(
+                    "cannot reload during a Session callback",
+                )),
+            };
+            // Replacement precedes addon loading/login; either may have failed.
+            if s.borrow().generation() != generation {
+                stale.set(true);
+                old.stale_sources
+                    .lock()
+                    .unwrap()
+                    .extend(observations.borrow().sources.clone());
+            }
+            // Retirement dispatch and its final flush can add failures, even on Err.
+            let mut observations = observations.borrow_mut();
+            observations.failures.extend(old.runtime_failures());
+            observations.notes.extend(
+                old.logs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .filter(|s| s.contains("not simulated"))
+                    .cloned(),
+            );
+            result
         })?,
     )?;
     let s = session.clone();
