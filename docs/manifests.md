@@ -185,3 +185,18 @@ is at most 65,536 bytes. Other tables retain names only. This keeps SOUNDKIT-lik
 constants while excluding bulky payloads and prose. Booleans, expressions and
 functions never become values; comments, XML and documentation text are excluded.
 Shared provenance and string name lists avoid repeating file paths on every member.
+
+## Top-level scalar constants
+
+Global entries may carry an optional `value` (JSON number/string); omitted values
+remain backward compatible. The Lua AST scan also records bare global scalar
+assignments outside functions, excluding lexical locals and table fields. Literal
+numbers (including hex and negative numbers) and strings retain their values.
+References and arithmetic derive number/string types from other discovered scalars
+and documented Constants fields; concatenation is string. These expressions carry
+no invented evaluated value. Unknown call results and other unproven scalar types
+are omitted. This is static source evidence, including conditional assignments and
+all source variants, rather than a claim about runtime initialisation. The first
+available scalar type and first literal value in deterministic file/source order
+are retained; scalar globals do not receive repeated per-entry provenance. Unlike
+large table datasets, scalar assignments are scanned in every addon Lua path.

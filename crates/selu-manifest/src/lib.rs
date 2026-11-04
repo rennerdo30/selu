@@ -106,6 +106,8 @@ fn yes() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub templates: Vec<String>,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]

@@ -533,6 +533,7 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
             .unwrap_or_default();
         m.globals.retain(|v| v.name != g.name);
         m.globals.push(selu_manifest::GlobalEntry {
+            value: None,
             templates,
             name: g.name,
             ty: g.ty,

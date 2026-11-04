@@ -29,6 +29,7 @@ struct Scan {
     calls: Vec<(String, usize)>,
     tables: Vec<(String, usize, TableConstructor)>,
     members: Vec<(String, String, usize)>,
+    scalars: Vec<(String, usize, Expression)>,
 }
 impl Scan {
     fn bind(&mut self, n: String, from: usize, to: usize) {
@@ -116,6 +117,11 @@ impl Visitor for Scan {
     fn visit_assignment(&mut self, n: &Assignment) {
         for (v, e) in n.variables().iter().zip(n.expressions().iter()) {
             if self.depth == 0
+                && let Var::Name(t) = v
+            {
+                self.scalars.push((name(t), start(n), e.clone()));
+            }
+            if self.depth == 0
                 && let (Var::Name(t), Expression::TableConstructor(table)) = (v, e)
             {
                 self.tables.push((name(t), start(n), (**table).clone()));
@@ -162,6 +168,7 @@ pub struct Sources {
     all_definitions: BTreeSet<String>,
     calls: BTreeMap<String, String>,
     tables: BTreeMap<String, selu_manifest::Declaration>,
+    scalars: BTreeMap<String, Vec<Scalar>>,
 }
 impl Sources {
     pub fn parse(&mut self, file: &str, source: &str) -> Result<(), String> {
@@ -169,6 +176,13 @@ impl Sources {
             .map_err(|e| format!("{file}: Lua parse error: {e:?}"))?;
         let mut scan = Scan::default();
         scan.visit_ast(&ast);
+        for (n, pos, e) in &scan.scalars {
+            if !scan.local(n, *pos)
+                && let Some(expr) = Scalar::from_ast(e, &scan, *pos)
+            {
+                self.scalars.entry(n.clone()).or_default().push(expr);
+            }
+        }
         for (n, pos, table) in &scan.tables {
             let lower = file.to_ascii_lowercase();
             if table.fields().len() > 2048
@@ -243,6 +257,52 @@ impl Sources {
         Ok(())
     }
     pub fn extend_manifest(self, m: &mut Manifest) -> (usize, usize) {
+        let mut types = BTreeMap::new();
+        for table in &m.tables {
+            if table.ty.as_deref() == Some("Constants") {
+                for field in &table.fields {
+                    if let Some(ty) = &field.ty {
+                        types.insert(
+                            format!("Constants.{}.{}", table.name, field.name),
+                            ty.clone(),
+                        );
+                    }
+                }
+            }
+        }
+        loop {
+            let mut changed = false;
+            for (name, expressions) in &self.scalars {
+                if !types.contains_key(name)
+                    && let Some(ty) = expressions.iter().find_map(|e| e.ty(&types))
+                {
+                    types.insert(name.clone(), ty);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for (name, expressions) in &self.scalars {
+            if let Some(ty) = types
+                .get(name)
+                .filter(|t| t.as_str() == "number" || t.as_str() == "string")
+                && !m.globals.iter().any(|g| &g.name == name)
+            {
+                let value = expressions.iter().find_map(|e| match e {
+                    Scalar::Literal(v) => Some(v.clone()),
+                    _ => None,
+                });
+                m.globals.push(selu_manifest::GlobalEntry {
+                    name: name.clone(),
+                    ty: Some(ty.clone()),
+                    value,
+                    evidence: Evidence::Source,
+                    templates: vec![],
+                });
+            }
+        }
         for (_, mut d) in self.tables {
             if d.fields.len() > 2048 {
                 continue;
@@ -251,6 +311,7 @@ impl Sources {
             d.methods.sort_by(|a, b| a.name.cmp(&b.name));
             if !m.globals.iter().any(|g| g.name == d.name) {
                 m.globals.push(selu_manifest::GlobalEntry {
+                    value: None,
                     name: d.name.clone(),
                     ty: None,
                     evidence: Evidence::Source,
@@ -301,6 +362,72 @@ fn entry(name: String, file: String, kind: &str, params: Vec<String>) -> Functio
                 .into(),
             kind: kind.into(),
         }),
+    }
+}
+
+#[derive(Clone)]
+enum Scalar {
+    Literal(serde_json::Value),
+    Reference(String),
+    Arithmetic(Box<Scalar>, Box<Scalar>),
+    Concat,
+}
+impl Scalar {
+    fn from_ast(e: &Expression, scan: &Scan, pos: usize) -> Option<Self> {
+        if let Some(v) = literal(e) {
+            return Some(Self::Literal(v));
+        }
+        match e {
+            Expression::Parentheses { expression, .. } => Self::from_ast(expression, scan, pos),
+            Expression::Var(v) => {
+                let path = match v {
+                    Var::Name(t) => name(t),
+                    Var::Expression(v) => {
+                        let Prefix::Name(root) = v.prefix() else {
+                            return None;
+                        };
+                        let mut path = name(root);
+                        for suffix in v.suffixes() {
+                            let Suffix::Index(Index::Dot { name: t, .. }) = suffix else {
+                                return None;
+                            };
+                            path.push('.');
+                            path.push_str(&name(t));
+                        }
+                        path
+                    }
+                    _ => return None,
+                };
+                if scan.local(path.split('.').next()?, pos) {
+                    None
+                } else {
+                    Some(Self::Reference(path))
+                }
+            }
+            Expression::BinaryOperator { lhs, binop, rhs } => match binop.to_string().trim() {
+                "+" | "-" | "*" | "/" | "%" | "^" => Some(Self::Arithmetic(
+                    Box::new(Self::from_ast(lhs, scan, pos)?),
+                    Box::new(Self::from_ast(rhs, scan, pos)?),
+                )),
+                ".." => Some(Self::Concat),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    fn ty(&self, types: &BTreeMap<String, String>) -> Option<String> {
+        match self {
+            Self::Literal(v) => Some(if v.is_number() { "number" } else { "string" }.into()),
+            Self::Reference(n) => types.get(n).cloned(),
+            Self::Arithmetic(a, b)
+                if a.ty(types).as_deref() == Some("number")
+                    && b.ty(types).as_deref() == Some("number") =>
+            {
+                Some("number".into())
+            }
+            Self::Concat => Some("string".into()),
+            _ => None,
+        }
     }
 }
 #[cfg(test)]
@@ -385,10 +512,9 @@ mod tests {
 
 fn literal(e: &Expression) -> Option<serde_json::Value> {
     match e {
-        Expression::Number(t) => t
-            .token()
-            .to_string()
-            .parse::<f64>()
+        Expression::Number(t) => mlua::Lua::new()
+            .load(format!("return {}", t.token()))
+            .eval::<f64>()
             .ok()
             .and_then(serde_json::Number::from_f64)
             .map(serde_json::Value::Number),
@@ -413,6 +539,31 @@ fn literal(e: &Expression) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod data_tests {
     use super::*;
+    #[test]
+    fn scalar_constants_and_documented_dependencies() {
+        let mut s = Sources::default();
+        s.parse("a.lua", r#"NUM_BAG_SLOTS = Constants.InventoryConstants.NumBagSlots; NUM_TOTAL_EQUIPPED_BAG_SLOTS = NUM_BAG_SLOTS + EXTRA; local LOCAL = 3; Hidden = LOCAL; function F() INNER = 4 end; object.FIELD = 5; LABEL = "bag\nslots"; HEX = 0x10; FLAG = true; EXTRA = 1; UNKNOWN = Mystery()"#).unwrap();
+        let mut m: Manifest = serde_json::from_value(serde_json::json!({"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1,"tables":[{"name":"InventoryConstants","type":"Constants","fields":[{"name":"NumBagSlots","type":"number"}]}]})).unwrap();
+        s.extend_manifest(&mut m);
+        let total = m
+            .globals
+            .iter()
+            .find(|g| g.name == "NUM_TOTAL_EQUIPPED_BAG_SLOTS")
+            .unwrap();
+        assert_eq!(total.ty.as_deref(), Some("number"));
+        assert_eq!(total.value, None);
+        assert_eq!(
+            m.globals.iter().find(|g| g.name == "HEX").unwrap().value,
+            Some(serde_json::json!(16.0))
+        );
+        assert_eq!(
+            m.globals.iter().find(|g| g.name == "LABEL").unwrap().value,
+            Some(serde_json::json!("bag\nslots"))
+        );
+        for name in ["LOCAL", "Hidden", "INNER", "FIELD", "FLAG", "UNKNOWN"] {
+            assert!(!m.globals.iter().any(|g| g.name == name), "{name}");
+        }
+    }
     #[test]
     fn literal_data_and_mixin_members() {
         let mut s = Sources::default();

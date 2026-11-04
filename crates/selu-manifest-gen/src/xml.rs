@@ -163,6 +163,7 @@ impl Xml {
                 }
             } else {
                 m.globals.push(GlobalEntry {
+                    value: None,
                     name,
                     ty: Some(ty),
                     evidence: Evidence::Source,
