@@ -650,18 +650,64 @@ fn collect_saved(
     shapes: &mut std::collections::BTreeMap<String, SavedShape>,
     globals: &mut Vec<(String, bool)>,
 ) -> Result<(), ExitCode> {
+    // Descriptor spelling is a persistence contract. Resolve named shapes while
+    // preserving the exact existing spelling for every inline type.
+    fn descriptor(ty: &selu_check::Type, active: &mut Vec<selu_check::Type>) -> String {
+        use selu_check::Type;
+        let ty = selu_check::shape_of(ty);
+        if let Some(i) = active.iter().position(|t| t == &ty) {
+            return format!("recursive({i})");
+        }
+        active.push(ty.clone());
+        let result = match &ty {
+            Type::Optional(t) => format!("{}?", descriptor(t, active)),
+            Type::Array(t) => format!("{}[]", descriptor(t, active)),
+            Type::Map(k, v) => format!("Map<{}, {}>", descriptor(k, active), descriptor(v, active)),
+            Type::WeakMap(k, v) => format!(
+                "WeakMap<{}, {}>",
+                descriptor(k, active),
+                descriptor(v, active)
+            ),
+            Type::Set(t) => format!("Set<{}>", descriptor(t, active)),
+            Type::Tuple(ts) => format!(
+                "[{}]",
+                ts.iter()
+                    .map(|t| descriptor(t, active))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Type::Object(fs) => format!(
+                "{{ {} }}",
+                fs.iter()
+                    .map(|(n, t)| format!("{n}: {}", descriptor(t, active)))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+            t => t.to_string(),
+        };
+        active.pop();
+        result
+    }
     fn fields(
         ty: &selu_check::Type,
         path: String,
         out: &mut std::collections::BTreeMap<String, String>,
+        active: &mut Vec<selu_check::Type>,
     ) {
-        if let selu_check::Type::Object(fs) = ty {
+        let ty = selu_check::shape_of(ty);
+        if let Some(i) = active.iter().position(|t| t == &ty) {
+            out.insert(path, format!("recursive({i})"));
+            return;
+        }
+        if let selu_check::Type::Object(fs) = &ty {
+            active.push(ty.clone());
             out.insert(path.clone(), "object".into());
             for (key, ty) in fs {
-                fields(ty, format!("{path}/{}:{key}", key.len()), out);
+                fields(ty, format!("{path}/{}:{key}", key.len()), out, active);
             }
+            active.pop();
         } else {
-            out.insert(path, ty.to_string());
+            out.insert(path, descriptor(&ty, active));
         }
     }
     for s in &module.program.stmts {
@@ -679,6 +725,7 @@ fn collect_saved(
                 types.get(defaults.id).expect("checked defaults"),
                 String::new(),
                 &mut fs,
+                &mut Vec::new(),
             );
             let global = selu_lower::saved::declaration_global(addon, name, *adopted);
             globals.push((global.clone(), *per_character));

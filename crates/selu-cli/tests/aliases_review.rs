@@ -396,3 +396,65 @@ fn r05_api_scalar_alias() {
         vec!["SELU0485"]
     );
 }
+fn rebuild(root: &std::path::Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("build")
+        .arg(root)
+        .arg("--manifest-dir")
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../manifests"))
+        .output()
+        .unwrap()
+}
+#[test]
+fn r16_alias_body_migration() {
+    let (root, out) = project(
+        "schema-body",
+        &[(
+            "main.selu",
+            "type N=number; saved settings={values:new Map<string,N>()};",
+        )],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let before = std::fs::read(root.join("selu.saved.toml")).unwrap();
+    std::fs::write(
+        root.join("src/main.selu"),
+        "type N=string; saved settings={values:new Map<string,N>()};",
+    )
+    .unwrap();
+    let out = rebuild(&root);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SELU0468"));
+    assert_eq!(std::fs::read(root.join("selu.saved.toml")).unwrap(), before);
+}
+#[test]
+fn r16_inline_alias_compatibility() {
+    let (root, out) = project(
+        "schema-inline",
+        &[(
+            "main.selu",
+            "saved settings={values:new Map<string,number>()};",
+        )],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let before = std::fs::read(root.join("selu.saved.toml")).unwrap();
+    std::fs::write(
+        root.join("src/main.selu"),
+        "type N=number; saved settings={values:new Map<string,N>()};",
+    )
+    .unwrap();
+    let out = rebuild(&root);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(std::fs::read(root.join("selu.saved.toml")).unwrap(), before);
+}

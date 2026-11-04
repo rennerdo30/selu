@@ -21,3 +21,5 @@ Diagnostics SELU0520-0525 cover duplicates, placement, argument count, cycles, c
 The named-types example prints `Quest` and `7` on PLAYER_LOGIN. Its expected output was calculated from score(7) and the single array insertion; expected.lua records the generated Lua.
 
 Interface method signatures retain final rest parameters. Rest parameters before another parameter and defaults in signatures are rejected. Declaration diagnostics point at duplicate parameter/member names and are emitted once per declaration. Resolved alias bodies are validated recursively, including unused declarations; aliases cannot conceal nullable array elements or nonserializable saved data.
+
+Saved-schema descriptors record recursively resolved shapes, including collection parameters, while preserving the byte spelling of existing inline descriptors. Introducing an equivalent alias does not change history; changing an alias body is a storage-shape change requiring the usual version bump and migration. Recursive shapes use numeric back-references rather than type labels.
