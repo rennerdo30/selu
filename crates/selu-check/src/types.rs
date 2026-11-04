@@ -209,8 +209,14 @@ impl Type {
             seen.remove(&key);
             return result;
         }
-        if let Type::Named(_, t) = to {
-            return t.get().is_some_and(|t| self.assignable_seen(&t, seen));
+        if let Type::Named(n, t) = to {
+            let key = (self.to_string(), format!("target:{n}"));
+            if !seen.insert(key.clone()) {
+                return true;
+            }
+            let result = t.get().is_some_and(|t| self.assignable_seen(&t, seen));
+            seen.remove(&key);
+            return result;
         }
         if self.is_open() || to.is_open() || self == to {
             return true;
@@ -510,7 +516,6 @@ fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>
 /// Anything else stays untyped until manifests carry full types.
 pub fn manifest_type(name: &str) -> Type {
     match name {
-        "unknown" => Type::Unknown,
         "number" => Type::Number,
         "string" => Type::String,
         "boolean" => Type::Boolean,

@@ -266,8 +266,14 @@ impl Ctx<'_> {
                         }
                     }
                     self.aliases.active.pop();
-                    let naked_cycle =
-                        matches!(&body, Type::Named(_, shape) if shape.get().is_none());
+                    fn unguarded(t: &Type) -> bool {
+                        match t {
+                            Type::Optional(t) => unguarded(t),
+                            Type::Named(_, s) => s.get().is_none(),
+                            _ => false,
+                        }
+                    }
+                    let naked_cycle = unguarded(&body);
                     if naked_cycle {
                         self.out.push(err(
                             "SELU0523",

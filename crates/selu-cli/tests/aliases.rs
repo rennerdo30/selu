@@ -106,6 +106,11 @@ fn nested_recursive_literals_and_generics() {
         vec!["2"]
     );
     assert_eq!(codes("type A = A;"), vec!["SELU0523"]);
+    assert_eq!(codes("type A = A?;"), vec!["SELU0523"]);
+    assert_eq!(
+        selu_check::types::manifest_type("unknown"),
+        selu_check::Type::Untyped
+    );
 }
 #[test]
 fn module_types_are_private_and_importable() {
