@@ -1,9 +1,16 @@
+// Print a small quest reminder through two nested callbacks.
+// Shows lexical captures and separate source positions for callback bodies.
+// Try: selu build examples/source-maps, install and log in for the reminder.
+// Offline: scripts\studio.bat examples\source-maps, then fire PLAYER_LOGIN.
+// Build sidecars live in dist/.selu; they are not addon files in the .toc.
+
 on PLAYER_LOGIN() {
+  // Keep the nested bodies on distinct lines so stepping can identify each one.
   const report = (label: string) => {
     const show = () => {
-      print(label);
+      print(`Quest reminder: ${label}`);
     };
     show();
   };
-  report("Source maps keep callback lines");
+  report("Pick up supplies before leaving town");
 }

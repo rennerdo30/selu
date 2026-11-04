@@ -1,3 +1,4 @@
-Balance unavailable
-Balance check finished
-0
+Repair estimate unavailable away from a merchant
+Repair estimate finished
+Estimated repair: 0 copper (sample fallback)
+Estimate running: false

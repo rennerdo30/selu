@@ -68,21 +68,23 @@ if not __selu_ns.__selu_events then
   __selu_ns.__selu_events = __selu_on
 end
 local __selu_on = __selu_ns.__selu_events
-local function readBalance()
-  local failure = __selu_new_error("Balance unavailable", "main.selu:2: ")
+local estimateInProgress = false
+local function repairEstimate()
+  estimateInProgress = true
   do
     local __selu_ok, __selu_status, __selu_value1 = __selu_protect(function()
-      __selu_raise(failure)
+      __selu_raise(__selu_new_error("Repair estimate unavailable away from a merchant", "main.selu:13: "))
     end)
     if not __selu_ok then
       __selu_ok, __selu_status, __selu_value1 = __selu_protect(function()
-        local e = __selu_wrap_error(__selu_status)
-        print(e.message)
+        local failure = __selu_wrap_error(__selu_status)
+        print(failure.message)
         return "return", 0
       end)
     end
     local __selu_final_ok, __selu_final_status, __selu_final_value1 = __selu_protect(function()
-      print("Balance check finished")
+      estimateInProgress = false
+      print("Repair estimate finished")
     end)
     if not __selu_final_ok or __selu_final_status ~= nil then
       __selu_ok, __selu_status, __selu_value1 = __selu_final_ok, __selu_final_status, __selu_final_value1
@@ -92,5 +94,7 @@ local function readBalance()
   end
 end
 __selu_on("PLAYER_LOGIN", function()
-  print(readBalance())
+  local estimatedCopper = repairEstimate()
+  print(string.format("Estimated repair: %s copper (sample fallback)", estimatedCopper))
+  print(string.format("Estimate running: %s", tostring(estimateInProgress)))
 end)

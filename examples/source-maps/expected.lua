@@ -25,9 +25,9 @@ local __selu_on = __selu_ns.__selu_events
 __selu_on("PLAYER_LOGIN", function()
   local report = function(label)
     local show = function()
-      print(label)
+      print(string.format("Quest reminder: %s", label))
     end
     show()
   end
-  report("Source maps keep callback lines")
+  report("Pick up supplies before leaving town")
 end)

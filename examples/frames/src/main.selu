@@ -1,14 +1,27 @@
+// Show a small welcome panel at login, also used as Studio's default project.
+// Shows typed frames, child regions, anchors and additive OnShow hooks.
+// Try: selu build examples/frames, install the addon and log in.
+// Offline: scripts\studio.bat examples\frames, then fire PLAYER_LOGIN.
+
+// Frame methods lower to Lua colon calls with the correct receiver.
 const panel = CreateFrame("Frame", null, UIParent);
 panel.SetSize(160, 60);
 panel.SetPoint("CENTER", UIParent, "CENTER", 0, 0);
 const texture = panel.CreateTexture();
 texture.SetSize(160, 60);
-const label = panel.CreateFontString();
-label.SetText("Selu frames");
-hookScript(panel, "OnShow", () => { print("Panel shown"); });
+const label = panel.CreateFontString(null, "OVERLAY", "GameFontNormal");
+label.SetPoint("CENTER", panel, "CENTER", 0, 0);
+label.SetText("Welcome to Selu!");
+// HookScript adds a callback without replacing the client script.
+hookScript(panel, "OnShow", () => {
+  print("Panel shown");
+});
 panel.Hide();
+
+// Register after setup so callbacks see initialized helpers and frames.
 on PLAYER_LOGIN() {
   panel.Show();
+  // Getters may return nil; ?? preserves legitimate zero values.
   const width = panel.GetWidth() ?? 0;
   const height = panel.GetHeight() ?? 0;
   const textureWidth = texture.GetWidth() ?? 0;

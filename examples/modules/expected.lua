@@ -28,5 +28,6 @@ local __selu_on = __selu_ns.__selu_events
 __selu_on("PLAYER_LOGIN", function()
   print(greeting)
   increment()
-  print(count())
+  increment()
+  print(string.format("Sample quests completed: %s", count()))
 end)

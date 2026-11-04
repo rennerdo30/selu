@@ -5,7 +5,7 @@ local count = 0
 __selu_ns["counter"].count = function()
   return count
 end
-local greeting = "Hello from modules!"
+local greeting = "Quest journal: sample route complete"
 __selu_ns["counter"].greeting = greeting
 local function increment()
   count = count + 1

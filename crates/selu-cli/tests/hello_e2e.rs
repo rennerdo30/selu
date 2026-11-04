@@ -69,7 +69,13 @@ fn hello_builds_runs_and_prints_on_login() {
     sim.load_files(&files).unwrap();
     assert!(sim.prints().is_empty(), "nothing prints before login");
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
-    assert_eq!(sim.prints(), vec!["Hello from Selu!".to_string()]);
+    assert_eq!(
+        sim.prints(),
+        vec![
+            "Welcome, adventurer!".to_string(),
+            "Before your next quest: check your bags and repair your gear.".to_string(),
+        ]
+    );
 }
 
 #[test]

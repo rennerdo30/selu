@@ -1,15 +1,27 @@
+// Remember account settings and count logins separately for each character.
+// Shows recursive saved defaults, versioned migration and per-character data.
+// Try: selu build examples/saved-settings, install the addon and log in.
+// Offline: scripts\studio.bat examples\saved-settings, then fire PLAYER_LOGIN.
+
+// Defaults fill absent keys without replacing existing player choices.
 saved settings version 2 = {
-    enabled: true,
-    thresholdPercent: 35,
-    panel: { scale: 1 },
+  enabled: true,
+  thresholdPercent: 35,
+  panel: { scale: 1 },
 };
+
+// Schema version 1 lacked this field; upgrade it before login handlers read it.
 migrate settings 1 -> 2 (old) {
-    old.thresholdPercent = 35;
+  old.thresholdPercent = 35;
 }
+
+// This tally belongs to the character, while settings are account-wide.
 saved perCharacter progress = { visits: 0 };
+
+// Register after setup so callbacks see initialized helpers and frames.
 on PLAYER_LOGIN() {
-    progress.visits += 1;
-    print(settings.enabled);
-    print(settings.thresholdPercent);
-    print(progress.visits);
+  progress.visits += 1;
+  print(settings.enabled);
+  print(settings.thresholdPercent);
+  print(progress.visits);
 }

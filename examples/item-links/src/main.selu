@@ -1,10 +1,30 @@
-on PLAYER_LOGIN() {
-  const link = "|cffffffff|Hitem:123:0|h[Silver Sword]|h|r";
+// Inspect a sample trade message without querying the client's item cache.
+// Shows Lua pattern captures, nullable match results and lazy word iteration.
+// Try: selu build examples/item-links, install and log in to print the sample.
+// Offline: scripts\studio.bat examples\item-links, then fire PLAYER_LOGIN.
+
+const sampleLink = "|cffffffff|Hitem:123:0|h[Silver Sword]|h|r";
+const sampleMessage = "Selling a Silver Sword";
+
+function describeLink(link: string) {
+  // Patterns see hyperlink control bytes. %d is Lua's digit class, not regex \d.
+  // The two captures lower to Lua multiple results, without a capture array.
   const [itemId, itemName] = link.match(luaPattern`%|Hitem:(%d+).-%|h%[(.-)%]%|h`);
-  print(itemId ?? "missing", itemName ?? "missing");
-  let words = 0;
-  for (const word of "Selling a Silver Sword".matchAll(luaPattern`%S+`)) {
-    words += 1;
+  if (itemId == null) {
+    print("No item link found; leave the message unchanged.");
+    return;
   }
-  print(words);
+  // Every capture can be nil after a failed match; keep the label printable.
+  print(`Trade item: ${itemName ?? "unnamed item"} (ID ${itemId})`);
+}
+
+on PLAYER_LOGIN() {
+  describeLink(sampleLink);
+  describeLink("Anyone need supplies?");
+  let wordCount = 0;
+  // matchAll lowers to string.gmatch: consume words without building an array.
+  for (const word of sampleMessage.matchAll(luaPattern`%S+`)) {
+    wordCount += 1;
+  }
+  print(`Sample trade message: ${wordCount} words`);
 }

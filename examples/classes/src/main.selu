@@ -1,51 +1,64 @@
+// Summarise sample quest and bonus loot rewards at login.
+// Shows inheritance, super calls, statics and lexical this.
+// Try: selu build examples/classes, install the addon and log in.
+// Offline: scripts\studio.bat examples\classes, then fire PLAYER_LOGIN.
+
 // Shared tracker behavior, with a loot tracker that counts doubled rewards.
+// Instances become Lua tables; methods live on a shared methods metatable.
 class Tracker {
-    static created = 0;
-    name: string;
-    total = 0;
+  // Static state counts all instances rather than belonging to one tracker.
+  static created = 0;
+  name: string;
+  total = 0;
 
-    constructor(name: string) {
-        this.name = name;
-        Tracker.created += 1;
-    }
+  constructor(name: string) {
+    this.name = name;
+    Tracker.created += 1;
+  }
 
-    record(amount: number) {
-        this.total += amount;
-    }
+  record(amount: number) {
+    this.total += amount;
+  }
 
-    summary(): string {
-        return `${this.name}: ${this.total}`;
-    }
+  summary(): string {
+    return `${this.name}: ${this.total}`;
+  }
 }
 
+// Reuse the base tally while applying a sample bonus before recording loot.
 class LootTracker extends Tracker {
-    multiplier = 2;
+  multiplier = 2;
 
-    constructor(name: string) {
-        super(name);
-    }
+  constructor(name: string) {
+    // Initialize the base on this same instance before derived fields are used.
+    super(name);
+  }
 
-    static make(): LootTracker {
-        return new LootTracker("Loot");
-    }
+  static make(): LootTracker {
+    return new LootTracker("Loot");
+  }
 
-    record(amount: number) {
-        super.record(amount * this.multiplier);
-    }
+  record(amount: number) {
+    super.record(amount * this.multiplier);
+  }
 
-    collect() {
-        const add = (amount: number) => { this.record(amount); };
-        add(3);
-        add(2);
-    }
+  collect() {
+    // The arrow retains this tracker when Lua invokes the closure.
+    const add = (amount: number) => {
+      this.record(amount);
+    };
+    add(3);
+    add(2);
+  }
 }
 
+// Register after setup so callbacks see initialized helpers and frames.
 on PLAYER_LOGIN() {
-    const quests = new Tracker("Quests");
-    quests.record(2);
-    const loot = LootTracker.make();
-    loot.collect();
-    print(quests.summary());
-    print(loot.summary());
-    print(`Trackers: ${Tracker.created}`);
+  const quests = new Tracker("Quests");
+  quests.record(2);
+  const loot = LootTracker.make();
+  loot.collect();
+  print(quests.summary());
+  print(loot.summary());
+  print(`Trackers: ${Tracker.created}`);
 }

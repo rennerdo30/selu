@@ -1,9 +1,9 @@
-// Loot summary: at login, sums up the loot of a session by quality and
-// prints a short report with its vendor value.
-//
-// Shows: arrays of objects, `Map`, `for...of`, template strings, `?? `,
-// `filter`/`map` with arrow functions, and `Math`.
+// Print a sample bag haul and vendor value at login; no bags are scanned.
+// Shows arrays, maps, transforms and copper arithmetic.
+// Try: selu build examples/loot-summary, install the addon and log in.
+// Offline: scripts\studio.bat examples\loot-summary, then fire PLAYER_LOGIN.
 
+// Fixed sample data makes the report reproducible without live bag or spell APIs.
 const loot = [
   { name: "Linen Cloth", quality: 1, count: 12, price: 13 },
   { name: "Broken Fang", quality: 0, count: 3, price: 5 },
@@ -22,7 +22,9 @@ function formatMoney(copper: number): string {
   return `${gold}g ${silver}s ${rest}c`;
 }
 
+// Register after setup so callbacks see initialized helpers and frames.
 on PLAYER_LOGIN() {
+  // Map.get returns null for a new quality; start that bucket at zero.
   const countByQuality = new Map<number, number>();
   let value = 0;
   for (const item of loot) {
@@ -38,6 +40,7 @@ on PLAYER_LOGIN() {
     }
   }
 
+  // Transform a new list so the original sample haul remains intact.
   const finds = loot.filter(item => item.quality >= 2).map(item => item.name);
   print(`Notable: ${finds.join(", ")}`);
   print(`Vendor value: ${formatMoney(value)}`);

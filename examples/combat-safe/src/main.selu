@@ -1,10 +1,21 @@
-// A secure template keeps receiver-dependent operations safe during combat.
+// Hide a protected reminder panel safely when the player logs in.
+// Shows template-aware receivers and Selu's deferred protected operations.
+// Try: scripts\studio.bat examples\combat-safe, then fire PLAYER_LOGIN.
+// Or selu build examples/combat-safe and log in. A queued hide runs after combat.
+
+// Secure templates make operations such as Hide protected during combat.
 const panel = CreateFrame("Frame", null, UIParent, "SecureHandlerBaseTemplate");
-const label = panel.CreateFontString();
+panel.SetSize(240, 60);
+panel.SetPoint("CENTER", UIParent, "CENTER", 0, 100);
+const label = panel.CreateFontString(null, "OVERLAY", "GameFontNormal");
+label.SetPoint("CENTER", panel, "CENTER", 0, 0);
+
 on PLAYER_LOGIN() {
+  const playerName = UnitName("player") ?? "adventurer";
+  label.SetText(`Safe travels, ${playerName}`);
+  // The compiler queues this protected receiver call during combat lockdown.
+  // Do not replace the secure template with an untyped alias to bypass checking.
   panel.Hide();
-  const name = UnitName("player");
-  label.SetText(name);
-  print("Hello " + (name ?? "Player"));
-  print("Panel hidden or queued");
+  print(`Travel reminder prepared for ${playerName}`);
+  print("Protected panel hide requested; combat may defer it.");
 }
