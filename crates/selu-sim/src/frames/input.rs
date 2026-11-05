@@ -35,7 +35,9 @@ fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
         .iter()
         .enumerate()
         .filter(|(_, r)| {
-            r.visible
+            clip(&a, id(&r.table).unwrap_or(0)).is_none_or(|q| {
+                x >= q.left && x < q.left + q.width && y >= q.bottom && y < q.bottom + q.height
+            }) && r.visible
                 && r.mouse
                 && r.enabled
                 && r.rect.is_some_and(|q| {

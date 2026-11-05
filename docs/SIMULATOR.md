@@ -240,3 +240,36 @@ resolution, the immutable snapshot view) and does all wiring in `lib.rs`;
 after that S1 and S2 own disjoint files. The existing `Sim` API keeps working
 through round 8 as a thin wrapper over `Session`, so no other test has to
 change at once.
+
+
+## SIM2 rendering model (2026-11-06)
+
+Region snapshots preserve arena indexing for selection and references. Studio
+sorts a separate drawing view by strata, level, draw layer, sublevel and arena
+index (creation order); the simulator uses the same key for input. Raise and
+Lower choose an extreme level within the current strata. ScrollFrame owns a
+scroll-child relationship and offsets its child's resolved anchor geometry.
+Snapshots intersect every clipping ancestor; Studio applies that intersection
+to all primitives and both front ends apply it to picking.
+
+`VisualStyle` carries text and texture state. The deterministic fallback text
+model uses half-size advances and size-height lines; Studio places glyphs at
+those advances. It supports inline colour changes, justification, wrapping,
+maximum lines, outline and shadow. This preserves historical simulator metrics,
+but is an approximation of proportional client typography. Addon fonts are
+loaded when sandboxed paths resolve; native client fonts are not distributed.
+Inline texture markup and native font kerning are not implemented.
+
+Media reads are canonicalized beneath explicitly loaded addon directories,
+including after symlink resolution. Studio caches successful and failed texture
+lookups. image 0.25.10 (MIT OR Apache-2.0) decodes PNG/TGA and the DXT blocks in
+BLP2; the small BLP2 adapter also supports palette and BGRA mip zero. Reads are
+limited to 32 MiB and 4096 pixels per dimension. BLP1, unavailable Blizzard
+assets and atlases produce labelled placeholders. Four-value UV crops, tint
+and effective alpha are supported; arbitrary eight-value UV transforms and
+nonstandard blend modes remain fidelity limits.
+
+Font objects use `sim_globals::create_font(lua, name)`. `fonts::create_font` is
+only a re-export. SIM1 must retain its own session-global initialization when
+merging the new module; no second constructor should survive integration.
+The committed visual fixture is `crates/selu-sim/tests/fixtures/rendering`.

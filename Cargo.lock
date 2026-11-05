@@ -2513,6 +2513,7 @@ name = "selu-debug"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "image",
  "selu-fmt",
  "selu-manifest",
  "selu-sim",

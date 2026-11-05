@@ -15,6 +15,7 @@ mod editor;
 mod game;
 mod png;
 mod settings;
+mod textures;
 mod theme;
 
 use selu_debug::{Command, Update, Worker};

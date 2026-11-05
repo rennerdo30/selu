@@ -32,6 +32,11 @@ pub struct Region {
     pub effective_alpha: f64,
     pub text: Option<String>,
     pub texture: Option<TextureFill>,
+    pub visual: crate::core::VisualStyle,
+    pub font_overrides: u8,
+    pub clips_children: bool,
+    pub scroll_child: Option<usize>,
+    pub scroll: (f64, f64),
     pub font_size: f64,
     pub font_path: String,
     pub font_flags: String,
@@ -97,4 +102,33 @@ impl Region {
             self.text.as_deref()
         }
     }
+}
+
+/// Intersection of every clipping ancestor, in screen coordinates.
+pub fn clip(a: &Arena, i: usize) -> Option<crate::Rect> {
+    let mut parent = a.regions[i].parent;
+    let mut result: Option<crate::Rect> = None;
+    for _ in 0..a.regions.len() {
+        let Some(p) = parent else { break };
+        let r = &a.regions[p];
+        if (r.clips_children || r.kind == "ScrollFrame")
+            && let Some(q) = r.rect
+        {
+            result = Some(match result {
+                None => q,
+                Some(c) => {
+                    let left = c.left.max(q.left);
+                    let bottom = c.bottom.max(q.bottom);
+                    crate::Rect {
+                        left,
+                        bottom,
+                        width: ((c.left + c.width).min(q.left + q.width) - left).max(0.0),
+                        height: ((c.bottom + c.height).min(q.bottom + q.height) - bottom).max(0.0),
+                    }
+                }
+            });
+        }
+        parent = r.parent;
+    }
+    result
 }

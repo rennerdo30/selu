@@ -112,6 +112,42 @@ pub enum TextureFill {
     Color([f32; 4]),
 }
 
+/// Visual state shared by layout, snapshots and Studio.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VisualStyle {
+    pub font: String,
+    pub size: f64,
+    pub flags: String,
+    pub color: [f32; 4],
+    pub shadow: [f32; 4],
+    pub shadow_offset: (f64, f64),
+    pub justify_h: String,
+    pub justify_v: String,
+    pub wrap: bool,
+    pub max_lines: usize,
+    pub uv: [f32; 4],
+    pub tint: [f32; 4],
+    pub blend: String,
+}
+impl Default for VisualStyle {
+    fn default() -> Self {
+        Self {
+            font: String::new(),
+            size: 12.0,
+            flags: String::new(),
+            color: [1.0; 4],
+            shadow: [0.0; 4],
+            shadow_offset: (0.0, 0.0),
+            justify_h: "LEFT".into(),
+            justify_v: "TOP".into(),
+            wrap: true,
+            max_lines: 0,
+            uv: [0.0, 1.0, 0.0, 1.0],
+            tint: [1.0; 4],
+            blend: "BLEND".into(),
+        }
+    }
+}
 /// One region as the front ends see it. Fields that the current model does
 /// not know yet are `None`; S1 fills them from the arena.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,6 +172,10 @@ pub struct RegionSnapshot {
     pub layer: Option<(DrawLayer, i8)>,
     /// Effective alpha (own alpha times the ancestors').
     pub alpha: f64,
+    #[serde(default)]
+    pub visual: VisualStyle,
+    #[serde(default)]
+    pub clip: Option<Rect>,
     pub texture: Option<TextureFill>,
     pub text: Option<String>,
     /// Script handlers set on the region, sorted (`OnClick`, `OnEvent`, ...).
@@ -873,6 +913,8 @@ mod tests {
                 level: Some(1),
                 layer: Some((DrawLayer::Artwork, 0)),
                 alpha: 1.0,
+                visual: VisualStyle::default(),
+                clip: None,
                 texture: Some(TextureFill::Color([1.0, 0.0, 0.0, 1.0])),
                 text: None,
                 scripts: vec!["OnEvent".into()],
@@ -946,4 +988,54 @@ mod text_tests {
         let m = super::measure_text("|cffffffff\u{732b}\u{e9}|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
         assert_eq!((m.width, m.height), (12.0, 24.0));
     }
+}
+
+/// A single text cell from the simulator's deterministic fallback measurement model.
+/// Studio positions glyphs on these same advances, including wrap and markup.
+pub fn text_cells(text: &str, style: &VisualStyle, width: f64) -> Vec<(char, f64, f64, [f32; 4])> {
+    let mut cells = Vec::new();
+    let mut chars = text.chars().peekable();
+    let (mut x, mut y) = (0.0, 0.0);
+    let mut color = style.color;
+    let advance = style.size * 0.5;
+    while let Some(c) = chars.next() {
+        if c == '|' {
+            match chars.peek() {
+                Some('c') => {
+                    chars.next();
+                    let hex: String = chars.by_ref().take(8).collect();
+                    if let Ok(value) = u32::from_str_radix(&hex, 16) {
+                        color = [
+                            ((value >> 16) & 255) as f32 / 255.0,
+                            ((value >> 8) & 255) as f32 / 255.0,
+                            (value & 255) as f32 / 255.0,
+                            (value >> 24) as f32 / 255.0,
+                        ];
+                    }
+                    continue;
+                }
+                Some('r') => {
+                    chars.next();
+                    color = style.color;
+                    continue;
+                }
+                Some('|') => {
+                    chars.next();
+                }
+                _ => {}
+            }
+        }
+        if c == '\n' || (style.wrap && width > 0.0 && x + advance > width && x > 0.0) {
+            x = 0.0;
+            y += style.size;
+        }
+        if style.max_lines > 0 && y >= style.max_lines as f64 * style.size {
+            break;
+        }
+        if c != '\n' {
+            cells.push((c, x, y, color));
+            x += advance;
+        }
+    }
+    cells
 }

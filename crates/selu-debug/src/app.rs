@@ -110,6 +110,8 @@ pub struct Studio {
     event_filter: EventFilter,
     event_search: String,
     logo: Option<egui::TextureHandle>,
+    textures: HashMap<String, Result<egui::TextureHandle, String>>,
+    addon_fonts: std::collections::HashSet<String>,
     game_settings: crate::game::Settings,
     game_clients: Vec<crate::game::Client>,
     game_scanned: bool,
@@ -190,6 +192,8 @@ impl Studio {
             repaint: Some(ctx.clone()),
             logo: crate::theme::logo_image()
                 .map(|img| ctx.load_texture("selu-logo", img, egui::TextureOptions::LINEAR)),
+            textures: HashMap::new(),
+            addon_fonts: Default::default(),
             event_name: String::new(),
             event_args: String::new(),
             playing: false,
@@ -2089,40 +2093,151 @@ impl Studio {
             let a = r.alpha.clamp(0.0, 1.0) as f32 * if r.visible { 1.0 } else { 0.3 };
             c.gamma_multiply(a)
         };
-        for r in snap.regions.iter().skip(1).filter(|r| visible(r)) {
+        let mut ordered: Vec<_> = snap.regions.iter().skip(1).filter(|r| visible(r)).collect();
+        ordered.sort_by_key(|r| (r.strata, r.level, r.layer, r.id.index));
+        for r in &ordered {
+            let painter = painter.with_clip_rect(
+                r.clip
+                    .as_ref()
+                    .map(to_screen)
+                    .unwrap_or(area)
+                    .intersect(area),
+            );
             let Some(rect) = r.rect.as_ref().map(to_screen) else {
                 continue;
             };
             match (&r.texture, r.widget.as_str()) {
                 (Some(TextureFill::Color(c)), _) => {
+                    let tint = r.visual.tint;
                     let col = Color32::from_rgba_unmultiplied(
-                        (c[0] * 255.0) as u8,
-                        (c[1] * 255.0) as u8,
-                        (c[2] * 255.0) as u8,
-                        (c[3] * 255.0) as u8,
+                        (c[0] * tint[0] * 255.0) as u8,
+                        (c[1] * tint[1] * 255.0) as u8,
+                        (c[2] * tint[2] * 255.0) as u8,
+                        (c[3] * tint[3] * 255.0) as u8,
                     );
                     painter.rect_filled(rect, 0.0, fade(r, col));
                 }
                 (Some(TextureFill::File(name) | TextureFill::Atlas(name)), _) => {
+                    let cached = self.textures.entry(name.clone()).or_insert_with(|| {
+                        if matches!(r.texture, Some(TextureFill::Atlas(_))) {
+                            return Err("unavailable atlas".into());
+                        }
+                        crate::textures::load(&self.opts.addons, name).map(|image| {
+                            ui.ctx()
+                                .load_texture(name, image, egui::TextureOptions::LINEAR)
+                        })
+                    });
+                    if let Ok(texture) = cached {
+                        let uv = r.visual.uv;
+                        let c = r.visual.tint;
+                        painter.image(
+                            texture.id(),
+                            rect,
+                            ERect::from_min_max(Pos2::new(uv[0], uv[2]), Pos2::new(uv[1], uv[3])),
+                            fade(
+                                r,
+                                Color32::from_rgba_unmultiplied(
+                                    (c[0] * 255.0) as u8,
+                                    (c[1] * 255.0) as u8,
+                                    (c[2] * 255.0) as u8,
+                                    (c[3] * 255.0) as u8,
+                                ),
+                            ),
+                        );
+                        continue;
+                    }
                     painter.rect_filled(rect, 0.0, fade(r, Color32::from_rgb(60, 70, 95)));
                     let tail = name.rsplit(['\\', '/']).next().unwrap_or(name);
                     painter.with_clip_rect(rect.intersect(area)).text(
                         rect.center(),
                         Align2::CENTER_CENTER,
-                        short(tail, 20),
+                        format!("Unavailable: {}", short(tail, 20)),
                         FontId::proportional(10.0),
                         fade(r, Color32::LIGHT_GRAY),
                     );
                 }
                 (None, "FontString") => {
                     if let Some(text) = &r.text {
-                        painter.text(
-                            rect.left_top(),
-                            Align2::LEFT_TOP,
-                            text,
-                            FontId::proportional((12.0 * scale).max(9.0)),
-                            fade(r, Color32::from_rgb(255, 210, 0)),
-                        );
+                        let mut family = egui::FontFamily::Proportional;
+                        if self.addon_fonts.contains(&r.visual.font) {
+                            family = egui::FontFamily::Name(r.visual.font.clone().into());
+                        } else if let Ok(path) =
+                            crate::textures::resolve(&self.opts.addons, &r.visual.font)
+                            && std::fs::metadata(&path).is_ok_and(|m| m.len() < 8 * 1024 * 1024)
+                            && let Ok(data) = std::fs::read(path)
+                        {
+                            let mut definitions = ui.ctx().fonts(|f| f.definitions().clone());
+                            definitions.font_data.insert(
+                                r.visual.font.clone(),
+                                std::sync::Arc::new(egui::FontData::from_owned(data)),
+                            );
+                            definitions.families.insert(
+                                egui::FontFamily::Name(r.visual.font.clone().into()),
+                                vec![r.visual.font.clone()],
+                            );
+                            ui.ctx().set_fonts(definitions);
+                            self.addon_fonts.insert(r.visual.font.clone());
+                        }
+                        let mut style = r.visual.clone();
+                        style.size *= scale as f64;
+                        let cells = selu_sim::core::text_cells(text, &style, rect.width() as f64);
+                        let height = cells.last().map(|c| c.2 + style.size).unwrap_or(0.0) as f32;
+                        let dy = match style.justify_v.as_str() {
+                            "BOTTOM" => rect.height() - height,
+                            "MIDDLE" => (rect.height() - height) / 2.0,
+                            _ => 0.0,
+                        };
+                        for &(ch, x, y, c) in &cells {
+                            let line_width = cells
+                                .iter()
+                                .rfind(|cell| cell.2 == y)
+                                .map(|cell| cell.1 + style.size * 0.5)
+                                .unwrap_or(0.0) as f32;
+                            let dx = match style.justify_h.as_str() {
+                                "RIGHT" => rect.width() - line_width,
+                                "CENTER" => (rect.width() - line_width) / 2.0,
+                                _ => 0.0,
+                            };
+                            let pos = rect.left_top() + Vec2::new(x as f32 + dx, y as f32 + dy);
+                            let rgba = |c: [f32; 4]| {
+                                Color32::from_rgba_unmultiplied(
+                                    (c[0] * 255.0) as u8,
+                                    (c[1] * 255.0) as u8,
+                                    (c[2] * 255.0) as u8,
+                                    (c[3] * 255.0) as u8,
+                                )
+                            };
+                            let font = FontId::new(style.size as f32, family.clone());
+                            if style.shadow[3] > 0.0 {
+                                painter.text(
+                                    pos + Vec2::new(
+                                        style.shadow_offset.0 as f32 * scale,
+                                        -style.shadow_offset.1 as f32 * scale,
+                                    ),
+                                    Align2::LEFT_TOP,
+                                    ch,
+                                    font.clone(),
+                                    fade(r, rgba(style.shadow)),
+                                );
+                            }
+                            if style.flags.contains("OUTLINE") {
+                                for delta in [
+                                    Vec2::new(-1.0, 0.0),
+                                    Vec2::new(1.0, 0.0),
+                                    Vec2::new(0.0, -1.0),
+                                    Vec2::new(0.0, 1.0),
+                                ] {
+                                    painter.text(
+                                        pos + delta,
+                                        Align2::LEFT_TOP,
+                                        ch,
+                                        font.clone(),
+                                        fade(r, Color32::BLACK),
+                                    );
+                                }
+                            }
+                            painter.text(pos, Align2::LEFT_TOP, ch, font, fade(r, rgba(c)));
+                        }
                     }
                 }
                 (None, "Texture") => {}
@@ -2138,12 +2253,14 @@ impl Studio {
         }
         // Selection and hover outlines on top.
         let hit = |pos: Pos2| {
-            snap.regions
+            ordered
                 .iter()
-                .skip(1)
                 .rev()
                 .filter(|r| visible(r))
-                .find(|r| r.rect.as_ref().is_some_and(|x| to_screen(x).contains(pos)))
+                .find(|r| {
+                    r.rect.as_ref().is_some_and(|x| to_screen(x).contains(pos))
+                        && r.clip.as_ref().is_none_or(|x| to_screen(x).contains(pos))
+                })
                 .map(|r| r.id.index)
         };
         let hovered = response.hover_pos().and_then(hit);
@@ -2752,6 +2869,8 @@ mod tests {
     #[test]
     fn labels_name_regions() {
         let r = RegionSnapshot {
+            visual: Default::default(),
+            clip: None,
             id: RegionId {
                 index: 3,
                 generation: 0,

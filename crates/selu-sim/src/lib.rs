@@ -21,11 +21,13 @@ use std::collections::HashSet;
 // contract; `frames` and `regions` belong to S1; `session`, `loader`,
 // `world`, `trace` and `snapshot` to S2. This file is S0's wiring.
 pub mod core;
+pub mod fonts;
 pub mod frames;
 pub mod loader;
 mod regions;
 pub mod saved;
 pub mod session;
+pub mod sim_globals;
 pub mod snapshot;
 mod timers;
 mod trace;

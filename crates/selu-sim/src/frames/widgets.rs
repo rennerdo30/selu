@@ -35,6 +35,10 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
     }));
 }
 pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    lua.globals().set(
+        "CreateFont",
+        lua.create_function(|lua, name: String| crate::sim_globals::create_font(lua, &name))?,
+    )?;
     lua.set_app_data(ctx.clone());
     lua.set_app_data(Rc::new(RefCell::new(Arena::default())) as Store);
     let ctx = ctx.clone();
@@ -132,6 +136,11 @@ pub fn create(
         effective_alpha: 1.0,
         text: None,
         texture: None,
+        visual: crate::core::VisualStyle::default(),
+        font_overrides: 0,
+        clips_children: false,
+        scroll_child: None,
+        scroll: (0.0, 0.0),
         font_size: 12.0,
         font_path: "fixed".into(),
         font_flags: String::new(),
@@ -221,7 +230,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown";
+const METHODS: &str = "SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     if !ctx
         .stale_sources
@@ -311,13 +320,143 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         }
         out!(());
     }
+    if method == "SetFontObject" {
+        let object = match v.first() {
+            Some(Value::String(name)) => lua.globals().get::<Table>(name.to_str()?.as_ref())?,
+            Some(Value::Table(t)) => t.clone(),
+            _ => return Err(mlua::Error::runtime("font object expected")),
+        };
+        let get: Function = object.get("GetFont")?;
+        let (path, size, flags): (String, f64, String) = get.call(object.clone())?;
+        t.raw_set("__font_object", object)?;
+        let mut a = a.borrow_mut();
+        a.regions[i].font_path = path;
+        a.regions[i].font_size = size;
+        a.regions[i].font_flags = flags;
+        a.dirty = true;
+        out!(());
+    }
+    if method == "SetFont" {
+        t.raw_set("__font_object", Value::Nil)?;
+    }
+    if method == "GetFontObject" {
+        out!(t.raw_get::<Value>("__font_object")?);
+    }
     layout::resolve(&mut a.borrow_mut(), ctx);
     let old = a.borrow().regions[i].clone();
     let n = number(v.first(), 0.0);
     let s = string(v.first()).unwrap_or_default();
     let mut a = a.borrow_mut();
+    if matches!(method, "Raise" | "Lower") {
+        let strata = a.regions[i].strata;
+        let levels = a
+            .regions
+            .iter()
+            .filter(|r| r.strata == strata && !is_region(&r.kind))
+            .map(|r| r.level);
+        let level = if method == "Raise" {
+            levels.max().unwrap_or(0).saturating_add(1)
+        } else {
+            levels.min().unwrap_or(0).saturating_sub(1)
+        };
+        a.regions[i].level = level;
+        a.regions[i].level_explicit = true;
+    }
+    if method == "SetScrollChild" {
+        let child = match v.first() {
+            Some(Value::Table(t)) => Some(id(t)?),
+            _ => None,
+        };
+        if let Some(c) = child {
+            let mut ancestor = Some(i);
+            for _ in 0..a.regions.len() {
+                let Some(p) = ancestor else { break };
+                if p == c {
+                    return Err(mlua::Error::runtime("scroll parent cycle"));
+                }
+                ancestor = a.regions[p].parent;
+            }
+            a.regions[c].parent = Some(i);
+            a.regions[c].points = vec![Point {
+                point: "TOPLEFT".into(),
+                relative: i,
+                anchor: "TOPLEFT".into(),
+                x: 0.0,
+                y: 0.0,
+            }];
+        }
+        a.regions[i].scroll_child = child;
+    }
+    if method == "GetScrollChild" {
+        out!(
+            a.regions[i]
+                .scroll_child
+                .map(|c| a.regions[c].table.clone())
+        );
+    }
+    if matches!(
+        method,
+        "GetHorizontalScrollRange" | "GetVerticalScrollRange"
+    ) {
+        let r = &a.regions[i];
+        let range = r
+            .scroll_child
+            .map(|c| {
+                let c = &a.regions[c];
+                if method == "GetHorizontalScrollRange" {
+                    c.width - r.width
+                } else {
+                    c.height - r.height
+                }
+            })
+            .unwrap_or(0.0)
+            .max(0.0);
+        out!(range);
+    }
     let r = &mut a.regions[i];
+    r.font_overrides |= match method {
+        "SetTextColor" => 1,
+        "SetShadowColor" => 2,
+        "SetShadowOffset" => 4,
+        "SetJustifyH" => 8,
+        "SetJustifyV" => 16,
+        _ => 0,
+    };
     match method {
+        "Raise" | "Lower" | "SetScrollChild" | "UpdateScrollChildRect" => {}
+        "SetClipsChildren" => r.clips_children = boolean(v.first()),
+        "DoesClipChildren" => out!(r.clips_children),
+        "SetHorizontalScroll" => r.scroll.0 = n.max(0.0),
+        "SetVerticalScroll" => r.scroll.1 = n.max(0.0),
+        "GetHorizontalScroll" => out!(r.scroll.0),
+        "GetVerticalScroll" => out!(r.scroll.1),
+        "SetJustifyH" => r.visual.justify_h = s,
+        "SetJustifyV" => r.visual.justify_v = s,
+        "SetWordWrap" => r.visual.wrap = boolean(v.first()),
+        "SetMaxLines" => r.visual.max_lines = n.max(0.0) as usize,
+        "SetBlendMode" => r.visual.blend = s,
+        "SetShadowOffset" => r.visual.shadow_offset = (n, number(v.get(1), 0.0)),
+        "SetTextColor" | "SetVertexColor" | "SetShadowColor" => {
+            let color = [
+                n as f32,
+                number(v.get(1), 1.0) as f32,
+                number(v.get(2), 1.0) as f32,
+                number(v.get(3), 1.0) as f32,
+            ];
+            match method {
+                "SetTextColor" => r.visual.color = color,
+                "SetVertexColor" => r.visual.tint = color,
+                _ => r.visual.shadow = color,
+            }
+        }
+        "SetTexCoord" => {
+            r.visual.uv = [
+                n as f32,
+                number(v.get(1), 1.0) as f32,
+                number(v.get(2), 0.0) as f32,
+                number(v.get(3), 1.0) as f32,
+            ]
+        }
         "GetName" => out!(r.name.clone()),
         "GetObjectType" => out!(r.kind.clone()),
         "IsObjectType" => out!(super::manifest::inherits(&r.kind, &s)),
@@ -399,7 +538,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                     "HIGHLIGHT" => DrawLayer::Highlight,
                     _ => DrawLayer::Artwork,
                 },
-                number(v.get(1), 0.0) as i8,
+                number(v.get(1), 0.0).clamp(-8.0, 7.0) as i8,
             );
         }
         "GetDrawLayer" => out!((format!("{:?}", r.layer.0).to_uppercase(), r.layer.1)),
@@ -620,6 +759,22 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             "OnValueChanged",
             vec![Value::Number(new.value), Value::Boolean(false)],
         );
+    }
+    for (changed, name, value) in [
+        (
+            old.scroll.0 != new.scroll.0,
+            "OnHorizontalScroll",
+            new.scroll.0,
+        ),
+        (
+            old.scroll.1 != new.scroll.1,
+            "OnVerticalScroll",
+            new.scroll.1,
+        ),
+    ] {
+        if changed {
+            callback(ctx, t.clone(), name, vec![Value::Number(value)]);
+        }
     }
     if old.text != new.text {
         callback(ctx, t.clone(), "OnTextChanged", vec![Value::Boolean(false)]);

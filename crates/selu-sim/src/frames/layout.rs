@@ -20,6 +20,89 @@ pub fn factor(p: &str) -> (f64, f64) {
     )
 }
 pub fn resolve(a: &mut Arena, ctx: &Ctx) {
+    for r in &mut a.regions {
+        let mut object = r
+            .table
+            .raw_get::<Option<mlua::Table>>("__font_object")
+            .ok()
+            .flatten();
+        let mut style_read = false;
+        for _ in 0..64 {
+            let Some(t) = object else { break };
+            if !style_read {
+                for (key, bit) in [
+                    ("TextColor", 1),
+                    ("ShadowColor", 2),
+                    ("ShadowOffset", 4),
+                    ("JustifyH", 8),
+                    ("JustifyV", 16),
+                ] {
+                    if r.font_overrides & bit != 0 {
+                        continue;
+                    }
+                    let mut current = Some(t.clone());
+                    for _ in 0..64 {
+                        let Some(object) = current else { break };
+                        if let Ok(value) = object.raw_get::<mlua::Table>(format!("_{key}")) {
+                            match key {
+                                "TextColor" | "ShadowColor" => {
+                                    let c = [
+                                        value.raw_get(1).unwrap_or(1.0),
+                                        value.raw_get(2).unwrap_or(1.0),
+                                        value.raw_get(3).unwrap_or(1.0),
+                                        value.raw_get(4).unwrap_or(1.0),
+                                    ];
+                                    if key == "TextColor" {
+                                        r.visual.color = c;
+                                    } else {
+                                        r.visual.shadow = c;
+                                    }
+                                }
+                                "ShadowOffset" => {
+                                    r.visual.shadow_offset = (
+                                        value.raw_get(1).unwrap_or(0.0),
+                                        value.raw_get(2).unwrap_or(0.0),
+                                    )
+                                }
+                                "JustifyH" => {
+                                    r.visual.justify_h =
+                                        value.raw_get(1).unwrap_or_else(|_| "LEFT".into())
+                                }
+                                _ => {
+                                    r.visual.justify_v =
+                                        value.raw_get(1).unwrap_or_else(|_| "TOP".into())
+                                }
+                            }
+                            break;
+                        }
+                        current = object
+                            .raw_get::<Option<mlua::Table>>("_parent")
+                            .ok()
+                            .flatten();
+                    }
+                }
+                style_read = true;
+            }
+            if let Ok(Some(parent)) = t.raw_get::<Option<mlua::Table>>("_parent") {
+                object = Some(parent);
+                continue;
+            }
+            if let Ok(font) = t.raw_get::<mlua::Table>("_font") {
+                let path = font.raw_get::<String>(1).unwrap_or_default();
+                let size = font.raw_get::<f64>(2).unwrap_or(12.0);
+                let flags = font.raw_get::<String>(3).unwrap_or_default();
+                if (r.font_path.as_str(), r.font_size, r.font_flags.as_str())
+                    != (path.as_str(), size, flags.as_str())
+                {
+                    r.font_path = path;
+                    r.font_size = size;
+                    r.font_flags = flags;
+                    a.dirty = true;
+                }
+            }
+            break;
+        }
+    }
     if !a.dirty {
         return;
     }
@@ -66,7 +149,9 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
     }
 }
 pub fn text_height(r: &Region, width: f64) -> f64 {
-    r.text
+    let width = if r.visual.wrap { width } else { 0.0 };
+    let height: f64 = r
+        .text
         .as_deref()
         .unwrap_or("")
         .split('\n')
@@ -79,7 +164,12 @@ pub fn text_height(r: &Region, width: f64) -> f64 {
                     1.0
                 }
         })
-        .sum()
+        .sum();
+    if r.visual.max_lines > 0 {
+        height.min(r.visual.max_lines as f64 * r.font_size)
+    } else {
+        height
+    }
 }
 fn inherit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) {
     if marks[i] == 2 {
@@ -190,6 +280,15 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
     };
     let out = &mut a.regions[i];
     out.rect = rect;
+    if let Some(p) = r.parent
+        && a.regions[p].scroll_child == Some(i)
+    {
+        let (x, y) = a.regions[p].scroll;
+        if let Some(q) = &mut a.regions[i].rect {
+            q.left -= x * scale;
+            q.bottom += y * scale;
+        }
+    }
 
     marks[i] = 2;
     valid
