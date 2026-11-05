@@ -47,7 +47,7 @@ impl Resolver {
         };
         self.sources
             .retain(|s| !matches!(s, Source::ClientStorage(_)));
-        self.sources.insert(0, Source::ClientStorage(Some(storage)));
+        self.sources.push(Source::ClientStorage(Some(storage)));
         self.cache.get_mut().clear();
         self.atlases.get_mut().clear();
         Ok(())
@@ -83,7 +83,12 @@ impl Resolver {
             .iter()
             .any(|s| matches!(s, Source::AddonMedia(p) if p == &root))
         {
-            self.sources.insert(0, Source::AddonMedia(root));
+            let at = self
+                .sources
+                .iter()
+                .position(|s| matches!(s, Source::ClientStorage(_)))
+                .unwrap_or(self.sources.len());
+            self.sources.insert(at, Source::AddonMedia(root));
             self.cache.get_mut().clear();
         }
     }
