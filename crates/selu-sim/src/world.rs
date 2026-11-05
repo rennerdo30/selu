@@ -23,9 +23,20 @@ pub(crate) fn install_restrictions(lua: &Lua, ctx: &crate::Ctx) -> SimResult<()>
                 .push(format!("error: {}", value_string(&error)));
             Ok(())
         })?;
+        globals.set("__selu_sim_native_error_handler", handler)?;
+        globals.set(
+            "seterrorhandler",
+            lua.create_function(|lua, handler: mlua::Function| {
+                lua.globals()
+                    .set("__selu_sim_native_error_handler", handler)
+            })?,
+        )?;
         globals.set(
             "geterrorhandler",
-            lua.create_function(move |_, ()| Ok(handler.clone()))?,
+            lua.create_function(move |lua, ()| {
+                lua.globals()
+                    .get::<mlua::Function>("__selu_sim_native_error_handler")
+            })?,
         )?;
     }
     globals.set("__selu_sim_combat", false)?;

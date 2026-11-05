@@ -1,4 +1,5 @@
 local queue, frame = {}, 1
+__selu_sim_counts = { timers = 0, updates = 0 }
 local flush = __selu_sim_flush
 local beginCallback, endCallback = __selu_sim_begin_callback, __selu_sim_end_callback
 local frameTime = 1 / 60
@@ -62,6 +63,7 @@ function __selu_sim_step()
  end
  for _, t in ipairs(due) do
   if not t.handle.cancelled then
+   __selu_sim_counts.timers = __selu_sim_counts.timers + 1
    local ok
    if t.after then ok = safe('timer',t.fn) else ok = safe('timer',t.fn,t.handle) end
    if t.remaining then t.remaining = t.remaining - 1 end
@@ -77,7 +79,10 @@ function __selu_sim_step()
   for i, f in ipairs(__selu_sim_frames) do frames[i] = f end
   for _, f in ipairs(frames) do
    local fn = f.__scripts.OnUpdate
-   if visible(f) and fn then safe('OnUpdate',fn,f,frameTime) end
+   if visible(f) and fn then
+    __selu_sim_counts.updates = __selu_sim_counts.updates + 1
+    safe('OnUpdate',fn,f,frameTime)
+   end
   end
  end
 end

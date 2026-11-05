@@ -1,0 +1,11 @@
+// A small checked catalog, not the toolkit service or its production catalog.
+type Sentences = { enabled: string, sold: string };
+const catalog: { enUS: Sentences, deDE: Sentences } = {
+  enUS: { enabled: "Aura flash enabled.", sold: "Sold your junk." },
+  deDE: { enabled: "Aurablitz aktiviert.", sold: "Dein Plunder wurde verkauft." }
+};
+function L(german: boolean): Sentences {
+  if (german) { return catalog.deDE; }
+  return catalog.enUS;
+}
+on PLAYER_LOGIN() { print(L(false).enabled, L(true).sold); }

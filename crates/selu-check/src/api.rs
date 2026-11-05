@@ -719,6 +719,50 @@ fn api_assignable(have: &Type, want: &Type) -> bool {
         let have = crate::restrictions::secret_inner(have).unwrap_or_else(|| have.clone());
         return api_assignable(&have, &inner);
     }
+    if have.assignable_to(want) {
+        return true;
+    }
+    // Native Lua callbacks may ignore supplied trailing arguments. Every
+    // parameter they consume remains contravariant, and required parameters
+    // must be guaranteed by the native callback contract.
+    let have_shape = crate::shape_of(have);
+    let want_shape = crate::shape_of(&want.non_null());
+    if let (
+        Type::Function {
+            params,
+            required,
+            rest,
+            ret,
+            ..
+        },
+        Type::Function {
+            params: supplied,
+            required: guaranteed,
+            rest: supplied_rest,
+            ret: expected_ret,
+            ..
+        },
+    ) = (&have_shape, &want_shape)
+    {
+        return have_shape.result_convention_matches(&want_shape)
+            && required <= guaranteed
+            && params.iter().enumerate().all(|(i, parameter)| {
+                supplied
+                    .get(i)
+                    .or(supplied_rest.as_deref())
+                    .is_none_or(|value| value.assignable_to(parameter))
+            })
+            && rest.as_deref().is_none_or(|parameter| {
+                supplied
+                    .iter()
+                    .skip(params.len())
+                    .all(|value| value.assignable_to(parameter))
+                    && supplied_rest
+                        .as_deref()
+                        .is_none_or(|value| value.assignable_to(parameter))
+            })
+            && (ret.assignable_to(expected_ret) || **expected_ret == Type::Void);
+    }
     have.assignable_to(want)
         || matches!(
             (crate::shape_of(have), crate::shape_of(&want.non_null())),

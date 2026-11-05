@@ -3,6 +3,7 @@ use crate::lua::{self, LBlock, LExpr, LStmt, LStmtKind, name};
 use selu_syntax::{Expr, ExprKind};
 #[derive(Default)]
 pub(crate) struct WowState {
+    pub error_handler: bool,
     pub bindings: Vec<crate::bindings::Binding>,
     pub keys: Vec<String>,
     pub used: bool,
@@ -109,6 +110,11 @@ impl Lowerer<'_> {
             return None;
         }
         let n = callee.dotted_name()?;
+        if n == "onError" {
+            self.wow.error_handler = true;
+            let value = self.expr(&args[0], pre);
+            return Some(lua::call(name("__selu_on_error"), vec![value]));
+        }
         if n == "keybinding" {
             return Some(self.binding_call(args, pre));
         }

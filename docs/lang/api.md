@@ -105,3 +105,11 @@ Single-value parentheses are printed only where Lua could expand a final call:
 last arguments, final positional table fields and final return operands. Operators,
 keyed fields, earlier list operands and single-target stores already truncate.
 The simulator retains CreateFrame's parent and exposes it through GetParent.
+
+Native API callbacks may ignore trailing arguments supplied by the game. A
+zero-parameter callback is valid for NewTicker. Every declared parameter is still
+checked positionally against the supplied type, including rest parameters; a
+callback requiring more arguments than the native signature guarantees remains
+SELU0481. Result-convention checks still apply. This rule applies to callback
+arguments of native APIs; ordinary Selu function assignment keeps its existing
+contract.

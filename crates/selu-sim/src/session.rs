@@ -11,7 +11,7 @@ use crate::{Ctx, TraceKind, core, frames, log_once, regions, timers, value_strin
 use crate::{SimResult, loader, snapshot};
 use mlua::Value;
 use mlua::{Function, Lua, MultiValue, Table};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// VM-independent host commands retained across reload (decision 22).
@@ -43,6 +43,9 @@ pub enum HostCommand {
         seconds: f64,
     },
     Reload,
+    SwitchCharacter {
+        character: String,
+    },
     Eval {
         code: String,
     },
@@ -487,6 +490,38 @@ impl Session {
         lock(&self.sim.state).commands.clone()
     }
 
+    /// Seed only declared saved globals before any addon loads. Values are data,
+    /// never executable chunks, and are restored by the ordinary loader.
+    pub fn seed_saved(
+        &mut self,
+        dir: &Path,
+        values: &BTreeMap<String, crate::saved::SavedValue>,
+    ) -> SimResult<()> {
+        if !lock(&self.sim.state).loaded.is_empty() {
+            return Err(runtime("saved fixtures must precede addon loading".into()));
+        }
+        let toc = loader::read_toc_target(dir, self.config.target.as_deref()).map_err(runtime)?;
+        let names: HashSet<_> = toc
+            .list("SavedVariables")
+            .into_iter()
+            .chain(toc.list("SavedVariablesPerCharacter"))
+            .collect();
+        for (name, value) in values {
+            if !names.contains(name) {
+                return Err(runtime(format!("undeclared saved fixture `{name}`")));
+            }
+            // Validate serializable values before committing the fixture.
+            let restored = crate::saved::restore(&self.sim.lua, value)?;
+            crate::saved::capture(restored, &mut HashSet::new())?;
+        }
+        for (name, value) in values {
+            self.saved
+                .0
+                .insert(saved_key(&self.config, &toc, name), value.clone());
+        }
+        Ok(())
+    }
+
     pub fn config(&self) -> &SessionConfig {
         &self.config
     }
@@ -601,7 +636,24 @@ impl Session {
     /// Drop the VM, start a new one, load every addon again and log in again
     /// if the session had. The generation changes. Saved data is restored before ADDON_LOADED.
     pub fn reload(&mut self) -> SimResult<()> {
-        lock(&self.sim.state).commands.push(HostCommand::Reload);
+        self.reload_character(None)
+    }
+
+    /// Persist the old character before selecting the next character's tree.
+    pub fn switch_character(&mut self, character: String) -> SimResult<()> {
+        if character.is_empty() {
+            return Err(runtime("character must not be empty".into()));
+        }
+        self.reload_character(Some(character))
+    }
+
+    fn reload_character(&mut self, character: Option<String>) -> SimResult<()> {
+        lock(&self.sim.state).commands.push(match &character {
+            Some(character) => HostCommand::SwitchCharacter {
+                character: character.clone(),
+            },
+            None => HostCommand::Reload,
+        });
         let addons = lock(&self.sim.state).loaded.clone();
         let old_checked = lock(&self.sim.state).checked_manifests.clone();
         let target = snapshot_target(&self.config, &old_checked);
@@ -654,7 +706,11 @@ impl Session {
                 crate::saved::capture(self.sim.lua.globals().raw_get(name)?, &mut HashSet::new())?,
             ));
         }
-        let replacement = Self::start_vm(&self.config)?;
+        let mut next_config = self.config.clone();
+        if let Some(character) = character {
+            next_config.character = character;
+        }
+        let replacement = Self::start_vm(&next_config)?;
         for (prefix, suffix) in &lock(&self.sim.state).manual_frame_families {
             register_family(&replacement, prefix, suffix)?;
             lock(&replacement.state)
@@ -690,6 +746,7 @@ impl Session {
                 replacement.lua.globals().raw_set(name, restored)?;
             }
         }
+        self.config = next_config;
         self.saved = saved;
         self.sim = replacement;
         self.generation = self.generation.next();

@@ -242,3 +242,17 @@ C_Timer.After(.2, function() ticker:Cancel(); assert(infinite:IsCancelled()) end
         assert_eq!(s.prints(), ["next frame", "cancel", "1", "2", "update"]);
     }
 }
+
+#[cfg(test)]
+mod sb_counters {
+    #[test]
+    fn dispatch_counts_are_observations_not_clock_estimates() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("C_Timer.After(.1, function() end); f=CreateFrame('Frame'); f:SetScript('OnUpdate', function() end)").unwrap();
+        sim.advance_time(0.1);
+        sim.eval("assert(__selu_sim_counts.timers == 1); assert(__selu_sim_counts.updates == 6); f:SetScript('OnUpdate', nil)").unwrap();
+        sim.advance_time(1.0);
+        sim.eval("assert(__selu_sim_counts.timers == 1 and __selu_sim_counts.updates == 6)")
+            .unwrap();
+    }
+}

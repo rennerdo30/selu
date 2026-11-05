@@ -136,3 +136,21 @@ per iteration. The initial module parse/setup and the few helper functions are
 outside that measurement. Files using no Error/throw/try emit no error runtime.
 Lua pcall, error, tostring, setmetatable and getmetatable are captured under
 reserved names before source bindings, so local source names cannot replace them.
+
+`onError((error: Error) => { ... })` installs a typed native diagnostic boundary.
+SELU0630 rejects an incompatible callback or arity. Strings become messages;
+existing Selu Errors retain identity; other values are described by Lua type
+without invoking their conversion hooks. Secret values become `<secret error>`.
+The compiler's adapter calls the prior native handler once with the original
+arguments, even when the Selu callback throws. Native values are never exposed
+by this adapter. Install early, retain errors in a bounded Selu array, and attach
+storage/UI sinks later. The callback starts outside any surrounding try context.
+This is registration, not a timer: disabling profiling needs no recurring work.
+Native seterrorhandler/geterrorhandler semantics are sourced in the toolkit's
+WOW_LUA_API.md:1887-1888; normalization is a Selu compiler contract.
+
+Use GetTime for deterministic logical timestamps. `sim.callbackCounts()` reports
+actual timer and OnUpdate callback dispatch counts for the current generation;
+it is an observation, not CPU time or allocations. Native debugprofilestop's
+millisecond contract comes from Blizzard FrameScriptDocumentation.lua. Simulator
+clock advancement does not establish CPU precision or a performance improvement.

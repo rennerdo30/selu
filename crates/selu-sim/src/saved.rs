@@ -2,7 +2,7 @@
 use crate::{Sim, SimResult};
 use mlua::{Lua, Value};
 use std::collections::{BTreeMap, HashSet};
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SavedValue {
     Nil,
     Boolean(bool),

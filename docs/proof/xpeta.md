@@ -112,3 +112,8 @@ classic 5.5.4.70631. Shorter Selu partly reflects omitted integration.
 Validation: root fmt check and strict workspace/all-target clippy passed.
 JunkSell: 4 passed, 0 failed. XPETA: 3 passed, 0 failed.
 Full workspace gate result and final head are recorded in the external report.
+
+Package SB resolves gap 9's metadata mismatch: sourced extraction v5 gives the
+callback a cancellable timer handle. The proof now uses a zero-argument callback
+because it ignores that handle, removing the obsolete function-typed workaround.
+This correction is offline compiler/simulator evidence, not a new native playtest.

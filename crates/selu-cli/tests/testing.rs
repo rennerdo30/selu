@@ -508,3 +508,106 @@ test("following",()=>{expect(1).toBe(1);});
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+#[test]
+fn sb_seed_character_reload_and_strict_gate() {
+    let dir = project(
+        "sb-scenario",
+        r#"
+        test("persistent characters", () => {
+            expect(sim.prints()).toContain("42");
+            const old = sim.frame("UIParent");
+            sim.switchCharacter("Other");
+            if (old) { expect(() => { old.Show(); }).toThrow(); }
+            expect(sim.prints()).toContain("1");
+            sim.switchCharacter("Player");
+            expect(sim.prints()).toContain("43");
+            sim.reload();
+            expect(sim.prints()).toContain("44");
+            expect(sim.callbackCounts().timers).toBe(0);
+            expect(sim.callbackCounts().updates).toBe(0);
+        });
+    "#,
+    );
+    std::fs::write(dir.join("src/main.selu"), "saved perCharacter state = { count: 0 }; on PLAYER_LOGIN() { state.count += 1; print(state.count); }").unwrap();
+    let value = selu_sim::saved::SavedValue::Table(vec![(
+        selu_sim::saved::SavedValue::String(b"count".to_vec()),
+        selu_sim::saved::SavedValue::Number(41.0),
+    )]);
+    std::fs::write(
+        dir.join("tests/api.test.scenario.json"),
+        serde_json::to_string(&serde_json::json!({"saved":{"Runner_state": value}})).unwrap(),
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("test")
+        .arg(&dir)
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("test")
+        .arg(&dir)
+        .args(["--strict", "--filter", "does not exist"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    std::fs::write(
+        dir.join("tests/api.test.selu"),
+        "test(\"gap\", () => { expect(() => { perf.allocations(() => {}); }).toThrow(); });",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("test")
+        .arg(&dir)
+        .args(["--strict", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let report: selu_test::Report = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report.failed(), 0);
+    assert!(!report.results[0].not_simulated.is_empty());
+    std::fs::write(
+        dir.join("tests/api.test.scenario.json"),
+        r#"{"saved":{"undeclared":{"Number":1}}}"#,
+    )
+    .unwrap();
+    let out = run(&dir, None);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SELU0631"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+#[test]
+fn sb_native_error_identity_in_shared_project_runtime() {
+    let dir = project("sb-handler-project", "");
+    std::fs::write(dir.join("src/main.selu"), "let seen: Error? = null; onError((e: Error) => { if (seen != null) { print(seen == e); } seen = e; });").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("build")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let manifest =
+        selu_manifest::load_manifest(&root.join("manifests/fixtures/forever-1.0.0.1000.json"))
+            .unwrap();
+    let mut session = selu_sim::Session::new(selu_sim::SessionConfig {
+        manifest: Some(manifest),
+        ..Default::default()
+    })
+    .unwrap();
+    session.load_addon_dir(&dir.join("dist/Runner")).unwrap();
+    let ns = session.sim().addon_namespace("Runner").unwrap();
+    session.sim().lua().load("local ns=...; local original=setmetatable({message='owned'}, ns.__selu_errors.meta); local handler=geterrorhandler(); handler(original); handler(original)").call::<()>(ns).unwrap();
+    assert_eq!(session.prints(), ["true"]);
+    let _ = std::fs::remove_dir_all(dir);
+}

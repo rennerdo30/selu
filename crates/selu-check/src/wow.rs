@@ -77,6 +77,36 @@ impl Ctx<'_> {
             return Some(t);
         }
         let n = self.wow_name(callee)?;
+        if n == "onError" {
+            let expected = Type::Function {
+                multiple_results: false,
+                unspecified_callback: false,
+                api: Default::default(),
+                api_semantics: Default::default(),
+                params: vec![crate::errors::error_type()],
+                required: 1,
+                rest: None,
+                ret: Box::new(Type::Void),
+            };
+            if args.len() != 1 {
+                self.out.push(err(
+                    "SELU0630",
+                    "onError needs one (error: Error) => void callback.",
+                    &e.span,
+                ));
+            }
+            for arg in args {
+                let actual = self.value_expected(arg, Some(&expected));
+                if !actual.assignable_to(&expected) {
+                    self.out.push(err(
+                        "SELU0630",
+                        "onError needs an Error callback.",
+                        &arg.span,
+                    ));
+                }
+            }
+            return Some(Type::Void);
+        }
         if n == "keybinding" {
             return Some(self.binding_call(e, args));
         }

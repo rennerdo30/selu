@@ -343,6 +343,20 @@ impl Lowerer<'_> {
                 _ => unreachable!(),
             },
             Type::Array(_) => match method.as_str() {
+                "clear" => {
+                    let i = self.temp();
+                    emit(LStmtKind::NumFor {
+                        var: i.clone(),
+                        start: len(obj.clone()),
+                        stop: num(1),
+                        step: Some(LExpr::Number("-1".into())),
+                        body: vec![LStmt::new(
+                            LStmtKind::Assign(vec![index(obj, name(&i))], vec![LExpr::Nil]),
+                            span,
+                        )],
+                    });
+                    LExpr::Nil
+                }
                 "push" => {
                     emit(LStmtKind::Assign(
                         vec![index(obj.clone(), bin(BinOp::Add, len(obj), num(1)))],
