@@ -185,3 +185,14 @@ successful Selu load can remove that compiler-owned key.
 A deferred input path cannot be repurposed before retirement: a conflicting
 write at its consuming step fails without committing or erasing the new value
 into defaults. Reuse that path in a later version after the reader has committed.
+
+Default filling is also transactional: it runs on a copy that retains graph
+provenance. The complete result is then strictly validated through every declared
+field, including aliased records and maps, before committing. Incompatible aliases
+are refused without changing the last-good graph or publishing writers.
+
+Adoption refusals, migration failures and distinct legacy roots emit one warning
+through the existing warning runtime. It names the database, phase or migration
+step and reason; exceptions retain their error text. Validation warnings include
+the field path and expected/actual kind. Warnings do not attach persistent writers
+and respect the existing warning level settings.

@@ -566,6 +566,21 @@ fn classes_saved_writes_reject_instances_and_accept_plain_copies() {
     assert_eq!(sim.prints(), vec!["1", "2", "1"]);
 }
 
+fn assert_adoption_status(sim: &Sim, status: &str) {
+    let messages = sim.prints();
+    if status == "ready" {
+        assert_eq!(messages, vec![status]);
+    } else {
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(messages[0].starts_with("[saved] "), "{messages:?}");
+        assert!(
+            messages[0].contains(&format!(": {status}:")),
+            "{messages:?}"
+        );
+        assert_eq!(messages[1], status);
+    }
+}
+
 #[test]
 fn adoption_mapped_version_refuses_future_and_preserves_identity() {
     let dir = project(
@@ -617,7 +632,7 @@ fn adoption_mapped_version_refuses_future_and_preserves_identity() {
         sim.load_addon("Saved", &files).unwrap();
         sim.fire("PLAYER_LOGIN", vec![]).unwrap();
         sim.eval(assertions).unwrap();
-        assert_eq!(sim.prints(), vec![status], "{input}");
+        assert_adoption_status(&sim, status);
     }
 }
 
@@ -688,7 +703,7 @@ fn adoption_nested_validation_and_failed_step_recovery() {
         let before = sim.logout_saved(&["DB", "OldDB"]).unwrap();
         sim.load_addon("Saved", &built).unwrap();
         sim.fire("PLAYER_LOGIN", vec![]).unwrap();
-        assert_eq!(sim.prints(), vec!["corrupt"]);
+        assert_adoption_status(&sim, "corrupt");
         assert_eq!(sim.logout_saved(&["DB", "OldDB"]).unwrap(), before);
     }
     let sim = Sim::new().unwrap();
@@ -704,7 +719,7 @@ fn adoption_nested_validation_and_failed_step_recovery() {
         .collect::<Vec<_>>();
     sim.load_addon("Saved", &failing).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
-    assert_eq!(sim.prints(), vec!["failed"]);
+    assert_adoption_status(&sim, "failed");
     sim.eval("assert(DB == nil and OldDB == root and root.count == 5 and root.dbVersion == 2 and root.history == nested)").unwrap();
     let snapshot = sim.logout_saved(&["DB", "OldDB"]).unwrap();
     let retry = Sim::login_saved("Saved", &built, &snapshot).unwrap();
@@ -755,7 +770,7 @@ fn adoption_defaults_callbacks_arrays_and_aliases() {
         sim.eval(input).unwrap();
         sim.load_addon("Saved", &built).unwrap();
         sim.fire("PLAYER_LOGIN", vec![]).unwrap();
-        assert_eq!(sim.prints(), vec![status]);
+        assert_adoption_status(&sim, status);
         if status == "ready" {
             sim.eval(&format!(
                 "assert(DB.count=={count} and DB.dbVersion==1 and OldDB==nil)"
@@ -1022,7 +1037,7 @@ fn adoption_deferred_inputs_are_general_nested_and_transactional() {
         .collect::<Vec<_>>();
     let conflict = Sim::login_saved("Saved", &conflicting, &snapshot).unwrap();
     conflict.fire("PLAYER_LOGIN", vec![]).unwrap();
-    assert_eq!(conflict.prints(), vec!["failed"]);
+    assert_adoption_status(&conflict, "failed");
     assert_eq!(conflict.logout_saved(&["DB"]).unwrap(), snapshot);
     for bad in [
         "false",
@@ -1037,7 +1052,7 @@ fn adoption_deferred_inputs_are_general_nested_and_transactional() {
         let before = sim.logout_saved(&["DB"]).unwrap();
         sim.load_addon("Saved", &built).unwrap();
         sim.fire("PLAYER_LOGIN", vec![]).unwrap();
-        assert_eq!(sim.prints(), vec!["corrupt"]);
+        assert_adoption_status(&sim, "corrupt");
         assert_eq!(sim.logout_saved(&["DB"]).unwrap(), before);
     }
 }

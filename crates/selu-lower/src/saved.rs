@@ -385,6 +385,7 @@ impl Lowerer<'_> {
                     body.push(invoke(helper(
                         "adopt",
                         vec![
+                            st(&key),
                             g(&format!("root_{saved}")),
                             legacy_value,
                             st(version_key),

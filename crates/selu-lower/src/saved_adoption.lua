@@ -1,39 +1,43 @@
 -- Closed persistence boundary. Unknown fields stay in the table but are never projected.
-local function __selu_saved_validate(__selu_value, __selu_schema, __selu_missing, __selu_seen)
+local function __selu_saved_validate(__selu_value, __selu_schema, __selu_missing, __selu_seen, __selu_path)
+  __selu_path = __selu_path or "$"
   if __selu_saved_type(__selu_schema) == "string" then
-    return (__selu_missing and __selu_value == nil) or __selu_saved_type(__selu_value) == __selu_schema
+    if (__selu_missing and __selu_value == nil) or __selu_saved_type(__selu_value) == __selu_schema then return true end
+    return false, __selu_path .. ": expected " .. __selu_schema .. ", got " .. __selu_saved_type(__selu_value)
   end
   if __selu_schema.optional then
-    return __selu_value == nil or __selu_saved_validate(__selu_value, __selu_schema.optional, false, __selu_seen)
+    if __selu_value == nil then return true end
+    return __selu_saved_validate(__selu_value, __selu_schema.optional, false, __selu_seen, __selu_path)
   end
   if __selu_missing and __selu_value == nil then return true end
-  if __selu_saved_type(__selu_value) ~= "table" then return false end
-  if __selu_seen[__selu_value] then return false end
+  if __selu_saved_type(__selu_value) ~= "table" then return false, __selu_path .. ": expected table, got " .. __selu_saved_type(__selu_value) end
+  if __selu_seen[__selu_value] then return false, __selu_path .. ": cyclic record" end
   __selu_seen[__selu_value] = true
-  local __selu_valid = true
   if __selu_schema.fields then
     for __selu_key, __selu_field in __selu_saved_pairs(__selu_schema.fields) do
-      if not __selu_saved_validate(__selu_value[__selu_key], __selu_field, __selu_missing, __selu_seen) then __selu_valid = false end
+      local __selu_valid, __selu_reason = __selu_saved_validate(__selu_value[__selu_key], __selu_field, __selu_missing, __selu_seen, __selu_path .. "." .. __selu_key)
+      if not __selu_valid then return false, __selu_reason end
     end
   elseif __selu_schema.array then
     local __selu_count, __selu_max = 0, 0
     for __selu_key, __selu_item in __selu_saved_pairs(__selu_value) do
-      if __selu_saved_type(__selu_key) ~= "number" or __selu_key < 1 or __selu_key % 1 ~= 0 then
-        __selu_valid = false
-      else
-        __selu_count = __selu_count + 1
-        if __selu_key > __selu_max then __selu_max = __selu_key end
-      end
-      if not __selu_saved_validate(__selu_item, __selu_schema.array, false, __selu_seen) then __selu_valid = false end
+      if __selu_saved_type(__selu_key) ~= "number" or __selu_key < 1 or __selu_key % 1 ~= 0 then return false, __selu_path .. ": invalid array index" end
+      __selu_count = __selu_count + 1
+      if __selu_key > __selu_max then __selu_max = __selu_key end
+      local __selu_valid, __selu_reason = __selu_saved_validate(__selu_item, __selu_schema.array, false, __selu_seen, __selu_path .. "[" .. __selu_saved_tostring(__selu_key) .. "]")
+      if not __selu_valid then return false, __selu_reason end
     end
-    if __selu_count ~= __selu_max then __selu_valid = false end
+    if __selu_count ~= __selu_max then return false, __selu_path .. ": array has holes" end
   elseif __selu_schema.key then
     for __selu_key, __selu_item in __selu_saved_pairs(__selu_value) do
-      if not __selu_saved_validate(__selu_key, __selu_schema.key, false, __selu_seen) or not __selu_saved_validate(__selu_item, __selu_schema.value, false, __selu_seen) then __selu_valid = false end
+      local __selu_valid, __selu_reason = __selu_saved_validate(__selu_key, __selu_schema.key, false, __selu_seen, __selu_path .. "[key]")
+      if not __selu_valid then return false, __selu_reason end
+      __selu_valid, __selu_reason = __selu_saved_validate(__selu_item, __selu_schema.value, false, __selu_seen, __selu_path .. "[value]")
+      if not __selu_valid then return false, __selu_reason end
     end
-  else __selu_valid = false end
+  else return false, __selu_path .. ": invalid schema" end
   __selu_seen[__selu_value] = nil
-  return __selu_valid
+  return true
 end
 -- Copy with provenance so successful commits keep existing table identities and aliases.
 local function __selu_saved_clone(__selu_value, __selu_forward, __selu_reverse)
@@ -104,46 +108,57 @@ local function __selu_saved_valid_paths(__selu_paths)
   end
   return __selu_count == #__selu_paths
 end
-__selu_saved_runtime.adopt = function(__selu_current, __selu_legacy, __selu_version_key, __selu_latest, __selu_defaults, __selu_schema, __selu_steps, __selu_readers, __selu_contexts, __selu_publish)
+__selu_saved_runtime.adopt = function(__selu_database, __selu_current, __selu_legacy, __selu_version_key, __selu_latest, __selu_defaults, __selu_schema, __selu_steps, __selu_readers, __selu_contexts, __selu_publish)
   local __selu_root = __selu_current
   if __selu_root == nil then __selu_root = __selu_legacy end
   if __selu_root == nil then __selu_root = {} end
-  local function __selu_refuse(__selu_status)
+  local __selu_phase = "load"
+  local function __selu_diagnostic(__selu_status, __selu_reason)
+    __selu_saved_runtime.warn("[saved] " .. __selu_database .. ": " .. __selu_phase .. ": " .. __selu_status .. ": " .. __selu_reason)
+  end
+  local function __selu_refuse(__selu_status, __selu_reason)
+    __selu_diagnostic(__selu_status, __selu_reason)
     __selu_publish({ status = __selu_status }, false)
   end
-  if __selu_saved_type(__selu_root) ~= "table" then __selu_refuse("corrupt"); return end
+  if __selu_saved_type(__selu_root) ~= "table" then __selu_refuse("corrupt", "saved root expected table, got " .. __selu_saved_type(__selu_root)); return end
   local __selu_version = __selu_root[__selu_version_key]
   if __selu_version == nil then
     local __selu_empty = true
     for __selu_key in __selu_saved_pairs(__selu_root) do __selu_empty = false; break end
     __selu_version = __selu_empty and __selu_latest or 1
   end
-  if __selu_saved_type(__selu_version) ~= "number" or __selu_version < 1 or __selu_version % 1 ~= 0 then __selu_refuse("corrupt"); return end
-  if __selu_version > __selu_latest then __selu_refuse("newer"); return end
+  if __selu_saved_type(__selu_version) ~= "number" or __selu_version < 1 or __selu_version % 1 ~= 0 then __selu_refuse("corrupt", "invalid " .. __selu_version_key .. ": expected a positive integer"); return end
+  if __selu_version > __selu_latest then __selu_refuse("newer", "saved version " .. __selu_version .. " is newer than supported version " .. __selu_latest); return end
   -- This is context, never a competing database version. Keep it only on failure.
   local __selu_context_key = "__selu_saved_adoption_context"
   local __selu_pending = __selu_root[__selu_context_key]
   if __selu_pending ~= nil and (__selu_saved_type(__selu_pending) ~= "table" or __selu_pending.format ~= 1 or __selu_saved_type(__selu_pending.original) ~= "table" or not __selu_saved_valid_paths(__selu_pending.removals)) then
-    __selu_refuse("corrupt"); return
+    __selu_refuse("corrupt", "invalid retry context"); return
   end
   local __selu_original = __selu_pending and __selu_pending.original or __selu_saved_clone(__selu_root, {}, {})
-  if __selu_original[__selu_context_key] ~= nil then __selu_refuse("corrupt"); return end
+  if __selu_original[__selu_context_key] ~= nil then __selu_refuse("corrupt", "invalid retry context"); return end
   local __selu_deletions = __selu_saved_clone(__selu_pending and __selu_pending.removals or {}, {}, {})
   local __selu_from = __selu_original[__selu_version_key]
   if __selu_from == nil then __selu_from = 1 end
-  if __selu_saved_type(__selu_from) ~= "number" or __selu_from < 1 or __selu_from % 1 ~= 0 or __selu_from > __selu_version then __selu_refuse("corrupt"); return end
+  if __selu_saved_type(__selu_from) ~= "number" or __selu_from < 1 or __selu_from % 1 ~= 0 or __selu_from > __selu_version then __selu_refuse("corrupt", "invalid retry context"); return end
   local __selu_has_context = false
   for __selu_key in __selu_saved_pairs(__selu_contexts) do __selu_has_context = true; break end
   while __selu_version < __selu_latest do
+    __selu_phase = "migration " .. __selu_version .. " -> " .. (__selu_version + 1)
     local __selu_reader = __selu_readers[__selu_version]
-    if not __selu_reader or not __selu_saved_validate(__selu_root, __selu_reader, false, {}) then __selu_refuse("corrupt"); return end
+    if not __selu_reader then __selu_refuse("corrupt", "missing historical reader"); return end
+    local __selu_valid, __selu_reason = __selu_saved_validate(__selu_root, __selu_reader, false, {})
+    if not __selu_valid then __selu_refuse("corrupt", "migration input " .. __selu_reason); return end
     local __selu_context = __selu_contexts[__selu_version]
-    if __selu_context and not __selu_saved_validate(__selu_original, __selu_context, false, {}) then __selu_refuse("corrupt"); return end
+    if __selu_context then
+      __selu_valid, __selu_reason = __selu_saved_validate(__selu_original, __selu_context, false, {})
+      if not __selu_valid then __selu_refuse("corrupt", "retry context " .. __selu_reason); return end
+    end
     local __selu_reverse = {}
     local __selu_forward = {}
     local __selu_candidate = __selu_saved_clone(__selu_root, __selu_forward, __selu_reverse)
-    local __selu_ok = __selu_saved_pcall(__selu_steps[__selu_version], __selu_candidate, __selu_saved_clone(__selu_original, {}, {}))
-    if not __selu_ok then __selu_refuse("failed"); return end
+    local __selu_ok, __selu_error = __selu_saved_pcall(__selu_steps[__selu_version], __selu_candidate, __selu_saved_clone(__selu_original, {}, {}))
+    if not __selu_ok then __selu_refuse("failed", __selu_saved_tostring(__selu_error)); return end
     local __selu_protected = {}
     for __selu_step, __selu_future in __selu_saved_pairs(__selu_contexts) do
       if __selu_step > __selu_version then
@@ -171,7 +186,7 @@ __selu_saved_runtime.adopt = function(__selu_current, __selu_legacy, __selu_vers
           local __selu_leaf = __selu_path[#__selu_path]
           local __selu_old
           if __selu_saved_type(__selu_previous) == "table" then __selu_old = __selu_previous[__selu_leaf] end
-          if __selu_parent[__selu_leaf] ~= nil and not __selu_saved_equal(__selu_parent[__selu_leaf], __selu_old, {}) then __selu_refuse("failed"); return end
+          if __selu_parent[__selu_leaf] ~= nil and not __selu_saved_equal(__selu_parent[__selu_leaf], __selu_old, {}) then __selu_refuse("failed", "conflicting write to a deferred input"); return end
           __selu_parent[__selu_leaf] = nil
         end
       end
@@ -179,18 +194,30 @@ __selu_saved_runtime.adopt = function(__selu_current, __selu_legacy, __selu_vers
     __selu_deletions = __selu_remaining
     __selu_candidate[__selu_version_key] = __selu_version + 1
     local __selu_next = __selu_readers[__selu_version + 1] or __selu_schema
-    if not __selu_saved_validate(__selu_candidate, __selu_next, __selu_version + 1 == __selu_latest, {}) then __selu_refuse("corrupt"); return end
+    __selu_valid, __selu_reason = __selu_saved_validate(__selu_candidate, __selu_next, __selu_version + 1 == __selu_latest, {})
+    if not __selu_valid then __selu_refuse("corrupt", "migration result " .. __selu_reason); return end
     if __selu_has_context then
       __selu_candidate[__selu_context_key] = { format = 1, original = __selu_saved_clone(__selu_original, {}, {}), removals = __selu_saved_clone(__selu_deletions, {}, {}) }
     end
     __selu_saved_commit(__selu_candidate, __selu_reverse, {})
     __selu_version = __selu_version + 1
   end
-  if not __selu_saved_validate(__selu_root, __selu_schema, true, {}) then __selu_refuse("corrupt"); return end
-  __selu_saved_runtime.fill(__selu_root, __selu_defaults, __selu_saved_runtime.adoptionObjects(__selu_schema))
-  __selu_root[__selu_context_key] = nil
-  __selu_root[__selu_version_key] = __selu_latest
+  __selu_phase = "current validation"
+  local __selu_valid, __selu_reason = __selu_saved_validate(__selu_root, __selu_schema, true, {})
+  if not __selu_valid then __selu_refuse("corrupt", __selu_reason); return end
+  -- Defaults are a graph transaction too: filling one record can change an aliased map.
+  local __selu_reverse = {}
+  local __selu_candidate = __selu_saved_clone(__selu_root, {}, __selu_reverse)
+  __selu_saved_runtime.fill(__selu_candidate, __selu_defaults, __selu_saved_runtime.adoptionObjects(__selu_schema))
+  __selu_candidate[__selu_context_key] = nil
+  __selu_candidate[__selu_version_key] = __selu_latest
+  __selu_phase = "defaults validation"
+  __selu_valid, __selu_reason = __selu_saved_validate(__selu_candidate, __selu_schema, false, {})
+  if not __selu_valid then __selu_refuse("corrupt", __selu_reason); return end
+  __selu_saved_commit(__selu_candidate, __selu_reverse, {})
   local __selu_collision = __selu_legacy ~= nil and __selu_legacy ~= __selu_root
+  __selu_phase = "publication"
+  if __selu_collision then __selu_diagnostic("collision", "distinct current and legacy roots; legacy data retained") end
   __selu_publish({ status = __selu_collision and "collision" or "ready", data = __selu_root }, not __selu_collision)
 end
 __selu_saved_runtime.adoptionObjects = function(__selu_schema)

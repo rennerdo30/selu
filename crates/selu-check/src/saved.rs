@@ -235,15 +235,18 @@ impl Ctx<'_> {
                 if let Some((_, b)) = self.lookup(name).map(|(i, b)| (i, b.clone())) {
                     self.check_ready(name, &b, &s.span);
                 }
-                if param.name.starts_with("__selu") || selu_syntax::is_lua_keyword(&param.name) {
-                    self.out.push(
-                        err(
-                            "SELU0463",
-                            "this migration parameter name is reserved",
-                            &param.span,
-                        )
-                        .with_help("choose another name"),
-                    );
+                for param in std::iter::once(param).chain(context.as_deref()) {
+                    if param.name.starts_with("__selu") || selu_syntax::is_lua_keyword(&param.name)
+                    {
+                        self.out.push(
+                            err(
+                                "SELU0463",
+                                "this migration parameter name is reserved",
+                                &param.span,
+                            )
+                            .with_help("choose another name"),
+                        );
+                    }
                 }
                 let adoption = self.types.saved_adoptions.contains(name);
                 if adoption && param.ty.is_none() {
