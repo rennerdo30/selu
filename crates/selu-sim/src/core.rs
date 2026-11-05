@@ -110,6 +110,11 @@ pub enum TextureFill {
     Atlas(String),
     /// RGBA, each 0..=1.
     Color([f32; 4]),
+    Gradient {
+        vertical: bool,
+        min: [f32; 4],
+        max: [f32; 4],
+    },
 }
 
 /// Visual state shared by layout, snapshots and Studio.
@@ -134,6 +139,10 @@ pub struct VisualStyle {
     pub uv: [f32; 4],
     pub tint: [f32; 4],
     pub blend: String,
+    #[serde(default)]
+    pub text_insets: [f64; 4],
+    #[serde(default)]
+    pub text_scroll: (f64, f64),
 }
 fn default_true() -> bool {
     true
@@ -157,6 +166,8 @@ impl Default for VisualStyle {
             uv: [0.0, 1.0, 0.0, 1.0],
             tint: [1.0; 4],
             blend: "BLEND".into(),
+            text_insets: [0.0; 4],
+            text_scroll: (0.0, 0.0),
         }
     }
 }

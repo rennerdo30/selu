@@ -131,6 +131,7 @@ impl crate::session::Vm {
                             point.y += (to.1 - from.1) / scale;
                         }
                         a.dirty = true;
+                        a.full_layout = true;
                     }
                 }
                 invoke(self, i, "OnDragStop", vec![button])?;
@@ -163,6 +164,7 @@ impl crate::session::Vm {
                 r.text_value = Value::Nil;
                 let t = r.table.clone();
                 a.dirty = true;
+                a.full_layout = true;
                 drop(a);
                 callback(self.ctx(), t, "OnTextChanged", vec![Value::Boolean(true)]);
             }

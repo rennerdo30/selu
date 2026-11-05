@@ -4,24 +4,24 @@ use mlua::{Lua, Table, Value};
 /// Single construction boundary for SIM2's visual font model.
 pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
     let constructor:mlua::Function=lua.load(r#"
-        return function(name,size,color,offset)
+        return function(name,size,color,offset,invalidate)
             local f={_font={"Fonts/FRIZQT__.TTF",size,""},_name=name}
             local defaults={TextColor=color,ShadowColor={0,0,0,1},ShadowOffset={offset,-offset},JustifyH={"LEFT"},JustifyV={"MIDDLE"},Spacing={0}}
             f._defaults=defaults
             function f:GetName() return self._name end
             function f:GetObjectType() return "Font" end
-            function f:SetFont(path,size,flags) self._font_explicit=true;self._font={path,size,flags or ""};return true end
+            function f:SetFont(path,size,flags) invalidate();self._font_explicit=true;self._font={path,size,flags or ""};return true end
             function f:GetFont() if self._parent and not self._font_explicit then return self._parent:GetFont() end;return unpack(self._font) end
             function f:SetFontObject(parent)
                 if type(parent)=="string" then parent=_G[parent] end
                 assert(type(parent)=="table" and parent.GetFont,"font object expected")
                 local p=parent
                 while p do assert(p~=self,"font inheritance cycle");p=rawget(p,"_parent") end
-                self._parent=parent;self._font_explicit=false
+                invalidate();self._parent=parent;self._font_explicit=false
             end
             function f:GetFontObject() return self._parent or self end
             for _,key in ipairs({"TextColor","ShadowColor","ShadowOffset","JustifyH","JustifyV","Spacing"}) do
-                f["Set"..key]=function(self,...) self["_"..key]={...} end
+                f["Set"..key]=function(self,...) invalidate();self["_"..key]={...} end
                 f["Get"..key]=function(self)
                     local value=rawget(self,"_"..key)
                     if value then return unpack(value) end
@@ -35,7 +35,22 @@ pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
     let native = crate::fonts::native_style(name);
     let (size, color) = native.unwrap_or((12.0, [1.0; 4]));
     let color = lua.create_sequence_from(color)?;
-    constructor.call((name, size, color, if native.is_some() { 1.0 } else { 0.0 }))
+    let invalidate = lua.create_function(|lua, ()| {
+        let store = crate::frames::arena::store(lua);
+        let mut a = store.borrow_mut();
+        a.dirty = true;
+        a.full_layout = true;
+        a.styles_dirty = true;
+        a.dirty_regions.clear();
+        Ok(())
+    })?;
+    constructor.call((
+        name,
+        size,
+        color,
+        if native.is_some() { 1.0 } else { 0.0 },
+        invalidate,
+    ))
 }
 
 fn json_value(lua: &Lua, value: &serde_json::Value) -> SimResult<Value> {
@@ -168,6 +183,39 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
 }
 
 pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
+    // Client contract: Blizzard_SharedXMLBase/Color.lua. Runtime objects only;
+    // public typing remains owned by the manifest.
+    lua.load(r#"
+        function CreateColor(r,g,b,a)
+            local c={r=r,g=g,b=b,a=a or 1}
+            function c:GetRGB() return self.r,self.g,self.b end
+            function c:GetRGBA() return self.r,self.g,self.b,self.a end
+            function c:SetRGBA(r,g,b,a) self.r=r;self.g=g;self.b=b;self.a=a or 1 end
+            function c:SetRGB(r,g,b) self:SetRGBA(r,g,b) end
+            function c:OnLoad(...) self:SetRGBA(...) end
+            function c:IsRGBEqualTo(o) return self.r==o.r and self.g==o.g and self.b==o.b end
+            function c:IsEqualTo(o) return self:IsRGBEqualTo(o) and self.a==o.a end
+            local function byte(v) return math.floor(v*255+0.5) end
+            function c:GetRGBAsBytes() return byte(self.r),byte(self.g),byte(self.b) end
+            function c:GetRGBAAsBytes() return byte(self.r),byte(self.g),byte(self.b),byte(self.a) end
+            function c:GenerateHexColorNoAlpha() return string.format('%02X%02X%02X',self:GetRGBAsBytes()) end
+            function c:GenerateHexColor() return string.format('%02X',byte(self.a))..self:GenerateHexColorNoAlpha() end
+            function c:GenerateHexColorMarkup() return '|c'..self:GenerateHexColor() end
+            function c:WrapTextInColorCode(text) return self:GenerateHexColorMarkup()..text..'|r' end
+            function c:GetHSL()
+                local r,g,b=self:GetRGB();local hi=math.max(r,g,b);local lo=math.min(r,g,b)
+                local l=(hi+lo)/2;local d=hi-lo;local h,s=0,0
+                if d~=0 then
+                    s=d/(1-math.abs(2*l-1))
+                    if hi==r then h=((g-b)/d)%6 elseif hi==g then h=(b-r)/d+2 else h=(r-g)/d+4 end
+                    h=h/6
+                end
+                return h,s,l,self.a
+            end
+            return c
+        end
+    "#).exec()?;
+
     lua.globals().set(
         "debugstack",
         lua.create_function(

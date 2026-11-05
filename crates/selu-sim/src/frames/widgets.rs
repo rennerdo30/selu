@@ -146,7 +146,9 @@ pub fn create(
         clips_children: false,
         scroll_child: None,
         scroll: (0.0, 0.0),
+        animation_offset: (0.0, 0.0),
         font_size: 12.0,
+        multi_line: false,
         font_path: "fixed".into(),
         font_flags: String::new(),
         text_value: Value::Nil,
@@ -172,7 +174,14 @@ pub fn create(
             }
         }),
     });
-    a.borrow_mut().dirty = true;
+    {
+        let mut a = a.borrow_mut();
+        a.dirty = true;
+        a.dirty_regions.insert(index);
+        if index == 0 {
+            a.full_layout = true;
+        }
+    }
     // Shared method table per type. Missing addon fields remain nil.
     let key = format!("selu.methods.{kind}");
     let methods = if let Ok(m) = lua.named_registry_value::<Table>(&key) {
@@ -235,7 +244,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
+const METHODS: &str = "CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     if !ctx
         .stale_sources
@@ -258,6 +267,19 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         ($x:expr) => {
             return $x.into_lua_multi(lua)
         };
+    }
+    if method == "CreateAnimationGroup" {
+        let constructor: Function = lua.load(include_str!("animations.lua")).eval()?;
+        let context = ctx.clone();
+        let note = lua.create_function(move |_, name: String| {
+            context.not_simulated(&name);
+            Ok(())
+        })?;
+        let translate = lua.create_function(|lua, (target, x, y): (Table, f64, f64)| {
+            store(lua).borrow_mut().regions[id(&target)?].animation_offset = (x, y);
+            Ok(())
+        })?;
+        out!(constructor.call::<Table>((t.clone(), note, translate))?);
     }
     if matches!(
         method,
@@ -361,6 +383,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         a.regions[i].font_size = size;
         a.regions[i].font_flags = flags;
         a.dirty = true;
+        a.dirty_regions.insert(i);
         out!(());
     }
     if method == "GetFontObject" {
@@ -463,6 +486,11 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             _ => out!(shaped.truncated),
         }
     }
+    let asset_available = method != "SetTexture" || a.fonts.asset(&s);
+    let current_asset_available = match &a.regions[i].texture {
+        Some(TextureFill::File(path)) => a.fonts.asset(path),
+        _ => false,
+    };
     let r = &mut a.regions[i];
     r.font_overrides |= match method {
         "SetTextColor" => 1,
@@ -649,6 +677,21 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             }
             out!(r.text.clone());
         }
+        "SetMultiLine" => r.multi_line = boolean(v.first()),
+        "SetTextInsets" => {
+            r.visual.text_insets = [
+                n,
+                number(v.get(1), 0.0),
+                number(v.get(2), 0.0),
+                number(v.get(3), 0.0),
+            ]
+        }
+        "GetTextInsets" => out!((
+            r.visual.text_insets[0],
+            r.visual.text_insets[1],
+            r.visual.text_insets[2],
+            r.visual.text_insets[3]
+        )),
         "SetFont" => {
             r.font_size = number(v.get(1), 12.0);
             r.font_path = s;
@@ -656,6 +699,9 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         }
         "GetFont" => out!((r.font_path.clone(), r.font_size, r.font_flags.clone())),
         "SetTexture" => {
+            if !asset_available && !matches!(v.first(), None | Some(Value::Nil)) {
+                ctx.not_simulated(&format!("unavailable texture: {s}"));
+            }
             r.texture = if matches!(v.first(), None | Some(Value::Nil)) {
                 None
             } else {
@@ -667,14 +713,56 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             };
         }
         "GetTextureFileID" => out!(match &r.texture {
-            Some(TextureFill::File(s)) => s.parse::<u32>().ok(),
+            Some(TextureFill::File(s)) if current_asset_available => s.parse::<u32>().ok(),
             _ => None,
         }),
         "GetTexture" => out!(match &r.texture {
-            Some(TextureFill::File(s)) => Some(s.clone()),
+            Some(TextureFill::File(s)) if current_asset_available => Some(s.clone()),
             _ => None,
         }),
-        "SetAtlas" => r.texture = Some(TextureFill::Atlas(s)),
+        "SetAtlas" => {
+            ctx.not_simulated(&format!("unavailable atlas: {s}"));
+            r.texture = Some(TextureFill::Atlas(s));
+        }
+        "SetGradient" | "SetGradientAlpha" => {
+            if s != "VERTICAL" && s != "HORIZONTAL" {
+                return Err(mlua::Error::runtime("invalid gradient orientation"));
+            }
+            let color = |start: usize, alpha: bool| -> mlua::Result<[f32; 4]> {
+                if let Some(Value::Table(c)) = v.get(start) {
+                    let get: Function = c.get("GetRGBA")?;
+                    let (r, g, b, a): (f32, f32, f32, f32) = get.call(c.clone())?;
+                    Ok([r, g, b, a])
+                } else {
+                    Ok([
+                        number(v.get(start), 0.0) as f32,
+                        number(v.get(start + 1), 0.0) as f32,
+                        number(v.get(start + 2), 0.0) as f32,
+                        if alpha {
+                            number(v.get(start + 3), 1.0) as f32
+                        } else {
+                            1.0
+                        },
+                    ])
+                }
+            };
+            let alpha = method == "SetGradientAlpha";
+            let modern = matches!(v.get(1), Some(Value::Table(_)));
+            r.texture = Some(TextureFill::Gradient {
+                vertical: s == "VERTICAL",
+                min: color(1, alpha)?,
+                max: color(
+                    if modern {
+                        2
+                    } else if alpha {
+                        5
+                    } else {
+                        4
+                    },
+                    alpha,
+                )?,
+            });
+        }
         "SetColorTexture" => {
             r.texture = Some(TextureFill::Color([
                 n as f32,
@@ -802,8 +890,21 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             .unwrap_or(true);
         a.regions[i].visible = a.regions[i].shown && parent_visible;
     }
-    a.dirty = true;
-    layout::resolve(&mut a, ctx);
+    if !matches!(
+        method,
+        "SetTexture"
+            | "SetAtlas"
+            | "SetColorTexture"
+            | "SetGradient"
+            | "SetGradientAlpha"
+            | "SetTexCoord"
+            | "SetVertexColor"
+            | "SetBlendMode"
+    ) {
+        a.dirty = true;
+        a.dirty_regions.insert(i);
+        layout::resolve(&mut a, ctx);
+    }
     let new = a.regions[i].clone();
     drop(a);
     if direct_visibility

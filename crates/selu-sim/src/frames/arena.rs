@@ -37,7 +37,9 @@ pub struct Region {
     pub clips_children: bool,
     pub scroll_child: Option<usize>,
     pub scroll: (f64, f64),
+    pub animation_offset: (f64, f64),
     pub font_size: f64,
+    pub multi_line: bool,
     pub font_path: String,
     pub font_flags: String,
     pub text_value: mlua::Value,
@@ -57,6 +59,9 @@ pub struct Arena {
     pub fonts: crate::fonts::FontBook,
     pub regions: Vec<Region>,
     pub dirty: bool,
+    pub full_layout: bool,
+    pub styles_dirty: bool,
+    pub dirty_regions: std::collections::HashSet<usize>,
     pub cursor: (f64, f64),
     pub hover: Option<usize>,
     pub focus: Option<usize>,
@@ -140,4 +145,17 @@ pub fn clip(a: &Arena, i: usize) -> Option<crate::Rect> {
         parent = r.parent;
     }
     result
+}
+
+pub fn animation_offset(a: &Arena, index: usize) -> (f64, f64) {
+    let mut current = Some(index);
+    let mut offset = (0.0, 0.0);
+    for _ in 0..a.regions.len() {
+        let Some(i) = current else { break };
+        let r = &a.regions[i];
+        offset.0 += r.animation_offset.0 * r.effective_scale;
+        offset.1 += r.animation_offset.1 * r.effective_scale;
+        current = r.parent;
+    }
+    offset
 }

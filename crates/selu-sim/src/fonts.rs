@@ -9,32 +9,23 @@ use std::{
 
 #[derive(Default)]
 pub struct FontBook {
-    roots: Vec<PathBuf>,
+    pub assets: crate::assets::Resolver,
     faces: RefCell<HashMap<String, FontArc>>,
+    layouts: RefCell<HashMap<String, crate::text::TextLayout>>,
 }
 impl FontBook {
+    pub fn asset(&self, name: &str) -> bool {
+        matches!(self.assets.lookup(name), crate::assets::Lookup::Found(_))
+    }
     pub fn face(&self, name: &str) -> FontArc {
         if let Some(face) = self.faces.borrow().get(name) {
             return face.clone();
         }
-        let face = resolve(&self.roots, name)
-            .ok()
-            .and_then(|p| {
-                let file = std::fs::File::open(p).ok()?;
-                if file.metadata().ok()?.len() > 8 * 1024 * 1024 {
-                    return None;
-                }
-                use std::io::Read;
-                let mut bytes = Vec::new();
-                file.take(8 * 1024 * 1024 + 1)
-                    .read_to_end(&mut bytes)
-                    .ok()?;
-                if bytes.len() > 8 * 1024 * 1024 {
-                    return None;
-                }
-                FontArc::try_from_vec(bytes).ok()
-            })
-            .unwrap_or_else(fallback);
+        let face = match self.assets.lookup(name) {
+            crate::assets::Lookup::Found(bytes) => FontArc::try_from_vec(bytes.to_vec()).ok(),
+            _ => None,
+        }
+        .unwrap_or_else(fallback);
         self.faces.borrow_mut().insert(name.into(), face.clone());
         face
     }
@@ -45,7 +36,20 @@ impl FontBook {
         width: Option<f64>,
         height: Option<f64>,
     ) -> crate::text::TextLayout {
-        crate::text::layout(&self.face(&style.font), text, style, width, height)
+        let key = format!(
+            "{text}\0{width:?}\0{height:?}\0{}",
+            serde_json::to_string(style).unwrap_or_default()
+        );
+        if let Some(layout) = self.layouts.borrow().get(&key) {
+            return layout.clone();
+        }
+        let layout = crate::text::layout(&self.face(&style.font), text, style, width, height);
+        let mut cache = self.layouts.borrow_mut();
+        if cache.len() >= 2048 {
+            cache.clear();
+        }
+        cache.insert(key, layout.clone());
+        layout
     }
 }
 pub fn fallback() -> FontArc {
@@ -120,11 +124,13 @@ pub fn register_addon_root(lua: &mlua::Lua, dir: &Path) -> mlua::Result<()> {
     let root = dir.canonicalize().map_err(mlua::Error::external)?;
     let store = crate::frames::arena::store(lua);
     let mut arena = store.borrow_mut();
-    if !arena.fonts.roots.contains(&root) {
-        arena.fonts.roots.push(root);
-        arena.fonts.faces.borrow_mut().clear();
-        arena.dirty = true;
-    }
+    arena.fonts.assets.add_addon(root);
+    arena.fonts.faces.borrow_mut().clear();
+    arena.fonts.layouts.borrow_mut().clear();
+    arena.dirty = true;
+    arena.full_layout = true;
+    arena.full_layout = true;
+    arena.dirty_regions.clear();
     Ok(())
 }
 /// Refuse absolute paths, traversal, cross-addon prefixes and symlink escapes.

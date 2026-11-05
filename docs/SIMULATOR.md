@@ -366,3 +366,39 @@ structure: `Modules/Skin/Collections.lua` assigns `sideTabs = SideTabs`
 (a Lua function), while `Modules/Skin/Framework.lua` passes that value to
 `ipairs` in `Parts` before looking up any child. No template field was invented
 to bypass this. Animation groups remain a separate follow-up package.
+
+### SIM3 visual runtime
+
+`selu_sim::assets::Resolver` is the shared bounded media lookup for probes and
+fonts. `Source::AddonMedia` reads only canonical files within registered addon
+roots (16 MiB maximum per file); `Source::ClientStorage` currently returns
+`Unavailable`, leaving client storage to SIM4. `Lookup` distinguishes found
+bytes, unavailable client data and missing addon media. Keys normalize slash
+and case; adding a root invalidates the cache. Studio decodes the same lookup
+bytes. No client install is searched or opened. Font fallback stays bundled.
+
+Texture setter success is separate from availability. Modern SetTexture returns
+true even for invalid assets ([reference](https://warcraft.wiki.gg/wiki/API:TextureBase_SetTexture));
+GetTexture returns nil for invalid input ([reference](https://warcraft.wiki.gg/wiki/API:TextureBase_GetTexture)).
+The simulator retains requested texture names in snapshots so Studio can label
+unavailable assets. Addon media resolve as paths; client file-ID assignment and
+atlas data remain unavailable. Toolkit's WHITE8X8 calibration cannot pass until
+a client source exists. This is reported rather than fabricated.
+
+CreateColor implements the object methods from the read-only client source
+`Interface/AddOns/Blizzard_SharedXMLBase/Color.lua`. Texture gradients carry
+orientation and endpoint RGBA through snapshots to a four-vertex Studio mesh;
+vertical minimum is at the bottom. EditBox uses the same positioned glyphs as
+FontString, with text insets, local scroll offset and ancestor viewport clips.
+
+Animation groups use the existing simulated OnUpdate grid. Alpha implements
+ordered durations/delays, pause/resume, stop, repeat/bounce and play/loop/finished
+scripts. Translation interpolates offsets in snapshots without changing anchor geometry.
+FlipBook explicitly reports not simulated and returns nil. Native timing/fidelity
+acceptance remains separate from deterministic simulator tests.
+
+Layout invalidations seed a dirty-region set, expanded through parent and
+anchor dependencies. Bulk external invalidations retain full resolution.
+Unchanged font styles skip scanning; Font object mutations explicitly invalidate
+inherited styles. Text measurements cache bounded results, and paint-only
+texture mutations do not invalidate geometry. Geometry getters remain eager.
