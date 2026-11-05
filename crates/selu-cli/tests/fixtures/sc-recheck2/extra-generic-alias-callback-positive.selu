@@ -1,0 +1,1 @@
+type Callback<T>=(v:T)=>void;function invoke(cb:Callback<number>){cb(2);}invoke((v:number)=>{print(v);});

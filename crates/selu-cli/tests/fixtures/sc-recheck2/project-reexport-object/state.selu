@@ -1,0 +1,1 @@
+type V={kind:"a";value:string}|{kind:"b";value:number};export const x:V={kind:"a",value:"s"};export function noop(){}

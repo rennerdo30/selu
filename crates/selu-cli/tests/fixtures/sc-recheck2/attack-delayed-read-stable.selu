@@ -1,0 +1,1 @@
+let cb:()=>void=()=>{};function register(f:()=>void){cb=f;}function f(x:number?){if(x!=null){register(()=>{const y:number=x;print(y);});}}f(2);cb();

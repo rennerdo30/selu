@@ -31,6 +31,7 @@ pub use modules::{ModuleBindings, ModuleExport, ModuleExports, reserved_module_p
 mod rules;
 // One file per language area. The central `stmt`/`expr_inner` matches only
 // dispatch; each area's checks live in its own file (docs/WORK-PACKAGES.md).
+mod access_paths;
 mod bindings;
 mod data;
 mod errors;
@@ -227,6 +228,7 @@ enum Kind {
 struct Binding {
     id: BindingId,
     external: bool,
+    never_written: bool,
     origin: usize,
     kind: Kind,
     ty: Type,
@@ -259,6 +261,7 @@ enum FactKey {
     Binding(BindingId),
     Field(BindingId),
     Capability(String),
+    Path(access_paths::AccessPath),
 }
 type Narrowings = Vec<(FactKey, Type)>;
 type FlowState = HashMap<FactKey, Narrow>;
@@ -338,7 +341,7 @@ impl Ctx<'_> {
         let (at, b) = self.lookup(name)?;
         for scope in self.scopes[at..].iter().rev() {
             if let Some(n) = scope.narrowed.get(&FactKey::Binding(b.id))
-                && (n.fn_depth == self.fn_depth || (b.kind == Kind::Const && !n.external))
+                && (n.fn_depth == self.fn_depth || (b.never_written && !n.external))
             {
                 return Some(n.ty.clone());
             }
@@ -383,6 +386,7 @@ impl Ctx<'_> {
             name.to_string(),
             Binding {
                 id,
+                never_written: !external && !self.flow_info.written.contains(&span.start),
                 external,
                 origin: span.start,
                 kind,
@@ -1050,19 +1054,19 @@ impl Ctx<'_> {
             return n;
         }
         let optional_name = |x: &Expr| -> Option<(FactKey, Type)> {
-            let ExprKind::Ident(n) = &x.kind else {
-                return None;
-            };
-            match self.alias_shape(self.type_of(n)?) {
-                Type::Optional(_) => Some((self.fact_key(n), self.type_of(n)?.non_null())),
+            let ty = self.checked_access_type(x)?;
+            match self.alias_shape(ty.clone()) {
+                Type::Optional(_) => Some((self.access_key(x)?, ty.non_null())),
                 _ => None,
             }
         };
         match &e.kind {
-            ExprKind::Ident(_) => match optional_name(e) {
-                Some(n) => (vec![n], vec![]),
-                None => (vec![], vec![]),
-            },
+            ExprKind::Ident(_) | ExprKind::Member { .. } | ExprKind::Index { .. } => {
+                match optional_name(e) {
+                    Some(n) => (vec![n], vec![]),
+                    None => (vec![], vec![]),
+                }
+            }
             ExprKind::Unary { op, expr } if op == "!" => {
                 let (t, f) = self.narrowings(expr);
                 (f, t)
@@ -1092,6 +1096,7 @@ impl Ctx<'_> {
 
         let t = self.refresh_class_type(t);
         let t = self.restriction_value_type(e, t);
+        let t = self.refined_access(e).unwrap_or(t);
         self.types.set(e.id, t.clone());
         t
     }

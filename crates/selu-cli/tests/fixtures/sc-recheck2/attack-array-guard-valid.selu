@@ -1,0 +1,1 @@
+function f(arr:number[],i:number):number{if(arr[i]!=null){print(arr[i]);return arr[i];}return 0;}print(f([2],0));

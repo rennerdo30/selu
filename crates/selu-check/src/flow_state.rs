@@ -27,12 +27,6 @@ pub(crate) fn intersect(states: Vec<FlowState>) -> FlowState {
     out
 }
 impl Ctx<'_> {
-    pub(crate) fn fact_key(&self, name: &str) -> FactKey {
-        FactKey::Binding(self.lookup(name).expect("checked binding").1.id)
-    }
-    pub(crate) fn field_fact_key(&self, name: &str) -> FactKey {
-        FactKey::Field(self.lookup(name).expect("checked binding").1.id)
-    }
     fn binding_by_id(&self, id: BindingId) -> Option<&crate::Binding> {
         self.scopes
             .iter()
@@ -51,6 +45,19 @@ impl Ctx<'_> {
         state.retain(|key, _| match key {
             FactKey::Binding(id) | FactKey::Field(id) => self.binding_by_id(*id).is_some(),
             FactKey::Capability(_) => true,
+            FactKey::Path(p) => {
+                let root_exists = match p.root {
+                    crate::access_paths::Root::Binding(id) => self.binding_by_id(id).is_some(),
+                    crate::access_paths::Root::Receiver(_, _) => true,
+                };
+                root_exists
+                    && p.steps.iter().all(|step| match step {
+                        crate::access_paths::Step::IndexBinding(id) => {
+                            self.binding_by_id(*id).is_some()
+                        }
+                        _ => true,
+                    })
+            }
         });
         for scope in &mut self.scopes {
             scope.narrowed.clear();
@@ -66,7 +73,10 @@ impl Ctx<'_> {
     }
     pub(crate) fn kill_binding(&mut self, id: BindingId) {
         for scope in &mut self.scopes {
-            scope.narrowed.remove(&FactKey::Binding(id));
+            scope.narrowed.retain(|key, _| {
+                !matches!(key,FactKey::Binding(b) if *b==id)
+                    && !matches!(key,FactKey::Path(p) if p.depends_on(id))
+            });
         }
     }
     pub(crate) fn invalidate_external_facts(&mut self) {
@@ -83,6 +93,7 @@ impl Ctx<'_> {
                     self.binding_by_id(id).is_some_and(|b| b.external),
                     false,
                 ),
+                FactKey::Path(p) => (FactKey::Path(p), true, true),
                 key => (key, false, false),
             };
             if let Some(scope) = self.scopes.last_mut() {
@@ -195,6 +206,7 @@ impl Ctx<'_> {
         for scope in &mut self.scopes {
             scope.narrowed.retain(|key, n| {
                 !matches!(key,FactKey::Binding(id) if ids.contains(id))
+                    && !matches!(key,FactKey::Path(p) if ids.iter().any(|id|p.depends_on(*id)))
                     && !(calls && n.external)
                     && !(field_writes && n.field)
             });

@@ -14,6 +14,7 @@ struct Scan {
 }
 #[derive(Clone, Default)]
 pub(crate) struct FlowInfo {
+    pub written: HashSet<usize>,
     pub captured: HashSet<usize>,
     pub assignments: HashMap<selu_syntax::ExprId, usize>,
     pub exports: HashSet<usize>,
@@ -22,6 +23,7 @@ pub(crate) fn analyze(p: &Program) -> FlowInfo {
     let mut s = Scan::default();
     s.block(&p.stmts, &[]);
     FlowInfo {
+        written: s.assignments.values().copied().collect(),
         captured: s.writes,
         assignments: s.assignments,
         exports: s.exports,

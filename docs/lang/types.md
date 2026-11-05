@@ -79,3 +79,18 @@ The invariant-field rule also applies to class field overrides: an inherited
 writer must remain safe for a subclass. Method signature compatibility keeps
 its ordinary parameter/return rules. Checking a delayed function or instance
 initializer does not execute its effects in the enclosing flow state.
+
+Guards also refine access paths such as `this.x`, `obj.field`, a nested
+`this.v.kind` discriminant, and `arr[i]` with an identifier or numeric literal
+index. Paths distinguish the identities of both the root and index bindings.
+Every call discards path facts. Reassigning a root or index discards dependent
+paths; a field or indexed write conservatively discards all field-dependent
+facts because another root may alias the same table. Loop entry applies the
+same write and call rules before checking the body. Guard again after effects.
+
+A closure may inherit a scalar guard on an outer local or parameter only when
+that binding has no assignment anywhere after its declaration (including in
+closures). Initializers do not count as assignments. Field-derived facts never
+inherit into a delayed body. Fresh collection method arguments, including
+`Map.set` and array `push`, receive their expected element context; existing
+mutable aliases remain invariant.

@@ -1,0 +1,1 @@
+function noop(){}function f():number{let x:number?=1;if(x!=null){noop();print(x);return x;}return 0;}print(f());

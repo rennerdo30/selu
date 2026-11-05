@@ -1,0 +1,1 @@
+function f(x:number?):number{const y=x;if(y!=null){const read=():number=>y;return read();}return 0;}print(f(2));

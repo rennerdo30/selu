@@ -1,0 +1,1 @@
+export let x:number?=1;export function clear(){x=null;}function f():number{if(x!=null){clear();return x;}return 0;}print(f());

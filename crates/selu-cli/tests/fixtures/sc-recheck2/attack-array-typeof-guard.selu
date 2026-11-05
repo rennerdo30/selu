@@ -1,0 +1,1 @@
+function f(arr:(string|number)[],i:number):string{if(typeof arr[i]=="string"){return arr[i];}return "other";}print(f(["s"],0));

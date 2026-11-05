@@ -1,0 +1,1 @@
+type V={kind:"a";value:string}|{kind:"b";value:number};function f(x:V):string{const xs:V[]=[x];if(x.kind=="a"){xs[0].value=4;return x.value;}return "other";}print(f({kind:"a",value:"s"}));

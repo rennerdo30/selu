@@ -1,0 +1,1 @@
+let x:number?=1;on PLAYER_LOGIN(){if(x!=null){const y:number=x;print(y);}}x=null;

@@ -1,0 +1,1 @@
+type V={kind:"a";value:string}|{kind:"b";value:number};class C{v:V={kind:"a",value:"s"};read():string{if(this.v.kind=="a"){return this.v.value;}return "other";}}print(new C().read());

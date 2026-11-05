@@ -394,68 +394,76 @@ impl Ctx<'_> {
                 _ => None,
             };
             if let Some(lit) = lit {
-                let (name, field) = match &test.kind {
-                    ExprKind::Ident(n) => (Some(n), None),
-                    ExprKind::Member { object, name } => match &object.kind {
-                        ExprKind::Ident(n) => (Some(n), Some(name)),
-                        _ => (None, None),
-                    },
-                    _ => (None, None),
-                };
-                if let Some(n) = name {
-                    let original = self.type_of(n)?;
-                    if matches!(shape_of(&original), Type::Union(_) | Type::Optional(_)) {
-                        let ts = original.members();
-                        let select = |equal| {
-                            let members: Vec<_> = ts
+                let mut yes = vec![];
+                let mut no = vec![];
+                if let (Some(key), Some(original)) =
+                    (self.access_key(test), self.checked_access_type(test))
+                    && matches!(shape_of(&original), Type::Union(_) | Type::Optional(_))
+                {
+                    let members = original.members();
+                    let select = |equal| {
+                        Type::union(
+                            members
                                 .iter()
                                 .filter_map(|t| {
-                                    let value = if let Some(f) = field {
-                                        match shape_of(t) {
-                                            Type::Class(_, _, fs) | Type::Object(fs) => {
-                                                match fs.get(f) {
-                                                    Some(t) => t.clone(),
-                                                    None => return Some(t.clone()),
-                                                }
-                                            }
-                                            _ => return Some(t.clone()),
-                                        }
-                                    } else {
-                                        t.clone()
-                                    };
-                                    if equal && lit.assignable_to(&value) {
-                                        Some(if field.is_none() {
-                                            lit.clone()
-                                        } else {
-                                            t.clone()
-                                        })
-                                    } else if !equal && !value.assignable_to(&lit) {
+                                    if equal && lit.assignable_to(t) {
+                                        Some(lit.clone())
+                                    } else if !equal && (t.is_open() || !t.assignable_to(&lit)) {
                                         Some(t.clone())
                                     } else {
                                         None
                                     }
                                 })
-                                .collect();
-                            Type::union(members)
-                        };
-                        let key = if field.is_some() {
-                            self.field_fact_key(n)
-                        } else {
-                            self.fact_key(n)
-                        };
-                        let yes = vec![(key.clone(), select(true))];
-                        let no = vec![(key, select(false))];
-                        return Some(if op == "==" { (yes, no) } else { (no, yes) });
-                    }
+                                .collect(),
+                        )
+                    };
+                    yes.push((key.clone(), select(true)));
+                    no.push((key, select(false)));
+                }
+                if let ExprKind::Member { object, name } = &test.kind
+                    && let (Some(key), Some(original)) = (
+                        self.discriminant_key(object),
+                        self.checked_access_type(object),
+                    )
+                    && matches!(shape_of(&original), Type::Union(_) | Type::Optional(_))
+                {
+                    let members = original.members();
+                    let select = |equal| {
+                        Type::union(
+                            members
+                                .iter()
+                                .filter(|t| {
+                                    let fields = match shape_of(t) {
+                                        Type::Class(_, _, fs) | Type::Object(fs) => fs,
+                                        _ => return true,
+                                    };
+                                    let Some(value) = fields.get(name) else {
+                                        return true;
+                                    };
+                                    if equal {
+                                        lit.assignable_to(value)
+                                    } else {
+                                        !value.assignable_to(&lit)
+                                    }
+                                })
+                                .cloned()
+                                .collect(),
+                        )
+                    };
+                    yes.push((key.clone(), select(true)));
+                    no.push((key, select(false)));
+                }
+                if !yes.is_empty() {
+                    return Some(if op == "==" { (yes, no) } else { (no, yes) });
                 }
             }
 
             if let (ExprKind::Unary { op: unary, expr }, ExprKind::Str(tag)) =
                 (&test.kind, &literal.kind)
                 && unary == "typeof"
-                && let ExprKind::Ident(n) = &expr.kind
+                && let Some(key) = self.access_key(expr)
             {
-                let original = self.type_of(n)?;
+                let original = self.checked_access_type(expr)?;
                 let non_null = original.non_null();
                 let shape = shape_of(&non_null);
                 if matches!(shape_of(&original), Type::Union(_) | Type::Optional(_)) {
@@ -504,8 +512,8 @@ impl Ctx<'_> {
                                 .collect(),
                         )
                     };
-                    let yes = vec![(self.fact_key(n), select(true))];
-                    let no = vec![(self.fact_key(n), select(false))];
+                    let yes = vec![(key.clone(), select(true))];
+                    let no = vec![(key.clone(), select(false))];
                     return Some(if op == "==" { (yes, no) } else { (no, yes) });
                 }
                 if let Type::SavedRepair(table) = &shape {
@@ -517,7 +525,7 @@ impl Ctx<'_> {
                         "nil" if original.is_optional() => Type::Null,
                         _ => return None,
                     };
-                    let yes = vec![(self.fact_key(n), narrowed)];
+                    let yes = vec![(key.clone(), narrowed)];
                     // Keep the full union on the opposite branch: it must still
                     // guard or replace the value before accessing any members.
                     return Some(if op == "==" {
@@ -543,9 +551,9 @@ impl Ctx<'_> {
                 };
                 let (yes, no) = if tag == "nil" {
                     (
-                        vec![(self.fact_key(n), Type::Null)],
+                        vec![(key.clone(), Type::Null)],
                         if original.is_optional() {
-                            vec![(self.fact_key(n), non_null)]
+                            vec![(key.clone(), non_null)]
                         } else {
                             vec![]
                         },
@@ -575,9 +583,9 @@ impl Ctx<'_> {
                         return None;
                     };
                     (
-                        vec![(self.fact_key(n), ty)],
+                        vec![(key.clone(), ty)],
                         if original.is_optional() && category == tag {
-                            vec![(self.fact_key(n), Type::Null)]
+                            vec![(key.clone(), Type::Null)]
                         } else {
                             vec![]
                         },

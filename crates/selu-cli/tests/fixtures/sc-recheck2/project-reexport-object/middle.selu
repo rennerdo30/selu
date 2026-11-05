@@ -1,0 +1,1 @@
+import {x,noop} from "./state";export const y=x;export function call(){noop();}

@@ -1,0 +1,1 @@
+class C{x:number?=1;read():number{const x=this.x;if(x!=null){return x;}return 0;}}print(new C().read());

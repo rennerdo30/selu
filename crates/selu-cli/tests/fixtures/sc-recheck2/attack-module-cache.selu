@@ -1,0 +1,1 @@
+let cache:number?=1;function setCache(x:number?){cache=x;}function read():number{if(cache!=null){const value:number=cache;return value;}return 0;}print(read());

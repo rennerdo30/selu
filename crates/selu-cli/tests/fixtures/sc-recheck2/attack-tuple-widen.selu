@@ -1,0 +1,1 @@
+const a:[{value:string},number]=[{value:"s"},0];const b:[{value:string|number},number]=a;b[0].value=4;

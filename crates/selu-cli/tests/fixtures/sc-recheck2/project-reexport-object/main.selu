@@ -1,0 +1,1 @@
+import {y,call} from "./middle";function f():string{if(y.kind=="a"){call();return y.value;}return "other";}print(f());

@@ -181,6 +181,7 @@ impl Ctx<'_> {
                     .map(|t| self.member(t, name, object))
                     .collect()
             }
+            ExprKind::Index { .. } => vec![self.expr_inner(target)],
             _ => vec![self.expr(target)],
         }
     }
@@ -210,6 +211,7 @@ impl Ctx<'_> {
                 );
             }
         }
+        self.invalidate_path_writes();
     }
 
     pub(crate) fn data_member(&mut self, t: &Type, field: &str, e: &Expr) -> Option<Type> {
@@ -355,7 +357,7 @@ impl Ctx<'_> {
         }
         self.restriction_data_call(callee, &params, &ret);
         for (arg, want) in args.iter().zip(&params) {
-            let got = self.value(arg);
+            let got = self.value_expected(arg, Some(want));
             if !got.assignable_to(want) {
                 self.out.push(
                     err(

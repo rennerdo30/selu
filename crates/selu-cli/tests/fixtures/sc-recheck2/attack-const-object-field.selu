@@ -1,0 +1,1 @@
+type V={kind:"a";value:string}|{kind:"b";value:number};const x:V={kind:"a",value:"s"};function clear(){x.value=4;}function f():string{if(x.kind=="a"){clear();return x.value;}return "other";}print(f());

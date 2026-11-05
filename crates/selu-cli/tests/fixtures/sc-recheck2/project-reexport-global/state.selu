@@ -1,0 +1,1 @@
+function start():number?{return 1;}export global x=start();export function clear(){x=null;}
