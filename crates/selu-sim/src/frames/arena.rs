@@ -54,6 +54,7 @@ pub struct Region {
 }
 #[derive(Default)]
 pub struct Arena {
+    pub fonts: crate::fonts::FontBook,
     pub regions: Vec<Region>,
     pub dirty: bool,
     pub cursor: (f64, f64),
@@ -94,6 +95,14 @@ pub fn focus(a: &mut Arena, ctx: &crate::Ctx, target: Option<usize>) {
 }
 
 impl Region {
+    pub fn text_style(&self) -> crate::core::VisualStyle {
+        crate::core::VisualStyle {
+            font: self.font_path.clone(),
+            size: self.font_size,
+            flags: self.font_flags.clone(),
+            ..self.visual.clone()
+        }
+    }
     /// Display placeholders never stringify or expose opaque secret payloads.
     pub fn display_text(&self) -> Option<&str> {
         if matches!(self.text_value, mlua::Value::LightUserData(_)) {

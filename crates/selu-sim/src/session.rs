@@ -620,6 +620,7 @@ impl Session {
                 .get::<Table>("__selu_saved_names")?
                 .raw_set(name.as_str(), true)?;
         }
+        crate::fonts::register_addon_root(sim.lua(), dir)?;
         let files = loader::read_files(&toc).map_err(runtime)?;
         sim.load_chunks(&toc.name, &files)?;
         for name in toc

@@ -111,7 +111,7 @@ pub struct Studio {
     event_search: String,
     logo: Option<egui::TextureHandle>,
     textures: HashMap<String, Result<egui::TextureHandle, String>>,
-    addon_fonts: std::collections::HashSet<String>,
+    glyphs: crate::text_render::GlyphCache,
     game_settings: crate::game::Settings,
     game_clients: Vec<crate::game::Client>,
     game_scanned: bool,
@@ -193,7 +193,7 @@ impl Studio {
             logo: crate::theme::logo_image()
                 .map(|img| ctx.load_texture("selu-logo", img, egui::TextureOptions::LINEAR)),
             textures: HashMap::new(),
-            addon_fonts: Default::default(),
+            glyphs: Default::default(),
             event_name: String::new(),
             event_args: String::new(),
             playing: false,
@@ -2093,6 +2093,9 @@ impl Studio {
             let a = r.alpha.clamp(0.0, 1.0) as f32 * if r.visible { 1.0 } else { 0.3 };
             c.gamma_multiply(a)
         };
+        if self.glyphs.len() > 8192 {
+            self.glyphs.clear();
+        }
         let mut ordered: Vec<_> = snap.regions.iter().skip(1).filter(|r| visible(r)).collect();
         ordered.sort_by_key(|r| (r.strata, r.level, r.layer, r.id.index));
         for r in &ordered {
@@ -2157,88 +2160,13 @@ impl Studio {
                     );
                 }
                 (None, "FontString") => {
-                    if let Some(text) = &r.text {
-                        let mut family = egui::FontFamily::Proportional;
-                        if self.addon_fonts.contains(&r.visual.font) {
-                            family = egui::FontFamily::Name(r.visual.font.clone().into());
-                        } else if let Ok(path) =
-                            crate::textures::resolve(&self.opts.addons, &r.visual.font)
-                            && std::fs::metadata(&path).is_ok_and(|m| m.len() < 8 * 1024 * 1024)
-                            && let Ok(data) = std::fs::read(path)
-                        {
-                            let mut definitions = ui.ctx().fonts(|f| f.definitions().clone());
-                            definitions.font_data.insert(
-                                r.visual.font.clone(),
-                                std::sync::Arc::new(egui::FontData::from_owned(data)),
-                            );
-                            definitions.families.insert(
-                                egui::FontFamily::Name(r.visual.font.clone().into()),
-                                vec![r.visual.font.clone()],
-                            );
-                            ui.ctx().set_fonts(definitions);
-                            self.addon_fonts.insert(r.visual.font.clone());
-                        }
-                        let mut style = r.visual.clone();
-                        style.size *= scale as f64;
-                        let cells = selu_sim::core::text_cells(text, &style, rect.width() as f64);
-                        let height = cells.last().map(|c| c.2 + style.size).unwrap_or(0.0) as f32;
-                        let dy = match style.justify_v.as_str() {
-                            "BOTTOM" => rect.height() - height,
-                            "MIDDLE" => (rect.height() - height) / 2.0,
-                            _ => 0.0,
-                        };
-                        for &(ch, x, y, c) in &cells {
-                            let line_width = cells
-                                .iter()
-                                .rfind(|cell| cell.2 == y)
-                                .map(|cell| cell.1 + style.size * 0.5)
-                                .unwrap_or(0.0) as f32;
-                            let dx = match style.justify_h.as_str() {
-                                "RIGHT" => rect.width() - line_width,
-                                "CENTER" => (rect.width() - line_width) / 2.0,
-                                _ => 0.0,
-                            };
-                            let pos = rect.left_top() + Vec2::new(x as f32 + dx, y as f32 + dy);
-                            let rgba = |c: [f32; 4]| {
-                                Color32::from_rgba_unmultiplied(
-                                    (c[0] * 255.0) as u8,
-                                    (c[1] * 255.0) as u8,
-                                    (c[2] * 255.0) as u8,
-                                    (c[3] * 255.0) as u8,
-                                )
-                            };
-                            let font = FontId::new(style.size as f32, family.clone());
-                            if style.shadow[3] > 0.0 {
-                                painter.text(
-                                    pos + Vec2::new(
-                                        style.shadow_offset.0 as f32 * scale,
-                                        -style.shadow_offset.1 as f32 * scale,
-                                    ),
-                                    Align2::LEFT_TOP,
-                                    ch,
-                                    font.clone(),
-                                    fade(r, rgba(style.shadow)),
-                                );
-                            }
-                            if style.flags.contains("OUTLINE") {
-                                for delta in [
-                                    Vec2::new(-1.0, 0.0),
-                                    Vec2::new(1.0, 0.0),
-                                    Vec2::new(0.0, -1.0),
-                                    Vec2::new(0.0, 1.0),
-                                ] {
-                                    painter.text(
-                                        pos + delta,
-                                        Align2::LEFT_TOP,
-                                        ch,
-                                        font.clone(),
-                                        fade(r, Color32::BLACK),
-                                    );
-                                }
-                            }
-                            painter.text(pos, Align2::LEFT_TOP, ch, font, fade(r, rgba(c)));
-                        }
+                    crate::text_render::TextPainter {
+                        ctx: ui.ctx(),
+                        roots: &self.opts.addons,
+                        glyphs: &mut self.glyphs,
+                        textures: &mut self.textures,
                     }
+                    .paint(&painter, r, rect, scale);
                 }
                 (None, "Texture") => {}
                 _ => {}
@@ -2862,6 +2790,7 @@ mod tests {
     #[test]
     fn labels_name_regions() {
         let r = RegionSnapshot {
+            text_layout: None,
             visual: Default::default(),
             clip: None,
             id: RegionId {

@@ -155,15 +155,32 @@ fn callbacks_create_frames_without_borrow_panics_and_share_instructions() {
 #[test]
 fn font_multiline_wrap_scaled_parent_and_reparent_draw_order() {
     let s = Sim::new().unwrap();
-    s.eval(r#"
+    use ab_glyph::Font;
+    let face = ab_glyph::FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).unwrap();
+    let mut w = 0.0;
+    let mut prev = None;
+    for c in "abcd".chars() {
+        let id = face.glyph_id(c);
+        w += face.h_advance_unscaled(id);
+        if let Some(p) = prev {
+            w += face.kern_unscaled(p, id);
+        }
+        prev = Some(id);
+    }
+    let width = w * 12.0 / face.units_per_em().unwrap() + 0.001;
+    let height =
+        3.0 * (face.ascent_unscaled() - face.descent_unscaled() + face.line_gap_unscaled()) * 12.0
+            / face.units_per_em().unwrap();
+    eprintln!("metric receipt: scaled wrapped width {width}, local height {height}");
+    s.eval(&format!(r#"
 local p=CreateFrame('Frame');p:SetScale(2);p:SetPoint('CENTER');p:SetSize(100,100)
-local f=p:CreateFontString();f:SetFont('custom',12,'OUTLINE');f:SetText('abcdefgh\nxy');f:SetPoint('TOPLEFT',p,'TOPLEFT');f:SetPoint('TOPRIGHT',p,'TOPLEFT',24,0)
-assert(f:GetWidth()==24 and f:GetHeight()==36 and f:GetStringHeight()==36)
+local f=p:CreateFontString();f:SetFont('custom',12,'OUTLINE');f:SetText('abcdefgh\nxy');f:SetPoint('TOPLEFT',p,'TOPLEFT');f:SetPoint('TOPRIGHT',p,'TOPLEFT',{width},0)
+assert(math.abs(f:GetWidth()-{width})<0.00001 and math.abs(f:GetHeight()-{height})<0.00001 and math.abs(f:GetStringHeight()-{height})<0.00001)
 local q=CreateFrame('Frame');q:SetFrameStrata('TOOLTIP');q:SetFrameLevel(20)
 local t=p:CreateTexture(nil,'OVERLAY',nil,-3);t:SetParent(q)
 assert(t:GetFrameStrata()=='TOOLTIP' and t:GetFrameLevel()==20)
 local l,n=t:GetDrawLayer();assert(l=='OVERLAY' and n==-3)
-"#).unwrap();
+"#)).unwrap();
 }
 
 #[test]

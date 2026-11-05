@@ -148,28 +148,15 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
         focus(a, ctx, None);
     }
 }
-pub fn text_height(r: &Region, width: f64) -> f64 {
-    let width = if r.visual.wrap { width } else { 0.0 };
-    let height: f64 = r
-        .text
-        .as_deref()
-        .unwrap_or("")
-        .split('\n')
-        .map(|line| {
-            let m = crate::core::measure_text(line, r.font_size);
-            r.font_size
-                * if width > 0.0 {
-                    (m.width / width).ceil().max(1.0)
-                } else {
-                    1.0
-                }
-        })
-        .sum();
-    if r.visual.max_lines > 0 {
-        height.min(r.visual.max_lines as f64 * r.font_size)
-    } else {
-        height
-    }
+pub fn text_height(r: &Region, width: f64, fonts: &crate::fonts::FontBook) -> f64 {
+    fonts
+        .layout(
+            r.display_text().unwrap_or(""),
+            &r.text_style(),
+            Some(width),
+            None,
+        )
+        .height
 }
 fn inherit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) {
     if marks[i] == 2 {
@@ -245,7 +232,9 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
         }
         Some((pos - f * size, size))
     }
-    let metric = crate::core::measure_text(r.display_text().unwrap_or(""), r.font_size);
+    let metric = a
+        .fonts
+        .layout(r.display_text().unwrap_or(""), &r.text_style(), None, None);
     let intrinsic = r.kind == "FontString";
     let width = if intrinsic && r.width == 0.0 {
         metric.width
@@ -255,7 +244,7 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
     let horizontal = axis(&xs, width * scale);
     let logical_width = horizontal.map(|(_, w)| w / scale).unwrap_or(width);
     let height = if intrinsic && r.height == 0.0 {
-        text_height(&r, logical_width)
+        text_height(&r, logical_width, &a.fonts)
     } else {
         r.height
     };

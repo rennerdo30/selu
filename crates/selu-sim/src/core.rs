@@ -125,9 +125,18 @@ pub struct VisualStyle {
     pub justify_v: String,
     pub wrap: bool,
     pub max_lines: usize,
+    #[serde(default = "default_true")]
+    pub non_space_wrap: bool,
+    #[serde(default = "default_true")]
+    pub ellipsis: bool,
+    #[serde(default)]
+    pub spacing: f64,
     pub uv: [f32; 4],
     pub tint: [f32; 4],
     pub blend: String,
+}
+fn default_true() -> bool {
+    true
 }
 impl Default for VisualStyle {
     fn default() -> Self {
@@ -142,6 +151,9 @@ impl Default for VisualStyle {
             justify_v: "TOP".into(),
             wrap: true,
             max_lines: 0,
+            non_space_wrap: true,
+            ellipsis: true,
+            spacing: 0.0,
             uv: [0.0, 1.0, 0.0, 1.0],
             tint: [1.0; 4],
             blend: "BLEND".into(),
@@ -178,6 +190,8 @@ pub struct RegionSnapshot {
     pub clip: Option<Rect>,
     pub texture: Option<TextureFill>,
     pub text: Option<String>,
+    #[serde(default)]
+    pub text_layout: Option<crate::text::TextLayout>,
     /// Script handlers set on the region, sorted (`OnClick`, `OnEvent`, ...).
     pub scripts: Vec<String>,
     /// Where the region was created, when known.
@@ -917,6 +931,7 @@ mod tests {
                 clip: None,
                 texture: Some(TextureFill::Color([1.0, 0.0, 0.0, 1.0])),
                 text: None,
+                text_layout: None,
                 scripts: vec!["OnEvent".into()],
                 created_at: None,
             }],
@@ -928,114 +943,41 @@ mod tests {
     }
 }
 
-/// Fixed-width metric shared with Studio: Unicode characters have width
-/// `0.5 * font_size`, lines have height `font_size`. WoW markup is ignored.
+/// Font-backed measurement using the same fallback face as region layout.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextMeasurement {
     pub width: f64,
     pub height: f64,
 }
 pub fn measure_text(text: &str, font_size: f64) -> TextMeasurement {
-    let mut chars = text.chars().peekable();
-    let (mut width, mut longest, mut lines) = (0usize, 0usize, 1usize);
-    while let Some(c) = chars.next() {
-        if c == '|' {
-            match chars.peek().copied() {
-                Some('c') => {
-                    chars.next();
-                    for _ in 0..8 {
-                        chars.next();
-                    }
-                    continue;
-                }
-                Some('r') | Some('h') => {
-                    chars.next();
-                    continue;
-                }
-                Some('T') | Some('H') => {
-                    let end = if chars.next() == Some('T') { 't' } else { 'h' };
-                    while let Some(c) = chars.next() {
-                        if c == '|' && chars.peek() == Some(&end) {
-                            chars.next();
-                            break;
-                        }
-                    }
-                    continue;
-                }
-                Some('|') => {
-                    chars.next();
-                }
-                _ => {}
-            }
-        }
-        if c == '\n' {
-            longest = longest.max(width);
-            width = 0;
-            lines += 1;
-        } else {
-            width += 1;
-        }
-    }
+    let style = VisualStyle {
+        size: font_size,
+        ..Default::default()
+    };
+    let layout = crate::fonts::FontBook::default().layout(text, &style, None, None);
     TextMeasurement {
-        width: longest.max(width) as f64 * 0.5 * font_size,
-        height: lines as f64 * font_size,
+        width: layout.width,
+        height: layout.height,
     }
 }
+#[cfg(test)]
+mod proportional_falsifier {
+    #[test]
+    fn measured_advances_come_from_the_font() {
+        assert!(
+            super::measure_text("WWW", 18.0).width > super::measure_text("iii", 18.0).width * 2.0
+        );
+    }
+}
+
 #[cfg(test)]
 mod text_tests {
     #[test]
     fn unicode_and_markup() {
         let m = super::measure_text("|cffffffff\u{732b}\u{e9}|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
-        assert_eq!((m.width, m.height), (12.0, 24.0));
+        let (first, h) = crate::text::expected_fallback("\u{732b}\u{e9}", 12.0);
+        let second = crate::text::expected_fallback("X", 12.0).0 + 12.0;
+        assert!((m.width - first.max(second)).abs() < 1e-5);
+        assert!((m.height - 2.0 * h).abs() < 1e-5);
     }
-}
-
-/// A single text cell from the simulator's deterministic fallback measurement model.
-/// Studio positions glyphs on these same advances, including wrap and markup.
-pub fn text_cells(text: &str, style: &VisualStyle, width: f64) -> Vec<(char, f64, f64, [f32; 4])> {
-    let mut cells = Vec::new();
-    let mut chars = text.chars().peekable();
-    let (mut x, mut y) = (0.0, 0.0);
-    let mut color = style.color;
-    let advance = style.size * 0.5;
-    while let Some(c) = chars.next() {
-        if c == '|' {
-            match chars.peek() {
-                Some('c') => {
-                    chars.next();
-                    let hex: String = chars.by_ref().take(8).collect();
-                    if let Ok(value) = u32::from_str_radix(&hex, 16) {
-                        color = [
-                            ((value >> 16) & 255) as f32 / 255.0,
-                            ((value >> 8) & 255) as f32 / 255.0,
-                            (value & 255) as f32 / 255.0,
-                            (value >> 24) as f32 / 255.0,
-                        ];
-                    }
-                    continue;
-                }
-                Some('r') => {
-                    chars.next();
-                    color = style.color;
-                    continue;
-                }
-                Some('|') => {
-                    chars.next();
-                }
-                _ => {}
-            }
-        }
-        if c == '\n' || (style.wrap && width > 0.0 && x + advance > width && x > 0.0) {
-            x = 0.0;
-            y += style.size;
-        }
-        if style.max_lines > 0 && y >= style.max_lines as f64 * style.size {
-            break;
-        }
-        if c != '\n' {
-            cells.push((c, x, y, color));
-            x += advance;
-        }
-    }
-    cells
 }

@@ -230,7 +230,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown";
+const METHODS: &str = "SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     if !ctx
         .stale_sources
@@ -270,6 +270,17 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                     Value::String(lua.create_string(layer)?),
                     v.get(3).cloned().unwrap_or(Value::Integer(0)),
                 ]),
+            )?;
+        }
+        if kind == "FontString"
+            && let Some(template) = string(v.get(2))
+        {
+            let object: Table = lua.globals().get(template)?;
+            call(
+                lua,
+                ctx,
+                "SetFontObject",
+                MultiValue::from_vec(vec![Value::Table(child.clone()), Value::Table(object)]),
             )?;
         }
         out!(child);
@@ -413,6 +424,32 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             .max(0.0);
         out!(range);
     }
+    if matches!(method, "GetStringWidth" | "GetStringHeight" | "IsTruncated") {
+        let r = &a.regions[i];
+        let width = if method == "GetStringWidth" {
+            None
+        } else {
+            r.rect
+                .map(|q| q.width / r.effective_scale)
+                .or_else(|| (r.width > 0.0).then_some(r.width))
+        };
+        let height = if method == "IsTruncated" {
+            r.rect.map(|q| q.height / r.effective_scale)
+        } else {
+            None
+        };
+        let shaped = a.fonts.layout(
+            r.display_text().unwrap_or(""),
+            &r.text_style(),
+            width,
+            height,
+        );
+        match method {
+            "GetStringWidth" => out!(shaped.width),
+            "GetStringHeight" => out!(shaped.height),
+            _ => out!(shaped.truncated),
+        }
+    }
     let r = &mut a.regions[i];
     r.font_overrides |= match method {
         "SetTextColor" => 1,
@@ -432,6 +469,13 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "GetVerticalScroll" => out!(r.scroll.1),
         "SetJustifyH" => r.visual.justify_h = s,
         "SetJustifyV" => r.visual.justify_v = s,
+        "SetNonSpaceWrap" => r.visual.non_space_wrap = boolean(v.first()),
+        "CanWordWrap" => out!(r.visual.wrap),
+        "CanNonSpaceWrap" => out!(r.visual.non_space_wrap),
+        "GetMaxLines" => out!(r.visual.max_lines),
+        "SetEllipsis" => r.visual.ellipsis = boolean(v.first()),
+        "SetSpacing" => r.visual.spacing = n,
+        "GetSpacing" => out!(r.visual.spacing),
         "SetWordWrap" => r.visual.wrap = boolean(v.first()),
         "SetMaxLines" => r.visual.max_lines = n.max(0.0) as usize,
         "SetBlendMode" => r.visual.blend = s,
@@ -576,15 +620,6 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             r.font_flags = string(v.get(2)).unwrap_or_default();
         }
         "GetFont" => out!((r.font_path.clone(), r.font_size, r.font_flags.clone())),
-        "GetStringWidth" => {
-            out!(crate::core::measure_text(r.display_text().unwrap_or(""), r.font_size).width)
-        }
-        "GetStringHeight" => out!(layout::text_height(
-            r,
-            r.rect
-                .map(|q| q.width / r.effective_scale)
-                .unwrap_or(r.width)
-        )),
         "SetTexture" => {
             r.texture = if matches!(v.first(), None | Some(Value::Nil)) {
                 None

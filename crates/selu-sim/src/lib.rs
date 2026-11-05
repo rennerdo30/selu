@@ -29,6 +29,7 @@ pub mod saved;
 pub mod session;
 pub mod sim_globals;
 pub mod snapshot;
+pub mod text;
 mod timers;
 mod trace;
 pub mod world;

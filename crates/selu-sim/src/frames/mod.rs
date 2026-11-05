@@ -65,6 +65,17 @@ impl RegionModel for LuaTableModel {
                     clip: arena::clip(&a, i),
                     texture: r.texture.clone(),
                     text: r.display_text().map(str::to_owned),
+                    text_layout: r.display_text().map(|text| {
+                        let style = r.text_style();
+                        let mut shaped = a.fonts.layout(
+                            text,
+                            &style,
+                            r.rect.map(|q| q.width / r.effective_scale),
+                            r.rect.map(|q| q.height / r.effective_scale),
+                        );
+                        crate::text::rasterize(&a.fonts.face(&style.font), style.size, &mut shaped);
+                        shaped
+                    }),
                     scripts,
                     created_at: r.created_at.clone(),
                 })
@@ -161,8 +172,11 @@ mod tests {
             texture.texture,
             Some(crate::TextureFill::Color([1.0, 0.0, 0.0, 0.5]))
         );
-        // Font string: top left at (874, 566), 4 chars x 6 px wide, 12 tall.
-        assert_eq!(rect(font), Some((874.0, 554.0, 24.0, 12.0)));
+        // Font-backed advances and ascent/descent replace the old 24x12 guess.
+        let (w, h) = crate::text::expected_fallback("abcd", 12.0);
+        let q = font.rect.unwrap();
+        assert!((q.left - 874.0).abs() < 1e-5 && (q.bottom - (566.0 - h)).abs() < 1e-5);
+        assert!((q.width - w).abs() < 1e-5 && (q.height - h).abs() < 1e-5);
     }
 
     #[test]

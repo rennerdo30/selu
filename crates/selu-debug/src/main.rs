@@ -15,6 +15,7 @@ mod editor;
 mod game;
 mod png;
 mod settings;
+mod text_render;
 mod textures;
 mod theme;
 
