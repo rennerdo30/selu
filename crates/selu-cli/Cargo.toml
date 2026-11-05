@@ -9,6 +9,7 @@ name = "selu"
 path = "src/main.rs"
 
 [dependencies]
+selu-gamedata = { path = "../selu-gamedata" }
 clap = { version = "4", features = ["derive"] }
 selu-diagnostics = { path = "../selu-diagnostics" }
 selu-syntax = { path = "../selu-syntax" }
