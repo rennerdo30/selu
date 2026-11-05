@@ -25,6 +25,23 @@ local function __selu_saved_validate(__selu_value, __selu_schema, __selu_missing
     local __selu_modes = __selu_schemas and __selu_schemas[__selu_schema]
     if __selu_modes and __selu_modes[__selu_missing] then return true end
   end
+  if __selu_schema.literal ~= nil then
+    if (__selu_missing and __selu_value == nil) or __selu_value == __selu_schema.literal then return true end
+    return false, __selu_path .. ": wrong literal value"
+  end
+  if __selu_schema.union then
+    for __selu_index = 1, #__selu_schema.union do
+      -- A failed arm may leave active-path marks. Each alternative owns its path.
+      local __selu_branch = {}
+      for __selu_table, __selu_active in __selu_saved_pairs(__selu_seen) do
+        __selu_branch[__selu_table] = __selu_active
+      end
+      if __selu_saved_validate(__selu_value, __selu_schema.union[__selu_index], __selu_missing, __selu_branch, __selu_path, __selu_done) then
+        return __selu_saved_validated(__selu_value, __selu_schema, __selu_missing, __selu_done)
+      end
+    end
+    return false, __selu_path .. ": value matches no union member"
+  end
   if __selu_schema.optional then
     if __selu_value == nil then return true end
     local __selu_valid, __selu_reason = __selu_saved_validate(__selu_value, __selu_schema.optional, false, __selu_seen, __selu_path, __selu_done)
@@ -134,7 +151,7 @@ local function __selu_saved_valid_paths(__selu_paths)
   end
   return __selu_count == #__selu_paths
 end
-__selu_saved_runtime.adopt = function(__selu_database, __selu_current, __selu_legacy, __selu_version_key, __selu_latest, __selu_defaults, __selu_schema, __selu_steps, __selu_readers, __selu_contexts, __selu_publish)
+__selu_saved_runtime.adopt = function(__selu_database, __selu_current, __selu_legacy, __selu_version_key, __selu_latest, __selu_defaults, __selu_schema, __selu_default_objects, __selu_steps, __selu_readers, __selu_contexts, __selu_publish)
   local __selu_root = __selu_current
   if __selu_root == nil then __selu_root = __selu_legacy end
   if __selu_root == nil then __selu_root = {} end
@@ -234,7 +251,7 @@ __selu_saved_runtime.adopt = function(__selu_database, __selu_current, __selu_le
   -- Defaults are a graph transaction too: filling one record can change an aliased map.
   local __selu_reverse = {}
   local __selu_candidate = __selu_saved_clone(__selu_root, {}, __selu_reverse)
-  __selu_saved_runtime.fill(__selu_candidate, __selu_defaults, __selu_saved_runtime.adoptionObjects(__selu_schema))
+  __selu_saved_runtime.fill(__selu_candidate, __selu_defaults, __selu_default_objects)
   __selu_candidate[__selu_context_key] = nil
   __selu_candidate[__selu_version_key] = __selu_latest
   __selu_phase = "defaults validation"

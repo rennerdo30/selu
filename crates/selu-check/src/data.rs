@@ -474,11 +474,12 @@ impl Ctx<'_> {
                     validate(inner, out);
                 }
                 K::Optional(inner) => validate(inner, out),
-                K::Tuple(items) | K::Named { args: items, .. } => {
+                K::Union(items) | K::Tuple(items) | K::Named { args: items, .. } => {
                     for t in items {
                         validate(t, out);
                     }
                 }
+                K::StringLiteral(_) | K::NumberLiteral(_) | K::BooleanLiteral(_) => {}
                 K::Object(fields) => {
                     for f in fields {
                         validate(&f.ty, out);

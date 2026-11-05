@@ -1,0 +1,12 @@
+type Value = string | number;
+
+function describe(value: Value): string {
+  if (typeof value == "string") {
+    return value;
+  }
+  return "number";
+}
+
+on PLAYER_LOGIN() {
+  print(describe("union"), describe(7));
+}

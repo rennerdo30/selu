@@ -8,6 +8,7 @@ impl Ctx<'_> {
             name,
             name_span,
             defaults,
+            ty,
             version_key,
             ..
         } = &s.kind
@@ -15,7 +16,9 @@ impl Ctx<'_> {
             if version_key.is_some() {
                 self.types.saved_adoptions.insert(name.clone());
             }
-            let ty = self.value(defaults);
+            let inferred = self.value(defaults);
+            let ty = self.annotation(ty).unwrap_or(inferred);
+            self.types.saved_schemas.insert(s.span.start, ty.clone());
             self.declare(
                 name,
                 name_span,
@@ -143,7 +146,21 @@ impl Ctx<'_> {
                         }
                     }
                 }
-                let ty = self.value(defaults);
+                let inferred = self.value(defaults);
+                let ty = self
+                    .types
+                    .saved_schemas
+                    .get(&s.span.start)
+                    .cloned()
+                    .unwrap_or(inferred.clone());
+                let inferred = self.value_expected(defaults, Some(&ty));
+                if !inferred.assignable_to(&ty) {
+                    self.out.push(err(
+                        "SELU0313",
+                        format!("defaults of type {inferred} do not fit {ty}"),
+                        &defaults.span,
+                    ));
+                }
                 if version_key.is_some() && !closed_schema(&ty, 0) {
                     self.out.push(err(
                         "SELU0901",
@@ -163,7 +180,7 @@ impl Ctx<'_> {
                         .with_help("use primitive map keys and serializable values at every depth"),
                     );
                 }
-                if !matches!(ty, Type::Object(_)) {
+                if !matches!(crate::shape_of(&ty), Type::Object(_)) {
                     self.out.push(err(
                         "SELU0464",
                         "saved defaults must be an object",
@@ -318,10 +335,16 @@ fn serializable_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) ->
         return true;
     }
     match crate::shape_of(ty) {
-        Type::Number | Type::String | Type::Boolean | Type::Null => true,
+        Type::Number
+        | Type::String
+        | Type::Boolean
+        | Type::Null
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
         Type::Optional(t) | Type::Array(t) => serializable_seen(&t, seen),
         Type::Object(fs) => fs.values().all(|t| serializable_seen(t, seen)),
-        Type::Tuple(ts) => ts.iter().all(|t| serializable_seen(t, seen)),
+        Type::Union(ts) | Type::Tuple(ts) => ts.iter().all(|t| serializable_seen(t, seen)),
         Type::Map(k, v) => {
             matches!(
                 crate::shape_of(&k),
@@ -348,7 +371,7 @@ fn contains_class_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) 
         Type::Class(..) | Type::ClassObject(_) => true,
         Type::Optional(t) | Type::Array(t) | Type::Set(t) => contains_class_seen(&t, seen),
         Type::Object(fs) => fs.values().any(|t| contains_class_seen(t, seen)),
-        Type::Tuple(ts) => ts.iter().any(|t| contains_class_seen(t, seen)),
+        Type::Union(ts) | Type::Tuple(ts) => ts.iter().any(|t| contains_class_seen(t, seen)),
         Type::Map(k, v) | Type::WeakMap(k, v) => {
             contains_class_seen(&k, seen) || contains_class_seen(&v, seen)
         }
@@ -378,8 +401,15 @@ pub(crate) fn closed_schema(ty: &Type, depth: usize) -> bool {
         return false;
     }
     match crate::shape_of(ty) {
-        Type::Number | Type::String | Type::Boolean | Type::Null => true,
+        Type::Number
+        | Type::String
+        | Type::Boolean
+        | Type::Null
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
         Type::Optional(t) | Type::Array(t) => closed_schema(&t, depth + 1),
+        Type::Union(ts) => ts.iter().all(|t| closed_schema(t, depth + 1)),
         Type::SavedRepair(t) => {
             matches!(
                 crate::shape_of(&t),

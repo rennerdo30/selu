@@ -1,0 +1,5 @@
+// SteamDeck.lua:472 stores normalized graphics values (number or string).
+type CVarValue = string | number;
+saved global RennerToolkitDB using dbVersion = {
+    owned: new Map<string, { value: CVarValue }>()
+};

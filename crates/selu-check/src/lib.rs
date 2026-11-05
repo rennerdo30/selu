@@ -1143,6 +1143,10 @@ impl Ctx<'_> {
 
     fn member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
         let shaped = shape_of(t);
+        if let Type::Union(ts) = &shaped {
+            let members: Vec<_> = ts.iter().map(|t| self.member(t, name, object)).collect();
+            return Type::Union(members);
+        }
         let t = &shaped;
         if let Some(t) = self.target_member(t, name, object) {
             return t;
@@ -1287,8 +1291,8 @@ impl Ctx<'_> {
                 let r = self.value(right);
                 let ok = l.is_open()
                     || r.is_open()
-                    || (shape_of(&l) == shape_of(&r)
-                        && matches!(shape_of(&l), Type::Number | Type::String));
+                    || (l.operand_type() == r.operand_type()
+                        && matches!(l.operand_type(), Type::Number | Type::String));
                 if !ok {
                     self.out.push(err(
                         "SELU0326",
@@ -1306,7 +1310,7 @@ impl Ctx<'_> {
                 self.wow_join(e, left, right);
                 let l = self.value(left);
                 let r = self.value(right);
-                match (&shape_of(&l), &shape_of(&r)) {
+                match (&l.operand_type(), &r.operand_type()) {
                     (Type::Number, Type::Number) => Type::Number,
                     (Type::String, Type::String) => Type::String,
                     (Type::Error, _) | (_, Type::Error) => Type::Error,

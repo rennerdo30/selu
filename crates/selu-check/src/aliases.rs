@@ -356,11 +356,12 @@ impl Ctx<'_> {
                 }
             }
             K::Optional(t) => self.alias_rewrite(t, env, names),
-            K::Tuple(ts) => {
+            K::Union(ts) | K::Tuple(ts) => {
                 for t in ts {
                     self.alias_rewrite(t, env, names);
                 }
             }
+            K::StringLiteral(_) | K::NumberLiteral(_) | K::BooleanLiteral(_) => {}
             K::Object(fs) => {
                 for f in fs {
                     self.alias_rewrite(&mut f.ty, env, names);
@@ -385,6 +386,60 @@ impl Ctx<'_> {
             return None;
         }
         for (test, literal) in [(left, right), (right, left)] {
+            let lit = match &literal.kind {
+                ExprKind::Str(s) => Some(Type::StringLiteral(s.clone())),
+                ExprKind::Number(s) => Some(Type::NumberLiteral(s.clone())),
+                ExprKind::Bool(b) => Some(Type::BooleanLiteral(*b)),
+                ExprKind::Null => Some(Type::Null),
+                _ => None,
+            };
+            if let Some(lit) = lit {
+                let (name, field) = match &test.kind {
+                    ExprKind::Ident(n) => (Some(n), None),
+                    ExprKind::Member { object, name } => match &object.kind {
+                        ExprKind::Ident(n) => (Some(n), Some(name)),
+                        _ => (None, None),
+                    },
+                    _ => (None, None),
+                };
+                if let Some(n) = name {
+                    let original = self.type_of(n)?;
+                    if let Type::Union(ts) = shape_of(&original) {
+                        let select = |equal| {
+                            let members: Vec<_> = ts
+                                .iter()
+                                .filter(|t| {
+                                    let value = if let Some(f) = field {
+                                        match shape_of(t) {
+                                            Type::Object(fs) => {
+                                                fs.get(f).cloned().unwrap_or(Type::Null)
+                                            }
+                                            _ => Type::Null,
+                                        }
+                                    } else {
+                                        (*t).clone()
+                                    };
+                                    if equal {
+                                        lit.assignable_to(&value)
+                                    } else {
+                                        !value.assignable_to(&lit)
+                                    }
+                                })
+                                .cloned()
+                                .collect();
+                            if members.len() == 1 {
+                                members[0].clone()
+                            } else {
+                                Type::Union(members)
+                            }
+                        };
+                        let yes = vec![(n.clone(), select(true))];
+                        let no = vec![(n.clone(), select(false))];
+                        return Some(if op == "==" { (yes, no) } else { (no, yes) });
+                    }
+                }
+            }
+
             if let (ExprKind::Unary { op: unary, expr }, ExprKind::Str(tag)) =
                 (&test.kind, &literal.kind)
                 && unary == "typeof"
@@ -393,6 +448,32 @@ impl Ctx<'_> {
                 let original = self.type_of(n)?;
                 let non_null = original.non_null();
                 let shape = shape_of(&non_null);
+                if let Type::Union(members) = &shape {
+                    let matches = |t: &Type| match shape_of(t) {
+                        Type::String | Type::StringLiteral(_) => tag == "string",
+                        Type::Number | Type::NumberLiteral(_) => tag == "number",
+                        Type::Boolean | Type::BooleanLiteral(_) => tag == "boolean",
+                        Type::Null => tag == "nil",
+                        Type::Object(_) | Type::Map(..) | Type::Array(_) => tag == "table",
+                        Type::Function { .. } => tag == "function",
+                        _ => false,
+                    };
+                    let select = |yes| {
+                        let ts: Vec<_> = members
+                            .iter()
+                            .filter(|t| matches(t) == yes)
+                            .cloned()
+                            .collect();
+                        if ts.len() == 1 {
+                            ts[0].clone()
+                        } else {
+                            Type::Union(ts)
+                        }
+                    };
+                    let yes = vec![(n.clone(), select(true))];
+                    let no = vec![(n.clone(), select(false))];
+                    return Some(if op == "==" { (yes, no) } else { (no, yes) });
+                }
                 if let Type::SavedRepair(table) = &shape {
                     let narrowed = match tag.as_str() {
                         "table" => *table.clone(),
@@ -486,11 +567,12 @@ fn rename_types(t: &mut TypeExpr, names: &HashMap<String, String>) {
             }
         }
         K::Array(t) | K::Optional(t) => rename_types(t, names),
-        K::Tuple(ts) => {
+        K::Union(ts) | K::Tuple(ts) => {
             for t in ts {
                 rename_types(t, names);
             }
         }
+        K::StringLiteral(_) | K::NumberLiteral(_) | K::BooleanLiteral(_) => {}
         K::Object(fs) => {
             for f in fs {
                 rename_types(&mut f.ty, names);
@@ -523,6 +605,8 @@ pub(crate) fn declaration_key(d: &TypeDecl) -> String {
 pub(crate) fn identity_key(t: &Type) -> String {
     let parts = match t {
         Type::Named(_, s) => return s.key.clone(),
+        Type::StringLiteral(s) | Type::NumberLiteral(s) => vec![s.clone()],
+        Type::BooleanLiteral(b) => vec![b.to_string()],
         Type::Class(n, ..) | Type::ClassObject(n) | Type::Widget(n, _) => vec![n.clone()],
         Type::Optional(t)
         | Type::SavedRepair(t)
@@ -536,7 +620,9 @@ pub(crate) fn identity_key(t: &Type) -> String {
             .iter()
             .map(|(n, t)| format!("{n:?}:{}", identity_key(t)))
             .collect(),
-        Type::Tuple(ts) | Type::ApiIterator(ts) => ts.iter().map(identity_key).collect(),
+        Type::Union(ts) | Type::Tuple(ts) | Type::ApiIterator(ts) => {
+            ts.iter().map(identity_key).collect()
+        }
         Type::ApiOpaque(n, ts) => std::iter::once(n.clone())
             .chain(ts.iter().map(identity_key))
             .collect(),
@@ -562,24 +648,24 @@ pub(crate) fn identity_key(t: &Type) -> String {
 }
 
 fn unguarded_cycle(t: &Type) -> bool {
-    let mut t = t.clone();
-    let mut seen = std::collections::HashSet::new();
-    loop {
+    fn visit(t: &Type, seen: &mut std::collections::HashSet<String>) -> bool {
         match t {
             Type::Named(_, s) => {
                 if !seen.insert(s.key.clone()) {
                     return true;
                 }
-                let Some(next) = s.get() else {
-                    return false;
-                };
-                t = next;
+                let result = s.get().is_some_and(|t| visit(&t, seen));
+                seen.remove(&s.key);
+                result
             }
-            Type::Optional(inner) | Type::Secret(inner) => t = *inner,
-            _ => return false,
+            Type::Optional(t) => visit(t, seen),
+            Type::Union(ts) => ts.iter().any(|t| visit(t, seen)),
+            _ => false,
         }
     }
+    visit(t, &mut Default::default())
 }
+
 fn validate_resolved(
     t: &Type,
     span: &selu_diagnostics::Span,
@@ -613,7 +699,7 @@ fn validate_resolved(
                 validate_resolved(t, span, seen, out);
             }
         }
-        Type::Tuple(ts) => {
+        Type::Union(ts) | Type::Tuple(ts) => {
             for t in ts {
                 validate_resolved(&t, span, seen, out);
             }
@@ -638,6 +724,18 @@ pub(crate) fn non_null_of(t: &Type) -> Type {
     let mut seen = std::collections::HashSet::new();
     loop {
         match t {
+            Type::Union(ts) => {
+                let ts: Vec<_> = ts
+                    .into_iter()
+                    .filter(|t| !matches!(shape_of(t), Type::Null))
+                    .map(|t| t.non_null())
+                    .collect();
+                return if ts.len() == 1 {
+                    ts[0].clone()
+                } else {
+                    Type::Union(ts)
+                };
+            }
             Type::Optional(inner) => t = *inner,
             Type::Named(_, ref s) if matches!(shape_of(&t), Type::Optional(_) | Type::Null) => {
                 if !seen.insert(s.key.clone()) {

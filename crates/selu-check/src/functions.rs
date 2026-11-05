@@ -125,7 +125,94 @@ impl Ctx<'_> {
     /// Package B can use this for callbacks: records the expression's type.
     pub(crate) fn value_expected(&mut self, e: &Expr, expected: Option<&Type>) -> Type {
         let shaped = expected.map(|t| self.alias_shape(t.clone()));
+        let shaped = shaped.map(|t| {
+            if !matches!(e.kind, ExprKind::Null) {
+                t.non_null()
+            } else {
+                t
+            }
+        });
         let expected = shaped.as_ref();
+        if let Some(Type::Union(members)) = expected {
+            // Select by the literal discriminant before checking an object arm.
+            let candidate = members
+                .iter()
+                .find(|t| match (crate::shape_of(t), &e.kind) {
+                    (Type::Object(fs), ExprKind::Object(values)) => fs.iter().all(|(key, ty)| {
+                        values.iter().find(|v| &v.key == key).is_none_or(|v| {
+                            match (crate::shape_of(ty), &v.value.kind) {
+                                (Type::StringLiteral(a), ExprKind::Str(b)) => a == *b,
+                                (Type::NumberLiteral(a), ExprKind::Number(b)) => a == *b,
+                                (Type::BooleanLiteral(a), ExprKind::Bool(b)) => a == *b,
+                                _ => true,
+                            }
+                        })
+                    }),
+                    (Type::String | Type::StringLiteral(_), ExprKind::Str(_)) => true,
+                    (Type::Number | Type::NumberLiteral(_), ExprKind::Number(_)) => true,
+                    (Type::Number | Type::NumberLiteral(_), ExprKind::Unary { op, expr })
+                        if op == "-" && matches!(expr.kind, ExprKind::Number(_)) =>
+                    {
+                        true
+                    }
+                    (Type::Boolean | Type::BooleanLiteral(_), ExprKind::Bool(_)) => true,
+                    _ => false,
+                });
+            if let Some(t) = candidate {
+                return self.value_expected(e, Some(t));
+            }
+        }
+        let literal = match (&e.kind, expected) {
+            (ExprKind::Str(s), Some(Type::StringLiteral(_))) => {
+                Some(Type::StringLiteral(s.clone()))
+            }
+            (ExprKind::Number(s), Some(Type::NumberLiteral(_))) => {
+                Some(Type::NumberLiteral(s.clone()))
+            }
+            (ExprKind::Bool(b), Some(Type::BooleanLiteral(_))) => Some(Type::BooleanLiteral(*b)),
+            (ExprKind::Unary { op, expr }, Some(Type::NumberLiteral(_))) if op == "-" => {
+                if let ExprKind::Number(s) = &expr.kind {
+                    Some(Type::NumberLiteral(format!("-{s}")))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(t) = literal {
+            self.types.set(e.id, t.clone());
+            return t;
+        }
+        if let (ExprKind::Object(values), Some(Type::Object(fields))) = (&e.kind, expected) {
+            let t = Type::Object(
+                values
+                    .iter()
+                    .map(|v| {
+                        (
+                            v.key.clone(),
+                            self.value_expected(&v.value, fields.get(&v.key)),
+                        )
+                    })
+                    .collect(),
+            );
+            self.types.set(e.id, t.clone());
+            return t;
+        }
+        if let (ExprKind::Array(items), Some(Type::Array(element))) = (&e.kind, expected) {
+            for item in items {
+                let got = self.value_expected(item, Some(element));
+                if !got.assignable_to(element) {
+                    self.out.push(err(
+                        "SELU0351",
+                        format!("array element {got} does not fit {element}"),
+                        &item.span,
+                    ));
+                }
+            }
+            let t = Type::Array(element.clone());
+            self.types.set(e.id, t.clone());
+            return t;
+        }
         if let ExprKind::Array(items) = &e.kind
             && items.is_empty()
             && let Some(Type::Array(_)) = expected
@@ -260,7 +347,8 @@ impl Ctx<'_> {
             self.types.set(e.id, t.clone());
             return t;
         }
-        self.value(e)
+        let expected = self.function_expected.last().cloned().flatten();
+        self.value_expected(e, expected.as_ref())
     }
     pub(crate) fn destructure(&mut self, s: &Stmt) {
         let StmtKind::Destructure { pattern, init, .. } = &s.kind else {

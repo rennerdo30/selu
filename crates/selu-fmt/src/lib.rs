@@ -1093,6 +1093,10 @@ const m = {
 
     #[test]
     fn spacing() {
+        assert_eq!(
+            format("type V=string|number;", &Options::default()).unwrap(),
+            "type V = string | number;\n"
+        );
         assert_eq!(fmt("const  x=1+2*y;"), "const x = 1 + 2 * y;\n");
         assert_eq!(fmt("f( a ,b );"), "f(a, b);\n");
         assert_eq!(fmt("if(x){y();}"), "if (x) {\n  y();\n}\n");

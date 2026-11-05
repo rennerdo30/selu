@@ -23,3 +23,17 @@ The named-types example prints `Quest` and `7` on PLAYER_LOGIN. Its expected out
 Interface method signatures retain final rest parameters. Rest parameters before another parameter and defaults in signatures are rejected. Declaration diagnostics point at duplicate parameter/member names and are emitted once per declaration. Resolved alias bodies are validated recursively, including unused declarations; aliases cannot conceal nullable array elements or nonserializable saved data.
 
 Saved-schema descriptors record recursively resolved shapes, including collection parameters, while preserving the byte spelling of existing inline descriptors. Introducing an equivalent alias does not change history; changing an alias body is a storage-shape change requiring the usual version bump and migration. Recursive shapes use numeric back-references rather than type labels.
+
+## Unions
+
+`A | B` accepts either member, including primitive, literal, object and named
+types. Unions work inside containers and generic arguments; use `(A | B)[]`
+for an array of either member. A member fits its union; a union fits a target
+only when every member fits it. Union annotations are erased from Lua.
+
+`typeof x == "string"` selects string members, `x != null` removes absence,
+and equality with a literal selects matching members. Object unions can use a
+literal discriminant, for example `{kind: "a"; value: string} |
+{kind: "b"; value: number}` and `if (x.kind == "a")`. The ordinary branch,
+short-circuit and early-return narrowing rules apply. Selu currently has no
+switch or pattern-match statement requiring an exhaustiveness check.

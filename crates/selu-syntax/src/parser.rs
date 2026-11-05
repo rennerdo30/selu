@@ -194,6 +194,21 @@ impl Parser {
 
     fn ty(&mut self) -> PResult<TypeExpr> {
         let start = self.peek_span().start;
+        let first = self.postfix_ty()?;
+        if !self.eat(&Tok::Pipe) {
+            return Ok(first);
+        }
+        let mut members = vec![first, self.postfix_ty()?];
+        while self.eat(&Tok::Pipe) {
+            members.push(self.postfix_ty()?);
+        }
+        Ok(TypeExpr {
+            kind: TypeExprKind::Union(members),
+            span: self.span_from(start),
+        })
+    }
+    fn postfix_ty(&mut self) -> PResult<TypeExpr> {
+        let start = self.peek_span().start;
         let mut t = self.primary_ty()?;
         loop {
             let kind = if self.at(&Tok::LBracket) && self.peek_at(1) == Some(&Tok::RBracket) {
@@ -215,6 +230,16 @@ impl Parser {
     fn primary_ty(&mut self) -> PResult<TypeExpr> {
         let start = self.peek_span().start;
         let kind = match self.peek().clone() {
+            Tok::LParen
+                if self.peek_at(2) != Some(&Tok::Colon)
+                    && self.peek_at(1) != Some(&Tok::RParen)
+                    && self.peek_at(1) != Some(&Tok::DotDotDot) =>
+            {
+                self.bump();
+                let t = self.ty()?;
+                self.expect(&Tok::RParen, "`)`")?;
+                t.kind
+            }
             Tok::LParen => {
                 // `(a: A, b: B) => R`
                 self.bump();
@@ -273,6 +298,30 @@ impl Parser {
                 }
                 self.expect(&Tok::RBrace, "`}`")?;
                 TypeExprKind::Object(fields)
+            }
+            Tok::Minus if matches!(self.peek_at(1), Some(Tok::Number(_))) => {
+                self.bump();
+                let Tok::Number(s) = self.peek().clone() else {
+                    unreachable!()
+                };
+                self.bump();
+                TypeExprKind::NumberLiteral(format!("-{s}"))
+            }
+            Tok::Str(s) => {
+                self.bump();
+                TypeExprKind::StringLiteral(s)
+            }
+            Tok::Number(s) => {
+                self.bump();
+                TypeExprKind::NumberLiteral(s)
+            }
+            Tok::True => {
+                self.bump();
+                TypeExprKind::BooleanLiteral(true)
+            }
+            Tok::False => {
+                self.bump();
+                TypeExprKind::BooleanLiteral(false)
             }
             Tok::Null => {
                 self.bump();
@@ -509,6 +558,7 @@ impl Parser {
                     self.bump();
                 }
                 let (name, name_span) = self.ident("a saved name")?;
+                let leading_ty = self.annotation()?;
                 let version = if self.at_ident("version") {
                     self.bump();
                     self.saved_version()?
@@ -527,6 +577,11 @@ impl Parser {
                 } else {
                     None
                 };
+                let ty = if leading_ty.is_some() {
+                    leading_ty
+                } else {
+                    self.annotation()?
+                };
                 self.expect(&Tok::Eq, "`=`")?;
                 let defaults = Box::new(self.expr()?);
                 self.semi(start)?;
@@ -539,6 +594,7 @@ impl Parser {
                     legacy,
                     version,
                     defaults,
+                    ty,
                 }
             }
             Tok::Ident(ref w)

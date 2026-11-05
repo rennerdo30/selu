@@ -248,3 +248,23 @@ and missing-field mode. Active-path cycle detection remains separate. Shared
 subgraphs are checked once per schema/mode instead of expanding every alias path;
 different schemas still validate the same table independently. The strict pass
 uses a fresh memo after default filling, so earlier successes cannot hide changes.
+
+## Independent current schemas
+
+A saved declaration may specify its current schema independently of defaults:
+
+```selu
+type Position = { p?: string; rp?: string; x?: number; y?: number };
+type Settings = { fallbackPos: Position; value: string | number };
+saved global DB using dbVersion: Settings = { fallbackPos: {}, value: 0 };
+```
+
+The annotation may also follow the saved name before version/adoption options.
+Defaults must remain literal data and are checked against the schema; a factory
+call is not a literal default. Optional fields can be omitted. Only keys present
+in defaults are filled: `{p: "BOTTOM", x: 0}` retains absent `rp` and `y`.
+Adoption validates the entire annotated schema before publication, including
+exact union alternatives and literal values, without coercion. Schema history
+records the annotation rather than the smaller default object. The existing
+candidate-copy, alias validation, memoisation and transactional commit paths
+remain in use.

@@ -392,7 +392,15 @@ impl Lowerer<'_> {
                             st(version_key),
                             n(*version),
                             defaults_value,
-                            schema(self.types.get(defaults.id).expect("checked defaults")),
+                            schema(
+                                self.types
+                                    .saved_schemas
+                                    .get(&stmt.span.start)
+                                    .unwrap_or_else(|| {
+                                        self.types.get(defaults.id).expect("checked defaults")
+                                    }),
+                            ),
+                            objects(self.types.get(defaults.id)),
                             entry,
                             ix(f(rt(), "readers"), st(&key)),
                             ix(f(rt(), "contexts"), st(&key)),
@@ -512,7 +520,18 @@ fn schema(ty: &selu_check::Type) -> LExpr {
         Type::String => st("string"),
         Type::Boolean => st("boolean"),
         Type::Null => st("nil"),
+        Type::StringLiteral(v) => LExpr::Table(vec![LField::Named("literal".into(), st(&v))]),
+        Type::NumberLiteral(v) => {
+            LExpr::Table(vec![LField::Named("literal".into(), LExpr::Number(v))])
+        }
+        Type::BooleanLiteral(v) => {
+            LExpr::Table(vec![LField::Named("literal".into(), LExpr::Bool(v))])
+        }
         Type::Optional(t) => LExpr::Table(vec![LField::Named("optional".into(), schema(&t))]),
+        Type::Union(ts) => LExpr::Table(vec![LField::Named(
+            "union".into(),
+            LExpr::Table(ts.iter().map(|t| LField::Pos(schema(t))).collect()),
+        )]),
         Type::SavedRepair(t) => LExpr::Table(vec![LField::Named("repair".into(), schema(&t))]),
         Type::Array(t) => LExpr::Table(vec![LField::Named("array".into(), schema(&t))]),
         Type::Map(k, v) => LExpr::Table(vec![
