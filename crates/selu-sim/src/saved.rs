@@ -79,17 +79,59 @@ impl Sim {
         saved: &SavedSnapshot,
     ) -> SimResult<Self> {
         let sim = Self::new()?;
-        for (name, value) in &saved.0 {
+        for name in saved.0.keys() {
             sim.lua
                 .globals()
                 .raw_get::<mlua::Table>("__selu_saved_names")?
                 .raw_set(name.as_str(), true)?;
-            sim.lua
-                .globals()
-                .raw_set(name.as_str(), restore(&sim.lua, value)?)?;
         }
-        sim.load_addon(addon, files)?;
+        sim.load_addon_with_restore(addon, files, |sim| {
+            for (name, value) in &saved.0 {
+                sim.lua
+                    .globals()
+                    .raw_set(name.as_str(), restore(&sim.lua, value)?)?;
+            }
+            Ok(())
+        })?;
         Ok(sim)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshots_restore_between_chunks_and_own_loaded_event() {
+        let snapshot = SavedSnapshot(BTreeMap::from([("DB".into(), SavedValue::Number(73.0))]));
+        let files = [(
+            "main.lua".into(),
+            r#"
+            assert(DB==nil)
+            local addon=...
+            local frame=CreateFrame('Frame')
+            frame:RegisterEvent('ADDON_LOADED')
+            frame:SetScript('OnEvent',function(_,_,name)
+                if name==addon then assert(DB==73); print('restored') end
+            end)
+        "#
+            .into(),
+        )];
+        let sim = Sim::login_saved("Timing", &files, &snapshot).unwrap();
+        // Globals restored for one addon stay visible while another addon loads.
+        sim.load_addon("Other", &[]).unwrap();
+        assert_eq!(sim.prints(), ["restored"]);
+        assert_eq!(sim.logout_saved(&["DB"]).unwrap(), snapshot);
+    }
+
+    #[test]
+    fn pre_chunk_saved_seeding_fails_loudly() {
+        let sim = Sim::new().unwrap();
+        sim.eval("__selu_saved_names.DB=true; DB={value=73}")
+            .unwrap();
+        let error = sim.load_addon("Timing", &[]).unwrap_err().to_string();
+        assert!(error.contains("seeded before addon chunks"), "{error}");
+        sim.eval("assert(DB.value==73)").unwrap();
     }
 }
 /// Account-wide data is shared; each character has an independent persisted tree.

@@ -373,13 +373,19 @@ fn adoption_type(ty: Type, adoption: bool) -> Type {
     )
 }
 
-fn closed_schema(ty: &Type, depth: usize) -> bool {
+pub(crate) fn closed_schema(ty: &Type, depth: usize) -> bool {
     if depth > 64 {
         return false;
     }
     match crate::shape_of(ty) {
         Type::Number | Type::String | Type::Boolean | Type::Null => true,
         Type::Optional(t) | Type::Array(t) => closed_schema(&t, depth + 1),
+        Type::SavedRepair(t) => {
+            matches!(
+                crate::shape_of(&t),
+                Type::Object(_) | Type::Array(_) | Type::Map(..)
+            ) && closed_schema(&t, depth + 1)
+        }
         Type::Object(fs) => fs.values().all(|t| closed_schema(t, depth + 1)),
         Type::Map(k, v) => {
             matches!(

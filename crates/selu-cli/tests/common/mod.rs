@@ -7,6 +7,87 @@ use selu_manifest::Manifest;
 use selu_sim::Sim;
 use std::path::Path;
 
+pub trait BoundedCommand {
+    fn bounded_output(&mut self) -> std::io::Result<std::process::Output>;
+}
+impl BoundedCommand for std::process::Command {
+    fn bounded_output(&mut self) -> std::io::Result<std::process::Output> {
+        use std::{
+            process::Stdio,
+            time::{Duration, Instant},
+        };
+        let mut child = self.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        eprintln!("test CLI PID {}, timeout 60s", child.id());
+        let start = Instant::now();
+        while child.try_wait()?.is_none() {
+            if start.elapsed() > Duration::from_secs(60) {
+                child.kill()?;
+                child.wait()?;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "test CLI exceeded 60s",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        child.wait_with_output()
+    }
+}
+
+/// Synthetic saved input is evaluated only between chunks and ADDON_LOADED.
+/// Pre-load snapshots use a separate data-only VM, never the addon VM.
+pub struct SavedVm {
+    sim: Sim,
+    input: std::cell::RefCell<Vec<String>>,
+    loaded: std::cell::Cell<bool>,
+}
+impl SavedVm {
+    pub fn new() -> Self {
+        Self {
+            sim: Sim::new().unwrap(),
+            input: Default::default(),
+            loaded: Default::default(),
+        }
+    }
+    pub fn eval(&self, input: &str) -> selu_sim::SimResult<()> {
+        if self.loaded.get() {
+            self.sim.eval(input)
+        } else {
+            self.input.borrow_mut().push(input.into());
+            Ok(())
+        }
+    }
+    pub fn load_addon(&self, addon: &str, files: &[(String, String)]) -> selu_sim::SimResult<()> {
+        assert!(!self.loaded.replace(true), "use a fresh VM for each login");
+        self.sim.load_addon_with_restore(addon, files, |sim| {
+            for input in self.input.borrow().iter() {
+                sim.eval(input)?;
+            }
+            Ok(())
+        })
+    }
+    pub fn logout_saved(
+        &self,
+        names: &[&str],
+    ) -> selu_sim::SimResult<selu_sim::saved::SavedSnapshot> {
+        if self.loaded.get() {
+            self.sim.logout_saved(names)
+        } else {
+            let data = Sim::new()?;
+            for input in self.input.borrow().iter() {
+                data.eval(input)?;
+            }
+            data.logout_saved(names)
+        }
+    }
+}
+impl std::ops::Deref for SavedVm {
+    type Target = Sim;
+    fn deref(&self) -> &Self::Target {
+        &self.sim
+    }
+}
+
 pub fn manifest() -> Manifest {
     selu_manifest::load_manifest(
         &Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -354,7 +354,7 @@ impl Lowerer<'_> {
                 if let Some(version_key) = version_key {
                     let legacy_value = legacy
                         .as_ref()
-                        .map_or(LExpr::Nil, |_| g(&format!("legacy_{saved}")));
+                        .map_or(LExpr::Nil, |_| call(&format!("legacy_{saved}"), vec![]));
                     let publish = LExpr::Function(LFunction {
                         params: vec!["__selu_saved_result".into(), "__selu_saved_retire".into()],
                         vararg: false,
@@ -381,12 +381,13 @@ impl Lowerer<'_> {
                         },
                     });
                     // Direct, compiler-owned global references; no dynamic global lookup.
-                    // The source binding shadows the global, so capture the native root first.
+                    // Getters resolve outside the shadowing source binding, but read only
+                    // inside this loader, after the client's SavedVariables restoration.
                     body.push(invoke(helper(
                         "adopt",
                         vec![
                             st(&key),
-                            g(&format!("root_{saved}")),
+                            call(&format!("root_{saved}"), vec![]),
                             legacy_value,
                             st(version_key),
                             n(*version),
@@ -512,6 +513,7 @@ fn schema(ty: &selu_check::Type) -> LExpr {
         Type::Boolean => st("boolean"),
         Type::Null => st("nil"),
         Type::Optional(t) => LExpr::Table(vec![LField::Named("optional".into(), schema(&t))]),
+        Type::SavedRepair(t) => LExpr::Table(vec![LField::Named("repair".into(), schema(&t))]),
         Type::Array(t) => LExpr::Table(vec![LField::Named("array".into(), schema(&t))]),
         Type::Map(k, v) => LExpr::Table(vec![
             LField::Named("key".into(), schema(&k)),
@@ -539,9 +541,15 @@ pub(crate) fn adoption_captures(program: &Program) -> LBlock {
             ..
         } = &inner(stmt).kind
         {
-            out.push(local(&format!("root_{saved}"), name(saved)));
+            out.push(local(
+                &format!("root_{saved}"),
+                fun(&[], vec![ret(name(saved))]),
+            ));
             if let Some(legacy) = legacy {
-                out.push(local(&format!("legacy_{saved}"), name(legacy)));
+                out.push(local(
+                    &format!("legacy_{saved}"),
+                    fun(&[], vec![ret(name(legacy))]),
+                ));
                 out.push(local(
                     &format!("retire_{saved}"),
                     fun(&[], vec![assign(name(legacy), LExpr::Nil)]),

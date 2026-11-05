@@ -1,4 +1,6 @@
 //! End-to-end runner contracts, using the actual CLI build and its Lua output.
+mod common;
+use common::BoundedCommand;
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -31,7 +33,93 @@ fn run(dir: &Path, filter: Option<&str>) -> std::process::Output {
     if let Some(filter) = filter {
         cmd.args(["--filter", filter]);
     }
-    cmd.output().unwrap()
+    cmd.bounded_output().unwrap()
+}
+
+#[test]
+fn saved_adoption_scenarios_hydrate_after_chunks_including_reload() {
+    let dir = project(
+        "sa2-order",
+        r#"
+        import { status, writers, characters } from "../src/main";
+        test("client-order adoption", () => {
+            expect(status()).toBe("newer");
+            expect(writers()).toBe(0);
+            sim.reload();
+            expect(sim.prints()).toContain("newer");
+            expect(sim.prints()).toContain("0");
+            expect(sim.prints()).not.toContain("ready");
+            expect(sim.prints()).not.toContain("1");
+        });
+    "#,
+    );
+    std::fs::write(dir.join("src/main.selu"), r#"
+        type Characters = Map<string,{ownedValue?:string;restoreValue?:string}>;
+        type Historical = {cooldownText?:SavedRepair<{characters?:SavedRepair<Characters>}>};
+        saved global RennerToolkitDB version 5 using dbVersion legacy RennersAddonsDB = {
+            cooldownText:{characters:new Map<string,{ownedValue?:string;restoreValue?:string}>()}
+        };
+        migrate RennerToolkitDB 1 -> 2 (old:Historical) {}
+        migrate RennerToolkitDB 2 -> 3 (old:Historical) {}
+        migrate RennerToolkitDB 3 -> 4 (old:Historical) {}
+        migrate RennerToolkitDB 4 -> 5 (old:Historical) {
+            const container=old.cooldownText;
+            if (typeof container!="table") { old.cooldownText={}; }
+            const settings=old.cooldownText;
+            if (typeof settings=="table") {
+                const chars=settings.characters;
+                if (typeof chars!="table") { settings.characters=new Map<string,{ownedValue?:string;restoreValue?:string}>(); }
+            }
+        }
+        let attached=0;
+        function attach() { RennerToolkitDB.whenReady(data => { attached+=1; }); }
+        attach();
+        export function writers():number { return attached; }
+        export function status():string { return RennerToolkitDB.status; }
+        export function characters():number { const data=RennerToolkitDB.data; if(data!=null) { return data.cooldownText.characters.count(); } return -1; }
+        on PLAYER_LOGIN() { print(RennerToolkitDB.status); print(attached); }
+    "#).unwrap();
+    // Copied verbatim from the read-only wave-0 falsifier (synthetic data).
+    std::fs::write(
+        dir.join("tests/api.test.scenario.json"),
+        include_str!("fixtures/adoption_future.scenario.json"),
+    )
+    .unwrap();
+    let strict = || {
+        Command::new(env!("CARGO_BIN_EXE_selu"))
+            .arg("test")
+            .arg(&dir)
+            .args(["--strict", "--json"])
+            .bounded_output()
+            .unwrap()
+    };
+    let out = strict();
+    assert!(
+        out.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::write(dir.join("tests/api.test.scenario.json"), r#"{"saved":{"RennerToolkitDB":{"Table":[[{"String":[100,98,86,101,114,115,105,111,110]},{"Number":4}],[{"String":[99,111,111,108,100,111,119,110,84,101,120,116]},{"Boolean":false}]]}}}"#).unwrap();
+    std::fs::write(
+        dir.join("tests/api.test.selu"),
+        r#"
+        import { status, writers, characters } from "../src/main";
+        test("typed migration-five repair", () => {
+            expect(status()).toBe("ready"); expect(writers()).toBe(1); expect(characters()).toBe(0);
+            sim.reload();
+            expect(sim.prints()).toEqual(["ready", "1"]);
+        });
+    "#,
+    )
+    .unwrap();
+    let out = strict();
+    assert!(
+        out.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 #[test]
 fn runner_api_reload_imports_spies_and_isolation() {
@@ -542,7 +630,7 @@ fn sb_seed_character_reload_and_strict_gate() {
         .arg("test")
         .arg(&dir)
         .arg("--strict")
-        .output()
+        .bounded_output()
         .unwrap();
     assert!(
         out.status.success(),
@@ -554,7 +642,7 @@ fn sb_seed_character_reload_and_strict_gate() {
         .arg("test")
         .arg(&dir)
         .args(["--strict", "--filter", "does not exist"])
-        .output()
+        .bounded_output()
         .unwrap();
     assert!(!out.status.success());
     std::fs::write(
@@ -566,7 +654,7 @@ fn sb_seed_character_reload_and_strict_gate() {
         .arg("test")
         .arg(&dir)
         .args(["--strict", "--json"])
-        .output()
+        .bounded_output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let report: selu_test::Report = serde_json::from_slice(&out.stdout).unwrap();
@@ -589,7 +677,7 @@ fn sb_native_error_identity_in_shared_project_runtime() {
     let out = Command::new(env!("CARGO_BIN_EXE_selu"))
         .arg("build")
         .arg(&dir)
-        .output()
+        .bounded_output()
         .unwrap();
     assert!(
         out.status.success(),
