@@ -97,8 +97,31 @@ pub fn read_toc_target(dir: &Path, target: Option<&str>) -> Result<Toc, String> 
 /// The `(chunk name, source)` pairs to run, in order. The chunk name is the
 /// path as the `.toc` lists it, so error positions read `main.lua:3:`.
 pub fn read_files(toc: &Toc) -> Result<Vec<(String, String)>, String> {
+    read_files_with_diagnostics(toc, |_| {})
+}
+
+pub fn read_files_with_diagnostics(
+    toc: &Toc,
+    mut diagnostic: impl FnMut(String),
+) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
     for file in &toc.files {
+        let root = toc.dir.canonicalize().map_err(|e| e.to_string())?;
+        let listed = toc.dir.join(file);
+        let path = match listed.canonicalize() {
+            Ok(path) => path,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                diagnostic(format!(
+                    "missing TOC file: {} (continuing)",
+                    listed.display()
+                ));
+                continue;
+            }
+            Err(e) => return Err(format!("cannot read {}: {e}", listed.display())),
+        };
+        if !path.starts_with(&root) {
+            return Err(format!("file escapes addon folder: {file}"));
+        }
         let lower = file.to_ascii_lowercase();
         if lower.ends_with(".xml") {
             return Err(format!(
@@ -111,15 +134,6 @@ pub fn read_files(toc: &Toc) -> Result<Vec<(String, String)>, String> {
                 "{}: unknown file type in the .toc: {file}",
                 toc.name
             ));
-        }
-        let root = toc.dir.canonicalize().map_err(|e| e.to_string())?;
-        let path = toc
-            .dir
-            .join(file)
-            .canonicalize()
-            .map_err(|e| e.to_string())?;
-        if !path.starts_with(&root) {
-            return Err(format!("file escapes addon folder: {file}"));
         }
         let source = std::fs::read_to_string(&path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;

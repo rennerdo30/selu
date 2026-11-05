@@ -173,8 +173,8 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
         Some(Rect {
             left: 0.0,
             bottom: 0.0,
-            width: r.width,
-            height: r.height,
+            width: r.width * scale,
+            height: r.height * scale,
         })
     } else if valid {
         horizontal

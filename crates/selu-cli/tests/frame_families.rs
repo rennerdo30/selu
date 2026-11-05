@@ -153,7 +153,7 @@ fn review_zero_index_and_production_session_reload() {
             session.reload().unwrap();
         }
         session
-            .eval("assert(_G['MerchantItem2'] == nil); UnmodelledAPI(1); UnmodelledAPI(2)")
+            .eval("assert(_G['MerchantItem2'] == nil); assert(UnmodelledAPI == nil); assert(UnmodelledAPI == nil)")
             .unwrap();
         assert_eq!(
             session
@@ -241,7 +241,7 @@ fn review_loaded_project_manifest_and_manual_family_survive_reload() {
     session.load_addon_dir(&addon).unwrap();
     session.register_frame_family("Extra", "Child").unwrap();
     session.reload().unwrap();
-    session.eval("assert(_G['MerchantItem2'] == nil); assert(_G['Extra1Child'] == nil); UnmodelledAPI(); UnmodelledAPI()").unwrap();
+    session.eval("assert(_G['MerchantItem2'] == nil); assert(_G['Extra1Child'] == nil); assert(UnmodelledAPI == nil); assert(UnmodelledAPI == nil)").unwrap();
     assert_eq!(
         session
             .logs()
