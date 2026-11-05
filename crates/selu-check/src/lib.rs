@@ -1196,6 +1196,9 @@ impl Ctx<'_> {
             return t;
         }
         if *t == errors::error_type() {
+            if name == "stack" {
+                return Type::optional(Type::String);
+            }
             if name == "message" {
                 return Type::String;
             }

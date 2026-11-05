@@ -7,6 +7,7 @@ pub(crate) fn error_type() -> Type {
         vec![],
         [
             ("message".into(), Type::String),
+            ("stack".into(), Type::optional(Type::String)),
             ("value".into(), Type::Unknown),
         ]
         .into(),

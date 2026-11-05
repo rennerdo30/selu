@@ -10,7 +10,7 @@ can still be Error.
 `new Error()` uses the empty message. Invalid arguments are SELU0540;
 throwing another type is SELU0541. Structural `{message: "..."}` objects do
 not become Errors. Earlier expression errors suppress follow-on diagnostics.
-There are no name/stack methods or inheritance requirements in this minimal type.
+`stack: string?` contains a protected client traceback when available. It is null when unavailable, inaccessible or secret. The compiler selects manifest-sourced debugstack, then debug.traceback. Catch and native boundaries retain Error identity and fill a missing stack. Simulator debugstack integration is supplied separately.
 
 Throw and catch preserve the object. After `throw original`, the caught value
 compares equal to original; its message is unchanged, and mutations affect
@@ -159,3 +159,26 @@ Simulator native callback failures reach an installed onError handler before
 host-side formatting. Nested native boundaries forward an internal reported-error
 marker, so the original error reaches the installed handler once. The owning test
 still records the failure even if a caller catches the propagated exception.
+
+`onError` returns a handle with `ensureInstalled(): void` and
+`isInstalled(): boolean`. There is one adapter per addon namespace. Calling
+onError again replaces the callback and returns that same handle; registrations
+do not stack. ensureInstalled compares native handler identity and replaces
+only a different handler, keeping that handler as the predecessor. A guard
+covers callback and predecessor execution, so a wrapping addon calling back
+into the adapter terminates. Repeated reassertion adds no captures. Use:
+
+```selu
+const errors = onError(e => { print(e.message); });
+on ADDON_LOADED(name) { errors.ensureInstalled(); }
+on PLAYER_ENTERING_WORLD() { errors.ensureInstalled(); }
+```
+
+When a replaced handler wraps the adapter and calls it back, the cycle is cut
+by forwarding to the original downstream sink exactly once, with the outer
+invocation's original arguments (including false and nil slots). The original
+sink is retained independently of the current predecessor. Downstream exceptions
+are contained and the guard is cleaned up. `downstreamFailureCount(): number`
+on the handle reports the cumulative number of failed downstream invocations;
+it records no potentially secret error payload. Re-registration retains this
+counter along with the handle.

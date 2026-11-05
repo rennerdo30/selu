@@ -496,6 +496,16 @@ pub fn uses_errors(program: &selu_syntax::Program) -> bool {
     found
 }
 impl Lowerer<'_> {
+    pub(crate) fn error_runtime(&self) -> String {
+        let trace = if self.target.manifest.function("debugstack").is_some() {
+            "debugstack"
+        } else if self.target.manifest.function("debug.traceback").is_some() {
+            "debug.traceback"
+        } else {
+            "nil"
+        };
+        ERROR_RUNTIME.replace("__SELU_TRACE__", trace)
+    }
     pub(crate) fn error_captures(&mut self, program: &selu_syntax::Program, out: &mut LBlock) {
         if uses_errors(program) {
             out.push(crate::raw("local __selu_pcall, __selu_error, __selu_tostring = pcall, error, tostring\nlocal __selu_error_setmetatable, __selu_error_getmetatable = setmetatable, getmetatable"));
@@ -532,7 +542,7 @@ impl Lowerer<'_> {
         let results = results.join(", ");
         let mut setup = vec![
             crate::raw(ERROR_STATE),
-            crate::raw(ERROR_RUNTIME),
+            crate::raw(&self.error_runtime()),
             // Save and restore: a callback entry may reset the count meanwhile.
             crate::raw(&format!(
                 "local function __selu_protect(fn, ...)\n  local depth = __selu_errors.depth\n  __selu_errors.depth = depth + 1\n  local {results} = __selu_pcall(fn, ...)\n  __selu_errors.depth = depth\n  return {results}\nend"
@@ -588,7 +598,22 @@ pub(crate) const ERROR_ENTRY: &str = r#"local function __selu_entry(fn)
     __selu_errors.depth = depth
   end
 end"#;
-pub(crate) const ERROR_RUNTIME: &str = r#"local function __selu_error_text(value)
+pub(crate) const ERROR_RUNTIME: &str = r#"local __selu_trace = __SELU_TRACE__
+local function __selu_stack()
+  if not __selu_trace then return nil end
+  local ok, value = __selu_pcall(__selu_trace)
+  if not ok then return nil end
+  if issecretvalue then
+    local checked, secret = __selu_pcall(issecretvalue, value)
+    if not checked or secret then return nil end
+  end
+  if canaccessvalue then
+    local checked, accessible = __selu_pcall(canaccessvalue, value)
+    if not checked or not accessible then return nil end
+  end
+  if type(value) == "string" then return value end
+end
+local function __selu_error_text(value)
   return __selu_tostring(value) .. ""
 end
 local function __selu_safe_error_text(value)
@@ -605,8 +630,13 @@ local function __selu_is_error(value)
 end
 local function __selu_wrap_error(value)
   local ok, isError = __selu_pcall(__selu_is_error, value)
-  if ok and isError then return value end
-  return __selu_new_error(__selu_safe_error_text(value), nil, value)
+  if ok and isError then
+    if value.stack == nil then value.stack = __selu_stack() end
+    return value
+  end
+  local wrapped = __selu_new_error(__selu_safe_error_text(value), nil, value)
+  wrapped.stack = __selu_stack()
+  return wrapped
 end
 local function __selu_raise(value)
   if __selu_errors.depth == 0 then
@@ -617,23 +647,71 @@ local function __selu_raise(value)
 end"#;
 
 pub(crate) const ON_ERROR_RUNTIME: &str = r#"local function __selu_on_error(callback)
-  local previous = geterrorhandler()
-  seterrorhandler(function(...)
+  local state = __selu_errors.handler
+  if state then
+    state.callback = callback
+    state.handle.ensureInstalled()
+    return state.handle
+  end
+  state = { callback = callback, busy = false, original = geterrorhandler(), failures = 0 }
+  local function downstream(fn, ...)
+    local ok, result = __selu_pcall(fn, ...)
+    if not ok then
+      state.failures = state.failures + 1
+      return nil
+    end
+    return result
+  end
+  local function original()
+    if state.originalForwarded then return end
+    state.originalForwarded = true
+    return downstream(state.original, unpack(state.arguments, 1, state.arguments.n))
+  end
+  local function handler(...)
+    if state.busy then return original() end
+    state.busy = true
+    state.originalForwarded = false
+    state.arguments = { n = select('#', ...), ... }
     local value = select(1, ...)
     local normalized
-    local accessible = not issecretvalue or not issecretvalue(value)
+    local accessible = true
+    if issecretvalue then
+      local ok, secret = __selu_pcall(issecretvalue, value)
+      accessible = ok and not secret
+    end
     if not accessible then
       normalized = __selu_new_error("<secret error>")
     else
       local ok, existing = __selu_pcall(function() return __selu_error_getmetatable(value) == __selu_errors.meta end)
-      if ok and existing then normalized = value
+      if ok and existing then
+        normalized = value
       elseif type(value) == "string" then normalized = __selu_new_error(value)
       else normalized = __selu_new_error("<" .. type(value) .. " error>") end
     end
+    if normalized.stack == nil then normalized.stack = __selu_stack() end
     local depth = __selu_errors.depth
     __selu_errors.depth = 0
-    __selu_pcall(callback, normalized)
+    __selu_pcall(state.callback, normalized)
     __selu_errors.depth = depth
-    return previous(...)
-  end)
+    local result
+    if state.previous == state.original then result = original()
+    else result = downstream(state.previous, ...) end
+    state.arguments = nil
+    state.busy = false
+    return result
+  end
+  state.handle = {
+    isInstalled = function() return geterrorhandler() == handler end,
+    downstreamFailureCount = function() return state.failures end,
+    ensureInstalled = function()
+      local current = geterrorhandler()
+      if current ~= handler then
+        state.previous = current
+        seterrorhandler(handler)
+      end
+    end
+  }
+  __selu_errors.handler = state
+  state.handle.ensureInstalled()
+  return state.handle
 end"#;

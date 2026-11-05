@@ -95,8 +95,13 @@ impl Lowerer<'_> {
             ));
             pieces.push(piece(
                 "12-errors",
-                vec![raw(errors::ERROR_RUNTIME)],
-                &["__selu_new_error", "__selu_wrap_error", "__selu_raise"],
+                vec![raw(&self.error_runtime())],
+                &[
+                    "__selu_new_error",
+                    "__selu_wrap_error",
+                    "__selu_raise",
+                    "__selu_stack",
+                ],
                 &["10-errors-state", "11-errors-captures"],
             ));
             if self.wow.error_handler {
