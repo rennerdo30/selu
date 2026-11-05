@@ -57,6 +57,33 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     Ok(value)
 }
 
+/// Lossless grouping used by the generator and materialized history caches.
+pub fn encode_manifest(manifest: &crate::Manifest) -> Result<Vec<u8>> {
+    let mut json = serde_json::to_value(manifest)?;
+    let mut groups = std::collections::BTreeMap::<String, serde_json::Value>::new();
+    let mut globals = Vec::new();
+    for global in &manifest.globals {
+        let mut entry = serde_json::to_value(global)?;
+        if global.value.is_some() {
+            globals.push(entry);
+            continue;
+        }
+        entry.as_object_mut().unwrap().remove("name");
+        let key = serde_json::to_string(&entry)?;
+        let group = groups.entry(key).or_insert_with(|| {
+            entry["names"] = serde_json::json!([]);
+            entry
+        });
+        group["names"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(global.name));
+    }
+    globals.extend(groups.into_values());
+    json["globals"] = serde_json::Value::Array(globals);
+    encode(&json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -24,15 +24,13 @@ failures to compile time.
 
 ## 2. Targets
 
-A target is `flavour@version`. The version can be as exact as you want:
+A target is `product@major.minor.patch.build`. The version can be as exact as you want:
 
 ```
-selu build --target retail                 # newest retail build Selu knows
-selu build --target retail@12.0            # newest known 12.0.x build
-selu build --target retail@12.0.1          # newest known build of 12.0.1
-selu build --target retail@12.0.1.64914    # exactly this build
-selu build --target retail@installed       # whatever your installed client is
-selu build --target retail,classic-era     # several targets at once
+selu build --target wow                         # newest stored build, then locked
+selu build --target wow@12.1.5.70783              # exact full build
+selu build --target wow,wow_classic_era          # several products
+selu targets --update                           # explicitly advance the project lock
 ```
 
 (Version numbers here are examples.)
@@ -55,7 +53,7 @@ only overrides it for one run.
 # selu.toml
 [addon]
 name = "MyAddon"
-targets = ["retail@12.0.1", "classic-era"]
+targets = ["wow", "wow_classic_era"]
 ```
 
 The interface number in the generated `.toc` (`## Interface: 120001`) comes
@@ -142,7 +140,7 @@ How the compiler handles each:
   a new restriction the manifest doesn't know yet): the compiler emits a guard
   and a one-time warning in the log. Code never fails silently.
 
-**Keeping manifests honest.** `selu probe --target retail@installed` builds a
+**Keeping manifests honest.** `selu probe --target wow` builds a
 small probe addon. You log in once, it checks which functions, events and
 restrictions really exist on your client and writes the result to its
 SavedVariables; `selu probe import` turns that into manifest evidence. A
@@ -197,7 +195,7 @@ Most addon bugs today are found by logging in, reloading and guessing. Selu
 should let you find them on your desktop first.
 
 ```
-selu debug --target forever       # build, then start the virtual WoW simulator
+selu debug --target wowf       # build, then start the virtual WoW simulator
 selu test                         # run test scenarios headless, same simulator
 ```
 
@@ -248,7 +246,7 @@ debugger. Rebuilding on save reloads the addon in place, like a `/reload`.
 
 ```
 selu debug                        # current folder, default target
-selu debug ./MyAddon --target retail
+selu debug ./MyAddon --target wow
 selu debug --break-on-load        # pause before the first line runs
 ```
 

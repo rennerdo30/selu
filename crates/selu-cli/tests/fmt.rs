@@ -62,7 +62,7 @@ fn fmt_command_writes_and_checks() {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"F\"\ntargets = [\"forever@1.0\"]\n\n[format]\nindent = 4\n",
+        "[addon]\nname = \"F\"\ntargets = [\"wowf@1.0.0.1000\"]\n\n[format]\nindent = 4\n",
     )
     .unwrap();
     std::fs::write(

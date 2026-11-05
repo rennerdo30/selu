@@ -1,4 +1,4 @@
-use selu_manifest::{Manifest, load_manifest};
+use selu_manifest::{Manifest, store::load_build};
 use selu_manifest_gen::{merge_system, read_documentation};
 fn empty() -> Manifest {
     serde_json::from_str(
@@ -7,12 +7,12 @@ fn empty() -> Manifest {
     .unwrap()
 }
 fn manifests() -> Vec<Manifest> {
-    [("retail", "12.1.5.70391"), ("forever", "1.60.1.70532")]
+    [("wow", "12.1.5.70391"), ("wowf", "1.60.1.70532")]
         .iter()
         .map(|(f, b)| {
-            load_manifest(
-                &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join(format!("../../manifests/{f}/{b}.selum")),
+            load_build(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+                &format!("{f}@{b}"),
             )
             .unwrap()
         })

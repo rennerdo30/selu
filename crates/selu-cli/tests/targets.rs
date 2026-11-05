@@ -118,12 +118,7 @@ fn both_layouts_fold_or_register_only_available_events() {
 }
 #[test]
 fn real_manifests_check_missing_functions_and_events() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
-    let ts: Vec<_> = selu_manifest::load_manifest_dir(&root)
-        .unwrap()
-        .into_iter()
-        .filter(|m| !m.fixture && ["retail", "forever"].contains(&m.flavour.as_str()))
-        .collect();
+    let ts = real_targets();
     assert_eq!(ts.len(), 2);
     for source in [
         "C_PaperDollInfo.CanCursorCanGoInSlot(1);",
@@ -133,7 +128,7 @@ fn real_manifests_check_missing_functions_and_events() {
         let (c, _) = selu_check::check_module_targets(&p, &ts[0], Default::default(), &ts);
         assert_eq!(c.diagnostics.len(), 1, "{:?}", c.diagnostics);
         assert_eq!(c.diagnostics[0].code, "SELU0500");
-        assert!(c.diagnostics[0].message.contains("forever@"));
+        assert!(c.diagnostics[0].message.contains("wowf@"));
     }
 }
 #[test]
@@ -190,7 +185,7 @@ fn cli_layout_and_unknown_build_keys() {
             for flavour in if shared {
                 vec![""]
             } else {
-                vec!["-retail", "-forever"]
+                vec!["-wow", "-wowf"]
             } {
                 let dir = root.join(format!("dist/Test{flavour}"));
                 let toc = std::fs::read_to_string(dir.join("Test.toc")).unwrap();
@@ -258,11 +253,10 @@ fn namespace_guard_does_not_imply_every_member_exists() {
     assert_eq!(c.diagnostics[0].code, "SELU0500");
 }
 fn real_targets() -> Vec<selu_manifest::Manifest> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
-    selu_manifest::load_manifest_dir(&root)
-        .unwrap()
-        .into_iter()
-        .filter(|m| !m.fixture && ["retail", "forever"].contains(&m.flavour.as_str()))
+    let store = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store");
+    ["wowf@1.60.1.70532", "wow@12.1.5.70391"]
+        .iter()
+        .map(|target| selu_manifest::store::load_build(&store, target).unwrap())
         .collect()
 }
 fn review_check(src: &str) -> selu_check::Checked {

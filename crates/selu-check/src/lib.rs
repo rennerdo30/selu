@@ -1628,7 +1628,7 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, "SELU0301");
         assert!(
-            diags[0].message.contains("forever@1.0.0.1000"),
+            diags[0].message.contains("wowf@1.0.0.1000"),
             "{}",
             diags[0].message
         );

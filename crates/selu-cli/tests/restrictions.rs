@@ -1,9 +1,9 @@
 mod common;
 use selu_sim::Sim;
 fn compile(src: &str) -> (String, Vec<String>) {
-    let mut m = selu_manifest::load_manifest(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/retail/12.1.5.70391.selum"),
+    let mut m = selu_manifest::store::load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wow@12.1.5.70391",
     )
     .unwrap();
     let mut f = m
@@ -59,9 +59,8 @@ fn protected_value_is_an_error() {
 }
 #[test]
 fn secret_read_becomes_null_before_arithmetic() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../manifests/retail/12.1.5.70391.selum");
-    let m = selu_manifest::load_manifest(&path).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store");
+    let m = selu_manifest::store::load_build(&path, "wow@12.1.5.70391").unwrap();
     let src = "const health = UnitHealth(\"player\") ?? 0; print(health + 1);";
     let p = selu_syntax::parse("test.selu", src).unwrap();
     let c = selu_check::check_program(&p, &m);
@@ -76,9 +75,8 @@ fn secret_read_becomes_null_before_arithmetic() {
 
 #[test]
 fn per_result_secret_policy_preserves_public_positions() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../manifests/retail/12.1.5.70391.selum");
-    let m = selu_manifest::load_manifest(&path).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store");
+    let m = selu_manifest::store::load_build(&path, "wow@12.1.5.70391").unwrap();
     let src = "const [name, filename, id] = UnitClass(\"player\"); const publicName: string = filename ?? \"\"; print(name ?? \"hidden\", publicName, id);";
     let p = selu_syntax::parse("test.selu", src).unwrap();
     let c = selu_check::check_program(&p, &m);
@@ -137,9 +135,10 @@ fn conditional_function_values_keep_the_stricter_policy() {
 #[test]
 fn several_targets_keep_secret_guards_regardless_of_primary_order() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
-    let retail = selu_manifest::load_manifest(&root.join("retail/12.1.5.70391.selum")).unwrap();
+    let retail = selu_manifest::store::load_build(&root.join("store"), "wow@12.1.5.70391").unwrap();
     let classic =
-        selu_manifest::load_manifest(&root.join("classic-era/1.15.9.70576.selum")).unwrap();
+        selu_manifest::store::load_build(&root.join("store"), "wow_classic_era@1.15.9.70576")
+            .unwrap();
     let targets = [classic, retail];
     for primary in &targets {
         let p = selu_syntax::parse("test.selu", "print(UnitHealth(\"player\") ?? 0);").unwrap();

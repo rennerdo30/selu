@@ -5,6 +5,8 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+const SOURCE_REPOSITORY: &str = "E:/Development/wow-ui-source";
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn git(repo: &str, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8(git_bytes(repo, args)?)?)
@@ -192,144 +194,383 @@ fn generate(args: &[String]) -> Result<()> {
     );
     Ok(())
 }
+// Verified against the exporter's TACT product set and each branch's workflow.
 const CLIENTS: &[(&str, &str)] = &[
-    ("classic", "classic"),
-    ("classic-anniversary", "classic_anniversary"),
-    ("classic-era", "classic_era"),
-    ("classic-titan", "classic_titan"),
-    ("forever", "forever"),
-    ("retail", "live"),
+    ("live", "wow"),
+    ("ptr", "wowt"),
+    ("ptr2", "wowxptr"),
+    ("beta", "wow_beta"),
+    ("forever", "wowf"),
+    ("classic", "wow_classic"),
+    ("classic_ptr", "wow_classic_ptr"),
+    ("classic_beta", "wow_classic_beta"),
+    ("classic_era", "wow_classic_era"),
+    ("classic_era_ptr", "wow_classic_era_ptr"),
+    ("classic_anniversary", "wow_anniversary"),
+    ("classic_titan", "wow_classic_titan"),
 ];
+fn build_title(title: &str) -> Option<Build> {
+    let (version, build) = title.split_once(" (")?;
+    Build::parse(&format!("{version}.{}", build.strip_suffix(')')?)).ok()
+}
+#[cfg(test)]
 fn names_added_removed(old: &[String], new: &[String]) -> (usize, usize) {
     use std::collections::BTreeSet;
     let old: BTreeSet<_> = old.iter().collect();
     let new: BTreeSet<_> = new.iter().collect();
     (new.difference(&old).count(), old.difference(&new).count())
 }
+fn refresh_build_table(doc: &str, rows: &[String]) -> Result<String> {
+    let start_marker = "<!-- selu-store-builds:start -->";
+    let end_marker = "<!-- selu-store-builds:end -->";
+    let heading = "## Stored product builds";
+    let section = format!(
+        "{start_marker}\n{heading}\n\n| Product | Branch | Full build | Interface | Commit |\n|---|---|---|---|---|\n{}\n{end_marker}",
+        rows.join("\n")
+    );
+    let mut output = doc.to_owned();
+    if let Some(start) = doc.find(start_marker) {
+        let end = start
+            + doc[start..]
+                .find(end_marker)
+                .ok_or("missing generated build table end marker")?
+            + end_marker.len();
+        output.replace_range(start..end, &section);
+    } else if let Some(start) = doc.find(heading) {
+        let tail = start + heading.len();
+        let end = doc[tail..]
+            .find("\n## ")
+            .map_or(doc.len(), |offset| tail + offset);
+        output.replace_range(start..end, &format!("{section}\n"));
+    } else {
+        output.push_str(&format!("\n{section}\n"));
+    }
+    Ok(output)
+}
+
+fn extract_product(product: &str, commit: &str) -> Result<Manifest> {
+    // Reuse the reviewed widget supplements; interface remains a build convention.
+    let family = match product {
+        "wowf" => "forever",
+        "wow_classic" | "wow_classic_ptr" | "wow_classic_beta" => "classic",
+        "wow_classic_era" | "wow_classic_era_ptr" => "classic-era",
+        "wow_anniversary" => "classic-anniversary",
+        "wow_classic_titan" => "classic-titan",
+        _ => "retail",
+    };
+    let temp = std::env::temp_dir().join(format!("selu-update-{}-{product}", std::process::id()));
+    std::fs::create_dir(&temp)?;
+    let output = temp.join("manifest.selum");
+    let result = (|| -> Result<Manifest> {
+        std::fs::copy(
+            Path::new("manifests").join(family).join("overlay.toml"),
+            temp.join("overlay.toml"),
+        )?;
+        generate(&[
+            product.into(),
+            commit.into(),
+            output.to_str().ok_or("invalid temp path")?.into(),
+            SOURCE_REPOSITORY.into(),
+        ])?;
+        selu_manifest::format::decode(&std::fs::read(&output)?)
+    })();
+    for name in ["manifest.selum", "overlay.toml"] {
+        let _ = std::fs::remove_file(temp.join(name));
+    }
+    let _ = std::fs::remove_dir(&temp);
+    result
+}
+
+fn retained_reextractions(
+    store: &selu_manifest::store::Store,
+    pending: &[Manifest],
+    selected: &[&str],
+    version: u32,
+) -> Result<Vec<(String, String, String)>> {
+    let mut requests = Vec::new();
+    for target in store.builds() {
+        let (product, _) = target
+            .split_once('@')
+            .ok_or("invalid stored build identity")?;
+        let selected_product = selected.is_empty()
+            || selected.iter().any(|name| {
+                selu_manifest::product(name) == product
+                    || CLIENTS
+                        .iter()
+                        .any(|(branch, p)| name == branch && *p == product)
+            });
+        if selected_product
+            && store.needs_extraction(target, version)
+            && !pending
+                .iter()
+                .any(|manifest| manifest.target_string() == target)
+        {
+            let manifest = store.load(target)?;
+            requests.push((
+                target.into(),
+                product.into(),
+                manifest
+                    .source
+                    .as_ref()
+                    .ok_or("stored build lacks source provenance")?
+                    .commit
+                    .clone(),
+            ));
+        }
+    }
+    Ok(requests)
+}
+
 fn update(args: &[String]) -> Result<()> {
-    let repo = "E:/Development/wow-ui-source";
-    let keep = args.iter().any(|a| a == "--keep-old");
-    let selected: Vec<_> = args.iter().filter(|a| a.as_str() != "--keep-old").collect();
+    let repo = SOURCE_REPOSITORY;
+    let directory = Path::new("manifests/store");
+    let mut store = selu_manifest::store::Store::open(directory)?;
+    let refs = git(
+        repo,
+        &["for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
+    )?;
+    let selected: Vec<_> = args
+        .iter()
+        .filter(|a| a.as_str() != "--keep-old")
+        .map(String::as_str)
+        .collect();
     for name in &selected {
         if !CLIENTS
             .iter()
-            .any(|(f, b)| name.as_str() == *f || name.as_str() == *b)
+            .any(|(branch, product)| name == branch || selu_manifest::product(name) == *product)
         {
-            return Err(format!("unknown flavour: {name}").into());
+            return Err(format!(
+                "unknown product or unmapped branch {name}; add a verified mapping first"
+            )
+            .into());
+        }
+        if selu_manifest::product(name) != *name {
+            eprintln!(
+                "warning: selector `{name}` is deprecated; use `{}`",
+                selu_manifest::product(name)
+            );
         }
     }
-    let doc_path = Path::new("docs/manifests.md");
-    let mut doc = std::fs::read_to_string(doc_path)?;
-    for &(flavour, branch) in CLIENTS {
+    let mut rows = Vec::new();
+    let mut pending = Vec::new();
+    for reference in refs.lines().filter(|r| !r.ends_with("/HEAD")) {
+        let branch = reference
+            .strip_prefix("refs/remotes/origin/")
+            .ok_or("invalid branch ref")?;
+        if branch == "automation" {
+            continue;
+        }
+        let Some(&(_, product)) = CLIENTS.iter().find(|(b, _)| *b == branch) else {
+            eprintln!("unmapped source branch {branch}; add a verified product mapping");
+            continue;
+        };
         if !selected.is_empty()
             && !selected
                 .iter()
-                .any(|a| a.as_str() == flavour || a.as_str() == branch)
+                .any(|a| *a == branch || selu_manifest::product(a) == product)
         {
             continue;
         }
-        let reference = format!("refs/remotes/origin/{branch}");
-        let log = git(
-            repo,
-            &["log", "-1", "--format=%H%n%s%n%ct", &reference, "--"],
-        )?;
-        let mut lines = log.lines();
-        let commit = lines.next().ok_or("missing commit")?;
-        let title = lines.next().ok_or("missing title")?;
-        let timestamp: u64 = lines.next().ok_or("missing timestamp")?.parse()?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs();
-        if now.saturating_sub(timestamp) > 14 * 86400 {
-            eprintln!(
-                "{flavour}: remote-tracking tip is older than 14 days; fetch the source clone before updating if a newer release is expected"
+        let log = git(repo, &["log", "--format=%H %s", reference, "--"])?;
+        let (commit, build) = log
+            .lines()
+            .find_map(|line| {
+                let (commit, title) = line.split_once(' ')?;
+                Some((commit, build_title(title)?))
+            })
+            .ok_or_else(|| format!("no build commit on {branch}"))?;
+        let target = format!("{product}@{build}");
+        if store.needs_extraction(&target, selu_manifest_gen::EXTRACTION_VERSION) {
+            pending.push(extract_product(product, commit)?);
+            println!("{target}: prepared");
+        }
+    }
+    // Re-extract retained pins too; compiler fixes must reach older locked builds.
+    for (target, product, commit) in retained_reextractions(
+        &store,
+        &pending,
+        &selected,
+        selu_manifest_gen::EXTRACTION_VERSION,
+    )? {
+        pending.push(extract_product(&product, &commit)?);
+        println!("{target}: prepared retained build extraction");
+    }
+    let before: Vec<_> = pending
+        .iter()
+        .map(|manifest| {
+            let target = manifest.target_string();
+            let previous = if store.extraction_version(&target).is_some() {
+                Some((store.latest_revision(&target)?, store.load(&target)?))
+            } else {
+                None
+            };
+            Ok(previous)
+        })
+        .collect::<Result<_>>()?;
+    let growth = store.append(directory, &pending)?;
+    for (manifest, previous) in pending.iter().zip(before) {
+        let target = manifest.target_string();
+        if let Some((revision, old)) = previous {
+            println!(
+                "{target}: extraction {revision} -> {}",
+                store.latest_revision(&target)?
+            );
+            print!(
+                "{}",
+                selu_manifest::lock::api_diff(Path::new("."), &old, &store.load(&target)?)?
             );
         }
-        let (version, build) = title
-            .split_once(" (")
-            .ok_or("commit title must be version (build)")?;
-        let build = Build::parse(&format!("{version}.{}", build.trim_end_matches(')')))
-            .map_err(|e| format!("{e:?}"))?;
-        let directory = Path::new("manifests").join(flavour);
-        let mut old = Vec::new();
-        for entry in std::fs::read_dir(&directory)? {
-            let path = entry?.path();
-            if path.extension().and_then(|x| x.to_str()) == Some("selum") {
-                let m: Manifest = selu_manifest::format::decode(&std::fs::read(&path)?)?;
-                if m.flavour != flavour {
-                    return Err("manifest flavour differs from directory".into());
-                }
-                old.push((path, m));
-            }
-        }
-        old.sort_by_key(|a| a.1.build);
-        let output = directory.join(format!("{version}.{}.selum", build.build));
-        generate(&[
-            flavour.into(),
-            commit.into(),
-            output.to_str().ok_or("invalid output path")?.into(),
-            repo.into(),
-        ])?;
-        let new: Manifest = selu_manifest::format::decode(&std::fs::read(&output)?)?;
-        let previous = old.last().map(|(_, m)| m);
-        let old_functions: Vec<String> = previous
-            .map(|m| m.functions.iter().map(|f| f.name.clone()).collect())
-            .unwrap_or_default();
-        let old_events: Vec<String> = previous
-            .map(|m| m.events.iter().map(|f| f.name.clone()).collect())
-            .unwrap_or_default();
-        let (fa, fr) = names_added_removed(
-            &old_functions,
-            &new.functions
-                .iter()
-                .map(|f| f.name.clone())
-                .collect::<Vec<_>>(),
-        );
-        let (ea, er) = names_added_removed(
-            &old_events,
-            &new.events
-                .iter()
-                .map(|f| f.name.clone())
-                .collect::<Vec<_>>(),
-        );
-        println!(
-            "{flavour}: {:?} -> {:?}; APIs +{fa}/-{fr}, events +{ea}/-{er}",
-            previous.map(|m| &m.build),
-            new.build
-        );
-        let prefix = format!("| `{flavour}` |");
-        let row = format!(
-            "| `{flavour}` | `{branch}` | {version} ({}) | {} | `{commit}` |",
-            build.build, new.interface
-        );
-        if !doc.lines().any(|line| line.starts_with(&prefix)) {
-            return Err(format!("missing pin row for {flavour}").into());
-        }
-        doc = doc
+    }
+    println!("{} builds: appended {growth} bytes", pending.len());
+    for &(branch, product) in CLIENTS {
+        if !refs
             .lines()
-            .map(|line| {
-                if line.starts_with(&prefix) {
-                    row.as_str()
-                } else {
-                    line
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n";
-        std::fs::write(doc_path, &doc)?;
-        if !keep {
-            for (path, _) in old {
-                if path != output {
-                    std::fs::remove_file(path)?;
-                }
-            }
+            .any(|reference| reference == format!("refs/remotes/origin/{branch}"))
+        {
+            continue;
         }
+        let newest = store
+            .builds()
+            .filter(|target| {
+                target
+                    .split_once('@')
+                    .is_some_and(|(name, _)| name == product)
+            })
+            .max_by_key(|target| {
+                target
+                    .split_once('@')
+                    .and_then(|(_, version)| Build::parse(version).ok())
+                    .map(|build| (build.build, build))
+            });
+        if let Some(target) = newest {
+            let manifest = store.load(target)?;
+            let source = manifest
+                .source
+                .as_ref()
+                .ok_or("stored build lacks source provenance")?;
+            rows.push(format!(
+                "| `{product}` | `{branch}` | {} | {} | `{}` |",
+                manifest.build, manifest.interface, source.commit
+            ));
+        }
+    }
+    rows.sort();
+    let doc_path = Path::new("docs/manifests.md");
+    let doc = std::fs::read_to_string(doc_path)?;
+    let updated = refresh_build_table(&doc, &rows)?;
+    if updated != doc {
+        std::fs::write(doc_path, updated)?;
     }
     Ok(())
 }
 fn run() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let revision = if let Some(index) = args.iter().position(|a| a == "--revision") {
+        if args.first().is_none_or(|a| a != "dump") {
+            return Err("--revision is only valid with dump".into());
+        }
+        let value = args
+            .get(index + 1)
+            .ok_or("--revision requires an extraction identifier")?
+            .clone();
+        args.drain(index..index + 2);
+        Some(value)
+    } else {
+        None
+    };
+    if args.first().is_some_and(|a| a == "revisions") {
+        if !(2..=3).contains(&args.len()) {
+            return Err("usage: revisions [store] <product@full-build>".into());
+        }
+        let (directory, target) = if args.len() == 3 {
+            (args[1].as_str(), args[2].as_str())
+        } else {
+            ("manifests/store", args[1].as_str())
+        };
+        let store = selu_manifest::store::Store::open(Path::new(directory))?;
+        let latest = store.latest_revision(target)?;
+        for id in store.revisions(target)? {
+            println!(
+                "{target} {id}{}",
+                if id == latest { " (latest)" } else { "" }
+            );
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|a| a == "extraction-report") {
+        if !(2..=3).contains(&args.len()) {
+            return Err("usage: extraction-report <project> [store]".into());
+        }
+        let store = selu_manifest::store::Store::open(Path::new(
+            args.get(2).map_or("manifests/store", String::as_str),
+        ))?;
+        print!("{}", store.extraction_report(Path::new(&args[1]))?);
+        return Ok(());
+    }
+    if args.first().is_some_and(|a| a == "migrate") {
+        // Standalone snapshots have no validated extractor provenance. Import
+        // only new builds or identical content, never a new current revision.
+        let mut manifests = Vec::new();
+        let mut directories = vec![std::path::PathBuf::from("manifests")];
+        while let Some(directory) = directories.pop() {
+            for entry in std::fs::read_dir(directory)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    if path.file_name().is_none_or(|name| name != "store") {
+                        directories.push(path);
+                    }
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension == "selum" || extension == "json")
+                {
+                    let manifest = selu_manifest::load_manifest(&path)?;
+                    if !manifest.fixture {
+                        manifests.push(manifest);
+                    }
+                }
+            }
+        }
+        for manifest in &mut manifests {
+            manifest.flavour = selu_manifest::product(&manifest.flavour).into();
+        }
+        let destination = Path::new(args.get(1).map(String::as_str).unwrap_or("manifests/store"));
+        let mut store = selu_manifest::store::Store::open(destination)?;
+        let growth = store.import_unversioned(destination, &manifests)?;
+        let verified = selu_manifest::store::Store::open(destination)?;
+        for manifest in &manifests {
+            if verified.load(&manifest.target_string())? != *manifest {
+                return Err("migration round trip changed manifest data".into());
+            }
+        }
+
+        println!(
+            "migrated and verified {} builds; {growth} bytes",
+            manifests.len()
+        );
+        return Ok(());
+    }
+    if args.first().is_some_and(|a| a == "list") {
+        let store = selu_manifest::store::Store::open(Path::new(
+            args.get(1).map(String::as_str).unwrap_or("manifests/store"),
+        ))?;
+        for build in store.builds() {
+            println!("{build}");
+        }
+        return Ok(());
+    }
+    if args.len() == 3 && args[0] == "dump" {
+        let store = selu_manifest::store::Store::open(Path::new(&args[1]))?;
+        let manifest = if let Some(revision) = revision {
+            store.load_revision(&args[2], &revision)?
+        } else {
+            store.load(&args[2])?
+        };
+        println!("{}", serde_json::to_string_pretty(&manifest)?);
+        return Ok(());
+    }
+    if revision.is_some() {
+        return Err("dump --revision requires a store and exact game build".into());
+    }
     if args.len() == 2 && args[0] == "dump" {
         let value: serde_json::Value = selu_manifest::format::decode(&std::fs::read(&args[1])?)?;
         println!("{}", serde_json::to_string_pretty(&value)?);
@@ -351,6 +592,57 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn new_extractor_refreshes_retained_pins_without_backfilling_game_builds() {
+        let root =
+            std::env::temp_dir().join(format!("selu-retained-reextract-{}", std::process::id()));
+        let old:selu_manifest::Manifest=serde_json::from_value(serde_json::json!({"flavour":"wow","build":{"major":12,"minor":1,"patch":5,"build":1},"interface":120105,"source":{"commit":"old-game-commit","version":"12.1.5","interfaceSource":"fixture"}})).unwrap();
+        let mut latest = old.clone();
+        latest.build.build = 2;
+        latest.source.as_mut().unwrap().commit = "latest-game-commit".into();
+        let mut store = selu_manifest::store::Store::default();
+        store
+            .append_with_extraction_version(&root, &[old.clone(), latest.clone()], 1)
+            .unwrap();
+        assert!(
+            super::retained_reextractions(&store, &[], &[], 1)
+                .unwrap()
+                .is_empty()
+        );
+        let requests =
+            super::retained_reextractions(&store, std::slice::from_ref(&latest), &["live"], 2)
+                .unwrap();
+        assert_eq!(
+            requests,
+            [(old.target_string(), "wow".into(), "old-game-commit".into())]
+        );
+        assert!(
+            super::retained_reextractions(&store, &[], &["wowf"], 2)
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .append_with_extraction_version(&root, &[old, latest], 2)
+            .unwrap();
+        assert!(
+            super::retained_reextractions(&store, &[], &[], 2)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.builds().count(), 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn generated_build_table_preserves_other_sections() {
+        let source = "Intro\n## Stored product builds\nold rows\n\n## Keep\nOwner notes\n";
+        let updated = super::refresh_build_table(source, &["new row".into()]).unwrap();
+        assert!(updated.contains("## Keep\nOwner notes\n"));
+        assert_eq!(
+            super::refresh_build_table(&updated, &["new row".into()]).unwrap(),
+            updated
+        );
+        assert!(super::refresh_build_table("<!-- selu-store-builds:start -->", &[]).is_err());
+    }
     #[test]
     fn counts_compare_names_not_only_lengths() {
         assert_eq!(

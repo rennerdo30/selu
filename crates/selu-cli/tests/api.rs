@@ -15,7 +15,7 @@ fn codes(src: &str, flavour: &str) -> Vec<String> {
 
 #[test]
 fn documented_argument_types() {
-    for flavour in ["retail", "forever"] {
+    for flavour in ["wow", "wowf"] {
         assert_eq!(
             codes("const f = CreateFrame(true);", flavour),
             vec!["SELU0481"]
@@ -25,7 +25,7 @@ fn documented_argument_types() {
 
 #[test]
 fn results_widgets_events_and_namespaces() {
-    for flavour in ["retail", "forever"] {
+    for flavour in ["wow", "wowf"] {
         assert_eq!(
             codes(
                 r#"const f = CreateFrame("Button"); f.SetSize("bad", 10);"#,
@@ -100,10 +100,10 @@ const passed = identity(alias);
 print(passed("player"));
 "#;
     for flavour in [
-        "classic-era",
-        "classic-anniversary",
-        "classic-titan",
-        "classic",
+        "wow_classic_era",
+        "wow_anniversary",
+        "wow_classic_titan",
+        "wow_classic",
     ] {
         let lua = compile(src, flavour);
         let sim = selu_sim::Sim::new().unwrap();
@@ -125,7 +125,7 @@ print(passed("player"));
 
 #[test]
 fn structures_enums_callbacks_and_optional_results() {
-    for flavour in ["retail", "forever"] {
+    for flavour in ["wow", "wowf"] {
         assert_eq!(
             codes(
                 r#"C_Timer.After(1, () => {}); const info = C_Map.GetMapInfo(1); if (info != null) { const name: string = info.name; } const slots: number = C_Container.GetContainerNumSlots(Enum.BagIndex.Backpack);"#,
@@ -195,7 +195,7 @@ fn imported_multiple_result_function_keeps_its_convention() {
 
 #[test]
 fn conditions_use_the_first_result_including_false() {
-    for flavour in ["retail", "forever"] {
+    for flavour in ["wow", "wowf"] {
         let lua = compile(
             r#"if (UnitExists("player")) { print("wrong"); } else { print("absent"); } const exists = UnitExists; if (!exists("player")) { print("false kept"); } const both: boolean = UnitExists("player") && UnitExists("target"); print(both);"#,
             flavour,
@@ -210,7 +210,7 @@ fn conditions_use_the_first_result_including_false() {
 
 #[test]
 fn primitive_aliases_and_scalar_unions() {
-    for flavour in ["retail", "forever"] {
+    for flavour in ["wow", "wowf"] {
         assert_eq!(
             codes(
                 r#"const f = CreateFrame("Frame"); f.SetPoint("TOP", UIParent, "TOP", 0, -40); const health: number = UnitHealth("player") ?? 0; C_Spell.GetSpellInfo(123); C_Spell.GetSpellInfo("Fireball");"#,
@@ -230,7 +230,7 @@ fn returned_scalar_unions_require_all_members_to_fit() {
     let all = cached_manifests();
     // This test edits the manifests, so it works on copies.
     for mut m in all.iter().filter(|m| !m.fixture).cloned() {
-        let modern = matches!(m.flavour.as_str(), "retail" | "forever");
+        let modern = matches!(m.flavour.as_str(), "wow" | "wowf");
         let api = if modern { "GetBuildInfo" } else { "UnitName" };
         // Model a documented API returning the same scalar union accepted by GetSpellInfo.
         let sig = m
@@ -335,10 +335,10 @@ fn api_origin_is_diagnostic_only_and_survives_aliases() {
 #[test]
 fn explicit_wrapper_returns_exactly_one_value() {
     for flavour in [
-        "classic-era",
-        "classic-anniversary",
-        "classic-titan",
-        "classic",
+        "wow_classic_era",
+        "wow_anniversary",
+        "wow_classic_titan",
+        "wow_classic",
     ] {
         let lua = compile(
             r#"function one(unit: string): string { return UnitName(unit); } global wrapped = one;"#,
@@ -356,10 +356,10 @@ fn explicit_wrapper_returns_exactly_one_value() {
 #[test]
 fn collections_reject_multiple_result_callbacks_and_accept_wrappers() {
     for flavour in [
-        "classic-era",
-        "classic-anniversary",
-        "classic-titan",
-        "classic",
+        "wow_classic_era",
+        "wow_anniversary",
+        "wow_classic_titan",
+        "wow_classic",
     ] {
         assert_eq!(
             codes(r#"const names = ["player"].map(UnitName);"#, flavour),
@@ -382,7 +382,7 @@ fn collections_reject_multiple_result_callbacks_and_accept_wrappers() {
 
 #[test]
 fn unspecified_script_callbacks_accept_functions_and_null() {
-    for flavour in ["retail", "forever"] {
+    for flavour in ["wow", "wowf"] {
         assert_eq!(
             codes(
                 r#"const f = CreateFrame("Frame"); f.SetScript("OnShow", (self) => {}); function shown(self: number, flag: boolean): number { return self; } f.SetScript("OnShow", shown); f.SetScript("OnShow", null);"#,
@@ -405,10 +405,10 @@ macro_rules! undefined_api_type_case {
         #[test]
         fn $name() {
             assert_eq!(
-                [codes($source, "retail"), codes($source, "forever")],
+                [codes($source, "wow"), codes($source, "wowf")],
                 [Vec::<String>::new(), Vec::<String>::new()]
             );
-            for flavour in ["retail", "forever"] {
+            for flavour in ["wow", "wowf"] {
                 compile($source, flavour);
             }
         }
@@ -445,7 +445,7 @@ fn review_checked(src: &str, flavour: &str) -> selu_check::Checked {
 }
 #[test]
 fn review_api_mismatches_are_warnings() {
-    for flavour in ["retail", "forever"] {
+    for flavour in ["wow", "wowf"] {
         let c = review_checked(r#"C_Timer.After("soon", () => {});"#, flavour);
         assert_eq!(c.diagnostics.len(), 1);
         assert_eq!(c.diagnostics[0].code, "SELU0481");
@@ -460,7 +460,7 @@ fn review_api_mismatches_are_warnings() {
 fn review_widgets_reject_undeclared_members_and_unknown_frames_use_frame() {
     let c = review_checked(
         r#"const f = CreateFrame("Frame", null, UIParent, "BackdropTemplate"); f.customFlag = true; f.UndeclaredBackdrop({}); f.SetSze(20, 30); const unknown = CreateFrame("UnrecordedFrame"); unknown.custom = 1;"#,
-        "retail",
+        "wow",
     );
     assert!(c.has_errors(), "{:?}", c.diagnostics);
     assert_eq!(
@@ -475,12 +475,12 @@ fn review_widgets_reject_undeclared_members_and_unknown_frames_use_frame() {
 #[test]
 fn review_frame_types_and_factory_aliases() {
     for flavour in [
-        "retail",
-        "forever",
-        "classic",
-        "classic-era",
-        "classic-anniversary",
-        "classic-titan",
+        "wow",
+        "wowf",
+        "wow_classic",
+        "wow_classic_era",
+        "wow_anniversary",
+        "wow_classic_titan",
     ] {
         for name in [
             "CheckButton",
@@ -529,12 +529,12 @@ fn review_frame_types_and_factory_aliases() {
 #[test]
 fn review_region_tooltip_overloads_and_numeric_text() {
     for flavour in [
-        "retail",
-        "forever",
-        "classic",
-        "classic-era",
-        "classic-anniversary",
-        "classic-titan",
+        "wow",
+        "wowf",
+        "wow_classic",
+        "wow_classic_era",
+        "wow_anniversary",
+        "wow_classic_titan",
     ] {
         let c = review_checked(
             r#"
@@ -555,13 +555,13 @@ f.CreateFontString().SetText(42);
 }
 #[test]
 fn review_callback_advice_and_excess_event_span() {
-    let c = review_checked("C_Timer.After(1, GetServerTime);", "retail");
+    let c = review_checked("C_Timer.After(1, GetServerTime);", "wow");
     assert_eq!(c.diagnostics.len(), 1);
     let d = &c.diagnostics[0];
-    assert!(d.message.contains("callback") && d.message.contains("retail@"));
+    assert!(d.message.contains("callback") && d.message.contains("wow@"));
     assert!(d.fix.as_deref().unwrap_or("").contains("GetServerTime"));
     let src = "on PLAYER_LOGIN(extra) {}";
-    let c = review_checked(src, "retail");
+    let c = review_checked(src, "wow");
     assert_eq!(
         c.diagnostics[0].span.as_ref().unwrap().start,
         src.find("extra").unwrap()
@@ -578,7 +578,7 @@ fn review_parent_and_parentheses() {
 fn review_parentheses_only_in_expanding_positions() {
     let lua = compile(
         r#"print(GetBuildInfo(), "end"); const o = { name: GetBuildInfo() }; print(GetBuildInfo() + "!");"#,
-        "retail",
+        "wow",
     );
     assert!(lua.contains("print(GetBuildInfo(), \"end\")"), "{lua}");
     assert!(lua.contains("name = GetBuildInfo()"), "{lua}");
@@ -590,7 +590,7 @@ fn review_strict_api_option_and_selu_types() {
     let p = selu_syntax::parse("strict.selu", r#"C_Timer.After("soon", () => {});"#).unwrap();
     let c = selu_check::check_program_with_options(
         &p,
-        review_manifest("retail"),
+        review_manifest("wow"),
         selu_check::CheckOptions { strict_api: true },
     );
     assert_eq!(c.diagnostics.len(), 1);
@@ -598,7 +598,7 @@ fn review_strict_api_option_and_selu_types() {
     assert_eq!(c.diagnostics[0].code, "SELU0481");
     let c = review_checked(
         r#"function text(x: string) {} text(42); class C { method(x: string) {} } const c = new C(); c.method(42);"#,
-        "retail",
+        "wow",
     );
     assert_eq!(
         c.diagnostics
@@ -689,12 +689,12 @@ fn review_numeric_text_is_converted_by_the_simulator() {
 #[test]
 fn review_region_factory_return_identities() {
     for flavour in [
-        "retail",
-        "forever",
-        "classic",
-        "classic-era",
-        "classic-anniversary",
-        "classic-titan",
+        "wow",
+        "wowf",
+        "wow_classic",
+        "wow_classic_era",
+        "wow_anniversary",
+        "wow_classic_titan",
     ] {
         let p=selu_syntax::parse("factories.selu",r#"const f = CreateFrame("Frame"); export const line = f.CreateLine(); export const mask = f.CreateMaskTexture(); export const group = f.CreateAnimationGroup();"#).unwrap();
         let (c, ex) = selu_check::check_module(&p, review_manifest(flavour), Default::default());
@@ -717,7 +717,7 @@ fn review_region_factory_return_identities() {
 fn review_scalar_conditions_and_index_keys() {
     let lua = compile(
         r#"const names = new Map<string, string>(); const name = names.get(UnitName("player") ?? ""); if (UnitExists("player")) { print("exists"); } while (UnitExists("target")) { break; }"#,
-        "retail",
+        "wow",
     );
     use selu_lower::lua::LExpr;
     let key = LExpr::Paren(Box::new(LExpr::Call(
@@ -732,7 +732,7 @@ fn review_scalar_conditions_and_index_keys() {
 
 #[test]
 fn review_nonfinal_array_field_is_scalar() {
-    let lua = compile(r#"const values = [GetBuildInfo(), "end"];"#, "retail");
+    let lua = compile(r#"const values = [GetBuildInfo(), "end"];"#, "wow");
     assert_eq!(lua, "local values = { GetBuildInfo(), \"end\" }\n");
 }
 
@@ -741,9 +741,18 @@ fn review_nonfinal_array_field_is_scalar() {
 fn cached_manifests() -> &'static Vec<selu_manifest::Manifest> {
     static ALL: std::sync::OnceLock<Vec<selu_manifest::Manifest>> = std::sync::OnceLock::new();
     ALL.get_or_init(|| {
-        selu_manifest::load_manifest_dir(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"),
-        )
-        .unwrap()
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store");
+        [
+            "wow@12.1.5.70391",
+            "wowf@1.60.1.70532",
+            "wow_classic@5.5.4.70631",
+            "wow_classic_era@1.15.9.70576",
+            "wow_anniversary@2.5.6.70577",
+            "wow_classic_titan@3.80.2.70522",
+        ]
+        .iter()
+        .map(|target| selu_manifest::store::load_build(&directory, target).unwrap())
+        .collect()
     })
 }

@@ -456,7 +456,7 @@ Acceptance:
 6. Output is deterministic: sorted, stable formatting, byte-identical when
    run twice; a test proves it.
 7. Generate and commit manifests for `retail` (branch `live`) and `forever`.
-   `selu targets` lists them, `selu build --target retail` and `--target
+   `selu targets` lists them, `selu build --target wow` and `--target
    forever` build every example, and the hand-made fixture keeps driving
    the existing tests.
 8. Tests: the generator on small hand-written documentation tables (not

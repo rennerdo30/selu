@@ -1,11 +1,13 @@
 //! Target manifests: the API surface of one exact game build.
 //!
-//! A target is `flavour@version`. Partial versions resolve to the newest
-//! matching known manifest; an unknown build is an error listing the
+//! A target is a product or an exact `product@major.minor.patch.build` pin.
+//! Transitional flavour aliases retain partial-version resolution; errors list the
 //! closest known builds (DESIGN.md section 2).
 
 pub mod format;
+pub mod lock;
 pub mod resolution;
+pub mod store;
 use selu_diagnostics::Diagnostic;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -190,7 +192,7 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn target_string(&self) -> String {
-        format!("{}@{}", self.flavour, self.build)
+        format!("{}@{}", product(&self.flavour), self.build)
     }
     pub fn function(&self, name: &str) -> Option<&FunctionEntry> {
         self.functions
@@ -230,9 +232,31 @@ pub fn load_manifest(path: &Path) -> Result<Manifest, Diagnostic> {
     })
 }
 
-/// Load every `*.json` or `*.selum` manifest under `dir`, recursively.
+/// Load history stores and legacy compiled/JSON manifests under `dir`.
 pub fn load_manifest_dir(dir: &Path) -> Result<Vec<Manifest>, Diagnostic> {
     let mut out = Vec::new();
+    let store_path = if dir.join("store").is_dir() {
+        dir.join("store")
+    } else {
+        dir.to_path_buf()
+    };
+    if store_path.join("..").is_dir()
+        && std::fs::read_dir(&store_path).is_ok_and(|mut entries| {
+            entries.any(|e| e.is_ok_and(|e| e.path().extension().is_some_and(|x| x == "selus")))
+        })
+    {
+        let workspace = if store_path.file_name().is_some_and(|name| name == "store") {
+            store_path.parent().and_then(Path::parent)
+        } else {
+            store_path.parent()
+        }
+        .unwrap_or(&store_path);
+        let cache_root = workspace.join("target/selu-manifest-cache");
+        out.extend(
+            store::load_cached(&store_path, &cache_root)
+                .map_err(|e| Diagnostic::error("SELU0202", e.to_string()))?,
+        );
+    }
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
         let entries = std::fs::read_dir(&d).map_err(|e| {
@@ -264,6 +288,39 @@ pub struct TargetSpec {
     pub installed: bool,
 }
 
+/// Transitional project aliases; branch mapping belongs exclusively to the updater.
+pub fn product(name: &str) -> &str {
+    match name {
+        "retail" => "wow",
+        "forever" => "wowf",
+        "classic" => "wow_classic",
+        "classic-era" => "wow_classic_era",
+        "classic-anniversary" => "wow_anniversary",
+        "classic-titan" => "wow_classic_titan",
+        _ => name,
+    }
+}
+/// Display text is derived metadata, never a project target identity.
+pub fn display_name(product: &str, build: &Build) -> String {
+    let name = match product {
+        "wow" => "World of Warcraft",
+        "wowt" => "World of Warcraft PTR",
+        "wowxptr" => "World of Warcraft PTR 2",
+        "wow_beta" => "World of Warcraft Beta",
+        "wowf" => "Forever",
+        "wow_classic" if build.major == 5 => "Mists of Pandaria Classic",
+        "wow_classic" => "Classic",
+        "wow_classic_ptr" => "Classic PTR",
+        "wow_classic_beta" => "Classic Beta",
+        "wow_classic_era" => "Classic Era",
+        "wow_classic_era_ptr" => "Classic Era PTR",
+        "wow_anniversary" => "Classic Anniversary",
+        "wow_anniversary_ptr" => "Classic Anniversary PTR",
+        "wow_classic_titan" => "Classic Titan",
+        _ => product,
+    };
+    format!("{name} {}.{}.{}", build.major, build.minor, build.patch)
+}
 impl TargetSpec {
     pub fn parse(s: &str) -> Result<TargetSpec, Diagnostic> {
         let (flavour, version) = match s.split_once('@') {
@@ -273,8 +330,21 @@ impl TargetSpec {
         if flavour.is_empty() {
             return Err(
                 Diagnostic::error("SELU0203", format!("target `{s}` has no flavour"))
-                    .with_help("use a target like `retail@12.0`"),
+                    .with_help("use a product like `wow`, or an exact full build pin"),
             );
+        }
+        let canonical = product(flavour);
+        if canonical != flavour {
+            eprintln!("warning: target `{flavour}` is deprecated; use `{canonical}`");
+        }
+        if canonical == flavour
+            && flavour.starts_with("wow")
+            && version.is_some_and(|v| v.split('.').count() != 4)
+        {
+            return Err(Diagnostic::error(
+                "SELU0203",
+                "product targets require an exact major.minor.patch.build pin",
+            ));
         }
         match version {
             None => Ok(TargetSpec {
@@ -340,11 +410,11 @@ pub fn resolve<'a>(
             "SELU0204",
             format!("target `{spec}`: reading the installed client build is not implemented yet"),
         )
-        .with_help("pin an exact build for now, e.g. `retail@12.0`"));
+        .with_help("pin an exact build, e.g. `wow@12.1.5.70783`"));
     }
     let same_flavour: Vec<&Manifest> = manifests
         .iter()
-        .filter(|m| m.flavour == spec.flavour)
+        .filter(|m| product(&m.flavour) == product(&spec.flavour))
         .collect();
     if same_flavour.is_empty() {
         let known: Vec<String> = {
@@ -362,7 +432,7 @@ pub fn resolve<'a>(
     same_flavour
         .iter()
         .filter(|m| spec.matches(&m.build))
-        .max_by_key(|m| m.build)
+        .max_by_key(|m| (m.build.build, m.build))
         .copied()
         .ok_or_else(|| {
             let mut builds: Vec<String> =
@@ -421,6 +491,30 @@ mod tests {
         assert_eq!(r.build.to_string(), "1.0.0.1000");
     }
 
+    #[test]
+    fn product_latest_follows_build_revision() {
+        // PTR history: 9.2.0 (43340) follows 9.2.5 (43254).
+        let mut older = fixture();
+        older.flavour = "wowt".into();
+        older.build = Build::parse("9.2.5.43254").unwrap();
+        let mut newer = older.clone();
+        newer.build = Build::parse("9.2.0.43340").unwrap();
+        let all = [older, newer];
+        assert_eq!(
+            resolve(&TargetSpec::parse("wowt").unwrap(), &all)
+                .unwrap()
+                .build
+                .build,
+            43340
+        );
+        assert_eq!(
+            resolve(&TargetSpec::parse("wowt@9.2.5.43254").unwrap(), &all)
+                .unwrap()
+                .build
+                .build,
+            43254
+        );
+    }
     #[test]
     fn unknown_build_lists_closest() {
         let all = vec![fixture()];

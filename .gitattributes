@@ -4,3 +4,4 @@
 *.bat text eol=crlf
 
 *.selum binary
+*.selus binary

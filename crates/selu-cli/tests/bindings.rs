@@ -66,7 +66,7 @@ fn project_layouts_names_and_simulator_loader() {
             .unwrap()
     };
     for layout in ["per-target", "shared"] {
-        fs::write(root.join("selu.toml"), format!("[addon]\nname = \"Demo\"\ntargets = [\"retail\", \"forever\"]\n[build]\nlayout = \"{layout}\"\n")).unwrap();
+        fs::write(root.join("selu.toml"), format!("[addon]\nname = \"Demo\"\ntargets = [\"wow\", \"wowf\"]\n[build]\nlayout = \"{layout}\"\n")).unwrap();
         fs::write(
             root.join("src/main.selu"),
             r#"keybinding("Demo_A", "Action", () => { print("pressed"); });"#,
@@ -77,10 +77,7 @@ fn project_layouts_names_and_simulator_loader() {
         let folders = if layout == "shared" {
             vec![root.join("dist/Demo")]
         } else {
-            vec![
-                root.join("dist/Demo-retail"),
-                root.join("dist/Demo-forever"),
-            ]
+            vec![root.join("dist/Demo-wow"), root.join("dist/Demo-wowf")]
         };
         for folder in folders {
             let xml = fs::read_to_string(folder.join("Bindings.xml")).unwrap();

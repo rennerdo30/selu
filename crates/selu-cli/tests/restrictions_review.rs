@@ -2,7 +2,7 @@ use selu_manifest::Manifest;
 use selu_sim::Sim;
 fn manifest() -> Manifest {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
-    let mut m = selu_manifest::load_manifest(&root.join("retail/12.1.5.70391.selum")).unwrap();
+    let mut m = selu_manifest::store::load_build(&root.join("store"), "wow@12.1.5.70391").unwrap();
     for name in ["Free", "Restricted", "First", "Second", "Third"] {
         let mut f = m.function("GetTime").unwrap().clone();
         f.name = name.into();
@@ -179,7 +179,8 @@ fn review_simulated_text_keeps_secret_identity() {
 fn review_secret_capabilities_across_targets() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
     let classic =
-        selu_manifest::load_manifest(&root.join("classic-era/1.15.9.70576.selum")).unwrap();
+        selu_manifest::store::load_build(&root.join("store"), "wow_classic_era@1.15.9.70576")
+            .unwrap();
     let (p, c) = checked(
         "const s:Secret<string>=GetLocale(); const plain:string=s;",
         &classic,
@@ -292,7 +293,9 @@ fn review_hooks_cannot_invalidate_function_protection() {
 #[test]
 fn review_unspecified_callbacks_can_refer_to_widget_operations_on_classic() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
-    let mut m = selu_manifest::load_manifest(&root.join("classic-era/1.15.9.70576.selum")).unwrap();
+    let mut m =
+        selu_manifest::store::load_build(&root.join("store"), "wow_classic_era@1.15.9.70576")
+            .unwrap();
     let mut f = manifest().function("GetTime").unwrap().clone();
     f.name = "GetCallback".into();
     let d = f.signature.as_mut().unwrap();

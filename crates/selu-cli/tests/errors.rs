@@ -113,7 +113,7 @@ fn catch_shadows_live_import() {
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"ErrorsImport\"\ntargets = [\"forever@1.0\"]\n",
+        "[addon]\nname = \"ErrorsImport\"\ntargets = [\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     fs::write(dir.join("src/value.selu"), "export let e = 7;").unwrap();
@@ -307,7 +307,7 @@ fn review_cross_module_error_identity() {
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"CrossErrors\"\ntargets = [\"forever@1.0\"]\n",
+        "[addon]\nname = \"CrossErrors\"\ntargets = [\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     fs::write(dir.join("src/fail.selu"),r#"export const original = new Error("module"); export function fail() { throw original; }"#).unwrap();

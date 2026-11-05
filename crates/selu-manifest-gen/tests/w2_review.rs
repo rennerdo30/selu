@@ -1,4 +1,4 @@
-use selu_manifest::{Manifest, load_manifest};
+use selu_manifest::Manifest;
 fn empty() -> Manifest {
     serde_json::from_value(serde_json::json!({"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1})).unwrap()
 }
@@ -12,9 +12,9 @@ fn extracted(src: &str) -> Manifest {
 }
 #[test]
 fn backdrop_forwarded_results() {
-    let m = load_manifest(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/retail/12.1.5.70391.selum"),
+    let m = selu_manifest::store::load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wow@12.1.5.70391",
     )
     .unwrap();
     let p=selu_syntax::parse("probe.selu",r#"const f=CreateFrame("Frame",null,UIParent,"BackdropTemplate"); const [r,g,b,a]=f.GetBackdropColor();"#).unwrap();
@@ -122,9 +122,9 @@ fn emmy_comma_returns_and_optional_param() {
 }
 #[test]
 fn table_builder_keeps_both_margins() {
-    let m = load_manifest(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/retail/12.1.5.70391.selum"),
+    let m = selu_manifest::store::load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wow@12.1.5.70391",
     )
     .unwrap();
     let p = selu_syntax::parse(
@@ -145,9 +145,9 @@ fn table_builder_keeps_both_margins() {
 }
 #[test]
 fn iterator_wrapper_must_preserve_triple_or_be_rejected() {
-    let m = load_manifest(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/retail/12.1.5.70391.selum"),
+    let m = selu_manifest::store::load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wow@12.1.5.70391",
     )
     .unwrap();
     let src = r#"const pool=CreateFramePool("Frame"); const enumerate=()=>pool.EnumerateActive(); for(const [frame] of enumerate()) { frame.Hide(); }"#;
@@ -236,9 +236,9 @@ fn annotation_nil_union_and_optional_return() {
 
 #[test]
 fn destructuring_cannot_save_an_iterator_value() {
-    let m = load_manifest(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/retail/12.1.5.70391.selum"),
+    let m = selu_manifest::store::load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wow@12.1.5.70391",
     )
     .unwrap();
     let p = selu_syntax::parse(

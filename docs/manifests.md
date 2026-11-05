@@ -1,20 +1,18 @@
 # Generated client manifests
 
-Regenerate from the owner-maintained source clone without fetching or changing it:
+The source clone is owner-maintained. After the owner fetches it, run:
 
 ```powershell
-cargo run -p selu-manifest-gen -- retail 18c6d677b605b312f3d813d498404631fb941977 manifests/retail/12.1.5.70391.selum E:/Development/wow-ui-source
-cargo run -p selu-manifest-gen -- forever ca8368f2f2380cbe696854f7f2646387c278a61b manifests/forever/1.60.1.70532.selum E:/Development/wow-ui-source
+cargo run -p selu-manifest-gen -- update
+cargo run -p selu-manifest-gen -- list manifests/store
+cargo run -p selu-manifest-gen -- dump manifests/store wow@12.1.5.70783
 ```
 
-The ref may be any local ref or commit. For reproducibility use immutable hashes,
-as above: even remote-tracking refs move, and local branches may be stale. The generator prints the resolved commit and uses that immutable
-hash for every subsequent read. Version and build are parsed from the commit
-subject `version (build)`. `git log` and `git archive` read the clone. Archives
-are owned temporary files under the system temp folder (`std::env::temp_dir()`) and are removed
-on completion; archive entries are streamed without extracting addon source.
-The output filename should be the printed build under the flavour directory.
-The generator never fetches, checks out, or writes to the clone.
+The generator resolves immutable commits with read-only git operations; it never
+fetches, checks out or writes to the clone. Temporary archives are streamed and
+removed on completion. `migrate` imports pre-store single-build manifests, retaining
+the six original build identities under their product codes. Single-file generation
+and dump remain available for offline extraction probes and JSON fixtures.
 
 ## Schema and compatibility
 
@@ -104,40 +102,13 @@ hand-listed. Overlays still supply the CreateFrame return type and canonical wid
 connections. Enum and Constants are known namespace roots.
 Existing handmade fixtures stay intact.
 
-## Shipped clients
+## Product identities
 
-Pins resolved from remote-tracking refs in the owner clone, without fetching.
-
-| Flavour | Branch | Version (build) | Interface | Pinned commit |
-|---|---|---|---|---|
-| `classic` | `classic` | 5.5.4 (70631) | 50504 | `e5d9b3a22c3f0f6f41ebac0e454f4969594261cf` |
-| `classic-anniversary` | `classic_anniversary` | 2.5.6 (70577) | 20506 | `68e0a2ec559d9761dfc4e7f864c3944f9d758a49` |
-| `classic-era` | `classic_era` | 1.15.9 (70576) | 11509 | `4192ac60067fc55566182291bc67c85dd9b6794d` |
-| `classic-titan` | `classic_titan` | 3.80.2 (70522) | 38002 | `7014c309a25338905c41dc3799a93f9719ebb533` |
-| `forever` | `forever` | 1.60.1 (70532) | 16001 | `ca8368f2f2380cbe696854f7f2646387c278a61b` |
-| `retail` | `live` | 12.1.5 (70391) | 120105 | `18c6d677b605b312f3d813d498404631fb941977` |
-
-Classic interfaces use `major * 10000 + minor * 100 + patch`: 1.15.9 gives
-11509, 2.5.6 gives 20506, 3.80.2 gives 38002 and 5.5.4 gives 50504.
-The owner's shipping `E:/Development/RennersAddons/RennersAddons.toc` loads
-with exactly these numbers and Forever 16001. Overlays record convention
-evidence, not a live probe. Retail and Forever retain their existing pins.
-
-For example:
-
-```powershell
-cargo run -p selu-manifest-gen -- classic-era 4192ac60067fc55566182291bc67c85dd9b6794d manifests/classic-era/1.15.9.70576.selum E:/Development/wow-ui-source
-```
-
-For PTR/beta on demand, resolve `origin/<branch>` with
-`git log -1 --format="%H %s"` in the source clone. Create a local uncommitted
-`manifests/<flavour>-ptr/` or `<flavour>-beta/` with an overlay recording that
-client's interface provenance and applicable widget connections. Run the same
-generator with the immutable hash, matching flavour and version/build filename.
-Generate twice and compare bytes. Do not fetch or change the source clone.
-PTR/beta manifests are local on-demand artifacts; none are committed here.
-The scan covers every addon Lua variant in a pin, without asserting TOC loading
-or live availability for each variant.
+Projects use Blizzard TACT product codes, optionally followed by a complete
+`major.minor.patch.build` pin. The updater's generated table below records the
+latest build of every discovered, mapped source branch. The six original pins
+were imported before updating; no other historical source builds are backfilled.
+Overlay directory names remain provenance identifiers from that migration.
 
 ## T1 typed globals
 
@@ -228,16 +199,14 @@ names below the 40 MB package cap. XML EOF with open elements is an error.
 
 ## Release updates
 
-The owner fetches `E:/Development/wow-ui-source` first. Then run
-`cargo run -p selu-manifest-gen -- update` (or `scripts/update-manifests.bat`).
-Optional flavour or branch names select a subset; `--keep-old` retains old builds.
-The command reads existing `origin/*` tracking refs without fetching or checking
-out the source clone. A tip older than 14 days prints a fetch reminder; this is
-an age heuristic, not a claim that the remote has no newer commits.
-It regenerates `.selum` through `encode`, updates this pin table, removes superseded
-builds by default, and prints function/event name additions and removals.
-Run the workspace and proof tests, review the diff, then commit the manifests,
-extraction changes and pin table together. No publication is performed.
+After the owner fetches the source clone, run `cargo run -p selu-manifest-gen -- update`.
+It discovers tracking branches without fetching or checking out, skips automation,
+and scans each branch's history for its newest build subject. Unknown branches
+are reported for a verified mapping; they are never guessed. Optional product or
+branch arguments select a subset. Existing segments and build identities are immutable.
+`selu-manifest-gen list manifests/store` lists stored builds;
+`selu-manifest-gen dump manifests/store wow@12.1.5.70783` dumps one build.
+The updater refreshes the stored product table below. It never publishes.
 
 Source Lua member declarations now emit qualified function signatures, which
 existing template/mixin resolution consumes. Parameter names and variadic tails
@@ -246,45 +215,142 @@ Unannotated types follow the existing untyped game value policy in lang/api.md;
 unannotated parameters permit omission because Lua bodies may supply defaults.
 A missing return annotation remains untyped rather than claiming a void result.
 This does not type the Lua Mixin/CreateFromMixins helpers for Selu consumption.
-## Compiled container (package Z)
+## Compiled containers and history store
 
-Generated client manifests are committed only as `.selum`; handmade fixtures stay
-JSON. All shared loaders accept both by content. Studio discovers both extensions.
-New build snapshots use `dist/.selu/<addon>/manifest.selum`, including shared-target
-bundles; existing `manifest.json` snapshots remain readable as a fallback.
+Single-build snapshots and derived caches retain Z's `.selum` encoding:
+`SELUMAN\0`, format 1 and schema 1 (u16 little endian), then zstd level 3
+MessagePack named maps. Decoding is bounded to 256 MiB. JSON fixtures remain readable.
 
-The 12-byte header is `SELUMAN\0` (8 bytes), format version 1 (u16 little endian),
-and schema version 1 (u16 little endian). The payload is zstd level 3 containing
-MessagePack named maps with the same JSON field names and omission rules. Both older
-and newer versions are rejected explicitly. Decoding is limited to 256 MiB.
-Generator sorting and ordered maps make identical inputs produce identical bytes;
-keep the locked encoder versions when reproducing bytes. Schema changes require
-an explicit schema version decision. No extraction behavior changes in package Z.
+History segments in `manifests/store/*.selus` are plain Git files, with no LFS
+requirement. The unpublished initial pack was rebuilt from the six W2 snapshots
+on master `719f404` and fresh generation of each branch's latest build. It contains
+no pre-W2 snapshot at the retained pins. Each stored extraction revision remains immutable; the game-build identity can
+gain newer extraction revisions. The bootstrap replacement above was explicitly
+authorized before publication. They begin with `SELUSEG\0`, format 2 (legacy) or 3 (revision-aware), schema 1 (u16 little endian),
+a 32-byte SHA-256 checksum of the complete remaining segment, and a u32 compressed
+catalog length. The zstd-compressed MessagePack catalog contains build delta indexes
+and entry-block offsets; independent zstd entry blocks follow. The checksum covers
+the catalog length, catalog, and every compressed block. Readers reject unsupported
+versions, truncation, bad checksums, invalid ranges, duplicate IDs, missing entries,
+and missing/cyclic bases. Decompression is bounded to 256 MiB per block.
 
-The existing generator `encode` function remains the single writer entry point.
-The update command decodes existing `.selum` files for API/event name deltas.
-Superseded `.selum` files are removed unless `--keep-old` is selected.
+Entries have dense u32 IDs across append-only segments. SHA-256 is used only to
+deduplicate canonical values while writing, never stored per reference. The first
+build lists integer IDs; each later build copies ranges from its closest available
+base and inserts only changed integer IDs. Same-product bases have priority; shared
+entry overlap chooses the closest candidate, with deterministic ties. Builds within
+a batch can use earlier builds in that batch. Arrays retain separate copy runs for
+distant changes. Scalars use sections prefixed with `=`. Provenance uses source-file
+entry IDs internally and is restored to each manifest's sourceFiles indices, so a
+new source file does not duplicate unchanged records. The writer hashes existing
+entries once per non-empty update, then appends one new segment containing only new
+entries and new build indexes. Existing files are never rewritten. Repeated identical extraction updates add
+zero bytes. Game builds can gain new immutable extraction revisions, described below.
 
-Dump for inspection or a textual diff:
+Writers serialize with an exclusive OS lock on `manifests/store.lock`, next to the
+store. The lock file is gitignored and keeps a stable identity; its handle releases
+the lock automatically, including after a process exits. Writers wait at most 30
+seconds, then return a retry error. After acquiring the lock, a writer reopens the
+current store before assigning entry IDs. It writes and syncs a temporary file,
+validates the combined store and pending reconstructions, and only then atomically
+renames the file into place. Rejected candidates are removed while still temporary.
+Generation may run outside the lock; publication always uses the refreshed store.
 
-```powershell
-cargo run -p selu-manifest-gen -- dump manifests/retail/12.1.5.70391.selum
+Production entry blocks contain at most 4,096 entries. Larger blocks were measured
+and saved some space, but increased one-build cold load time. Opening the store reads
+and verifies complete compressed segments and decodes their small catalogs; it does
+not reconstruct manifests or decompress entry tables. A load resolves only the
+requested build's delta-base index chain and decompresses only referenced blocks.
+Those blocks and indexes are shared across requested builds within the load.
+
+The store is authoritative. Optional derived `.selum` caches live under
+`target/selu-manifest-cache/v4/<store-content-hash>/` beside the manifests workspace,
+never inside project dist or AddOns. Each requested build has a file named by its
+build-ID hash and a CRC32 sidecar. Every load checks the store's segment checksums,
+the cache CRC32, and decoded build identity. Changed store content hashes select a
+new cache directory. Missing or corrupt cache files rebuild only that requested
+build; an unwritable cache still permits uncached loading. Cache snapshots use the
+same versioned Z MessagePack/zstd container, with direct typed serialization.
+No all-build cache population runs on first use.
+
+## Extraction revisions and compiler improvements
+
+A game build and an extraction revision are separate identities. `selu.lock` still
+pins only `product@major.minor.patch.build`. Loading that game build selects its
+newest stored extraction, so a compiler extraction fix can improve an existing pin.
+No project target, output directory, TOC or lock key contains an extraction ID.
+
+The generator's `EXTRACTION_VERSION` is re-exported from
+`selu_manifest::store::EXTRACTION_VERSION`. It is **1 for the W2 baseline**. Bump this
+constant whenever extraction output rules change, including sourced signatures or
+overlay changes. The workspace test `extraction_sources_and_overlays_require_version_bump`
+enforces this with a frozen SHA-256 contract per version in
+`crates/selu-manifest-gen/tests/extraction_version.rs`. It discovers extractor Rust
+modules and all overlays, and covers generation orchestration, manifest schema,
+normalization and encoding inputs. Paths and contents are hashed in sorted order
+with LF normalization. When changing these inputs, bump `EXTRACTION_VERSION` and
+append the new version/digest to `CONTRACTS`; preserve previous entries. CLI-only
+import/report changes do not affect the extraction contract. This is intentionally
+conservative about changes within covered source files.
+
+Extraction IDs are `v<version>-<sha256>`, where the hash covers the
+named-MessagePack Manifest content in schema-1 serialization order. That order is
+part of the hash protocol. The game build and content, not compression settings,
+determine the ID. A version bump with unchanged content still creates a revision;
+repeating the same version/content writes zero bytes.
+
+Format-3 catalogs key each index by `(game build, extraction ID)` and record its
+extractor version, content hash and monotonically allocated per-build ordinal.
+Entries remain dense integers shared across all revisions. New revisions copy from
+the closest stored index and insert only changed IDs, using the same compressed
+append-only segments, integrity checks, exclusive writer lock and pre-publication
+validation. A revision is immutable; an older ID always reconstructs its original
+content. Selection uses highest numeric extractor version, then append order within
+that version. Replaying an existing extraction or using an older extractor cannot
+roll back the latest selection. Multiple different revisions for one game build in
+a single append transaction are rejected as ambiguous.
+
+The existing format-2 W2 pack stays byte-for-byte intact. Its game-build indexes are
+read as extraction version 1, with content-derived audit IDs computed on demand.
+New segments use format 3; the reader supports both. Ordinary loads do not reconstruct
+all old builds to derive revision IDs. A new segment changes the store fingerprint,
+which invalidates derived caches even when game-build pins did not change.
+
+`selu-manifest-gen update [product...]` compares the stored extractor version with
+the current constant. A bump regenerates unchanged branch builds and retained older
+stored builds for those products, from their recorded source commits. It adds their
+new revision deltas, with API diffs, without adding historical game builds. A normal
+unchanged update with the same constant is a zero-byte no-op.
+
+Standalone `.selum` and JSON files do not prove which extractor produced them.
+`migrate` therefore treats them as unversioned. Under the exclusive writer lock,
+an import matching an existing build's selected content is a zero-byte no-op;
+different content is rejected with the game-build ID and a direction to run
+`update`. Rejection publishes none of that import batch. A previously unseen build
+can be bootstrapped as reserved revision **v0** (unknown extractor), which always
+needs real re-extraction by `update` before it counts as current. Version 0 is
+reserved for this import path; trusted generator appends require a positive version.
+An import cannot create a newer revision of an existing build, even when its content
+matches a historical revision. Only re-extraction or validated extractor provenance
+can establish a current revision; `migrate` provides no provenance override.
+
+Audit commands (run from the compiler workspace, or pass an explicit store):
+
+```text
+selu-manifest-gen revisions wow@12.1.5.70391
+selu-manifest-gen revisions path/to/store wow@12.1.5.70391
+selu-manifest-gen dump path/to/store wow@12.1.5.70391 --revision v1-<hash>
+selu-manifest-gen extraction-report path/to/project path/to/store
 ```
 
-Short warm-cache measurements on the six current files: minified JSON 41,133,429
-bytes, MessagePack+zstd 5,460,382 bytes including headers. Release load+parse
-276 ms for the original loader versus 236 ms compiled; debug 278 ms versus 225 ms (single pass, disk-cache noise
-applies). Pretty JSON would be 68,185,718 bytes. A simulated one-field regeneration
-produced a combined compressed prefix/suffix delta estimate of 38,901 bytes for
-MessagePack+zstd versus 596,827 for JSON+zstd and 982,829 for gzip. Raw JSON deltas
-were only 199 bytes; compressed artifacts trade some delta locality for an 87%
-checkout reduction. We choose compiled-only commits because estimated updates
-remain small. This proxy is not a measurement of Git's pack delta algorithm.
-
-Reproduce the short comparison with `cargo run -p selu-manifest --example formats`
-(and `--release`). It uses a one-field interface increment, a prefix/suffix delta
-compressed with zlib plus 24 bytes of metadata, and one load+parse per file/format.
-The full per-file measurements and gate evidence are in the package Z report.
+`dump` without `--revision` reads the newest extraction. `revisions` lists all IDs and
+marks the latest. `extraction-report` reads active game-build pins from `selu.lock`
+(or exact project targets), reports their latest stored extraction transition, and
+shows the complete API diff and candidate source uses using the same implementation
+as lock updates. It does not modify the project or claim to remember which extractor
+was last used locally. Newest extractions are already used automatically. For older
+transitions, use the listed revision IDs with `dump --revision`. Exact game pins and
+major-game-version confirmation behavior remain unchanged.
 
 ## Checked engine supplements and source factories (W)
 
@@ -307,13 +373,15 @@ that all dynamic widget types have been recovered.
 A bounded source analysis follows lexical closures, local mixins, public aliases,
 Mixin/CreateFromMixins and CreateAndInitFromMixin construction, and the pinned
 ProxyUtil helpers' explicit exported method lists. It creates nominal checked
-object signatures for proven factory results, including pools, ScrollBox views
-and DataProviders. Private helpers stay private. Analysis never executes Blizzard
+object signatures for proven factory results, including ScrollBox views and
+DataProviders. Private helpers stay private. Analysis never executes Blizzard
 Lua and does not expose Lua construction helpers to Selu. Unresolved operations,
 recursive limits and dynamic return branches supply no factory proof.
 Parameters and results without sufficient evidence retain the existing untyped
-game-value policy. Pool allocator closures prove base Frame/Texture/FontString
-results; Acquire is nullable because a capacity-limited pool can be exhausted.
+game-value policy. W2 follows uniquely indexed helper bodies within fixed bounds
+and invalidates contracts when opaque calls or callbacks can reach the objects.
+The six reviewed source pins now withhold their pool contracts, including typed
+Acquire and EnumerateActive methods; the generator does not guess those contracts.
 Factory objects and mixins are source metadata, not a TOC-loading guarantee.
 
 `SeluIterator` in return attributes records source-proven Lua iterator yields.
@@ -325,3 +393,21 @@ distinct internal type, not arrays, maps or scalar unions. Call the enumerator i
 the loop expression: saving one result would lose Lua's state/control values.
 The same rule covers ScrollBox EnumerateFrames calls. No array allocation or
 iterator wrapper is generated.
+<!-- selu-store-builds:start -->
+## Stored product builds
+
+| Product | Branch | Full build | Interface | Commit |
+|---|---|---|---|---|
+| `wow_anniversary` | `classic_anniversary` | 2.5.6.70577 | 20506 | `68e0a2ec559d9761dfc4e7f864c3944f9d758a49` |
+| `wow_beta` | `beta` | 12.0.1.66220 | 120001 | `078d0cf7512bfc9c83c576ae83d14ef6a173ea3b` |
+| `wow_classic_beta` | `classic_beta` | 5.5.0.62071 | 50500 | `997d2ecc801c502c2c71ba467c07c84e5b5fa12d` |
+| `wow_classic_era_ptr` | `classic_era_ptr` | 2.5.6.70006 | 20506 | `31702bfe83af187a4344eb6934d64ba1904238ad` |
+| `wow_classic_era` | `classic_era` | 1.15.9.70576 | 11509 | `4192ac60067fc55566182291bc67c85dd9b6794d` |
+| `wow_classic_ptr` | `classic_ptr` | 5.5.4.67849 | 50504 | `ea6f4ee4ce0d457c02f479787293b702c062f067` |
+| `wow_classic_titan` | `classic_titan` | 3.80.2.70522 | 38002 | `7014c309a25338905c41dc3799a93f9719ebb533` |
+| `wow_classic` | `classic` | 5.5.4.70631 | 50504 | `e5d9b3a22c3f0f6f41ebac0e454f4969594261cf` |
+| `wow` | `live` | 12.1.5.70783 | 120105 | `297d7aaaa736f346b3e036f38ee088eaf7f8c07f` |
+| `wowf` | `forever` | 1.60.1.70790 | 16001 | `eac30af597e5aaa43a60f6675ef5fdcea100375f` |
+| `wowt` | `ptr` | 12.1.7.70668 | 120107 | `9fc0ba94381153262856ed0120a2675f1a11c30a` |
+| `wowxptr` | `ptr2` | 12.1.5.70340 | 120105 | `12380f8cdc541b7f0963f74cbe0874c21a857fbb` |
+<!-- selu-store-builds:end -->

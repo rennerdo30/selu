@@ -29,7 +29,7 @@ built-ins (ranges per package in `docs/WORK-PACKAGES.md`).
 |---|---|
 | `selu-diagnostics` | `Diagnostic`, `Span`, terminal rendering. No other Selu deps. |
 | `selu-syntax` | Hand-written lexer and recursive-descent parser for all of SPEC-V1 section 2 except classes and modules (DESIGN.md section 9). Semicolons are required; a missing one is `SELU0101` with a fix suggestion. Every expression has an `id`; `visit.rs` walks any node's children. |
-| `selu-manifest` | Serde types for a target manifest, compiled/JSON loading, `flavour@version` parsing and partial-version resolution to the newest matching manifest. Per-version differences (Lua dialect, availability, restriction flags, `returnsSecret`, evidence `documented`/`verified`) live in manifests, never in compiler code. |
+| `selu-manifest` | Serde types for a target manifest, compiled/JSON loading, product target parsing, exact build locks and append-only history segments. Per-version differences (Lua dialect, availability, restriction flags, `returnsSecret`, evidence `documented`/`verified`) live in manifests, never in compiler code. |
 | `selu-check` | Semantic pass: block scopes and name resolution (below), and a global call or `on EVENT` the target lacks is an error naming the target (`SELU0301`/`SELU0302`). `rules.rs` holds target-independent rules (Lua keywords and `__selu` names, where assignments may appear). One file per language area (`loops.rs`, `data.rs`, `functions.rs`, `wow.rs`; see `docs/WORK-PACKAGES.md`). |
 | `selu-lower` | Builds a Lua syntax tree (`lua.rs`) and prints readable Lua 5.1 (2-space indent, local names preserved, only needed brackets, `a.B(x)` becomes `a:B(x)`; manifest namespace functions like `C_Foo.Bar(x)` stay plain calls), a generated-line -> source-span map, shared event-frame dispatch for `on EVENT`, and the `.toc` whose `## Interface:` comes from the manifest. Same per-area files as the checker. |
 | `selu-sim` | `mlua` (Lua 5.1, vendored): boot a VM, load files in TOC order, simulated clock (`GetTime`), captured `print`, minimal `CreateFrame` (`RegisterEvent`/`UnregisterEvent`/`SetScript`/`Show`/`Hide`/`IsShown`), and `fire(event, ...)` from Rust. Unmodelled globals and frame methods log `not simulated: X` once and return a no-op. |
@@ -39,14 +39,13 @@ built-ins (ranges per package in `docs/WORK-PACKAGES.md`).
 
 - A project is a folder with `selu.toml` (`[addon]` with `name`, `targets`) and `.selu`
   files under `src/` (or the project root). `selu build` writes
-  `dist/<Name>/` (one folder per flavour when several targets are built).
-- Manifests are generated `.selum` files (versioned MessagePack+zstd; see docs/manifests.md) (not hand-edited config; those are TOML) found via `--manifest-dir`, `$SELU_MANIFEST_DIR`,
+  `dist/<Name>/` (one folder per product when several targets are built).
+- Manifests are generated append-only `.selus` history segments, with derived `.selum` caches (see docs/manifests.md), found via `--manifest-dir`, `$SELU_MANIFEST_DIR`,
   or the nearest `manifests/` folder walking up from the project.
   `manifests/fixtures/` holds one small hand-made **test fixture**
   (`fixture: true`); real manifests will be generated, never hand-written.
 - A build prints the resolution it used, e.g.
-  `target forever@1.0 -> 1.0.0.1000`. An unknown build is an error listing
-  the closest known builds; `@installed` is parsed but not implemented yet.
+  `target wowf -> 1.60.1.70790`. An unknown build is an error. `selu.lock` retains exact resolutions until an explicit targets update. Product pins require four version numbers.
 
 ## Scopes and names (decided while building the language core)
 

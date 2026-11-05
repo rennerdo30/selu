@@ -41,7 +41,7 @@ fn project(source: &str) -> PathBuf {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"Saved\"\ntargets = [\"forever@1.0\"]\n",
+        "[addon]\nname = \"Saved\"\ntargets = [\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     std::fs::write(dir.join("src/main.selu"), source).unwrap();

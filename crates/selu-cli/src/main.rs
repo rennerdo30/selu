@@ -26,7 +26,7 @@ enum Command {
     Build {
         /// Project folder holding `selu.toml` (default: current folder).
         path: Option<PathBuf>,
-        /// Override the project targets, e.g. `retail@12.0` (comma-separated).
+        /// Override the project targets, e.g. `wow@12.1.5.70783` (comma-separated).
         #[arg(long)]
         target: Option<String>,
         /// Folder holding target manifests (default: search upwards for `manifests/`).
@@ -62,8 +62,13 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
-    /// List every known flavour and build.
+    /// List stored products and builds.
     Targets {
+        /// Move the project lock to newest stored builds (optionally select products).
+        #[arg(long, num_args = 0..)]
+        update: Option<Vec<String>>,
+        #[arg(long)]
+        yes: bool,
         #[arg(long)]
         manifest_dir: Option<PathBuf>,
     },
@@ -86,7 +91,17 @@ fn main() -> ExitCode {
             target.as_deref(),
             manifest_dir.as_deref(),
         ),
-        Command::Targets { manifest_dir } => targets(manifest_dir.as_deref()),
+        Command::Targets {
+            manifest_dir,
+            update,
+            yes,
+        } => {
+            if let Some(products) = update {
+                update_targets(manifest_dir.as_deref(), products, *yes)
+            } else {
+                targets(manifest_dir.as_deref())
+            }
+        }
         Command::Fmt { paths, check } => fmt(paths, *check),
         Command::Test {
             path,
@@ -386,11 +401,33 @@ fn targets(manifest_dir: Option<&Path>) -> Result<(), ExitCode> {
     let manifests = find_manifests(manifest_dir, Path::new("."), None)?;
     for m in &manifests {
         println!(
-            "{}  (interface {}{})",
+            "{}  -  {} (interface {}{})",
             m.target_string(),
+            selu_manifest::display_name(&m.flavour, &m.build),
             m.interface,
             if m.fixture { ", test fixture" } else { "" }
         );
     }
     Ok(())
+}
+
+fn update_targets(
+    manifest_dir: Option<&Path>,
+    products: &[String],
+    yes: bool,
+) -> Result<(), ExitCode> {
+    let project = Path::new(".");
+    let manifests = find_manifests(manifest_dir, project, None)?;
+    let result = selu_manifest::lock::Lock::read(project)
+        .and_then(|mut lock| lock.update(project, &manifests, products, yes));
+    match result {
+        Ok(report) => {
+            print!("{report}");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("selu: {e}");
+            Err(ExitCode::FAILURE)
+        }
+    }
 }

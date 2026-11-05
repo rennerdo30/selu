@@ -35,7 +35,7 @@ fn hello_builds_runs_and_prints_on_login() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("target forever@1.0 -> 1.0.0.1000"),
+        stdout.contains("target wowf@1.0.0.1000 -> 1.0.0.1000"),
         "{stdout}"
     );
 
@@ -107,7 +107,7 @@ fn version_and_targets_work() {
         .unwrap();
     assert!(targets.status.success());
     let stdout = String::from_utf8_lossy(&targets.stdout);
-    assert!(stdout.contains("forever@1.0.0.1000"), "{stdout}");
+    assert!(stdout.contains("wowf@1.0.0.1000"), "{stdout}");
     assert!(stdout.contains("test fixture"), "{stdout}");
 }
 
@@ -121,7 +121,7 @@ fn missing_api_on_target_fails_the_build() {
         dir.join("selu.toml"),
         "[addon]
 name = \"Bad\"
-targets = [\"forever@1.0\"]
+targets = [\"wowf@1.0.0.1000\"]
 ",
     )
     .unwrap();
@@ -139,6 +139,6 @@ targets = [\"forever@1.0\"]
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("SELU0301"), "{stderr}");
-    assert!(stderr.contains("forever@1.0.0.1000"), "{stderr}");
+    assert!(stderr.contains("wowf@1.0.0.1000"), "{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }

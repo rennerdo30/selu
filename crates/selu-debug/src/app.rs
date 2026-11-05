@@ -616,6 +616,10 @@ impl eframe::App for Studio {
         if let Some(w) = &mut self.settings {
             match w.ui(&ctx) {
                 crate::settings::Outcome::Open => {}
+                crate::settings::Outcome::LockUpdated => {
+                    let now = ctx.input(|i| i.time);
+                    self.editor.config_changed(now);
+                }
                 crate::settings::Outcome::Saved => {
                     self.settings = None;
                     let now = ctx.input(|i| i.time);
@@ -778,7 +782,7 @@ impl Studio {
         };
         let mut out: Vec<String> = Vec::new();
         for t in targets {
-            let f = t.split('@').next().unwrap_or(&t).trim().to_string();
+            let f = selu_manifest::product(t.split('@').next().unwrap_or(&t).trim()).to_string();
             if !f.is_empty() && !out.contains(&f) {
                 out.push(f);
             }
@@ -1013,7 +1017,8 @@ impl Studio {
         let Some(project) = self.opts.project.clone() else {
             return;
         };
-        let Some(built) = crate::game::built_folder(&project, flavour) else {
+        let Some(built) = crate::game::built_folder(&project, flavour, self.opts.target.as_deref())
+        else {
             self.line(
                 LineKind::Error,
                 format!(
@@ -1023,6 +1028,32 @@ impl Studio {
             );
             return;
         };
+        let checked =
+            match selu_manifest::resolution::compiled_manifest_for_target(&built, Some(flavour)) {
+                Ok(Some(manifest)) => manifest,
+                Ok(None) => {
+                    self.line(
+                    LineKind::Error,
+                    "the built addon has no checked target snapshot; rebuild before Run in Game",
+                );
+                    return;
+                }
+                Err(error) => {
+                    self.line(LineKind::Error, error.to_string());
+                    return;
+                }
+            };
+        if let Some(installed) = crate::game::installed_build(client)
+            && installed != checked.build
+        {
+            self.line(
+                LineKind::Build,
+                format!(
+                    "WARNING: installed {installed} differs from locked {}",
+                    checked.target_string()
+                ),
+            );
+        }
         match crate::game::install_addon(&built, client, force) {
             Ok(dest) => {
                 self.line(LineKind::Build, format!("copied to {}", dest.display()));
@@ -1127,7 +1158,7 @@ impl Studio {
                 if self.game_clients.is_empty() {
                     ui.label(egui::RichText::new("No World of Warcraft install found. Add its folder below.").color(palette::WARNING));
                 }
-                let flavours = ["retail", "forever", "classic", "classic-era", "classic-anniversary", "classic-titan"];
+                let flavours = ["wow", "wowf", "wow_classic", "wow_classic_era", "wow_anniversary", "wow_classic_titan", "wowt", "wowxptr", "wow_beta", "wow_classic_ptr", "wow_classic_beta", "wow_classic_era_ptr", "wow_anniversary_ptr"];
                 egui::Grid::new("clients").num_columns(5).spacing([14.0, 8.0]).striped(true).show(ui, |ui| {
                     for h in ["USE", "CLIENT", "FLAVOUR", "GAME", "ADDONS FOLDER"] {
                         ui.label(egui::RichText::new(h).size(10.5).strong().color(palette::FAINT));

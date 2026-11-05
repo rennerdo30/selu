@@ -395,7 +395,7 @@ title = "My Addon"
 version = "1.0.0"
 author = "Name"
 notes = "One line shown in the AddOns list."
-targets = ["retail@12.0", "forever"]
+targets = ["wow", "wowf"]
 lua = []                 # plain Lua files, in load order (section 5)
 ```
 
@@ -520,7 +520,7 @@ run = ["fluidsynth", "-ni", "font.sf2", "{in}", "-F", "{out}"]
 
 ```
 selu export                 # every target in selu.toml
-selu export --target forever
+selu export --target wowf
 ```
 
 1. **Builds** the addon in release mode (`-O1`, source maps kept outside the

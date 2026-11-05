@@ -51,7 +51,7 @@ The six current flavours can share a build with:
 ```toml
 [addon]
 name = "AllClients"
-targets = ["retail", "forever", "classic-era", "classic-anniversary", "classic-titan", "classic"]
+targets = ["wow", "wowf", "wow_classic_era", "wow_anniversary", "wow_classic_titan", "wow_classic"]
 [build]
 layout = "shared"
 ```
@@ -67,3 +67,40 @@ interface numbers are hardcoded. See `examples/multi-target` for a shared addon.
 otherwise they are warnings. Availability failures remain errors in both modes.
 Guarded fallback declarations retain API signatures, referenced structures and
 widgets, multiple-result semantics, and factory specialization through aliases.
+
+## Products and selu.lock
+
+Use `targets = ["wow", "wow_classic", "wow_classic_era"]` or an exact pin such
+as `"wow_classic@5.5.4.70631"`. Product version-line targets are rejected.
+The transitional aliases retail, forever, classic, classic-era,
+classic-anniversary and classic-titan remain accepted (including their old
+version forms), with a warning naming the replacement product.
+
+The first build creates `selu.lock` beside `selu.toml`:
+
+```toml
+version = 1
+
+[targets]
+wow = "wow@12.1.5.70783"
+wow_classic = "wow_classic@5.5.4.70631"
+```
+
+Keys sort lexically. Exact project pins have their complete target as the key.
+Builds retain these resolutions until `selu targets --update [product...]` is
+run in the project directory. The command prints previous/new builds and added,
+removed and changed functions, events, widgets, globals, named types/structures
+(the tables section), predicates, enums, templates, data globals and frame families,
+plus candidate source lines for removed or changed names and members. Candidate lines are textual references, not a claim
+that a guarded use is invalid. Exact project pins stay exact. Major-version
+changes require `--yes`, or Studio's confirmation dialog. Missing locked builds
+produce an error with fetch-then-update recovery instructions.
+Unknown selectors, including products absent from the project, are errors listing
+valid project products and targets; a failed selection leaves the lock unchanged.
+Studio Project Settings shows the lock and offers the same explicit update. It
+preserves legacy selectors such as `retail@12.1` during ordinary edits and saves.
+Explicitly choosing the corresponding product migrates a legacy selector to its
+locked exact build; build the project first if no matching exact lock exists.
+Run in Game keeps test products distinct, reads the install root's `.build.info`
+and warns when its version differs from the locked version. The shared TOC
+Interface line continues to come from the resolved manifests.

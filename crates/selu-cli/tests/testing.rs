@@ -9,7 +9,7 @@ fn project(tag: &str, tests: &str) -> PathBuf {
     std::fs::create_dir_all(dir.join("tests")).unwrap();
     std::fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"Runner\"\ntargets = [\"forever@1.0\"]\n",
+        "[addon]\nname = \"Runner\"\ntargets = [\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     std::fs::write(

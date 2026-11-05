@@ -6,7 +6,7 @@ fn project(label: &str, files: &[(&str, &str)]) -> (PathBuf, std::process::Outpu
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
         root.join("selu.toml"),
-        "[addon]\nname=\"Review\"\ntargets=[\"forever@1.0\"]\n",
+        "[addon]\nname=\"Review\"\ntargets=[\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     for (name, text) in files {
@@ -379,7 +379,7 @@ fn r05_api_scalar_alias() {
     .unwrap();
     let manifest = manifests
         .iter()
-        .find(|m| m.flavour == "retail" && !m.fixture)
+        .find(|m| m.flavour == "wow" && !m.fixture)
         .unwrap();
     let source = "type N=number; const n:N=1; UnitName(n);";
     let p = selu_syntax::parse("t.selu", source).unwrap();

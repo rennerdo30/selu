@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
-/// One target row: flavour plus an optional version (`retail`, `retail@12.0`).
+/// One product plus an optional exact build pin.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TargetRow {
     pub flavour: String,
@@ -30,6 +30,43 @@ impl TargetRow {
                 version: String::new(),
             },
         }
+    }
+    fn select_product(
+        &mut self,
+        product: &str,
+        lock: &selu_manifest::lock::Lock,
+    ) -> Result<(), String> {
+        let current = selu_manifest::product(&self.flavour);
+        if current != self.flavour && current == product {
+            let requested =
+                selu_manifest::TargetSpec::parse(&self.render()).map_err(|e| e.to_string())?;
+            let targets = lock
+                .discovery_targets(&[self.render()])
+                .map_err(|e| e.to_string())?;
+            let exact = &targets[0];
+            let selected = selu_manifest::TargetSpec::parse(exact).map_err(|e| e.to_string())?;
+            let Some((_, version)) = exact.split_once('@') else {
+                return Err(
+                    "Build the project to lock its exact build before migrating this legacy target"
+                        .into(),
+                );
+            };
+            if selected.parts.len() != 4
+                || selu_manifest::product(&selected.flavour) != product
+                || !selected.parts.starts_with(&requested.parts)
+            {
+                return Err(
+                    "Build the project to lock its exact build before migrating this legacy target"
+                        .into(),
+                );
+            }
+            self.flavour = product.into();
+            self.version = version.into();
+        } else {
+            self.flavour = product.into();
+            self.version.clear();
+        }
+        Ok(())
     }
     pub fn render(&self) -> String {
         if self.version.is_empty() {
@@ -179,7 +216,12 @@ impl Settings {
         }
         let mut seen = std::collections::BTreeSet::new();
         for t in &self.targets {
-            if !t.flavour.is_empty() && !seen.insert(t.flavour.clone()) {
+            if let Err(error) = selu_manifest::TargetSpec::parse(&t.render()) {
+                out.push(error.to_string());
+            }
+
+            if !t.flavour.is_empty() && !seen.insert(selu_manifest::product(&t.flavour).to_owned())
+            {
                 out.push(format!(
                     "`{}` is listed twice; one build per flavour.",
                     t.flavour
@@ -190,34 +232,23 @@ impl Settings {
     }
 }
 
-/// Flavours and their builds, from the manifest file names
-/// (`manifests/retail/12.1.5.70391.selum`).
+/// Products and stored builds, excluding handmade test fixtures.
 pub fn known_builds(manifests: &Path) -> BTreeMap<String, Vec<String>> {
-    let mut out = BTreeMap::new();
-    let Ok(entries) = std::fs::read_dir(manifests) else {
-        return out;
-    };
-    for e in entries.flatten() {
-        let dir = e.path();
-        let Some(flavour) = dir.file_name().and_then(|n| n.to_str()).map(String::from) else {
-            continue;
-        };
-        if !dir.is_dir() || flavour == "fixtures" {
-            continue;
+    let mut out = BTreeMap::<String, Vec<String>>::new();
+    if let Ok(entries) = selu_manifest::load_manifest_dir(manifests) {
+        for m in entries.into_iter().filter(|m| !m.fixture) {
+            out.entry(selu_manifest::product(&m.flavour).into())
+                .or_default()
+                .push(m.build.to_string());
         }
-        let mut builds: Vec<String> = std::fs::read_dir(&dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|f| {
-                let name = f.file_name().to_string_lossy().into_owned();
-                name.strip_suffix(".selum")
-                    .or_else(|| name.strip_suffix(".json"))
-                    .map(String::from)
-            })
-            .collect();
-        builds.sort();
-        out.insert(flavour, builds);
+    }
+    for builds in out.values_mut() {
+        builds.sort_by_key(|build| {
+            selu_manifest::Build::parse(build)
+                .ok()
+                .map(|b| (b.build, b))
+        });
+        builds.dedup();
     }
     out
 }
@@ -225,23 +256,16 @@ pub fn known_builds(manifests: &Path) -> BTreeMap<String, Vec<String>> {
 /// Version choices for a build such as `12.1.5.70391`: the newest build
 /// (empty), the major.minor, the patch, and the exact build.
 fn version_choices(builds: &[String]) -> Vec<(String, String)> {
-    let mut out = vec![(String::new(), "newest build".to_string())];
-    for b in builds.iter().rev() {
-        let parts: Vec<&str> = b.split('.').collect();
-        for n in [2, 3, 4] {
-            if parts.len() >= n {
-                let v = parts[..n].join(".");
-                if !out.iter().any(|(x, _)| *x == v) {
-                    let label = match n {
-                        2 => format!("{v} (any {v}.x)"),
-                        3 => format!("{v} (any build)"),
-                        _ => format!("{v} (exact)"),
-                    };
-                    out.push((v, label));
-                }
-            }
-        }
-    }
+    let mut out = vec![(
+        String::new(),
+        "newest stored build (locked on build)".to_string(),
+    )];
+    out.extend(
+        builds
+            .iter()
+            .rev()
+            .map(|b| (b.clone(), format!("{b} (exact)"))),
+    );
     out
 }
 
@@ -252,11 +276,14 @@ pub struct SettingsWindow {
     original: Settings,
     builds: BTreeMap<String, Vec<String>>,
     error: Option<String>,
+    lock_report: Option<String>,
+    confirm_lock: bool,
 }
 
 pub enum Outcome {
     Open,
     Saved,
+    LockUpdated,
     Closed,
 }
 
@@ -279,6 +306,8 @@ impl SettingsWindow {
             settings,
             builds,
             error: None,
+            lock_report: None,
+            confirm_lock: false,
         })
     }
 
@@ -299,11 +328,13 @@ impl SettingsWindow {
     pub fn ui(&mut self, ctx: &egui::Context) -> Outcome {
         let mut outcome = Outcome::Open;
         let mut open = true;
+        let mut update_lock = false;
         egui::Window::new(RichText::new("Project Settings").size(15.0).strong())
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
             .default_width(560.0)
+            .vscroll(true)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 let s = &mut self.settings;
@@ -340,13 +371,16 @@ impl SettingsWindow {
                             .selected_text(if t.flavour.is_empty() { "choose..." } else { &t.flavour })
                             .show_ui(ui, |ui| {
                                 for f in &flavours {
-                                    if ui.selectable_label(&t.flavour == f, f).clicked() {
-                                        t.flavour = f.clone();
-                                        t.version.clear();
+                                    if ui.selectable_label(&t.flavour == f, self.builds.get(f).and_then(|builds| builds.last()).and_then(|v| selu_manifest::Build::parse(v).ok()).map(|b| format!("{f}  -  {}", selu_manifest::display_name(f, &b))).unwrap_or_else(|| f.clone())).clicked() {
+                                        let project = self.path.parent().unwrap_or(Path::new("."));
+                                        let result = selu_manifest::lock::Lock::read(project)
+                                            .map_err(|e| e.to_string())
+                                            .and_then(|lock| t.select_product(f, &lock));
+                                        if let Err(error) = result { self.error = Some(error); }
                                     }
                                 }
                             });
-                        let builds = self.builds.get(&t.flavour).cloned().unwrap_or_default();
+                        let builds = self.builds.get(selu_manifest::product(&t.flavour)).cloned().unwrap_or_default();
                         let choices = version_choices(&builds);
                         let current = choices
                             .iter()
@@ -370,7 +404,7 @@ impl SettingsWindow {
                             remove = Some(i);
                         }
                     });
-                    if !t.flavour.is_empty() && !self.builds.contains_key(&t.flavour) {
+                    if !t.flavour.is_empty() && !self.builds.contains_key(selu_manifest::product(&t.flavour)) {
                         ui.label(
                             RichText::new(format!("No manifest for `{}`.", t.flavour))
                                 .small()
@@ -384,7 +418,7 @@ impl SettingsWindow {
                 if ui.button("Add target").clicked() {
                     let next = flavours
                         .iter()
-                        .find(|f| !s.targets.iter().any(|t| &t.flavour == *f))
+                        .find(|f| !s.targets.iter().any(|t| selu_manifest::product(&t.flavour) == f.as_str()))
                         .cloned()
                         .unwrap_or_default();
                     s.targets.push(TargetRow {
@@ -394,6 +428,12 @@ impl SettingsWindow {
                 }
                 ui.add_space(12.0);
 
+                caption(ui, "Locked builds");
+                if let Ok(lock) = selu_manifest::lock::Lock::read(self.path.parent().unwrap_or(Path::new("."))) {
+                    for (target, build) in lock.targets { ui.label(format!("{target}: {build}")); }
+                }
+                update_lock = ui.add_enabled(*s == self.original, egui::Button::new("Update locked builds")).on_hover_text("Save target changes before updating the lock").clicked();
+                if let Some(report) = &self.lock_report { ui.label(report); }
                 caption(ui, "Build");
                 ui.add_space(2.0);
                 ui.add_enabled_ui(s.targets.len() > 1, |ui| {
@@ -443,6 +483,42 @@ impl SettingsWindow {
                     }
                 });
             });
+        let mut confirmed = false;
+        if self.confirm_lock {
+            egui::Window::new("Confirm major version change")
+                .vscroll(true)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label(self.lock_report.as_deref().unwrap_or_default());
+                    if ui.button("Confirm major version update").clicked() {
+                        confirmed = true;
+                        self.confirm_lock = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.confirm_lock = false;
+                    }
+                });
+        }
+        if update_lock || confirmed {
+            let project = self.path.parent().unwrap_or(Path::new("."));
+            let result = (|| -> Result<String, String> {
+                let dir =
+                    crate::editor::complete::find_manifests(project).ok_or("no manifest store")?;
+                let manifests =
+                    selu_manifest::load_manifest_dir(&dir).map_err(|e| format!("{e:?}"))?;
+                let mut lock =
+                    selu_manifest::lock::Lock::read(project).map_err(|e| e.to_string())?;
+                lock.update(project, &manifests, &[], confirmed)
+                    .map_err(|e| e.to_string())
+            })();
+            if result.is_ok() {
+                outcome = Outcome::LockUpdated;
+            }
+            self.confirm_lock = result
+                .as_ref()
+                .is_err_and(|e| e.contains("MAJOR VERSION CHANGE"));
+            self.lock_report = Some(result.unwrap_or_else(|e| e));
+        }
         if !open {
             outcome = Outcome::Closed;
         }
@@ -453,21 +529,79 @@ impl SettingsWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn open_and_save_preserves_legacy_partial_target() {
+        let project =
+            std::env::temp_dir().join(format!("selu-studio-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("selu.toml"),
+            "[addon]\nname=\"Legacy\"\ntargets=[\"retail@12.1\"]\n",
+        )
+        .unwrap();
+        let mut window = SettingsWindow::open(&project).unwrap();
+        assert!(
+            window.settings.problems().is_empty(),
+            "{:?}",
+            window.settings.problems()
+        );
+        assert_eq!(window.settings.targets[0].render(), "retail@12.1");
+        window.settings.indent = 4;
+        assert!(window.save());
+        assert_eq!(
+            selu_manifest::lock::project_targets(&project).unwrap(),
+            ["retail@12.1"]
+        );
+        assert!(
+            SettingsWindow::open(&project)
+                .unwrap()
+                .settings
+                .problems()
+                .is_empty()
+        );
+        let no_lock = selu_manifest::lock::Lock::read(&project).unwrap();
+        assert!(
+            window.settings.targets[0]
+                .select_product("wow", &no_lock)
+                .is_err()
+        );
+        assert_eq!(window.settings.targets[0].render(), "retail@12.1");
+        let lock = selu_manifest::lock::Lock {
+            version: 1,
+            targets: BTreeMap::from([("wow@12.1".into(), "wow@12.1.5.70391".into())]),
+        };
+        lock.write(&project).unwrap();
+        window.settings.targets[0]
+            .select_product("wow", &lock)
+            .unwrap();
+        assert_eq!(window.settings.targets[0].render(), "wow@12.1.5.70391");
+        assert!(window.settings.problems().is_empty());
+        assert!(window.save());
+        assert_eq!(
+            selu_manifest::lock::project_targets(&project).unwrap(),
+            ["wow@12.1.5.70391"]
+        );
+        assert_eq!(
+            selu_manifest::lock::Lock::read(&project).unwrap().targets,
+            lock.targets
+        );
+        std::fs::remove_dir_all(project).unwrap();
+    }
 
     #[test]
     fn edits_keep_comments_and_unknown_keys() {
-        let text = "# My addon\n[addon]\nname = \"Demo\" # shown in game\ntargets = [\"retail@12.0\"]\n\n[extra]\nkeep = 1\n";
+        let text = "# My addon\n[addon]\nname = \"Demo\" # shown in game\ntargets = [\"wow@12.1.5.70391\"]\n\n[extra]\nkeep = 1\n";
         let mut doc: DocumentMut = text.parse().unwrap();
         let mut s = Settings::read(&doc);
         assert_eq!(s.name, "Demo");
         assert_eq!(
             s.targets,
             [TargetRow {
-                flavour: "retail".into(),
-                version: "12.0".into()
+                flavour: "wow".into(),
+                version: "12.1.5.70391".into()
             }]
         );
-        s.targets.push(TargetRow::parse("classic-era"));
+        s.targets.push(TargetRow::parse("wow_classic_era"));
         s.shared_layout = true;
         s.indent = 4;
         s.write(&mut doc);
@@ -475,7 +609,7 @@ mod tests {
         assert!(out.starts_with("# My addon\n"), "{out}");
         assert!(out.contains("# shown in game"), "{out}");
         assert!(
-            out.contains("targets = [\"retail@12.0\", \"classic-era\"]"),
+            out.contains("targets = [\"wow@12.1.5.70391\", \"wow_classic_era\"]"),
             "{out}"
         );
         assert!(out.contains("[build]\nlayout = \"shared\""), "{out}");
@@ -495,12 +629,12 @@ mod tests {
     }
 
     #[test]
-    fn version_choices_cover_major_patch_and_exact() {
+    fn version_choices_offer_latest_and_exact_only() {
         let c = version_choices(&["12.1.5.70391".to_string()]);
         let values: Vec<&str> = c.iter().map(|(v, _)| v.as_str()).collect();
-        assert_eq!(values, ["", "12.1", "12.1.5", "12.1.5.70391"]);
+        assert_eq!(values, ["", "12.1.5.70391"]);
         let builds = known_builds(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"));
-        assert!(builds.contains_key("retail") && !builds.contains_key("fixtures"));
+        assert!(builds.contains_key("wow") && !builds.contains_key("fixtures"));
     }
 
     #[test]
@@ -508,7 +642,10 @@ mod tests {
         let mut s = Settings::read(&"[addon]\nname = \"\"\n".parse().unwrap());
         assert_eq!(s.problems().len(), 2);
         s.name = "Bad Name".into();
-        s.targets = vec![TargetRow::parse("retail"), TargetRow::parse("retail@12.0")];
+        s.targets = vec![
+            TargetRow::parse("retail"),
+            TargetRow::parse("wow@12.1.5.70391"),
+        ];
         let p = s.problems();
         assert!(
             p.iter().any(|x| x.contains("letters")) && p.iter().any(|x| x.contains("twice")),

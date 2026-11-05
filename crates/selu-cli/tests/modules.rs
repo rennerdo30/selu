@@ -7,7 +7,7 @@ fn entry_ignores_unreachable_invalid_source() {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"Modules\"\ntargets = [\"forever@1.0\"]\n",
+        "[addon]\nname = \"Modules\"\ntargets = [\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     std::fs::write(dir.join("src/main.selu"), "print(7);").unwrap();
@@ -39,7 +39,7 @@ fn project(label: &str, files: &[(&str, &str)]) -> (std::path::PathBuf, std::pro
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("selu.toml"),
-        "[addon]\nname = \"Modules\"\ntargets = [\"forever@1.0\"]\n",
+        "[addon]\nname = \"Modules\"\ntargets = [\"wowf@1.0.0.1000\"]\n",
     )
     .unwrap();
     for (name, source) in files {

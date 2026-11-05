@@ -1,3 +1,4 @@
+pub use selu_manifest::store::EXTRACTION_VERSION;
 pub mod coverage;
 pub mod factory;
 pub mod xml;
@@ -557,29 +558,7 @@ pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
     }
     m.templates.sort_by(|a, b| a.name.cmp(&b.name));
     m.data_globals.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut json = serde_json::to_value(&*m)?;
-    let mut groups = BTreeMap::<String, serde_json::Value>::new();
-    let mut globals = Vec::new();
-    for g in &m.globals {
-        let mut entry = serde_json::to_value(g)?;
-        if g.value.is_some() {
-            globals.push(entry);
-            continue;
-        }
-        entry.as_object_mut().unwrap().remove("name");
-        let key = serde_json::to_string(&entry)?;
-        let group = groups.entry(key).or_insert_with(|| {
-            entry["names"] = serde_json::json!([]);
-            entry
-        });
-        group["names"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!(g.name));
-    }
-    globals.extend(groups.into_values());
-    json["globals"] = serde_json::Value::Array(globals);
-    selu_manifest::format::encode(&json)
+    selu_manifest::format::encode_manifest(m)
 }
 #[cfg(test)]
 mod tests {
@@ -628,16 +607,16 @@ mod tests {
     #[test]
     fn committed_manifests_smoke() {
         for (flavour, build) in [
-            ("retail", "12.1.5.70391"),
-            ("forever", "1.60.1.70532"),
-            ("classic-era", "1.15.9.70576"),
-            ("classic-anniversary", "2.5.6.70577"),
-            ("classic-titan", "3.80.2.70522"),
-            ("classic", "5.5.4.70631"),
+            ("wow", "12.1.5.70391"),
+            ("wowf", "1.60.1.70532"),
+            ("wow_classic_era", "1.15.9.70576"),
+            ("wow_anniversary", "2.5.6.70577"),
+            ("wow_classic_titan", "3.80.2.70522"),
+            ("wow_classic", "5.5.4.70631"),
         ] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("../../manifests/{flavour}/{build}.selum"));
-            let m = selu_manifest::load_manifest(&path).unwrap();
+            let path =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store");
+            let m = selu_manifest::store::load_build(&path, &format!("{flavour}@{build}")).unwrap();
             assert!(!m.fixture);
             assert!(m.function("C_Timer.After").is_some());
             assert!(m.function("CreateFrame").is_some());

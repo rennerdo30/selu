@@ -1,4 +1,4 @@
-use selu_manifest::{Manifest, load_manifest};
+use selu_manifest::Manifest;
 fn empty() -> Manifest {
     serde_json::from_value(serde_json::json!({"flavour":"test","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1})).unwrap()
 }
@@ -12,9 +12,9 @@ fn extracted(src: &str) -> Manifest {
 }
 #[test]
 fn direct_api_array_loop_remains_valid() {
-    let m = load_manifest(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../manifests/retail/12.1.5.70391.selum"),
+    let m = selu_manifest::store::load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wow@12.1.5.70391",
     )
     .unwrap();
     let p = selu_syntax::parse(
