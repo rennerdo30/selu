@@ -280,7 +280,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         if kind == "FontString"
             && let Some(template) = string(v.get(2))
         {
-            let object: Table = lua.globals().get(template)?;
+            let object = crate::fonts::template(lua, &template)?;
             call(
                 lua,
                 ctx,
