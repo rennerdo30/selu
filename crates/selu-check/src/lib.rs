@@ -397,7 +397,16 @@ impl Ctx<'_> {
         self.scopes.push(Scope::default());
         self.narrow_here(narrowings);
         for (p, ty) in params {
-            self.declare(&p.name, &p.span, Kind::Param, ty.clone());
+            let saved = self.types.saved_parameters.contains(&p.span.start);
+            self.declare(
+                &p.name,
+                &p.span,
+                if saved { Kind::Saved } else { Kind::Param },
+                ty.clone(),
+            );
+            if saved {
+                self.finish_decl(&p.name, ty.clone());
+            }
         }
         self.declare_block_imports(stmts);
         self.predeclare_aliases(stmts);
@@ -1453,6 +1462,18 @@ impl Ctx<'_> {
         let callee_type = self.restriction_value_type(callee, callee_type);
         let callee_type = self.restriction_call_policy(e, &callee_type);
         self.types.set(callee.id, callee_type.clone());
+        if let ExprKind::Member { object, name } = &callee.kind
+            && name == "whenReady"
+            && self.is_saved_root(object)
+        {
+            for arg in args {
+                if let ExprKind::Function { params, .. } = &arg.kind {
+                    for p in params {
+                        self.types.saved_parameters.insert(p.span.start);
+                    }
+                }
+            }
+        }
         let arg_types = self.function_arguments(args, &callee_type);
         if self.api_check_call(e, args, &arg_types, &callee_type)
             && let Type::Function { ret, .. } = &callee_type

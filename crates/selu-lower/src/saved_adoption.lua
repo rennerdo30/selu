@@ -294,3 +294,16 @@ __selu_saved_runtime.publishAdoption = function(__selu_pending, __selu_result)
     end
   end
 end
+
+-- Ordinary declarations stage the complete attempt on a provenance-preserving
+-- copy. Refusals never commit any changes to the client's restored graph.
+__selu_saved_runtime.ordinary = function(__selu_database, __selu_current, __selu_legacy, __selu_version_key, __selu_latest, __selu_defaults, __selu_schema, __selu_default_objects, __selu_steps, __selu_readers, __selu_contexts, __selu_publish)
+  local __selu_reverse = {}
+  local __selu_candidate = __selu_saved_clone(__selu_current, {}, __selu_reverse)
+  __selu_saved_runtime.adopt(__selu_database, __selu_candidate, nil, __selu_version_key, __selu_latest, __selu_defaults, __selu_schema, __selu_default_objects, __selu_steps, __selu_readers, __selu_contexts, function(__selu_result)
+    if __selu_result.data then
+      __selu_result.data = __selu_saved_commit(__selu_result.data, __selu_reverse, {})
+    end
+    __selu_publish(__selu_result, false)
+  end)
+end

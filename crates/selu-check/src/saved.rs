@@ -9,22 +9,14 @@ impl Ctx<'_> {
             name_span,
             defaults,
             ty,
-            version_key,
             ..
         } = &s.kind
         {
-            if version_key.is_some() {
-                self.types.saved_adoptions.insert(name.clone());
-            }
+            self.types.saved_adoptions.insert(name.clone());
             let inferred = self.value(defaults);
             let ty = self.annotation(ty).unwrap_or(inferred);
             self.types.saved_schemas.insert(s.span.start, ty.clone());
-            self.declare(
-                name,
-                name_span,
-                Kind::Saved,
-                adoption_type(ty, version_key.is_some()),
-            );
+            self.declare(name, name_span, Kind::Saved, adoption_type(ty, true));
         }
     }
     pub(crate) fn saved_access(&mut self, name: &str, span: &Span) {
@@ -44,7 +36,7 @@ impl Ctx<'_> {
             );
         }
     }
-    fn saved_root(&self, target: &selu_syntax::Expr) -> bool {
+    pub(crate) fn is_saved_root(&self, target: &selu_syntax::Expr) -> bool {
         use selu_syntax::ExprKind;
         match &target.kind {
             ExprKind::Ident(name) => self.lookup(name).is_some_and(|(_, b)| {
@@ -53,7 +45,7 @@ impl Ctx<'_> {
             }),
             ExprKind::Member { object, .. }
             | ExprKind::OptionalMember { object, .. }
-            | ExprKind::Index { object, .. } => self.saved_root(object),
+            | ExprKind::Index { object, .. } => self.is_saved_root(object),
             _ => false,
         }
     }
@@ -61,7 +53,7 @@ impl Ctx<'_> {
         self.out.push(err("SELU0469", "class instances cannot be saved because their metatables and methods cannot be persisted", span).with_help("copy the fields into a plain object, for example { x: p.x, y: p.y }"));
     }
     pub(crate) fn saved_write_value(&mut self, target: &selu_syntax::Expr, ty: &Type, span: &Span) {
-        if self.saved_root(target) && contains_class(ty) {
+        if self.is_saved_root(target) && contains_class(ty) {
             self.class_saved_error(span);
         }
     }
@@ -72,7 +64,7 @@ impl Ctx<'_> {
     ) {
         if let selu_syntax::ExprKind::Member { object, name } = &callee.kind
             && matches!(name.as_str(), "push" | "insert" | "set" | "add")
-            && self.saved_root(object)
+            && self.is_saved_root(object)
         {
             for arg in args {
                 if self.types.get(arg.id).is_some_and(contains_class) {
@@ -135,8 +127,7 @@ impl Ctx<'_> {
                         }
 
                         if field.key == "__selu_version"
-                            || (version_key.is_some()
-                                && field.key == "__selu_saved_adoption_context")
+                            || field.key == "__selu_saved_adoption_context"
                         {
                             self.out.push(err(
                                 "SELU0470",
@@ -161,10 +152,10 @@ impl Ctx<'_> {
                         &defaults.span,
                     ));
                 }
-                if version_key.is_some() && !closed_schema(&ty, 0) {
+                if !closed_schema(&ty, 0) {
                     self.out.push(err(
                         "SELU0901",
-                        "adoption requires a finite closed record schema",
+                        "saved declarations require a finite closed record schema",
                         &defaults.span,
                     ));
                 }
@@ -217,7 +208,7 @@ impl Ctx<'_> {
                         name_span,
                     ));
                 }
-                self.finish_decl(name, adoption_type(ty, version_key.is_some()));
+                self.finish_decl(name, adoption_type(ty, true));
             }
             StmtKind::Migrate {
                 name,
@@ -269,7 +260,7 @@ impl Ctx<'_> {
                 if adoption && param.ty.is_none() {
                     self.out.push(err(
                         "SELU0901",
-                        "adoption migrations require a closed historical schema",
+                        "saved migrations require a closed historical schema",
                         &param.span,
                     ));
                 }

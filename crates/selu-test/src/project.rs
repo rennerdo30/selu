@@ -837,7 +837,6 @@ fn collect_saved(
                         .filter_map(|s| {
                             if let selu_syntax::StmtKind::Migrate { name: n, from, .. } = &s.kind
                                 && n == name
-                                && version_key.is_some()
                             {
                                 return types.saved_readers.get(&s.span.start).map(|t| {
                                     (

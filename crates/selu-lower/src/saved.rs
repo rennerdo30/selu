@@ -62,12 +62,7 @@ fn method(v: LExpr, k: &str, args: Vec<LExpr>) -> LStmt {
 fn helper(k: &str, args: Vec<LExpr>) -> LExpr {
     lua::call(f(rt(), k), args)
 }
-fn warning(message: &str) -> LStmt {
-    invoke(helper(
-        "warn",
-        vec![bin(BinOp::Concat, g("key"), st(&format!(": {message}")))],
-    ))
-}
+
 fn each(iter: LExpr, body: LBlock) -> LStmt {
     s(LStmtKind::GenFor {
         names: vec!["__selu_saved_key".into(), "__selu_saved_value".into()],
@@ -137,95 +132,6 @@ fn runtime() -> LBlock {
             Some(vec![invoke(call("print", vec![g("message")]))]),
         )),
     ];
-    let data = g("data");
-    let version = g("version");
-    let ver = f(data.clone(), "__selu_version");
-    let invalid = bin(
-        BinOp::Or,
-        bin(BinOp::Ne, call("type", vec![version.clone()]), st("number")),
-        bin(
-            BinOp::Or,
-            bin(BinOp::Lt, version.clone(), n(1)),
-            bin(BinOp::Ne, bin(BinOp::Mod, version.clone(), n(1)), n(0)),
-        ),
-    );
-    let load_body = vec![
-        local("data", call("rawget", vec![g("_G"), g("key")])),
-        iff(
-            eq(data.clone(), LExpr::Nil),
-            vec![
-                assign(data.clone(), LExpr::Table(vec![])),
-                assign(ver.clone(), g("current")),
-            ],
-        ),
-        iff(
-            bin(BinOp::Ne, call("type", vec![data.clone()]), st("table")),
-            vec![warning("saved root is not a table"), ret(data.clone())],
-        ),
-        local(
-            "version",
-            call("rawget", vec![data.clone(), st("__selu_version")]),
-        ),
-        iff(
-            eq(version.clone(), LExpr::Nil),
-            vec![assign(version.clone(), n(1))],
-        ),
-        iff(
-            invalid,
-            vec![warning("invalid saved version"), ret(data.clone())],
-        ),
-        iff(
-            bin(BinOp::Gt, version.clone(), g("current")),
-            vec![
-                warning("saved data is newer than this addon"),
-                ret(data.clone()),
-            ],
-        ),
-        s(LStmtKind::While(
-            bin(BinOp::Lt, version.clone(), g("current")),
-            vec![
-                local("migration", ix(g("migrations"), version.clone())),
-                iff(
-                    eq(g("migration"), LExpr::Nil),
-                    vec![warning("missing saved migration"), ret(data.clone())],
-                ),
-                local("candidate", helper("copy", vec![data.clone()])),
-                s(LStmtKind::Local(
-                    vec!["__selu_saved_ok".into(), "__selu_saved_message".into()],
-                    vec![call("pcall", vec![g("migration"), g("candidate")])],
-                )),
-                iff(
-                    LExpr::Unary(UnOp::Not, Box::new(g("ok"))),
-                    vec![
-                        invoke(helper(
-                            "warn",
-                            vec![bin(
-                                BinOp::Concat,
-                                g("key"),
-                                bin(
-                                    BinOp::Concat,
-                                    st(": migration failed: "),
-                                    call("tostring", vec![g("message")]),
-                                ),
-                            )],
-                        )),
-                        ret(data.clone()),
-                    ],
-                ),
-                assign(version.clone(), bin(BinOp::Add, version.clone(), n(1))),
-                assign(data.clone(), g("candidate")),
-                assign(ver.clone(), version.clone()),
-                assign(ix(g("_G"), g("key")), data.clone()),
-            ],
-        )),
-        invoke(helper(
-            "fill",
-            vec![data.clone(), g("defaults"), g("objects")],
-        )),
-        assign(ver, g("current")),
-        assign(ix(g("_G"), g("key")), data.clone()),
-        ret(data),
-    ];
     vec![
         assign(rt(), LExpr::Table(vec![])),
         assign(f(name("__selu_ns"), "__selu_saved"), rt()),
@@ -235,13 +141,6 @@ fn runtime() -> LBlock {
             fun(&["data", "defaults", "objects"], fill_body),
         ),
         assign(f(rt(), "warn"), fun(&["message"], warn_body)),
-        assign(
-            f(rt(), "load"),
-            fun(
-                &["key", "current", "defaults", "objects", "migrations"],
-                load_body,
-            ),
-        ),
         assign(f(rt(), "entries"), LExpr::Table(vec![])),
         assign(f(rt(), "loaders"), LExpr::Table(vec![])),
         local("frame", call("CreateFrame", vec![st("Frame")])),
@@ -333,13 +232,13 @@ impl Lowerer<'_> {
                 if !forward {
                     out.push(s(LStmtKind::Local(vec![saved.clone()], vec![])));
                 }
-                if version_key.is_some() {
+                {
                     out.push(assign(name(saved), helper("pending", vec![])));
                 }
                 let key = declaration_global(&self.module.addon_name, saved, *adopted);
                 let entry = ix(f(rt(), "entries"), st(&key));
                 out.push(assign(entry.clone(), LExpr::Table(vec![])));
-                if version_key.is_some() {
+                {
                     out.push(assign(
                         ix(f(rt(), "readers"), st(&key)),
                         LExpr::Table(vec![]),
@@ -351,7 +250,13 @@ impl Lowerer<'_> {
                 }
                 let mut body = vec![];
                 let defaults_value = self.expr(defaults, &mut body);
-                if let Some(version_key) = version_key {
+                {
+                    let loader = if version_key.is_some() {
+                        "adopt"
+                    } else {
+                        "ordinary"
+                    };
+                    let version_key = version_key.as_deref().unwrap_or("__selu_version");
                     let legacy_value = legacy
                         .as_ref()
                         .map_or(LExpr::Nil, |_| call(&format!("legacy_{saved}"), vec![]));
@@ -384,7 +289,7 @@ impl Lowerer<'_> {
                     // Getters resolve outside the shadowing source binding, but read only
                     // inside this loader, after the client's SavedVariables restoration.
                     body.push(invoke(helper(
-                        "adopt",
+                        loader,
                         vec![
                             st(&key),
                             call(&format!("root_{saved}"), vec![]),
@@ -407,20 +312,6 @@ impl Lowerer<'_> {
                             publish,
                         ],
                     )));
-                } else {
-                    body.push(assign(
-                        name(saved),
-                        helper(
-                            "load",
-                            vec![
-                                st(&key),
-                                n(*version),
-                                defaults_value,
-                                objects(self.types.get(defaults.id)),
-                                entry,
-                            ],
-                        ),
-                    ));
                 }
                 let loaders = f(rt(), "loaders");
                 out.push(assign(
@@ -550,19 +441,40 @@ fn schema(ty: &selu_check::Type) -> LExpr {
     }
 }
 
-pub(crate) fn adoption_captures(program: &Program) -> LBlock {
-    let mut out = vec![];
+pub(crate) fn adoption_captures(program: &Program, addon: &str) -> LBlock {
+    let mut out = if has_saved(program) {
+        vec![
+            local("rootRawget", name("rawget")),
+            local("rootEnvironment", name("_G")),
+        ]
+    } else {
+        vec![]
+    };
     for stmt in &program.stmts {
         if let StmtKind::Saved {
             name: saved,
-            version_key: Some(_),
+            adopted,
+            version_key,
             legacy,
             ..
         } = &inner(stmt).kind
         {
             out.push(local(
                 &format!("root_{saved}"),
-                fun(&[], vec![ret(name(saved))]),
+                fun(
+                    &[],
+                    vec![ret(if version_key.is_some() {
+                        name(&declaration_global(addon, saved, *adopted))
+                    } else {
+                        call(
+                            "rootRawget",
+                            vec![
+                                g("rootEnvironment"),
+                                st(&declaration_global(addon, saved, *adopted)),
+                            ],
+                        )
+                    })],
+                ),
             ));
             if let Some(legacy) = legacy {
                 out.push(local(
@@ -577,7 +489,13 @@ pub(crate) fn adoption_captures(program: &Program) -> LBlock {
 
             out.push(local(
                 &format!("publish_{saved}"),
-                fun(&["value"], vec![assign(name(saved), g("value"))]),
+                fun(
+                    &["value"],
+                    vec![assign(
+                        name(&declaration_global(addon, saved, *adopted)),
+                        g("value"),
+                    )],
+                ),
             ));
         }
     }
@@ -585,15 +503,7 @@ pub(crate) fn adoption_captures(program: &Program) -> LBlock {
 }
 
 pub(crate) fn has_adoption(program: &Program) -> bool {
-    program.stmts.iter().any(|s| {
-        matches!(
-            inner(s).kind,
-            StmtKind::Saved {
-                version_key: Some(_),
-                ..
-            }
-        )
-    })
+    has_saved(program)
 }
 pub(crate) fn adoption_setup(program: &Program) -> LBlock {
     if !has_adoption(program) {

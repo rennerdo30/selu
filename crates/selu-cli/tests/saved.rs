@@ -73,9 +73,9 @@ fn success(dir: &Path) {
 #[test]
 fn defaults_sessions_migrations_and_live_imports() {
     let dir = project(
-        "import { settings } from \"./state\"; on PLAYER_LOGIN() { print(settings.enabled); print(settings.nested.count); }",
+        "import { settings } from \"./state\"; on PLAYER_LOGIN() {settings.whenReady((settings) => { print(settings.enabled); print(settings.nested.count); });}",
     );
-    std::fs::write(dir.join("src/state.selu"),"export saved settings = { enabled: true, nested: { count: 3 } }; on PLAYER_LOGIN() { settings.enabled = false; settings.nested.count = 7; }").unwrap();
+    std::fs::write(dir.join("src/state.selu"),"export saved settings = { enabled: true, nested: { count: 3 } }; on PLAYER_LOGIN() {settings.whenReady((settings) => { settings.enabled = false; settings.nested.count = 7; });}").unwrap();
     success(&dir);
     let sim = common::SavedVm::new();
     sim.load_addon("Saved", &files(&dir)).unwrap();
@@ -83,7 +83,7 @@ fn defaults_sessions_migrations_and_live_imports() {
     assert_eq!(sim.prints(), vec!["false", "7"]);
     let key = selu_lower::saved::global_name("Saved", "state", "settings");
     let saved = sim.logout_saved(&[&key]).unwrap();
-    std::fs::write(dir.join("src/state.selu"),"export saved settings version 3 = { enabled: true, nested: { count: 3 }, added: 9 }; migrate settings 1 -> 2 (old) { old.nested.count = 12; } migrate settings 2 -> 3 (old) { old.nested.count += 1; }").unwrap();
+    std::fs::write(dir.join("src/state.selu"),"export saved settings version 3 = { enabled: true, nested: { count: 3 }, added: 9 }; migrate settings 1 -> 2 (old: {enabled:boolean; nested:{count:number}; added?:number}) { old.nested.count = 12; } migrate settings 2 -> 3 (old: {enabled:boolean; nested:{count:number}; added?:number}) { old.nested.count += 1; }").unwrap();
     success(&dir);
     let next = Sim::login_saved("Saved", &files(&dir), &saved).unwrap();
     next.fire("PLAYER_LOGIN", vec![]).unwrap();
@@ -135,7 +135,7 @@ fn early_access_includes_writes_members_and_imports_but_allows_shadowing() {
     }
     assert!(
         common::codes(
-            "saved s = { x: 1 }; function f() { print(s.x); } { const s = 3; print(s); }"
+            "saved s = { x: 1 }; function f() { s.whenReady((data) => { print(data.x); }); } { const s = 3; print(s); }"
         )
         .is_empty()
     );
@@ -148,7 +148,7 @@ fn early_access_includes_writes_members_and_imports_but_allows_shadowing() {
 #[test]
 fn failed_migration_rolls_back_and_retries_and_newer_data_is_untouched() {
     let dir = project(
-        "saved s version 3 = { x: 1 }; migrate s 1 -> 2 (old) { old.x = 8; } migrate s 2 -> 3 (old) { old.x = 2; print(old.missing.value); } on PLAYER_LOGIN() { print(s.x); }",
+        "saved s version 3 = { x: 1 }; migrate s 1 -> 2 (old: {x:number}) { old.x = 8; } migrate s 2 -> 3 (old: {x:number}) { old.x = 2; throw new Error(\"migration fault\"); } on PLAYER_LOGIN() {s.whenReady((s) => { print(s.x); });}",
     );
     success(&dir);
     let key = selu_lower::saved::global_name("Saved", "main", "s");
@@ -158,13 +158,13 @@ fn failed_migration_rolls_back_and_retries_and_newer_data_is_untouched() {
     sim.load_addon("Saved", &files(&dir)).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     sim.eval(&format!(
-        "assert({key}.x == 8); assert({key}.__selu_version == 2)"
+        "assert({key}.x == 7); assert({key}.__selu_version == 1)"
     ))
     .unwrap();
     let snapshot = sim.logout_saved(&[&key]).unwrap();
     let next = Sim::login_saved("Saved", &files(&dir), &snapshot).unwrap();
     assert_eq!(next.logout_saved(&[&key]).unwrap(), snapshot);
-    let warning_prefix = format!("{key}: migration failed: ");
+    let warning_prefix = format!("[saved] {key}: migration 2 -> 3: failed: ");
     assert_eq!(
         sim.prints()
             .iter()
@@ -197,7 +197,7 @@ fn runtime_globals_are_captured_and_forward_reads_capture_the_saved_local() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("SELU0648"));
     let dir = project(
-        "const type = 1; const pairs = 1; const ipairs = 1; const rawget = 1; const pcall = 1; const error = 1; const string = 1; const CreateFrame = 1; function read(): number { return s.x; } saved s = { x: 7 }; on PLAYER_LOGIN() { print(read()); }",
+        "const type = 1; const pairs = 1; const ipairs = 1; const rawget = 1; const pcall = 1; const error = 1; const string = 1; const CreateFrame = 1; function read(): number { const data = s.data; if(data != null) { return data.x; } return 0; } saved s = { x: 7 }; on PLAYER_LOGIN() { print(read()); }",
     );
     success(&dir);
     let sim = common::SavedVm::new();
@@ -208,7 +208,7 @@ fn runtime_globals_are_captured_and_forward_reads_capture_the_saved_local() {
 #[test]
 fn per_character_defaults_arrays_maps_and_addon_names_are_isolated() {
     let dir = project(
-        "saved perCharacter s = { enabled: true, inner: { x: 3 }, list: [1, 2], map: new Map<string, number>() }; on PLAYER_LOGIN() { print(s.enabled); print(s.inner.x); print(s.list[0]); s.list.push(4); s.map.set(\"key\", 5); }",
+        "saved perCharacter s = { enabled: true, inner: { x: 3 }, list: [1, 2], map: new Map<string, number>() }; on PLAYER_LOGIN() {s.whenReady((s) => { print(s.enabled); print(s.inner.x); print(s.list[0]); s.list.push(4); s.map.set(\"key\", 5); });}",
     );
     success(&dir);
     let key = selu_lower::saved::global_name("Saved", "main", "s");
@@ -243,16 +243,16 @@ fn review_generated_names_and_runtime_size() {
     ] {
         for (version, initial, migration, expected) in [
             ("", "", "", "7"),
-            ("", "{ x = 9, __selu_version = 3 }", "", "9"),
+            ("", "{ x = 9, __selu_version = 3 }", "", "newer"),
             (
                 " version 2",
                 "{ x = 11 }",
-                "migrate NAME 1 -> 2 (old) { old.x = 2; print(old.missing.value); }",
-                "11",
+                "migrate NAME 1 -> 2 (old: {x:number}) { old.x = 2; throw new Error(\"migration fault\"); }",
+                "failed",
             ),
         ] {
             let src = format!(
-                "saved {saved}{version} = {{ x: 7 }}; {} on PLAYER_LOGIN() {{ print({saved}.x); }}",
+                "saved {saved}{version} = {{ x: 7 }}; {} on PLAYER_LOGIN() {{print({saved}.status); {saved}.whenReady(({saved}) => {{ print({saved}.x); }});}}",
                 migration.replace("NAME", saved)
             );
             let dir = project(&src);
@@ -270,7 +270,7 @@ fn review_generated_names_and_runtime_size() {
     let source = (0..45)
         .map(|i| format!("saved s{i} = {{ x: {i} }};\n"))
         .collect::<String>()
-        + "on PLAYER_LOGIN() { print(s44.x); }";
+        + "on PLAYER_LOGIN() { s44.whenReady((s44) => { print(s44.x); }); }";
     let dir = project(&source);
     success(&dir);
     let fs = files(&dir);
@@ -282,8 +282,9 @@ fn review_generated_names_and_runtime_size() {
 }
 #[test]
 fn review_adoption_and_readable_names() {
-    let dir =
-        project("saved global MyAddonDB = { x: 1 }; on PLAYER_LOGIN() { print(MyAddonDB.x); }");
+    let dir = project(
+        "saved global MyAddonDB = { x: 1 }; on PLAYER_LOGIN() {MyAddonDB.whenReady((MyAddonDB) => { print(MyAddonDB.x); });}",
+    );
     success(&dir);
     let sim = common::SavedVm::new();
     sim.eval("MyAddonDB = { x = 99 }").unwrap();
@@ -291,7 +292,7 @@ fn review_adoption_and_readable_names() {
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), vec!["99"]);
     let snapshot = sim.logout_saved(&["MyAddonDB"]).unwrap();
-    std::fs::write(dir.join("src/main.selu"),"saved global MyAddonDB version 2 = { x: 1 }; migrate MyAddonDB 1 -> 2 (old) { old.x += 1; } on PLAYER_LOGIN() { print(MyAddonDB.x); }").unwrap();
+    std::fs::write(dir.join("src/main.selu"),"saved global MyAddonDB version 2 = { x: 1 }; migrate MyAddonDB 1 -> 2 (old: {x:number}) { old.x += 1; } on PLAYER_LOGIN() {MyAddonDB.whenReady((MyAddonDB) => { print(MyAddonDB.x); });}").unwrap();
     success(&dir);
     let next = Sim::login_saved("Saved", &files(&dir), &snapshot).unwrap();
     next.fire("PLAYER_LOGIN", vec![]).unwrap();
@@ -332,7 +333,7 @@ fn review_recursive_types_and_collection_shapes() {
 #[test]
 fn review_invalid_metadata_isolation_and_retry_warning() {
     let dir = project(
-        "saved s version 2 = { x: 1 }; migrate s 1 -> 2 (old) { old.x = 2; print(old.missing.value); } saved healthy = { x: 7 }; log.info`ready`; on PLAYER_LOGIN() { print(healthy.x); }",
+        "saved s version 2 = { x: 1 }; migrate s 1 -> 2 (old: {x:number}) { old.x = 2; throw new Error(\"migration fault\"); } saved healthy = { x: 7 }; log.info`ready`; on PLAYER_LOGIN() {healthy.whenReady((healthy) => { print(healthy.x); });}",
     );
     success(&dir);
     let fs = files(&dir);
@@ -378,9 +379,9 @@ fn review_duplicate_names_and_migration_spans() {
         "{err}"
     );
     for (src, part) in [
-        ("migrate missing 1 -> 2 (old) {}", "missing"),
+        ("migrate missing 1 -> 2 (old: {x:number}) {}", "missing"),
         (
-            "saved s version 3 = { x: 1 }; migrate s 1 -> 3 (old) {}",
+            "saved s version 3 = { x: 1 }; migrate s 1 -> 3 (old: {x:number}) {}",
             "1 -> 3",
         ),
     ] {
@@ -395,7 +396,7 @@ fn review_duplicate_names_and_migration_spans() {
 #[test]
 fn review_two_character_saved_sessions() {
     let dir = project(
-        "saved account = { visits: 0 }; saved perCharacter character = { visits: 0 }; on PLAYER_LOGIN() { account.visits += 1; character.visits += 1; print(account.visits); print(character.visits); }",
+        "saved account = { visits: 0 }; saved perCharacter character = { visits: 0 }; on PLAYER_LOGIN() {account.whenReady((account) => {character.whenReady((character) => { account.visits += 1; character.visits += 1; print(account.visits); print(character.visits); });});}",
     );
     success(&dir);
     let fs = files(&dir);
@@ -421,14 +422,16 @@ fn review_newer_warnings_adopted_character_and_moving_modules() {
     let toc = std::fs::read_to_string(dir.join("dist/Saved/Saved.toc")).unwrap();
     assert!(toc.contains("## SavedVariablesPerCharacter: LegacyCharacter\n"));
     let mut fs = files(&dir);
-    fs.push(("verify.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent',function() assert(#ns.__selu_wow.buffer == 2); assert(ns.__selu_wow.buffer[2].level == 'warn'); assert(ns.__selu_wow.buffer[2].message == 'Saved_s: saved data is newer than this addon'); assert(ns.__selu_saved == nil); print(LegacyCharacter.x) end)".into()));
+    fs.push(("verify.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent',function() assert(#ns.__selu_wow.buffer == 2); assert(ns.__selu_wow.buffer[2].level == 'warn'); assert(ns.__selu_wow.buffer[2].message == '[saved] Saved_s: load: newer: saved version 3 is newer than supported version 1'); assert(ns.__selu_saved == nil); print(LegacyCharacter.x) end)".into()));
     let sim = common::SavedVm::new();
     sim.eval("Saved_s = { x = 99, __selu_version = 3 }; LegacyCharacter = { x = 99 }")
         .unwrap();
     sim.load_addon("Saved", &fs).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), vec!["99"]);
-    let dir = project("import { s } from \"./first\"; on PLAYER_LOGIN() { print(s.x); }");
+    let dir = project(
+        "import { s } from \"./first\"; on PLAYER_LOGIN() {s.whenReady((s) => { print(s.x); });}",
+    );
     std::fs::write(dir.join("src/first.selu"), "export saved s = { x: 7 };").unwrap();
     success(&dir);
     let sim = common::SavedVm::new();
@@ -437,7 +440,7 @@ fn review_newer_warnings_adopted_character_and_moving_modules() {
     let before = sim.logout_saved(&["Saved_s"]).unwrap();
     std::fs::write(
         dir.join("src/main.selu"),
-        "import { s } from \"./second\"; on PLAYER_LOGIN() { print(s.x); }",
+        "import { s } from \"./second\"; on PLAYER_LOGIN() {s.whenReady((s) => { print(s.x); });}",
     )
     .unwrap();
     std::fs::write(dir.join("src/second.selu"), "export saved s = { x: 7 };").unwrap();
@@ -475,7 +478,7 @@ fn review_reserved_module_paths() {
 }
 #[test]
 fn classes_saved_instance_fields_methods_and_preludes() {
-    let source = "saved settings = { value: 7 }; class Reader { value = settings.value; read(): number { return settings.value; } } on PLAYER_LOGIN() { const reader = new Reader(); print(reader.value); print(reader.read()); }";
+    let source = "saved settings = { value: 7 }; function readSettings(): number { const data = settings.data; if(data!=null) {return data.value;} return 0;} export class Reader { value = readSettings(); read(): number { return readSettings(); } } on PLAYER_LOGIN() { const reader = new Reader(); print(reader.value); print(reader.read()); }";
     let lua = common::compile(source);
     assert!(lua.contains("local __selu_setmetatable = setmetatable\nlocal __selu_saved__G = _G"));
     let sim = common::SavedVm::new();
@@ -492,7 +495,7 @@ fn classes_saved_instance_fields_methods_and_preludes() {
         "export saved settings = { value: 7 };",
     )
     .unwrap();
-    std::fs::write(dir.join("src/model.selu"),"import { settings } from \"./state\"; export class Reader { value = settings.value; read(): number { return settings.value; } }").unwrap();
+    std::fs::write(dir.join("src/model.selu"),"import { settings } from \"./state\"; function readSettings(): number { const data = settings.data; if(data!=null) {return data.value;} return 0;} export class Reader { value = readSettings(); read(): number { return readSettings(); } }").unwrap();
     success(&dir);
     let sim = common::SavedVm::new();
     sim.eval("Saved_settings = { value = 42 }").unwrap();
@@ -536,7 +539,7 @@ fn classes_saved_writes_reject_instances_and_accept_plain_copies() {
         "s.points.set(\"key\", p);",
     ] {
         let src = format!(
-            "class Point {{ x = 1; }} saved s = {{ point: {{ x: 0 }}, nested: {{ point: {{ x: 0 }} }}, items: [{{ x: 0 }}], points: new Map<string, {{ x: number }}>() }}; on PLAYER_LOGIN() {{ const p = new Point(); {operation} }}"
+            "class Point {{ x = 1; }} saved s = {{ point: {{ x: 0 }}, nested: {{ point: {{ x: 0 }} }}, items: [{{ x: 0 }}], points: new Map<string, {{ x: number }}>() }}; on PLAYER_LOGIN() {{ s.whenReady((s) => {{ const p = new Point(); {operation} }}); }}"
         );
         let p = selu_syntax::parse("t.selu", &src).unwrap();
         let ds = selu_check::check(&p, &common::manifest());
@@ -547,7 +550,7 @@ fn classes_saved_writes_reject_instances_and_accept_plain_copies() {
         assert!(d.help.as_ref().unwrap().contains("{ x: p.x, y: p.y }"));
     }
     let dir = project(
-        "import { s } from \"./state\"; import { Point } from \"./model\"; on PLAYER_LOGIN() { const p = new Point(); s.points.set(\"key\", p); }",
+        "import { s } from \"./state\"; import { Point } from \"./model\"; on PLAYER_LOGIN() {s.whenReady((s) => { const p = new Point(); s.points.set(\"key\", p); });}",
     );
     std::fs::write(
         dir.join("src/state.selu"),
@@ -558,7 +561,7 @@ fn classes_saved_writes_reject_instances_and_accept_plain_copies() {
     let output = build(&dir);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("class instances cannot be saved"));
-    let src = "class Point { x = 1; } saved s = { point: { x: 0 }, items: [{ x: 0 }], points: new Map<string, { x: number }>() }; on PLAYER_LOGIN() { const p = new Point(); s.point = { x: p.x }; s.items.push({ x: p.x }); s.points.set(\"key\", { x: p.x }); print(s.point.x); print(s.items.length); print(s.points.count()); }";
+    let src = "class Point { x = 1; } saved s = { point: { x: 0 }, items: [{ x: 0 }], points: new Map<string, { x: number }>() }; on PLAYER_LOGIN() {s.whenReady((s) => { const p = new Point(); s.point = { x: p.x }; s.items.push({ x: p.x }); s.points.set(\"key\", { x: p.x }); print(s.point.x); print(s.items.length); print(s.points.count()); });}";
     let dir = project(src);
     success(&dir);
     let sim = common::SavedVm::new();
@@ -804,7 +807,7 @@ fn adoption_rejects_untyped_readers_and_alias_collisions() {
         "saved global DB using __selu_saved_adoption_context = {count:0};",
         "saved global DB using dbVersion legacy _G = {count:0};",
         "saved global _G using dbVersion = {count:0};",
-        "saved global DB version 2 using dbVersion = {count:0}; migrate DB 1 -> 2 (old) { old.count=1; }",
+        "saved global DB version 2 using dbVersion = {count:0}; migrate DB 1 -> 2 (old: {x:number}) { old.count=1; }",
         "saved global DB using dbVersion legacy Other = {count:0}; saved global Other = {x:1};",
         "saved global DB version 2 using dbVersion = {count:0}; migrate DB 1 -> 2 (old: {count:number}) { old.typo=1; }",
     ] {
@@ -886,7 +889,7 @@ fn adoption_failure_at_each_step_keeps_last_success() {
 #[test]
 fn adoption_mode_is_explicit_and_history_is_closed() {
     let dir = project(
-        "saved settings version 2 = {status: \"text\", data:{count:0}}; migrate settings 1 -> 2 (old) { old.data.count += 1; }",
+        "saved settings version 2 = {status: \"text\", data:{count:0}}; migrate settings 1 -> 2 (old: {status:string; data:{count:number}}) { old.data.count += 1; }",
     );
     success(&dir);
     let dir = project(

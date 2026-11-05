@@ -731,6 +731,7 @@ pub fn resolve_quiet(t: &TypeExpr) -> Type {
 pub struct TypeTable {
     pub(crate) saved_adoptions: std::collections::HashSet<String>,
     pub saved_contexts: HashMap<usize, Type>,
+    pub(crate) saved_parameters: std::collections::HashSet<usize>,
     pub saved_schemas: HashMap<usize, Type>,
     pub saved_readers: HashMap<usize, Type>,
     pub(crate) named_roots: Vec<NamedShape>,

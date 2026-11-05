@@ -16,3 +16,6 @@ per_character = false
 "/5:panel" = "object"
 "/5:panel/5:scale" = "number"
 "/7:enabled" = "boolean"
+
+[saved.SavedSettings_settings.readers]
+1 = "{ enabled: boolean; panel: { scale: number }; thresholdPercent: number? };context="

@@ -11,7 +11,9 @@ saved settings version 2 = {
 };
 
 // Schema version 1 lacked this field; upgrade it before login handlers read it.
-migrate settings 1 -> 2 (old) {
+migrate settings 1 -> 2 (old: {
+  enabled: boolean; panel: { scale: number }; thresholdPercent?: number
+}) {
   old.thresholdPercent = 35;
 }
 
@@ -19,9 +21,17 @@ migrate settings 1 -> 2 (old) {
 saved perCharacter progress = { visits: 0 };
 
 // Register after setup so callbacks see initialized helpers and frames.
-on PLAYER_LOGIN() {
-  progress.visits += 1;
-  print(settings.enabled);
-  print(settings.thresholdPercent);
-  print(progress.visits);
+function initializeSaved() {
+  settings.whenReady((settings) => {
+    progress.whenReady((progress) => {
+      on PLAYER_LOGIN() {
+        progress.visits += 1;
+        print(settings.enabled);
+        print(settings.thresholdPercent);
+        print(progress.visits);
+      }
+    });
+  });
 }
+
+initializeSaved();
