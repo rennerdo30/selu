@@ -1,31 +1,48 @@
 # Handoff
 
-## State (2026-11-04, after round 6)
+## State (2026-11-05, after round 9)
 
 - `master`, public at https://github.com/rennerdo30/selu. Push only
-  `master`, by explicit ref. `cargo test` (480 tests, including every
-  example built with the real binary and run in the simulator), the proof
-  test (4), clippy and `cargo fmt --check` are clean.
-- Built and merged, each by a Codex job with an independent review (every
-  review found real bugs, all fixed before merge):
-  - Round 1: the language core of SPEC-V1 section 2 (packages A-C).
-  - Round 2: modules with `.toc` order from imports (D1), classes (D3),
-    `command`/`hook`/`hookScript`/`log`/`L` (D4).
-  - Round 3: `saved` with checked migrations and `selu.saved.toml` (D2),
-    and generated manifests for retail 12.1.5 and Forever 1.60.1 (M1).
-  - Round 4: readability (R), every client (M2), typed game API (T1),
-    `has(...)` and several targets (T2).
-  - Round 5: named types, `interface`, generics, `unknown`/`typeof` (L);
-    XML frames, fonts, constants and templates in the manifests (M3); the
-    `JunkSell` proof port (P, `proof/junksell/`, `docs/proof/junksell.md`).
-  - Round 6: simulator timers and `OnUpdate` (Q), `try`/`catch`/`finally`/
-    `throw` with `Error` (E), Lua string patterns via `luaPattern` (S). Codex
-    ran out of usage mid-round (until 2026-11-08); the last fixes and
-    re-checks were done by Claude agents.
-- Examples: 13 (`examples/README.md`); each is a test.
-- `selu` 0.0.1 placeholder is on crates.io; licence MIT.
+  `master`, by explicit ref. The gate (fmt, clippy `-D warnings`,
+  `cargo test --workspace`, both proof suites with `--locked`,
+  `git diff --check`, clean status) passes with about 790 tests. A full
+  workspace run takes about 10-15 minutes; run it in the background.
+- Rounds 1-6: see the git history and `docs/WORK-PACKAGES.md`.
+- Round 7-8 (2026-11-04/05): frame templates (F), restrictions (G), lean
+  output (K), the simulator core S0-S3 (sessions, frames, source maps), and
+  Selu Studio (`selu debug`, `crates/selu-debug`): editor with highlighting,
+  completion and formatting, Explorer, Project Settings, background builds,
+  Run in Game through Battle.net with a version picker.
+- `selu fmt` (`crates/selu-fmt`), opinionated, width 100.
+- Round 9 and follow-ups (2026-11-05):
+  - B: `keybinding(...)` writes `Bindings.xml` (`docs/lang/bindings.md`).
+  - S4: `selu test` with `*.test.selu`, `expect`, `sim.*`, spies
+    (`docs/lang/testing.md`).
+  - Pilot port of the toolkit's XPBarETA (`proof/xpeta/`,
+    `docs/proof/xpeta.md`) with a gap list for the full port.
+  - F2: `frameFamily("MerchantItem", i, "NameFrame")`, typed numbered
+    Blizzard frames; widget members are closed (only declared members
+    compile); `_G` is a reserved name.
+  - W/W2/W3: typed methods from Blizzard's Lua mixins and templates, a
+    sourced engine overlay (GameTooltip NumLines/ClearLines), typed frame
+    pools behind reviewed source digests (an unknown Pools.lua digest
+    withholds the pool contracts with an `update` warning; see
+    `docs/manifests.md`), and the `update` command
+    (`scripts/update-manifests.bat`).
+  - Z + H: the manifest store (`manifests/store/*.selus`): content
+    addressed, append-only, delta encoded, 3.3 MB for 14 builds; extraction
+    revisions for generator improvements; a derived local cache under
+    `target/selu-manifest-cache/`. It holds the newest build of every
+    `wow-ui-source` branch.
+  - Targets are Blizzard TACT product codes (`wow`, `wow_classic`,
+    `wow_classic_era`, `wowf`, ...) or exact pins; `selu.lock` records the
+    exact builds and moves only with `selu targets --update`. Old flavour
+    names still work with a warning.
+- **Owner rules for Selu** are in `CLAUDE.md`/`AGENTS.md` of this repository:
+  no Lua interop of any kind (package N was thrown away), and only build
+  what the owner asked for.
 - Owner goal: Renner's Toolkit gets written in Selu
-  (`docs/TOOLKIT-SURVEY.md`). The proof port's open gaps are the plan.
+  (`docs/TOOLKIT-SURVEY.md`, `docs/proof/xpeta.md` for the remaining gaps).
 
 ## Decisions taken while the owner was away (2026-11-04 night)
 
@@ -86,21 +103,17 @@ Each is recorded in the named document; all can be reversed.
 
 ## Next
 
-0. Round 7 (F, G, K) is running. Then round 8, the simulator core
-   (`docs/SIMULATOR.md` is the architecture, reviewed by Sol;
-   `docs/WORK-PACKAGES.md` has the S0-S3 briefs and the outline of
-   `selu test`, Selu Studio and the debugger in rounds 9 and 10).
-1. Less runtime scaffolding (proof gap 8); the error runtime is about 45
-   lines per file that uses it and could live once in the shared namespace; restriction and combat
-   checks and secret values (DESIGN.md section 3); `selu probe` for
-   verified evidence; a second, larger proof module that uses `try`,
-   patterns and timers instead of the JunkSell workarounds.
-2. Small follow-ups from the round-6 re-checks: hoist capture-free `try`
-   bodies outside loops too; the flaky `every_example_builds_for_every_client`
-   failure seen once on `timers --target retail` (empty stderr, not
-   reproduced).
-3. Not yet planned: GUI framework (SPEC section 4), `selu debug` app, async,
-   asset pipeline and `selu export`, VS Code extension.
+0. The full toolkit port. Before migrating modules, per the pilot
+   (`docs/proof/xpeta.md`): redesign the toolkit's frame scanning (`.bars`,
+   one `pairs(_G)`), plan adopting the existing `RennerToolkitDB` saved
+   data, and port the shared `RA.UI`/`RA.HUD` layers. Ask the owner before
+   starting any of these.
+1. Small items from the pilot: `array.clear()`, an empty typed array as a
+   class field, the `C_Timer.NewTicker` callback type.
+2. 75 retail engine methods without typed declarations (mostly
+   GameTooltip setters), listed per flavour in the W report.
+3. Not yet planned: GUI framework (SPEC section 4), async, asset pipeline
+   and `selu export`, VS Code extension.
 
 ## Traps
 
@@ -126,3 +139,9 @@ Each is recorded in the named document; all can be reversed.
   first (see `crates/selu-cli/tests/semantics.rs`).
 - Tests must be able to fail: prove a new semantics test red on the old
   code (break the fix temporarily) before keeping it.
+- Delegated jobs committed CRLF files three times; `.gitattributes` now
+  has `* text=auto eol=lf`, and `git diff --check` in the gate catches the
+  rest.
+- The store is append-only: never rewrite a published segment. Generator
+  changes bump the extraction version (a test enforces it) and append a
+  new revision.
