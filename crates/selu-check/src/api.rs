@@ -137,6 +137,14 @@ fn primitive(name: &str) -> Option<Type> {
         _ => return None,
     })
 }
+// XML widget names are literal global keys, even when they contain dots.
+// Only explicitly typed scalar entries authorize namespace-property lookup.
+pub(crate) fn qualified_global(m: &Manifest, name: &str) -> Option<Type> {
+    let global = m.globals.iter().find(|g| g.name == name)?;
+    let ty = primitive(global.ty.as_deref()?)?;
+    matches!(ty, Type::Number | Type::String | Type::Boolean).then_some(ty)
+}
+
 pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     if let Some(t) = primitive(n) {
         return t;
@@ -425,6 +433,12 @@ impl Ctx<'_> {
                     .map(|d| signature_for(self.manifest, &f.name, d))
                     .unwrap_or(Type::Untyped),
             );
+        }
+        if let Some(root) = object.dotted_name()
+            && self.lookup(root.split('.').next().unwrap_or("")).is_none()
+            && let Some(ty) = qualified_global(self.manifest, &format!("{root}.{name}"))
+        {
+            return Some(ty);
         }
         let Type::Widget(widget, _) = t else {
             return None;

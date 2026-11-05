@@ -23,6 +23,9 @@ fn manifest_on(family: &str, target: &str) -> selu_manifest::Manifest {
 }
 #[test]
 fn fixed_standard_library_contracts() {
+    assert!(codes("const angle: number = math.atan2(1, 2); const pi: number = math.pi; const huge: number = math.huge;").is_empty());
+    assert!(codes("math.atan2(true, 2);").contains(&"SELU0481".into()));
+    assert!(!codes("const wrong: boolean = math.pi;").is_empty());
     assert!(codes("tostring(UnitHealth(\"player\"));").contains(&"SELU0481".into()));
     assert!(codes("tonumber(UnitHealth(\"player\"));").contains(&"SELU0481".into()));
     assert!(codes("math.random(null);").contains(&"SELU0481".into()));
@@ -70,6 +73,8 @@ fn sourced_animation_factories_and_parent() {
     assert!(codes("const group = CreateFrame(\"Frame\").CreateTexture().CreateAnimationGroup(); group.CreateAnimation(\"Alpha\").SetFromAlpha(0.15); group.CreateAnimation(\"Translation\").SetOffset(1, 2); group.CreateAnimation(\"Scale\").SetScale(1, 1); group.CreateAnimation(\"Rotation\").SetDegrees(30);").is_empty());
     assert!(codes("CreateFrame(\"Frame\").CreateAnimationGroup().CreateAnimation(\"Alpha\").SetToAlpha(true);").contains(&"SELU0481".into()));
     assert!(!codes("const p = CreateFrame(\"Frame\").GetParent(); p.GetName();").is_empty());
+    assert!(!codes("const p = CreateFrame(\"Frame\").GetParent(); p.GetDebugName();").is_empty());
+    assert!(!codes("const p = readable(CreateFrame(\"Frame\").GetParent()); if (p != null) { p.GetName(); }").is_empty());
     assert!(codes("const p = readable(CreateFrame(\"Frame\").GetParent()); if (p != null) { p.GetDebugName(); }").is_empty());
 }
 
@@ -219,6 +224,66 @@ fn table_results_do_not_claim_stored_frames_are_unprotected() {
     };
     let selu_syntax::ExprKind::Call { callee, .. } = &expr.kind else {
         panic!("call")
+    };
+    assert!(
+        matches!(checked.types.get(callee.id), Some(selu_check::Type::Function { api_semantics, .. }) if api_semantics.protected)
+    );
+}
+
+#[test]
+fn qualified_scalar_support_does_not_invent_xml_child_fields() {
+    let mut m = manifest_on("retail", "wow@12.1.5.70391");
+    m.globals.push(selu_manifest::GlobalEntry {
+        name: "UIParent.UnsourcedChild".into(),
+        ty: Some("Frame".into()),
+        evidence: selu_manifest::Evidence::Source,
+        templates: vec![],
+        value: None,
+    });
+    let p = selu_syntax::parse(
+        "literal-global.selu",
+        "const child = UIParent.UnsourcedChild;",
+    )
+    .unwrap();
+    assert!(
+        selu_check::check(&p, &m)
+            .iter()
+            .any(|d| d.code == "SELU0582")
+    );
+}
+#[test]
+fn documented_base_object_interface_accepts_frame_receivers() {
+    let result = codes(
+        r#"CreateFrame("Frame").HookScript("OnEnter", (self: CScriptObject, motion) => { self.GetDebugName(); });"#,
+    );
+    assert!(result.is_empty(), "{result:?}");
+}
+
+#[test]
+fn script_receiver_keeps_the_runtime_protection_check() {
+    use selu_syntax::{ExprKind, FnBody, StmtKind};
+    let m = manifest_on("retail", "wow@12.1.5.70391");
+    let p = selu_syntax::parse("script-frame.selu", r#"CreateFrame("Frame").HookScript("OnUpdate", (self, elapsed) => { self.SetSize(10,20); });"#).unwrap();
+    let checked = selu_check::check_program(&p, &m);
+    assert!(!checked.has_errors(), "{:?}", checked.diagnostics);
+    let StmtKind::Expr(expr) = &p.stmts[0].kind else {
+        panic!("call")
+    };
+    let ExprKind::Call { args, .. } = &expr.kind else {
+        panic!("registration")
+    };
+    let ExprKind::Function {
+        body: FnBody::Block(body),
+        ..
+    } = &args[1].kind
+    else {
+        panic!("handler")
+    };
+    let StmtKind::Expr(body) = &body[0].kind else {
+        panic!("statement")
+    };
+    let ExprKind::Call { callee, .. } = &body.kind else {
+        panic!("method")
     };
     assert!(
         matches!(checked.types.get(callee.id), Some(selu_check::Type::Function { api_semantics, .. }) if api_semantics.protected)

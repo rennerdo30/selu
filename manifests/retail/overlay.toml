@@ -515,3 +515,21 @@ entry = { "name" = "string.gmatch", "params" = ["text", "pattern"], "evidence" =
 evidence="documented"
 note="Lua 5.1 Reference Manual 5.4 unpack / 5.1 unpack; generic captures and elements are conservative; https://www.lua.org/manual/5.1/manual.html"
 entry = { "name" = "unpack", "params" = ["list", "i", "j"], "evidence" = "documented", "signature" = { "name" = "unpack", "type" = "Function", "arguments" = [{ "name" = "list", "type" = "table", "attributes" = { "InnerType" = "" } }, { "name" = "i", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "j", "type" = "number", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "value", "type" = "" }], "attributes" = { "SeluUntypedReturnTail" = true, "SeluTableOperation" = "unpack" } } }
+
+# SF complete Toolkit math-reference inventory
+[[functions]]
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.6 math.atan2(y, x)"
+entry = { "name" = "math.atan2", "params" = ["y", "x"], "evidence" = "documented", "signature" = { "name" = "math.atan2", "type" = "Function", "arguments" = [{ "name" = "y", "type" = "number" }, { "name" = "x", "type" = "number" }], "returns" = [{ "name" = "angle", "type" = "number" }] } }
+
+[[globals]]
+name="math.pi"
+type="number"
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.6 math.pi; retain the native value, not a guessed numeric literal"
+
+[[globals]]
+name="math.huge"
+type="number"
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.6 math.huge; retain the native value, not a guessed numeric literal"

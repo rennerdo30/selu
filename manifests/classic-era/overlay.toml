@@ -510,3 +510,21 @@ entry = { "name" = "unpack", "params" = ["list", "i", "j"], "evidence" = "docume
 evidence="source"
 note="Pinned 4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_Calendar/Classic/Blizzard_Calendar.lua:3627; string input/output; extra argument types unproven"
 entry={ "name" = "strtrim", "params" = ["text", "..."], "evidence" = "source", "signature" = { "name" = "strtrim", "type" = "Function", "arguments" = [{ "name" = "text", "type" = "string" }, { "name" = "...", "type" = "" }], "returns" = [{ "name" = "text", "type" = "string" }] } }
+
+# SF complete Toolkit math-reference inventory
+[[functions]]
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.6 math.atan2(y, x)"
+entry = { "name" = "math.atan2", "params" = ["y", "x"], "evidence" = "documented", "signature" = { "name" = "math.atan2", "type" = "Function", "arguments" = [{ "name" = "y", "type" = "number" }, { "name" = "x", "type" = "number" }], "returns" = [{ "name" = "angle", "type" = "number" }] } }
+
+[[globals]]
+name="math.pi"
+type="number"
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.6 math.pi; retain the native value, not a guessed numeric literal"
+
+[[globals]]
+name="math.huge"
+type="number"
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.6 math.huge; retain the native value, not a guessed numeric literal"

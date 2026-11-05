@@ -13,7 +13,12 @@ pub fn extend(m: &mut Manifest, sources: &[(String, String)]) {
             ..empty()
         };
         object.inherits.push("SimpleObjectAPI".into());
-        if !m.widgets.iter().any(|w| w.name == object.name) {
+        object
+            .attributes
+            .insert("SeluAliasOf".into(), json!("SimpleObjectAPI"));
+        if let Some(existing) = m.widgets.iter_mut().find(|w| w.name == object.name) {
+            *existing = object;
+        } else {
             m.widgets.push(object);
         }
     }

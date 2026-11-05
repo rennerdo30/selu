@@ -1184,9 +1184,11 @@ impl Ctx<'_> {
         let api_object = match &object.kind {
             ExprKind::Member {
                 object: receiver, ..
-            } if object
-                .dotted_name()
-                .is_some_and(|n| self.manifest.function(&n).is_some()) =>
+            } if object.dotted_name().is_some_and(|n| {
+                self.manifest.function(&n).is_some()
+                    || (self.lookup(n.split('.').next().unwrap_or("")).is_none()
+                        && api::qualified_global(self.manifest, &n).is_some())
+            }) =>
             {
                 receiver
             }

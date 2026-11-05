@@ -485,8 +485,10 @@ variadic formatting, numeric conversion, string captures, math and table
 operations. `tonumber` retains a nilable number result. `Optional` permits an
 argument to be omitted without admitting nil (for example math.random).
 `SeluReturnTail` preserves optional typed capture positions in direct native
-result destructuring. Unsupported generic element results remain untyped game
-values; no host-value escape hatch is introduced.
+result destructuring. Known array element types drive insert/remove/unpack results and sort callback
+parameters; unknown element types retain the untyped game-value policy. Native
+gmatch closures keep their multiple-return convention and typed optional capture
+tail. No host-value escape hatch is introduced.
 
 The six retained product pins have sourced ItemInfo ID/link inputs, date/time
 variants, and a closed StaticPopupDialogs entry subset. `[[tables]]` overlays
@@ -499,8 +501,19 @@ input defaults from the required date-result fields.
 SetScript/HookScript literal names select `SeluScriptCallbacks` declarations.
 The callbacks retain their receiver type, supported parameter types, and pinned
 file:line citations. OnMouseWheel, OnClick and OnEnter are reviewed at all six
-retained source pins. Retail also reviews OnLeave, OnAttributeChanged,
+retained source pins. Retail and the Toolkit pin wowf@1.60.1.70790 also review OnLeave, OnAttributeChanged,
 OnShow/OnHide, OnKeyDown/OnKeyUp and OnUpdate. Unreviewed scripts preserve the
 existing LuaFunctionReference behavior. Unknown parameter types stay untyped.
 Native factories and callback facts intersect when function values join; mutable
 aliases lose facts that depend on native function identity.
+
+Extraction v7 adds the remaining Toolkit math references: atan2 and the
+qualified scalar globals math.pi/math.huge, sourced from Lua 5.1 manual 5.6.
+Their native numeric values are retained. Qualified scalar lookup does not turn
+literal XML widget global names containing dots into widget child properties.
+The already-appended v6 segment and frozen digest remain immutable.
+
+Extraction v8 gives the documented CScriptObject name its SimpleObjectAPI
+interface identity. Frames and other objects inheriting that interface can be
+passed as CScriptObject; the sourced hierarchy secret result remains intact.
+The v6 and v7 segments and frozen digests remain immutable.
