@@ -159,6 +159,7 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
     };
     let (mut prints_seen, mut logs_seen, mut trace_seen) = (0, 0, 0);
     let mut seq = 0;
+    let mut manifest_seen = String::new();
     while let Ok(command) = inbox.recv() {
         if command == Command::Shutdown {
             break;
@@ -213,6 +214,18 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
                 lines: prints[prints_seen..].to_vec(),
             });
             prints_seen = prints.len();
+        }
+        let identities = session.manifest_identities();
+        let identity = if identities.is_empty() {
+            "manifest: none loaded".into()
+        } else {
+            format!("manifest loaded: {}", identities.join(", "))
+        };
+        if identity != manifest_seen {
+            let _ = outbox.send(Update::Logs {
+                lines: vec![identity.clone()],
+            });
+            manifest_seen = identity;
         }
         let logs = session.logs();
         if logs.len() > logs_seen {

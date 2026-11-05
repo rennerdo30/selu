@@ -216,6 +216,7 @@ fn install_snapshots(vm: &Vm, checked: CheckedManifests) -> SimResult<()> {
     let manual = lock(&vm.state).manual_frame_families.clone();
     let mut families = manual;
     for m in checked.values() {
+        crate::sim_globals::install_manifest(vm.lua(), m, &vm.ctx)?;
         families.extend(
             m.frame_families
                 .iter()
@@ -417,6 +418,7 @@ impl Session {
     fn start_vm(config: &SessionConfig) -> SimResult<Vm> {
         let sim = Vm::new()?;
         if let Some(manifest) = &config.manifest {
+            crate::sim_globals::install_manifest(sim.lua(), manifest, &sim.ctx)?;
             for family in &manifest.frame_families {
                 register_family(&sim, &family.prefix, &family.suffix)?;
             }
@@ -424,6 +426,13 @@ impl Session {
         lock(&sim.ctx().trace).enabled = config.trace;
         lock(&sim.state).ui_size = Some(config.ui_size);
         frames::configure_ui_size(sim.lua(), config.ui_size)?;
+        crate::sim_globals::configure_screen(sim.lua(), config.ui_size)?;
+        let realm = config.realm.clone();
+        sim.lua().globals().raw_set(
+            "GetRealmName",
+            sim.lua().create_function(move |_, ()| Ok(realm.clone()))?,
+        )?;
+        sim.lua().load("local name = ...; __selu_world_units.player = { name=name, class='WARRIOR', level=1, health=100, max_health=100, power=0, max_power=100, auras={}, combat=false }").call::<()>(config.character.as_str())?;
         sim.lua()
             .load(format!("math.randomseed({})", config.seed))
             .exec()?;
@@ -543,6 +552,21 @@ impl Session {
         Ok(())
     }
 
+    /// Actual checked manifest identities, independent of the requested label.
+    pub fn manifest_identities(&self) -> Vec<String> {
+        let mut identities: Vec<_> = lock(&self.sim.state)
+            .checked_manifests
+            .values()
+            .map(selu_manifest::Manifest::target_string)
+            .collect();
+        if let Some(m) = &self.config.manifest {
+            identities.push(m.target_string());
+        }
+        identities.sort();
+        identities.dedup();
+        identities
+    }
+
     pub fn config(&self) -> &SessionConfig {
         &self.config
     }
@@ -561,6 +585,7 @@ impl Session {
         if self.config.manifest.is_none() && lock(&self.sim.state).checked_manifests.is_empty() {
             self.config.manifest = discover_manifest(&self.config, dir)?;
             if let Some(m) = &self.config.manifest {
+                crate::sim_globals::install_manifest(self.sim.lua(), m, &self.sim.ctx)?;
                 for f in &m.frame_families {
                     register_family(&self.sim, &f.prefix, &f.suffix)?;
                 }
@@ -621,7 +646,9 @@ impl Session {
                 .raw_set(name.as_str(), true)?;
         }
         crate::fonts::register_addon_root(sim.lua(), dir)?;
-        let files = loader::read_files(&toc).map_err(runtime)?;
+        let files =
+            loader::read_files_with_diagnostics(&toc, |message| lock(&sim.logs).push(message))
+                .map_err(runtime)?;
         sim.load_chunks(&toc.name, &files)?;
         for name in toc
             .list("SavedVariables")
@@ -872,6 +899,7 @@ impl Vm {
         let clock = ctx.clock.clone();
         let globals = lua.globals();
         globals.set("__selu_saved_names", lua.create_table()?)?;
+        globals.raw_set("__selu_global_shapes", lua.create_table()?)?;
 
         {
             let ctx = ctx.clone();
@@ -901,10 +929,10 @@ impl Vm {
         let registry: Table = globals.get("__selu_sim_frames")?;
         registry.raw_set(registry.raw_len(), Value::Nil)?;
         globals.raw_set("__selu_frame_families", lua.create_table()?)?;
-        // Unknown globals: log once, hand back a callable no-op so the
-        // addon keeps running and the gap is visible.
+        // Unknown shapes stay nil; accessing them logs once and cannot invent a callable.
         {
             let mt = lua.create_table()?;
+            let shape_ctx = ctx.clone();
             let logs = logs.clone();
             let warned = warned.clone();
             mt.set(
@@ -930,13 +958,16 @@ impl Vm {
                             return Ok(Value::Nil);
                         }
                     }
+                    if let Some(value) = crate::sim_globals::lookup(lua, &key, &shape_ctx)? {
+                        return Ok(value);
+                    }
                     log_once(&logs, &warned, &key);
-                    let noop = lua.create_function(|_, _: MultiValue| Ok(Value::Nil))?;
-                    Ok(Value::Function(noop))
+                    Ok(Value::Nil)
                 })?,
             )?;
             globals.set_metatable(Some(mt));
         }
+        crate::sim_globals::install(&lua, &ctx)?;
         wow_api::install(&lua)?;
         timers::install(&lua, logs.clone())?;
         lua.globals()
@@ -1202,6 +1233,7 @@ mod tests {
         std::fs::create_dir_all(&addon).unwrap();
         std::fs::write(addon.join("WithXml.toc"), "main.lua\nframes.xml\n").unwrap();
         std::fs::write(addon.join("main.lua"), "print('x')").unwrap();
+        std::fs::write(addon.join("frames.xml"), "<Ui/>").unwrap();
         let mut s = Session::new(SessionConfig::default()).unwrap();
         let err = s.load_addon_dir(&addon).unwrap_err().to_string();
         let _ = std::fs::remove_dir_all(&dir);

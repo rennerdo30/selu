@@ -36,6 +36,7 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
                     ("ShadowOffset", 4),
                     ("JustifyH", 8),
                     ("JustifyV", 16),
+                    ("Spacing", 32),
                 ] {
                     if r.font_overrides & bit != 0 {
                         continue;
@@ -43,7 +44,24 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
                     let mut current = Some(t.clone());
                     for _ in 0..64 {
                         let Some(object) = current else { break };
-                        if let Ok(value) = object.raw_get::<mlua::Table>(format!("_{key}")) {
+                        let own = object
+                            .raw_get::<Option<mlua::Table>>(format!("_{key}"))
+                            .ok()
+                            .flatten();
+                        let defaults = if object
+                            .raw_get::<Option<mlua::Table>>("_parent")
+                            .ok()
+                            .flatten()
+                            .is_none()
+                        {
+                            object
+                                .raw_get::<mlua::Table>("_defaults")
+                                .ok()
+                                .and_then(|t| t.raw_get::<Option<mlua::Table>>(key).ok().flatten())
+                        } else {
+                            None
+                        };
+                        if let Some(value) = own.or(defaults) {
                             match key {
                                 "TextColor" | "ShadowColor" => {
                                     let c = [
@@ -68,6 +86,7 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
                                     r.visual.justify_h =
                                         value.raw_get(1).unwrap_or_else(|_| "LEFT".into())
                                 }
+                                "Spacing" => r.visual.spacing = value.raw_get(1).unwrap_or(0.0),
                                 _ => {
                                     r.visual.justify_v =
                                         value.raw_get(1).unwrap_or_else(|_| "TOP".into())
@@ -252,8 +271,8 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
         Some(Rect {
             left: 0.0,
             bottom: 0.0,
-            width: r.width,
-            height: r.height,
+            width: r.width * scale,
+            height: r.height * scale,
         })
     } else if valid {
         horizontal

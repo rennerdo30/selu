@@ -5,6 +5,7 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 selu-manifest = { path = "../selu-manifest" }
 mlua = { version = "0.10", features = ["lua51", "vendored"] }
 serde.workspace = true
@@ -14,6 +15,3 @@ ab_glyph = "0.2.32"
 harfrust = "0.12"
 # Reuse Studio's bundled fallback face (no GUI/runtime dependency).
 epaint_default_fonts = { version = "0.37", default-features = false }
-
-[dev-dependencies]
-serde_json.workspace = true

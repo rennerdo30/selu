@@ -19,6 +19,15 @@ fn boolean(v: Option<&Value>) -> bool {
     !matches!(v, None | Some(Value::Nil) | Some(Value::Boolean(false)))
 }
 pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
+    // A transition without a handler must not retain the frame until the
+    // outer dispatch finishes (large addon construction can create thousands).
+    if !matches!(
+        t.raw_get::<Table>("__scripts")
+            .and_then(|scripts| scripts.raw_get::<Value>(name)),
+        Ok(Value::Function(_))
+    ) {
+        return;
+    }
     let name = name.to_owned();
     let ctx2 = ctx.clone();
     ctx.queue(Box::new(move |lua| {
@@ -35,10 +44,6 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
     }));
 }
 pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
-    lua.globals().set(
-        "CreateFont",
-        lua.create_function(|lua, name: String| crate::sim_globals::create_font(lua, &name))?,
-    )?;
     lua.set_app_data(ctx.clone());
     lua.set_app_data(Rc::new(RefCell::new(Arena::default())) as Store);
     let ctx = ctx.clone();
@@ -230,7 +235,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown";
+const METHODS: &str = "SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     if !ctx
         .stale_sources
@@ -307,18 +312,28 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                     Some(Value::Function(f)) => f.clone(),
                     _ => return Err(mlua::Error::runtime("function expected")),
                 };
+                let old = old.map(|f| lua.create_registry_value(f)).transpose()?;
+                let hook = lua.create_registry_value(hook)?;
                 let context = ctx.clone();
                 scripts.raw_set(
                     name,
                     lua.create_function(move |lua, args: MultiValue| {
                         if let Some(old) = &old {
                             crate::core::script_callback(lua, &context, || {
-                                crate::core::call_lua::<()>(lua, old.clone(), args.clone())
+                                crate::core::call_lua::<()>(
+                                    lua,
+                                    lua.registry_value::<Function>(old)?,
+                                    args.clone(),
+                                )
                             })?;
                             crate::core::flush(lua, &context);
                         }
                         let result = crate::core::script_callback(lua, &context, || {
-                            crate::core::call_lua::<()>(lua, hook.clone(), args)
+                            crate::core::call_lua::<()>(
+                                lua,
+                                lua.registry_value::<Function>(&hook)?,
+                                args,
+                            )
                         });
                         crate::core::flush(lua, &context);
                         result
@@ -457,6 +472,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "SetShadowOffset" => 4,
         "SetJustifyH" => 8,
         "SetJustifyV" => 16,
+        "SetSpacing" => 32,
         _ => 0,
     };
     match method {
@@ -501,6 +517,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 number(v.get(3), 1.0) as f32,
             ]
         }
+        "SetOwner" => {
+            t.raw_set("__tooltip_owner", v.first().cloned().unwrap_or(Value::Nil))?;
+        }
+        "GetOwner" => out!(t.raw_get::<Value>("__tooltip_owner")?),
         "GetName" => out!(r.name.clone()),
         "GetObjectType" => out!(r.kind.clone()),
         "IsObjectType" => out!(super::manifest::inherits(&r.kind, &s)),
@@ -543,6 +563,18 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 return Err(mlua::Error::runtime("invalid scale"));
             }
             r.scale = n;
+            if i == 0 {
+                r.width = lua
+                    .globals()
+                    .raw_get::<f64>("__selu_screen_width")
+                    .unwrap_or(1920.0)
+                    / n;
+                r.height = lua
+                    .globals()
+                    .raw_get::<f64>("__selu_screen_height")
+                    .unwrap_or(1080.0)
+                    / n;
+            }
         }
         "GetScale" => out!(r.scale),
         "GetEffectiveScale" => out!(r.effective_scale),
@@ -607,13 +639,17 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 Some(crate::value_string(&v[0]))
             };
             if !matches!(r.text_value, Value::LightUserData(_)) {
-                r.text_value = match &r.text {
-                    Some(text) => Value::String(lua.create_string(text)?),
-                    None => Value::Nil,
-                };
+                // Ordinary text already lives in Rust; retaining a second Lua
+                // string consumes one auxiliary-stack slot per text region.
+                r.text_value = Value::Nil;
             }
         }
-        "GetText" => out!(r.text_value.clone()),
+        "GetText" => {
+            if matches!(r.text_value, Value::LightUserData(_)) {
+                out!(r.text_value.clone());
+            }
+            out!(r.text.clone());
+        }
         "SetFont" => {
             r.font_size = number(v.get(1), 12.0);
             r.font_path = s;
@@ -631,6 +667,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 }))
             };
         }
+        "GetTextureFileID" => out!(match &r.texture {
+            Some(TextureFill::File(s)) => s.parse::<u32>().ok(),
+            _ => None,
+        }),
         "GetTexture" => out!(match &r.texture {
             Some(TextureFill::File(s)) => Some(s.clone()),
             _ => None,

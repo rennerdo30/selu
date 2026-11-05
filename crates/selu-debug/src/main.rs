@@ -2,7 +2,7 @@
 //! decision 2).
 //!
 //! ```text
-//! selu-studio [--target flavour@version] [--project dir --selu exe] [--headless] <addon folder>...
+//! selu-studio [--target product@build] [--manifest-dir dir | --manifest snapshot] [--project dir --selu exe] [--headless] <addon folder>...
 //! ```
 //!
 //! Opens the Studio window (`app.rs`). `--project` and `--selu` enable
@@ -25,7 +25,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: selu-studio [--target flavour@version] [--project dir --selu exe] [--headless] <addon folder>...";
+const USAGE: &str = "usage: selu-studio [--target product@build] [--manifest-dir dir | --manifest snapshot] [--project dir --selu exe] [--headless] <addon folder>...";
 
 fn main() -> ExitCode {
     let mut target = None;
@@ -110,8 +110,18 @@ fn main() -> ExitCode {
         eprintln!("selu-studio: no addon folder given\n{USAGE}");
         return ExitCode::from(2);
     }
-    let manifest = match manifest_path {
+    let mut manifest = match manifest_path {
         Some(path) => {
+            // A .selus history store is not a checked snapshot; say so plainly.
+            // (Kept here: resolution.rs is a frozen extraction input.)
+            let store = path.extension().is_some_and(|e| e == "selus")
+                || std::fs::read(&path).is_ok_and(|b| b.starts_with(b"SELUSEG"));
+            if store {
+                eprintln!(
+                    "error[SELU0202]: --manifest expects a checked SELUMAN snapshot, not a .selus history store; use --manifest-dir <manifests directory> with --target <product@build>"
+                );
+                return ExitCode::FAILURE;
+            }
             match selu_manifest::resolution::load_checked_manifest(&path, target.as_deref()) {
                 Ok(m) => Some(m),
                 Err(e) => {
@@ -122,6 +132,23 @@ fn main() -> ExitCode {
         }
         None => None,
     };
+    if manifest.is_none() && manifest_dir.is_some() {
+        let result = selu_manifest::resolution::discover(
+            manifest_dir.as_deref(),
+            &addons[0],
+            target.as_ref().map(std::slice::from_ref),
+        )
+        .and_then(|all| {
+            selu_manifest::resolution::select_checked_manifest(&all, target.as_deref()).cloned()
+        });
+        match result {
+            Ok(m) => manifest = Some(m),
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     if !headless {
         let options = app::Options {
             addons,

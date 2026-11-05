@@ -27,7 +27,7 @@ pub mod loader;
 mod regions;
 pub mod saved;
 pub mod session;
-pub mod sim_globals;
+mod sim_globals;
 pub mod snapshot;
 pub mod text;
 mod timers;
@@ -111,17 +111,19 @@ mod tests {
         sim.eval(
             r#"
             local f = CreateFrame("Frame")
-            f:Wiggle()
-            f:Wiggle()
+            f:SetMovable(true)
+            f:SetMovable(true)
             assert(f.missingAddonField == nil)
-            TotallyMadeUp(1)
-            TotallyMadeUp(2)
+            assert(TotallyMadeUp == nil)
+            assert(TotallyMadeUp == nil)
             "#,
         )
         .unwrap();
         let logs = sim.logs();
         assert_eq!(
-            logs.iter().filter(|l| l.contains("Frame:Wiggle")).count(),
+            logs.iter()
+                .filter(|l| l.contains("Frame:SetMovable"))
+                .count(),
             1,
             "{logs:?}"
         );
