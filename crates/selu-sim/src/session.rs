@@ -123,6 +123,8 @@ pub struct SessionConfig {
     /// The checked target manifest. Front ends may pass it directly; otherwise
     /// sessions resolve `target` from the nearest manifests directory.
     pub manifest: Option<selu_manifest::Manifest>,
+    /// Explicit read-only client install; None keeps deterministic offline sessions.
+    pub client_install: Option<PathBuf>,
     /// `flavour@version`, selecting flavour-specific `.toc` files.
     pub target: Option<String>,
     /// UIParent size in pixels at scale 1 (decision 4).
@@ -140,6 +142,7 @@ impl Default for SessionConfig {
     fn default() -> Self {
         SessionConfig {
             manifest: None,
+            client_install: None,
             target: None,
             ui_size: snapshot::DEFAULT_UI_SIZE,
             seed: 1,
@@ -417,6 +420,21 @@ impl Session {
 
     fn start_vm(config: &SessionConfig) -> SimResult<Vm> {
         let sim = Vm::new()?;
+        if let Some(root) = &config.client_install {
+            let target = config
+                .manifest
+                .as_ref()
+                .map(selu_manifest::Manifest::target_string)
+                .or_else(|| config.target.clone());
+            if let Some(target) = target {
+                let product = target.split('@').next().unwrap_or_default();
+                crate::frames::arena::store(sim.lua())
+                    .borrow_mut()
+                    .fonts
+                    .open_client(root, product)
+                    .map_err(mlua::Error::runtime)?;
+            }
+        }
         if let Some(manifest) = &config.manifest {
             crate::sim_globals::install_manifest(sim.lua(), manifest, &sim.ctx)?;
             for family in &manifest.frame_families {

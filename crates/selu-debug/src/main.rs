@@ -2,7 +2,7 @@
 //! decision 2).
 //!
 //! ```text
-//! selu-studio [--target product@build] [--manifest-dir dir | --manifest snapshot] [--project dir --selu exe] [--headless] <addon folder>...
+//! selu-studio [--target product@build] [--manifest-dir dir | --manifest snapshot] [--project dir --selu exe] [--headless] [--no-client-assets | --client-install root] <addon folder>...
 //! ```
 //!
 //! Opens the Studio window (`app.rs`). `--project` and `--selu` enable
@@ -25,13 +25,15 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: selu-studio [--target product@build] [--manifest-dir dir | --manifest snapshot] [--project dir --selu exe] [--headless] <addon folder>...";
+const USAGE: &str = "usage: selu-studio [--target product@build] [--manifest-dir dir | --manifest snapshot] [--project dir --selu exe] [--headless] [--no-client-assets | --client-install root] <addon folder>...";
 
 fn main() -> ExitCode {
     let mut target = None;
     let mut manifest_path = None;
     let mut manifest_dir = None;
     let mut headless = false;
+    let mut no_client_assets = false;
+    let mut client_install = None;
     let mut project = None;
     let mut selu = None;
     let mut addons: Vec<PathBuf> = Vec::new();
@@ -67,6 +69,14 @@ fn main() -> ExitCode {
                         "selu-studio: {arg} needs a value
 {USAGE}"
                     );
+                    return ExitCode::from(2);
+                }
+            },
+            "--no-client-assets" => no_client_assets = true,
+            "--client-install" => match args.next() {
+                Some(p) => client_install = Some(PathBuf::from(p)),
+                None => {
+                    eprintln!("--client-install needs a path");
                     return ExitCode::from(2);
                 }
             },
@@ -149,9 +159,43 @@ fn main() -> ExitCode {
             }
         }
     }
+    let settings = game::Settings::load();
+    let product = manifest
+        .as_ref()
+        .map(selu_manifest::Manifest::target_string)
+        .or_else(|| target.clone());
+    let client_install = if no_client_assets || settings.disable_client_assets {
+        None
+    } else {
+        client_install
+            .or(settings.client_install.clone())
+            .or_else(|| {
+                let product = product.as_deref()?.split('@').next()?;
+                game::detect(&settings)
+                    .into_iter()
+                    .find(|c| c.flavour.as_deref() == Some(product))?
+                    .folder
+                    .parent()
+                    .map(PathBuf::from)
+            })
+    };
+    // The owner's whole-drive subst aliases E: and D:; retain the public E: spelling.
+    let client_install = client_install.map(|root| {
+        let text = root.to_string_lossy();
+        if text.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("D:")) {
+            PathBuf::from(format!("E:{}", &text[2..]))
+        } else {
+            root
+        }
+    });
+    match &client_install {
+        Some(root) => eprintln!("client assets enabled: {}", root.display()),
+        None => eprintln!("client assets unavailable or disabled; bundled font fallback"),
+    }
     if !headless {
         let options = app::Options {
             addons,
+            client_install,
             manifest,
             manifest_dir,
             target,
@@ -189,6 +233,7 @@ fn main() -> ExitCode {
     }
 
     let worker = Worker::spawn(SessionConfig {
+        client_install,
         manifest,
         target,
         trace: true,

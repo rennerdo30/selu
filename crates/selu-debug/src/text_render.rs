@@ -4,12 +4,11 @@ use selu_sim::{RegionSnapshot, text::Content};
 use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
-    path::PathBuf,
 };
 pub type GlyphCache = HashMap<u64, egui::TextureHandle>;
 pub struct TextPainter<'a> {
     pub ctx: &'a egui::Context,
-    pub roots: &'a [PathBuf],
+    pub assets: &'a selu_sim::assets::Resolver,
     pub glyphs: &'a mut GlyphCache,
     pub textures: &'a mut HashMap<String, Result<egui::TextureHandle, String>>,
 }
@@ -112,7 +111,7 @@ impl TextPainter<'_> {
                 } => {
                     let area = Rect::from_min_size(origin, Vec2::new(*width, *height) * scale);
                     let texture = self.textures.entry(path.clone()).or_insert_with(|| {
-                        crate::textures::load(self.roots, path).map(|image| {
+                        crate::textures::load_resolved(self.assets, path).map(|image| {
                             self.ctx
                                 .load_texture(path, image, egui::TextureOptions::LINEAR)
                         })
@@ -160,7 +159,7 @@ mod tests {
         let rect = Rect::from_min_size(Pos2::new(30.0, 40.0), Vec2::splat(500.0));
         TextPainter {
             ctx: &ctx,
-            roots: &[],
+            assets: &selu_sim::assets::Resolver::default(),
             glyphs: &mut glyphs,
             textures: &mut textures,
         }

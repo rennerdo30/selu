@@ -32,6 +32,7 @@ pub struct Region {
     pub effective_alpha: f64,
     pub text: Option<String>,
     pub texture: Option<TextureFill>,
+    pub atlas_uv: Option<[f32; 4]>,
     pub visual: crate::core::VisualStyle,
     pub font_overrides: u8,
     pub clips_children: bool,

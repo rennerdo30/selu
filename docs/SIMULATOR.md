@@ -371,11 +371,10 @@ to bypass this. Animation groups remain a separate follow-up package.
 
 `selu_sim::assets::Resolver` is the shared bounded media lookup for probes and
 fonts. `Source::AddonMedia` reads only canonical files within registered addon
-roots (16 MiB maximum per file); `Source::ClientStorage` currently returns
-`Unavailable`, leaving client storage to SIM4. `Lookup` distinguishes found
+roots (16 MiB maximum per file); `Source::ClientStorage` optionally opens local CASC storage (see SL-11 below). `Lookup` distinguishes found
 bytes, unavailable client data and missing addon media. Keys normalize slash
 and case; adding a root invalidates the cache. Studio decodes the same lookup
-bytes. No client install is searched or opened. Font fallback stays bundled.
+bytes. Studio searches local installs by the manifest product; library sessions stay offline by default. Font fallback stays bundled.
 
 Texture setter success is separate from availability. Modern SetTexture returns
 true even for invalid assets ([reference](https://warcraft.wiki.gg/wiki/API:TextureBase_SetTexture));
@@ -402,3 +401,28 @@ anchor dependencies. Bulk external invalidations retain full resolution.
 Unchanged font styles skip scanning; Font object mutations explicitly invalidate
 inherited styles. Text measurements cache bounded results, and paint-only
 texture mutations do not invalidate geometry. Geometry getters remain eager.
+
+## Local client assets (SL-11 phase 2)
+
+Studio detects a local install through the same discovery as Run in Game and
+selects the product from the loaded manifest. `--client-install <root>` selects
+the folder containing `.build.info`; `--no-client-assets` disables discovery
+and storage entirely, including in headless mode. The Run in Game settings
+window also saves a disable switch and install root (restart Studio to apply).
+Library sessions remain offline unless `SessionConfig.client_install` is set.
+No manifest/product means no client storage is opened.
+
+Client storage uses selu-gamedata's read-only local CASC reader and verified
+build/content cache outside the game folder. Paths are limited to Fonts and
+Interface, plus numeric FileDataIDs. Fonts share the simulator measurement and
+raster-mask drawing backend; the bundled font remains the fallback. Textures
+are decoded lazily and cached by Studio, including inline text textures.
+Missing local content stays missing, with no network fallback.
+
+SetAtlas resolves installed UiTextureAtlas tables, uses the sheet FileDataID
+and normalized crop, and changes region dimensions only with useAtlasSize.
+Custom UVs are relative to the atlas crop; resetTexCoords resets them to the
+full member. Unsupported phase-1 table layouts and encrypted/missing local
+content remain explicit unavailable placeholders. Atlas metadata is cached.
+Nine-slice rendering, atlas tiling and filter/wrap overrides remain fidelity
+limits of the existing renderer.

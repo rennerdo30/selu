@@ -141,6 +141,7 @@ pub fn create(
         effective_alpha: 1.0,
         text: None,
         texture: None,
+        atlas_uv: None,
         visual: crate::core::VisualStyle::default(),
         font_overrides: 0,
         clips_children: false,
@@ -486,10 +487,28 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             _ => out!(shaped.truncated),
         }
     }
-    let asset_available = method != "SetTexture" || a.fonts.asset(&s);
+    let asset_available = method != "SetTexture"
+        || a.fonts.asset(&if s.is_empty() {
+            n.to_string()
+        } else {
+            s.clone()
+        });
     let current_asset_available = match &a.regions[i].texture {
         Some(TextureFill::File(path)) => a.fonts.asset(path),
         _ => false,
+    };
+    let current_asset_id = if method == "GetTextureFileID" && current_asset_available {
+        match &a.regions[i].texture {
+            Some(TextureFill::File(path)) => a.fonts.assets.file_id(path),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let atlas = if method == "SetAtlas" {
+        a.fonts.assets.atlas(&s)
+    } else {
+        None
     };
     let r = &mut a.regions[i];
     r.font_overrides |= match method {
@@ -699,6 +718,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         }
         "GetFont" => out!((r.font_path.clone(), r.font_size, r.font_flags.clone())),
         "SetTexture" => {
+            r.atlas_uv = None;
             if !asset_available && !matches!(v.first(), None | Some(Value::Nil)) {
                 ctx.not_simulated(&format!("unavailable texture: {s}"));
             }
@@ -712,17 +732,31 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 }))
             };
         }
-        "GetTextureFileID" => out!(match &r.texture {
-            Some(TextureFill::File(s)) if current_asset_available => s.parse::<u32>().ok(),
-            _ => None,
-        }),
+        "GetTextureFileID" => out!(current_asset_id),
         "GetTexture" => out!(match &r.texture {
             Some(TextureFill::File(s)) if current_asset_available => Some(s.clone()),
             _ => None,
         }),
         "SetAtlas" => {
-            ctx.not_simulated(&format!("unavailable atlas: {s}"));
-            r.texture = Some(TextureFill::Atlas(s));
+            if let Some(atlas) = atlas {
+                r.texture = Some(TextureFill::File(atlas.file_data_id.to_string()));
+                r.atlas_uv = Some([
+                    atlas.left as f32 / atlas.sheet_width as f32,
+                    atlas.right as f32 / atlas.sheet_width as f32,
+                    atlas.top as f32 / atlas.sheet_height as f32,
+                    atlas.bottom as f32 / atlas.sheet_height as f32,
+                ]);
+                if boolean(v.get(3)) {
+                    r.visual.uv = [0.0, 1.0, 0.0, 1.0];
+                }
+                if boolean(v.get(1)) {
+                    r.width = atlas.width as f64;
+                    r.height = atlas.height as f64;
+                }
+            } else {
+                ctx.not_simulated(&format!("unavailable atlas: {s}"));
+                r.texture = Some(TextureFill::Atlas(s));
+            }
         }
         "SetGradient" | "SetGradientAlpha" => {
             if s != "VERTICAL" && s != "HORIZONTAL" {
@@ -890,17 +924,19 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             .unwrap_or(true);
         a.regions[i].visible = a.regions[i].shown && parent_visible;
     }
-    if !matches!(
-        method,
-        "SetTexture"
-            | "SetAtlas"
-            | "SetColorTexture"
-            | "SetGradient"
-            | "SetGradientAlpha"
-            | "SetTexCoord"
-            | "SetVertexColor"
-            | "SetBlendMode"
-    ) {
+    if (method == "SetAtlas" && boolean(v.get(1)))
+        || !matches!(
+            method,
+            "SetTexture"
+                | "SetAtlas"
+                | "SetColorTexture"
+                | "SetGradient"
+                | "SetGradientAlpha"
+                | "SetTexCoord"
+                | "SetVertexColor"
+                | "SetBlendMode"
+        )
+    {
         a.dirty = true;
         a.dirty_regions.insert(i);
         layout::resolve(&mut a, ctx);

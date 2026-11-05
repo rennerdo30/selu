@@ -21,6 +21,7 @@ use eframe::egui::{
 
 /// What `selu-studio` was started with.
 pub struct Options {
+    pub client_install: Option<PathBuf>,
     pub manifest: Option<selu_manifest::Manifest>,
     pub manifest_dir: Option<PathBuf>,
     pub addons: Vec<PathBuf>,
@@ -110,6 +111,7 @@ pub struct Studio {
     event_filter: EventFilter,
     event_search: String,
     logo: Option<egui::TextureHandle>,
+    assets: selu_sim::assets::Resolver,
     textures: HashMap<String, Result<egui::TextureHandle, String>>,
     glyphs: crate::text_render::GlyphCache,
     game_settings: crate::game::Settings,
@@ -153,7 +155,22 @@ pub struct Studio {
 
 impl Studio {
     pub fn new(opts: Options, ctx: &egui::Context) -> Studio {
+        let mut assets = selu_sim::assets::Resolver::default();
+        if let Some(root) = &opts.client_install {
+            let target = opts
+                .manifest
+                .as_ref()
+                .map(selu_manifest::Manifest::target_string)
+                .or_else(|| opts.target.clone());
+            if let Some(target) = target {
+                let _ = assets.open_client(root, target.split('@').next().unwrap_or_default());
+            }
+        }
+        for root in &opts.addons {
+            assets.add_addon(root.clone());
+        }
         let worker = Worker::spawn(SessionConfig {
+            client_install: opts.client_install.clone(),
             manifest: opts.manifest.clone(),
             target: opts.target.clone(),
             trace: true,
@@ -192,6 +209,7 @@ impl Studio {
             repaint: Some(ctx.clone()),
             logo: crate::theme::logo_image()
                 .map(|img| ctx.load_texture("selu-logo", img, egui::TextureOptions::LINEAR)),
+            assets,
             textures: HashMap::new(),
             glyphs: Default::default(),
             event_name: String::new(),
@@ -1241,6 +1259,14 @@ impl Studio {
                     }
                 });
                 ui.add_space(6.0);
+                ui.label("Client assets (takes effect after restarting Studio)");
+                changed |= ui.checkbox(&mut self.game_settings.disable_client_assets, "Disable client fonts and art").changed();
+                let mut root = self.game_settings.client_install.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+                if ui.text_edit_singleline(&mut root).changed() {
+                    self.game_settings.client_install = if root.trim().is_empty() { None } else { Some(PathBuf::from(root.trim())) };
+                    changed = true;
+                }
+                ui.label("Install root containing .build.info; leave empty to detect automatically.");
                 ui.label(egui::RichText::new("Start the game").strong());
                 for mode in [
                     crate::game::LaunchMode::Battlenet,
@@ -2160,7 +2186,7 @@ impl Studio {
                         if matches!(r.texture, Some(TextureFill::Atlas(_))) {
                             return Err("unavailable atlas".into());
                         }
-                        crate::textures::load(&self.opts.addons, name).map(|image| {
+                        crate::textures::load_resolved(&self.assets, name).map(|image| {
                             ui.ctx()
                                 .load_texture(name, image, egui::TextureOptions::LINEAR)
                         })
@@ -2210,7 +2236,7 @@ impl Studio {
                         painter.with_clip_rect(text_rect.intersect(painter.clip_rect()));
                     crate::text_render::TextPainter {
                         ctx: ui.ctx(),
-                        roots: &self.opts.addons,
+                        assets: &self.assets,
                         glyphs: &mut self.glyphs,
                         textures: &mut self.textures,
                     }
