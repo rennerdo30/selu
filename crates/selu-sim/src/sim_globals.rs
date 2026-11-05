@@ -10,14 +10,14 @@ pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
             f._defaults=defaults
             function f:GetName() return self._name end
             function f:GetObjectType() return "Font" end
-            function f:SetFont(path,size,flags) self._parent=nil;self._font={path,size,flags or ""};return true end
-            function f:GetFont() if self._parent then return self._parent:GetFont() end;return unpack(self._font) end
+            function f:SetFont(path,size,flags) self._font_explicit=true;self._font={path,size,flags or ""};return true end
+            function f:GetFont() if self._parent and not self._font_explicit then return self._parent:GetFont() end;return unpack(self._font) end
             function f:SetFontObject(parent)
                 if type(parent)=="string" then parent=_G[parent] end
                 assert(type(parent)=="table" and parent.GetFont,"font object expected")
                 local p=parent
                 while p do assert(p~=self,"font inheritance cycle");p=rawget(p,"_parent") end
-                self._parent=parent
+                self._parent=parent;self._font_explicit=false
             end
             function f:GetFontObject() return self._parent or self end
             for _,key in ipairs({"TextColor","ShadowColor","ShadowOffset","JustifyH","JustifyV","Spacing"}) do

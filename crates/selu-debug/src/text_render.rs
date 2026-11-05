@@ -14,55 +14,6 @@ pub struct TextPainter<'a> {
     pub textures: &'a mut HashMap<String, Result<egui::TextureHandle, String>>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn painted_glyph_quads_are_the_simulator_positions() {
-        let sim = selu_sim::Sim::new().unwrap();
-        sim.eval("local t=UIParent:CreateFontString();t:SetFont('fallback',20);t:SetScale(2);t:SetText('AVATAR');t:SetPoint('TOPLEFT')").unwrap();
-        let snapshot = sim.snapshot().unwrap();
-        let region = snapshot.regions.last().unwrap();
-        let layout = region.text_layout.as_ref().unwrap();
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let painter = ctx.layer_painter(egui::LayerId::background());
-        let mut glyphs = GlyphCache::new();
-        let mut textures = HashMap::new();
-        let rect = Rect::from_min_size(Pos2::new(30.0, 40.0), Vec2::splat(500.0));
-        TextPainter {
-            ctx: &ctx,
-            roots: &[],
-            glyphs: &mut glyphs,
-            textures: &mut textures,
-        }
-        .paint(&painter, region, rect, 0.75);
-        let mut output = ctx.end_pass();
-        output.textures_delta.clear();
-        let meshes: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|s| {
-                if let egui::Shape::Mesh(m) = &s.shape {
-                    Some(m)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert_eq!(meshes.len(), layout.placements.len());
-        for (mesh, p) in meshes.iter().zip(&layout.placements) {
-            let Content::Glyph(id) = p.content else {
-                panic!("glyph")
-            };
-            let mask = layout.masks.iter().find(|m| m.id == id).unwrap();
-            let top_left = rect.left_top() + Vec2::new(p.x + mask.left, p.y + mask.top) * 1.5;
-            let bottom_right = top_left + Vec2::new(mask.width as f32, mask.height as f32) * 1.5;
-            assert!(mesh.vertices.iter().any(|v| v.pos == top_left));
-            assert!(mesh.vertices.iter().any(|v| v.pos == bottom_right));
-        }
-    }
-}
 impl TextPainter<'_> {
     pub fn paint(
         &mut self,
@@ -187,6 +138,56 @@ impl TextPainter<'_> {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn painted_glyph_quads_are_the_simulator_positions() {
+        let sim = selu_sim::Sim::new().unwrap();
+        sim.eval("local t=UIParent:CreateFontString();t:SetFont('fallback',20);t:SetScale(2);t:SetText('AVATAR');t:SetPoint('TOPLEFT')").unwrap();
+        let snapshot = sim.snapshot().unwrap();
+        let region = snapshot.regions.last().unwrap();
+        let layout = region.text_layout.as_ref().unwrap();
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        let mut glyphs = GlyphCache::new();
+        let mut textures = HashMap::new();
+        let rect = Rect::from_min_size(Pos2::new(30.0, 40.0), Vec2::splat(500.0));
+        TextPainter {
+            ctx: &ctx,
+            roots: &[],
+            glyphs: &mut glyphs,
+            textures: &mut textures,
+        }
+        .paint(&painter, region, rect, 0.75);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        let meshes: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                if let egui::Shape::Mesh(m) = &s.shape {
+                    Some(m)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(meshes.len(), layout.placements.len());
+        for (mesh, p) in meshes.iter().zip(&layout.placements) {
+            let Content::Glyph(id) = p.content else {
+                panic!("glyph")
+            };
+            let mask = layout.masks.iter().find(|m| m.id == id).unwrap();
+            let top_left = rect.left_top() + Vec2::new(p.x + mask.left, p.y + mask.top) * 1.5;
+            let bottom_right = top_left + Vec2::new(mask.width as f32, mask.height as f32) * 1.5;
+            assert!(mesh.vertices.iter().any(|v| v.pos == top_left));
+            assert!(mesh.vertices.iter().any(|v| v.pos == bottom_right));
         }
     }
 }

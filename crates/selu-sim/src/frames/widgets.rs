@@ -356,14 +356,12 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         let (path, size, flags): (String, f64, String) = get.call(object.clone())?;
         t.raw_set("__font_object", object)?;
         let mut a = a.borrow_mut();
+        a.regions[i].font_overrides &= !64;
         a.regions[i].font_path = path;
         a.regions[i].font_size = size;
         a.regions[i].font_flags = flags;
         a.dirty = true;
         out!(());
-    }
-    if method == "SetFont" {
-        t.raw_set("__font_object", Value::Nil)?;
     }
     if method == "GetFontObject" {
         out!(t.raw_get::<Value>("__font_object")?);
@@ -473,6 +471,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "SetJustifyH" => 8,
         "SetJustifyV" => 16,
         "SetSpacing" => 32,
+        "SetFont" => 64,
         _ => 0,
     };
     match method {

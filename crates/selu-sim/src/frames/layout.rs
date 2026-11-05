@@ -21,6 +21,7 @@ pub fn factor(p: &str) -> (f64, f64) {
 }
 pub fn resolve(a: &mut Arena, ctx: &Ctx) {
     for r in &mut a.regions {
+        let original_style = r.visual.clone();
         let mut object = r
             .table
             .raw_get::<Option<mlua::Table>>("__font_object")
@@ -102,11 +103,19 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
                 }
                 style_read = true;
             }
-            if let Ok(Some(parent)) = t.raw_get::<Option<mlua::Table>>("_parent") {
+            if !t
+                .raw_get::<Option<bool>>("_font_explicit")
+                .ok()
+                .flatten()
+                .unwrap_or(false)
+                && let Ok(Some(parent)) = t.raw_get::<Option<mlua::Table>>("_parent")
+            {
                 object = Some(parent);
                 continue;
             }
-            if let Ok(font) = t.raw_get::<mlua::Table>("_font") {
+            if r.font_overrides & 64 == 0
+                && let Ok(font) = t.raw_get::<mlua::Table>("_font")
+            {
                 let path = font.raw_get::<String>(1).unwrap_or_default();
                 let size = font.raw_get::<f64>(2).unwrap_or(12.0);
                 let flags = font.raw_get::<String>(3).unwrap_or_default();
@@ -120,6 +129,9 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
                 }
             }
             break;
+        }
+        if r.visual != original_style {
+            a.dirty = true;
         }
     }
     if !a.dirty {

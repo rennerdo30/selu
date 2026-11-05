@@ -170,3 +170,26 @@ fn addon_font_is_sandboxed_and_reregistered_on_reload() {
     std::fs::remove_dir(addon).unwrap();
     std::fs::remove_dir(root).unwrap();
 }
+
+#[test]
+fn live_font_inheritance_reflows_spacing_and_preserves_style_overrides() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"
+        local root=CreateFont('RootFont');root:SetFont('fallback',18)
+        local derived=CreateFont('DerivedFont');derived:SetFontObject(root)
+        local t=UIParent:CreateFontString(nil,'OVERLAY','DerivedFont');t:SetPoint('TOPLEFT');t:SetText('AVATAR')
+        local height=t:GetHeight();root:SetSpacing(3)
+        assert(math.abs(t:GetHeight()-height-3)<0.00001,'live inherited spacing must invalidate layout')
+        t:SetTextColor(0.2,0.4,0.6,1);root:SetTextColor(1,0,0,1)
+        derived:SetFont('fallback',24)
+        assert(select(2,t:GetFont())==24 and t:GetHeight()>height)
+        t:SetFont('fallback',16);root:SetSpacing(5)
+        assert(select(2,t:GetFont())==16 and t:GetSpacing()==5,'font override must retain inherited style')
+        assert(not pcall(function() root:SetFontObject(derived) end),'font cycles must be refused')
+    "#).unwrap();
+    let snap = sim.snapshot().unwrap();
+    assert_eq!(
+        snap.regions.last().unwrap().visual.color,
+        [0.2, 0.4, 0.6, 1.0]
+    );
+}
