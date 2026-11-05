@@ -360,17 +360,15 @@ fn diagnostics_use_existing_warning_runtime_without_persistent_attachment() {
     }
 }
 
-#[test]
-fn shared_map_validation_visits_are_bounded_including_strict_pass() {
-    let mut ty = "number".to_string();
-    for _ in 0..6 {
-        ty = format!("Map<string,{ty}>");
-    }
-    let src = source(&format!("{{items:new {ty}()}}"), 1, "");
+fn shared_map_validation_visits(lua: String) -> (common::SavedVm, Vec<String>, usize) {
     let sim = vm(r#"
         node=1;
         for i=1,6 do node={a=node,b=node,c=node,d=node,e=node,f=node,g=node,h=node} end;
         DB={dbVersion=1,items=node}; root=DB; top=node;
+    "#);
+    // Install instrumentation before generated chunks capture pairs. Saved input
+    // remains staged in SavedVm until after all chunks have executed.
+    let counter = r#"
         visits=0; counting=true;
         local original=pairs;
         pairs=function(t)
@@ -384,24 +382,62 @@ fn shared_map_validation_visits_are_bounded_including_strict_pass() {
                 return next_key,value;
             end,state,key;
         end
-    "#);
-    load(&sim, &src);
+    "#;
+    sim.load_addon(
+        "Addon",
+        &[
+            ("counter.lua".into(), counter.into()),
+            ("main.lua".into(), lua),
+        ],
+    )
+    .unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     sim.eval("counting=false; print(visits)").unwrap();
     let messages = sim.prints();
     let visits = messages.last().unwrap().parse::<usize>().unwrap();
+    (sim, messages, visits)
+}
+
+#[test]
+fn shared_map_validation_visits_are_bounded_including_strict_pass() {
+    let mut ty = "number".to_string();
+    for _ in 0..6 {
+        ty = format!("Map<string,{ty}>");
+    }
+    let src = source(&format!("{{items:new {ty}()}}"), 1, "");
+    let lua = common::compile(&src);
+    let (sim, messages, visits) = shared_map_validation_visits(lua.clone());
     // 50 unique input entries: two root keys and six maps of eight edges.
     // Eight traversals cover both validation passes, clones, commit and defaults.
     let visit_bound = 8 * (2 + 6 * 8);
     println!("shared six-level graph: {visits} iterator visits; bound {visit_bound}");
     assert!(
-        visits <= visit_bound,
-        "{visits} visits exceeds {visit_bound}: {messages:?}"
+        visits > 0 && visits <= visit_bound,
+        "{visits} visits outside 1..={visit_bound}: {messages:?}"
     );
     assert_eq!(
         &messages[..messages.len() - 1],
         ["writer", "ready", "writer"]
     );
     sim.eval("assert(DB==root and DB.items==top and DB.dbVersion==1); local cursor=top; for i=1,6 do assert(cursor.a==cursor.b and cursor.a==cursor.c and cursor.a==cursor.d and cursor.a==cursor.e and cursor.a==cursor.f and cursor.a==cursor.g and cursor.a==cursor.h); cursor=cursor.a end; assert(cursor==1)").unwrap();
+
+    // The same measured workload must fail the bound if successful-validation
+    // memoisation is removed. The counter's safety cap bounds the mutation run.
+    let memo_guard = "if __selu_modes and __selu_modes[__selu_missing] then return true end";
+    assert_eq!(lua.matches(memo_guard).count(), 1);
+    let mutated = lua.replacen(memo_guard, "if false then return true end", 1);
+    let (_, messages, visits) = shared_map_validation_visits(mutated);
+    println!("memo disabled: {visits} iterator visits; bound {visit_bound}");
+    assert!(
+        visits > visit_bound,
+        "mutation did not fail the bound: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|s| s.contains("10000 visit safety cap")),
+        "mutation did not hit its safety cap: {messages:?}"
+    );
 }
 
 #[test]

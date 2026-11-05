@@ -13,24 +13,54 @@ pub trait BoundedCommand {
 impl BoundedCommand for std::process::Command {
     fn bounded_output(&mut self) -> std::io::Result<std::process::Output> {
         use std::{
+            io::{self, Read},
             process::Stdio,
             time::{Duration, Instant},
         };
+        fn drain(mut pipe: impl Read) -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        }
         let mut child = self.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
         eprintln!("test CLI PID {}, timeout 60s", child.id());
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        // Both pipes must drain while the child runs, even if either stream
+        // exceeds its OS pipe capacity before the other produces any output.
+        let stdout = std::thread::spawn(move || drain(stdout));
+        let stderr = std::thread::spawn(move || drain(stderr));
         let start = Instant::now();
-        while child.try_wait()?.is_none() {
-            if start.elapsed() > Duration::from_secs(60) {
-                child.kill()?;
-                child.wait()?;
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "test CLI exceeded 60s",
-                ));
+        let status = (|| {
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    return Ok(status);
+                }
+                if start.elapsed() > Duration::from_secs(60) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "test CLI exceeded 60s",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            std::thread::sleep(Duration::from_millis(10));
+        })();
+        if status.is_err() {
+            // Retain cleanup on timeout and on wait errors before joining readers.
+            let _ = child.kill();
+            let _ = child.wait();
         }
-        child.wait_with_output()
+        let stdout = stdout
+            .join()
+            .unwrap_or_else(|_| Err(io::Error::other("stdout reader panicked")));
+        let stderr = stderr
+            .join()
+            .unwrap_or_else(|_| Err(io::Error::other("stderr reader panicked")));
+        Ok(std::process::Output {
+            status: status?,
+            stdout: stdout?,
+            stderr: stderr?,
+        })
     }
 }
 

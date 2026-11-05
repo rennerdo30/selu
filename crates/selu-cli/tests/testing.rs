@@ -37,6 +37,36 @@ fn run(dir: &Path, filter: Option<&str>) -> std::process::Output {
 }
 
 #[test]
+fn bounded_cli_drains_large_stdout_and_stderr() {
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "bounded_cli_output_fixture",
+            "--nocapture",
+        ])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stdout.contains(&"x".repeat(192 * 1024)));
+    assert_eq!(stderr, "y".repeat(192 * 1024));
+}
+
+#[test]
+#[ignore = "subprocess fixture exercised by bounded_cli_drains_large_stdout_and_stderr"]
+fn bounded_cli_output_fixture() {
+    use std::io::Write;
+    std::io::stdout()
+        .write_all(&vec![b'x'; 192 * 1024])
+        .unwrap();
+    std::io::stderr()
+        .write_all(&vec![b'y'; 192 * 1024])
+        .unwrap();
+}
+
+#[test]
 fn saved_adoption_scenarios_hydrate_after_chunks_including_reload() {
     let dir = project(
         "sa2-order",
