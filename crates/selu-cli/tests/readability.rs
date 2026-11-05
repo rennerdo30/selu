@@ -83,7 +83,7 @@ fn events() {
 fn captures() {
     reference(
         "captures",
-        "saved settings = { enabled: false }; class C { value = 1; } on PLAYER_LOGIN() { print(settings.enabled); }",
+        "saved settings = { enabled: false }; class C { value = 1; } on PLAYER_LOGIN() { settings.whenReady(data => { print(data.enabled); }); }",
     );
 }
 #[test]

@@ -184,7 +184,7 @@ fn update_narrowing_invalidated_by_body() {
             .contains(&"SELU0341".into())
     );
     assert!(
-        codes("for (let n: number? = 0; n != null && n < 2; n++) { continue; }")
+        codes("for (let n: number? = 0; n != null && n < 2; n++) { n = null; continue; }")
             .contains(&"SELU0341".into())
     );
 }
@@ -196,5 +196,13 @@ fn compound_index_once() {
             "let calls = 0; function index(): number { calls++; return 0; } on PLAYER_LOGIN() { let t = [3]; t[index()] += 1; print(t[0]); print(calls); }"
         ),
         ["4", "1"]
+    );
+}
+
+#[test]
+fn update_narrowing_survives_an_unmodified_continue() {
+    assert_eq!(
+        run("let count=0;for(let n:number?=0;n!=null&&n<2;n++){count++;continue;}print(count);"),
+        ["2"]
     );
 }

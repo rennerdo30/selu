@@ -138,13 +138,16 @@ impl Ctx<'_> {
                 })
             }
             ExprKind::CompoundAssign { op, target, value } => {
-                let result = self.binary(e, op, target, value);
-                self.control_write(target, &result);
+                let target_info = self.prepare_write(target);
+                let r = self.value(value);
+                let result = self.binary_values(e, op, target, value, target_info.read.clone(), r);
+                self.commit_write(target, &target_info, &result);
                 Type::Void
             }
             ExprKind::Update { target, .. } => {
-                let t = self.value(target);
-                if crate::shape_of(&t) != Type::Number && !t.is_open() {
+                let target_info = self.prepare_write(target);
+                let t = &target_info.read;
+                if crate::shape_of(t) != Type::Number && !t.is_open() {
                     self.out.push(
                         err(
                             "SELU0341",
@@ -154,25 +157,10 @@ impl Ctx<'_> {
                         .with_help("use a number variable"),
                     );
                 }
-                self.control_write(target, &Type::Number);
+                self.commit_write(target, &target_info, &Type::Number);
                 Type::Void
             }
             _ => unreachable!(),
-        }
-    }
-
-    fn control_write(&mut self, target: &Expr, t: &Type) {
-        match &target.kind {
-            ExprKind::Ident(n) => self.write(n, &target.span, t),
-            ExprKind::Member { .. } | ExprKind::Index { .. } => self.data_write(target, t),
-            _ => self.out.push(
-                err(
-                    "SELU0344",
-                    "this expression is not an assignment target",
-                    &target.span,
-                )
-                .with_help("assign to a variable, field or index"),
-            ),
         }
     }
 }

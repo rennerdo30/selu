@@ -643,3 +643,28 @@ fn review_real_callbacks_reach_typed_error_sink_once() {
         assert_eq!(sim.prints(), ["captured", "previous"], "{setup}");
     }
 }
+
+#[test]
+fn prepared_stores_keep_union_arm_checks_after_rhs_effects() {
+    let prefix = r#"type V={kind:"a";value:string;items:string[]}|{kind:"b";value:number;items:number[]};let x:V={kind:"a",value:"a",items:["a"]};function change():string{x={kind:"b",value:1,items:[1]};return "s";}"#;
+    for statement in [
+        r#"if(x.kind=="a"){x.value=change();}"#,
+        r#"if(x.kind=="a"){x.items[0]=change();}"#,
+        r#"if(x.kind=="a"){x.value+=change();}"#,
+    ] {
+        assert_eq!(
+            codes(&format!("{prefix}{statement}")),
+            vec!["SELU0355"],
+            "{statement}"
+        );
+    }
+}
+#[test]
+fn prepared_receivers_and_indices_are_evaluated_once_at_runtime() {
+    assert_eq!(
+        run(
+            "let calls=0;const box={n:0};const xs=[1];function receiver():{n:number}{calls++;return box;}function index():number{calls++;return 0;}receiver().n=2;receiver().n+=3;receiver().n++;xs[index()]=2;xs[index()]+=3;xs[index()]++;print(calls,box.n,xs[0]);"
+        ),
+        vec!["6\t6\t6"]
+    );
+}

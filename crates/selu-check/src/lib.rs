@@ -39,6 +39,7 @@ mod flow;
 mod flow_state;
 mod functions;
 mod loops;
+mod lvalues;
 pub mod patterns;
 pub mod targets;
 pub mod types;
@@ -1134,14 +1135,9 @@ impl Ctx<'_> {
             }
             ExprKind::Binary { op, left, right } => self.binary(e, op, left, right),
             ExprKind::Assign { target, value } => {
-                // The value runs first, then the store.
-                let contexts = self.write_contexts(target);
-                let t = self.value_expected(value, contexts.first());
-                self.saved_write_value(target, &t, &value.span);
-                match &target.kind {
-                    ExprKind::Ident(name) => self.write(name, &target.span, &t),
-                    _ => self.data_write(target, &t),
-                }
+                let target_info = self.prepare_write(target);
+                let t = self.value_expected(value, target_info.contexts.first());
+                self.commit_write(target, &target_info, &t);
                 Type::Void
             }
             ExprKind::Member { object, name } => {
@@ -1331,10 +1327,26 @@ impl Ctx<'_> {
                 }
                 Type::Boolean
             }
-            "+" => {
-                self.wow_join(e, left, right);
+            _ => {
                 let l = self.value(left);
                 let r = self.value(right);
+                self.binary_values(e, op, left, right, l, r)
+            }
+        }
+    }
+
+    fn binary_values(
+        &mut self,
+        e: &Expr,
+        op: &str,
+        left: &Expr,
+        right: &Expr,
+        l: Type,
+        r: Type,
+    ) -> Type {
+        match op {
+            "+" => {
+                self.wow_join(e, left, right);
                 match (&l.operand_type(), &r.operand_type()) {
                     (Type::Number, Type::Number) => Type::Number,
                     (Type::String, Type::String) => Type::String,
@@ -1377,8 +1389,6 @@ impl Ctx<'_> {
             }
             _ => {
                 // - * / %
-                let l = self.value(left);
-                let r = self.value(right);
                 for (t, side) in [(&l, left), (&r, right)] {
                     if !t.is_open() && shape_of(t) != Type::Number {
                         self.out.push(err(

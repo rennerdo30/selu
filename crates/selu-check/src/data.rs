@@ -168,52 +168,6 @@ impl Ctx<'_> {
         self.value_expected(e, expected)
     }
 
-    pub(crate) fn write_contexts(&mut self, target: &Expr) -> Vec<Type> {
-        match &target.kind {
-            ExprKind::Ident(n) => self
-                .lookup(n)
-                .map(|(_, b)| vec![b.ty.clone()])
-                .unwrap_or_default(),
-            ExprKind::Member { object, name } => {
-                let t = self.value(object);
-                t.members()
-                    .iter()
-                    .map(|t| self.member(t, name, object))
-                    .collect()
-            }
-            ExprKind::Index { .. } => vec![self.expr_inner(target)],
-            _ => vec![self.expr(target)],
-        }
-    }
-    pub(crate) fn data_write(&mut self, target: &Expr, value: &Type) {
-        if let ExprKind::Member { object, name } = &target.kind {
-            let t = self.value(object);
-            if name == "length"
-                && t.members()
-                    .iter()
-                    .any(|t| matches!(t.operand_type(), Type::Array(_) | Type::String))
-            {
-                self.out
-                    .push(err("SELU0355", "length is read-only", &target.span));
-                return;
-            }
-        }
-        for ty in self.write_contexts(target) {
-            self.types.set(target.id, ty.clone());
-            if !value.assignable_to(&ty) {
-                self.out.push(
-                    err(
-                        "SELU0355",
-                        format!("cannot store `{value}` in `{ty}`"),
-                        &target.span,
-                    )
-                    .with_help("the value must fit every possible receiver arm"),
-                );
-            }
-        }
-        self.invalidate_path_writes();
-    }
-
     pub(crate) fn data_member(&mut self, t: &Type, field: &str, e: &Expr) -> Option<Type> {
         match t {
             Type::Object(fields) => Some(fields.get(field).cloned().unwrap_or_else(|| {
