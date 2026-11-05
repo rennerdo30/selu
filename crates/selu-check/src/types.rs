@@ -645,6 +645,9 @@ pub fn resolve_quiet(t: &TypeExpr) -> Type {
 /// uses it to pick the Lua operator (`+` or `..`) and similar choices.
 #[derive(Debug, Clone, Default)]
 pub struct TypeTable {
+    pub(crate) saved_adoptions: std::collections::HashSet<String>,
+    pub saved_contexts: HashMap<usize, Type>,
+    pub saved_readers: HashMap<usize, Type>,
     pub(crate) named_roots: Vec<NamedShape>,
     types: HashMap<ExprId, Type>,
     stable: std::collections::HashSet<ExprId>,

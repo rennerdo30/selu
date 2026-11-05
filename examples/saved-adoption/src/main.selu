@@ -1,0 +1,16 @@
+saved global ExampleDB version 2 using dbVersion legacy ExampleLegacyDB = {
+  count: 0,
+  enabled: true
+};
+
+migrate ExampleDB 1 -> 2 (old: {
+  count: number; enabled: boolean
+}) {
+  old.count += 1;
+}
+
+on PLAYER_LOGIN() {
+  ExampleDB.whenReady((data) => {
+    print(data.count);
+  });
+}

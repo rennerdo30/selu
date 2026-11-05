@@ -1,0 +1,3 @@
+[addon]
+name = "SavedAdoption"
+targets = ["wowf@1.0.0.1000"]

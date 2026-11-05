@@ -565,3 +565,494 @@ fn classes_saved_writes_reject_instances_and_accept_plain_copies() {
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), vec!["1", "2", "1"]);
 }
+
+fn assert_adoption_status(sim: &Sim, status: &str) {
+    let messages = sim.prints();
+    if status == "ready" {
+        assert_eq!(messages, vec![status]);
+    } else {
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(messages[0].starts_with("[saved] "), "{messages:?}");
+        assert!(
+            messages[0].contains(&format!(": {status}:")),
+            "{messages:?}"
+        );
+        assert_eq!(messages[1], status);
+    }
+}
+
+#[test]
+fn adoption_mapped_version_refuses_future_and_preserves_identity() {
+    let dir = project(
+        r#"
+        saved global RennerToolkitDB version 2 using dbVersion legacy RennersAddonsDB = { enabled: true, count: 0 };
+        migrate RennerToolkitDB 1 -> 2 (old: { enabled: boolean; count: number }) { old.count += 1; }
+        on PLAYER_LOGIN() {
+            const data = RennerToolkitDB.data;
+            if (data != null) { data.count += 10; }
+            print(RennerToolkitDB.status);
+        }
+    "#,
+    );
+    success(&dir);
+    let files = files(&dir);
+    for (input, assertions, status) in [
+        (
+            "RennerToolkitDB = {dbVersion=2, enabled=false, count=7}; root=RennerToolkitDB",
+            "assert(RennerToolkitDB == root and root.count == 17 and root.enabled == false and root.__selu_version == nil)",
+            "ready",
+        ),
+        (
+            "RennerToolkitDB = {dbVersion=3, count=7}; root=RennerToolkitDB",
+            "assert(RennerToolkitDB == root and root.count == 7 and root.enabled == nil and root.__selu_version == nil)",
+            "newer",
+        ),
+        (
+            "RennersAddonsDB = {dbVersion=1, enabled=false, count=7}; root=RennersAddonsDB",
+            "assert(RennerToolkitDB == root and root.count == 18 and RennersAddonsDB == nil and root.dbVersion == 2)",
+            "ready",
+        ),
+        (
+            "RennerToolkitDB = {dbVersion=2, enabled='bad', count=7}; root=RennerToolkitDB",
+            "assert(RennerToolkitDB == root and root.count == 7 and root.enabled == 'bad')",
+            "corrupt",
+        ),
+        (
+            "RennerToolkitDB = {dbVersion=2, enabled=false, count=7}; RennersAddonsDB={history=42}; legacy=RennersAddonsDB; root=RennerToolkitDB",
+            "assert(RennerToolkitDB == root and RennersAddonsDB == legacy and legacy.history == 42)",
+            "collision",
+        ),
+    ] {
+        let sim = Sim::new().unwrap();
+        sim.eval(
+            "__selu_saved_names.RennerToolkitDB = true; __selu_saved_names.RennersAddonsDB = true",
+        )
+        .unwrap();
+        sim.eval(input).unwrap();
+        sim.load_addon("Saved", &files).unwrap();
+        sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+        sim.eval(assertions).unwrap();
+        assert_adoption_status(&sim, status);
+    }
+}
+
+#[test]
+fn adoption_ten_versions_context_retry_and_roundtrip() {
+    let mut source = String::from(
+        "saved global RennerToolkitDB version 10 using dbVersion legacy RennersAddonsDB = { count: 0, enabled: true }; ",
+    );
+    for v in 1..10 {
+        source.push_str(&format!("migrate RennerToolkitDB {v} -> {} (old: {{ count: number; enabled: boolean }}, original: {{ count: number; enabled: boolean }}) {{ old.count += 1; }}", v+1));
+    }
+    source.push_str("on PLAYER_LOGIN() { const db = RennerToolkitDB.data; if (db != null) { db.count += 100; } print(RennerToolkitDB.status); }");
+    let dir = project(&source);
+    success(&dir);
+    let built = files(&dir);
+    for version in 1..=11 {
+        let sim = Sim::new().unwrap();
+        sim.eval(
+            "__selu_saved_names.RennerToolkitDB = true; __selu_saved_names.RennersAddonsDB = true",
+        )
+        .unwrap();
+        sim.eval(&format!("RennerToolkitDB = {{dbVersion={version},count=20,enabled=false,extension={{[42]='x',['42']='y'}}}}; root=RennerToolkitDB; nested=root.extension; root.other=nested")).unwrap();
+        sim.load_addon("Saved", &built).unwrap();
+        sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+        let count = if version > 10 { 20 } else { 130 - version };
+        sim.eval(&format!("assert(RennerToolkitDB == root and root.count == {count}); assert(root.enabled == false and root.__selu_version == nil); assert(root.extension == nested and root.other == nested and nested[42] == 'x' and nested['42'] == 'y')")).unwrap();
+        let snapshot = sim
+            .logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
+            .unwrap();
+        // An ordinary Lua consumer sees the mapped version and unprojected extensions.
+        let rollback = Sim::login_saved("LuaMaster", &[], &snapshot).unwrap();
+        rollback.eval(&format!("assert(RennerToolkitDB.dbVersion == {} and RennerToolkitDB.count == {count}); assert(RennerToolkitDB.extension[42] == 'x')", version.min(10).max(if version == 11 {11} else {10}))).unwrap();
+    }
+    // Deliberately mutate a migration: the simulator must observe a changed result.
+    let mutation = built
+        .iter()
+        .map(|(n, s)| (n.clone(), s.replace("__selu_t2 + 1", "__selu_t2 + 2")))
+        .collect::<Vec<_>>();
+    let sim = Sim::new().unwrap();
+    sim.eval("__selu_saved_names.RennersAddonsDB=true; RennerToolkitDB={dbVersion=1,count=20,enabled=false}").unwrap();
+    sim.load_addon("Saved", &mutation).unwrap();
+    assert!(sim.eval("assert(RennerToolkitDB.count == 29)").is_err());
+}
+
+#[test]
+fn adoption_nested_validation_and_failed_step_recovery() {
+    let source = r#"
+        saved global DB version 3 using dbVersion legacy OldDB = { count: 0, enabled: true, history: new Map<string, number>() };
+        migrate DB 1 -> 2 (old: { count: number; enabled: boolean; history: Map<string, number> }) { old.count += 1; }
+        migrate DB 2 -> 3 (old: { count: number; enabled: boolean; history: Map<string, number> }, original: { count: number }) { old.count += original.count; }
+        on PLAYER_LOGIN() { print(DB.status); }
+    "#;
+    let dir = project(source);
+    success(&dir);
+    let built = files(&dir);
+    for input in [
+        "DB={dbVersion='3'}",
+        "DB=false",
+        "DB=false; OldDB={dbVersion=1,count=4,enabled=false,history={}}",
+        "DB={dbVersion=1.5}",
+        "DB={dbVersion=0}",
+        "DB={dbVersion=3,count=0,enabled=false,history={x='bad'}}",
+    ] {
+        let sim = Sim::new().unwrap();
+        sim.eval("__selu_saved_names.DB=true; __selu_saved_names.OldDB=true")
+            .unwrap();
+        sim.eval(input).unwrap();
+        let before = sim.logout_saved(&["DB", "OldDB"]).unwrap();
+        sim.load_addon("Saved", &built).unwrap();
+        sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+        assert_adoption_status(&sim, "corrupt");
+        assert_eq!(sim.logout_saved(&["DB", "OldDB"]).unwrap(), before);
+    }
+    let sim = Sim::new().unwrap();
+    sim.eval("__selu_saved_names.DB=true; OldDB={dbVersion=1,count=4,enabled=false,history={}}; root=OldDB; nested=root.history").unwrap();
+    let failing = built
+        .iter()
+        .map(|(n, s)| {
+            (
+                n.clone(),
+                s.replace("= original.count", "= error('synthetic failure')"),
+            )
+        })
+        .collect::<Vec<_>>();
+    sim.load_addon("Saved", &failing).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_adoption_status(&sim, "failed");
+    sim.eval("assert(DB == nil and OldDB == root and root.count == 5 and root.dbVersion == 2 and root.history == nested)").unwrap();
+    let snapshot = sim.logout_saved(&["DB", "OldDB"]).unwrap();
+    let retry = Sim::login_saved("Saved", &built, &snapshot).unwrap();
+    retry
+        .eval(
+            "assert(DB.count == 9 and DB.dbVersion == 3 and OldDB == nil and DB.enabled == false and DB.__selu_saved_adoption_context == nil)",
+        )
+        .unwrap();
+}
+
+#[test]
+fn adoption_defaults_callbacks_arrays_and_aliases() {
+    let dir = project(
+        r#"
+        saved global DB using dbVersion legacy OldDB = { count: 0, enabled: true, rows: [1] };
+        function attach() { DB.whenReady((data) => { data.count += 1; }); }
+        attach();
+        on PLAYER_LOGIN() { DB.whenReady((data) => { data.count += 10; }); print(DB.status); }
+    "#,
+    );
+    success(&dir);
+    let built = files(&dir);
+    for (input, status, count) in [
+        ("", "ready", 11),
+        ("DB={}", "ready", 11),
+        ("DB={count=0,enabled=false,rows={}}", "ready", 11),
+        ("OldDB={}", "ready", 11),
+        (
+            "DB={dbVersion=1,count=0,enabled=false,rows={}}; OldDB=DB",
+            "ready",
+            11,
+        ),
+        (
+            "DB={dbVersion=1,count=0,enabled=false,rows={[1]=1,[3]=3}}",
+            "corrupt",
+            0,
+        ),
+        (
+            "DB={dbVersion=1,count=0,enabled=false,rows={false}}",
+            "corrupt",
+            0,
+        ),
+        ("DB={dbVersion=2,count=0}", "newer", 0),
+    ] {
+        let sim = Sim::new().unwrap();
+        sim.eval("__selu_saved_names.DB=true; __selu_saved_names.OldDB=true")
+            .unwrap();
+        sim.eval(input).unwrap();
+        sim.load_addon("Saved", &built).unwrap();
+        sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+        assert_adoption_status(&sim, status);
+        if status == "ready" {
+            sim.eval(&format!(
+                "assert(DB.count=={count} and DB.dbVersion==1 and OldDB==nil)"
+            ))
+            .unwrap();
+        } else {
+            sim.eval("assert(DB.count == 0)").unwrap();
+        }
+    }
+    // Removing the readiness check must activate the synthetic writer and fail the oracle.
+    let mutation = built
+        .iter()
+        .map(|(n, s)| {
+            (
+                n.clone(),
+                s.replace("if __selu_result.data then", "if true then"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let sim = Sim::new().unwrap();
+    sim.eval("__selu_saved_names.OldDB=true; DB={dbVersion=2,count=0}")
+        .unwrap();
+    assert!(sim.load_addon("Saved", &mutation).is_err());
+}
+
+#[test]
+fn adoption_rejects_untyped_readers_and_alias_collisions() {
+    for source in [
+        "saved global DB using dbVersion = {dbVersion: \"wrong\"};",
+        "saved global DB using __selu_saved_adoption_context = {count:0};",
+        "saved global DB using dbVersion legacy _G = {count:0};",
+        "saved global _G using dbVersion = {count:0};",
+        "saved global DB version 2 using dbVersion = {count:0}; migrate DB 1 -> 2 (old) { old.count=1; }",
+        "saved global DB using dbVersion legacy Other = {count:0}; saved global Other = {x:1};",
+        "saved global DB version 2 using dbVersion = {count:0}; migrate DB 1 -> 2 (old: {count:number}) { old.typo=1; }",
+    ] {
+        let dir = project(source);
+        assert!(!build(&dir).status.success());
+    }
+}
+
+#[test]
+fn adoption_default_pollution_repair_uses_original_snapshot() {
+    let dir = project(
+        r#"
+        type Aura = { threshold: number; enabled: boolean };
+        type Historical = { auraFlash?: Aura; debuffFlash?: Aura };
+        saved global DB version 4 using dbVersion = { auraFlash: {threshold:5, enabled:true} };
+        function merge(db: Historical, repair: boolean, context: Historical) {
+            const old = db.debuffFlash ?? context.debuffFlash;
+            if (old != null) {
+                const dest = db.auraFlash;
+                if (dest == null) { db.auraFlash = old; }
+                else {
+                    if (repair && dest.threshold == 5 && old.threshold != 5) { dest.threshold = old.threshold; }
+                    if (repair && dest.enabled == true && old.enabled == false) { dest.enabled = false; }
+                }
+                db.debuffFlash = null;
+            }
+        }
+        migrate DB 1 -> 2 (old: Historical, context: Historical) { merge(old, false, context); }
+        migrate DB 2 -> 3 (old: Historical, context: Historical) { merge(old, false, context); }
+        migrate DB 3 -> 4 (old: Historical, context: Historical) { merge(old, true, context); }
+    "#,
+    );
+    success(&dir);
+    let built = files(&dir);
+    for version in 1..4 {
+        let sim = Sim::new().unwrap();
+        sim.eval(&format!("DB={{dbVersion={version},debuffFlash={{threshold=9,enabled=false}},auraFlash={{threshold=5,enabled=true}}, extension={{[0]='zero',[9]='sparse'}}}}; root=DB; aura=DB.auraFlash; extension=DB.extension")).unwrap();
+        sim.load_addon("Saved", &built).unwrap();
+        sim.eval("assert(DB==root and DB.dbVersion==4 and DB.auraFlash==aura and DB.auraFlash.threshold==9 and DB.auraFlash.enabled==false and DB.debuffFlash==nil and DB.extension==extension and extension[0]=='zero' and extension[9]=='sparse')").unwrap();
+    }
+}
+
+#[test]
+fn adoption_failure_at_each_step_keeps_last_success() {
+    let mut source =
+        String::from("saved global DB version 10 using dbVersion legacy OldDB = {count:0};");
+    for v in 1..10 {
+        source.push_str(&format!(
+            "migrate DB {v} -> {} (old: {{count:number}}) {{ old.count += 1; }}",
+            v + 1
+        ));
+    }
+    let dir = project(&source);
+    success(&dir);
+    let built = files(&dir);
+    for step in 1..10 {
+        let marker = format!("entries[\"DB\"][{step}] = function(old)");
+        let mutation = built
+            .iter()
+            .map(|(n, s)| {
+                (
+                    n.clone(),
+                    s.replace(&marker, &format!("{marker} error('step failure');")),
+                )
+            })
+            .collect::<Vec<_>>();
+        let sim = Sim::new().unwrap();
+        sim.eval("__selu_saved_names.DB=true; OldDB={dbVersion=1,count=0}; root=OldDB")
+            .unwrap();
+        sim.load_addon("Saved", &mutation).unwrap();
+        sim.eval(&format!(
+            "assert(DB==nil and OldDB==root and root.dbVersion=={step} and root.count=={})",
+            step - 1
+        ))
+        .unwrap();
+    }
+}
+
+#[test]
+fn adoption_mode_is_explicit_and_history_is_closed() {
+    let dir = project(
+        "saved settings version 2 = {status: \"text\", data:{count:0}}; migrate settings 1 -> 2 (old) { old.data.count += 1; }",
+    );
+    success(&dir);
+    let dir = project(
+        "saved global DB version 2 using dbVersion = {count:0}; migrate DB 1 -> 2 (old: {count:number}) { old.count += 1; }",
+    );
+    success(&dir);
+    std::fs::write(dir.join("src/main.selu"),"saved global DB version 2 using dbVersion = {count:0}; migrate DB 1 -> 2 (old: {count:number; extra?:number}) { old.count += 1; }").unwrap();
+    let output = build(&dir);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("SELU0902"));
+}
+
+#[test]
+fn adoption_persisted_context_v4_retry_and_lua_master_rollback() {
+    let dir = project(
+        r#"
+        type Aura = {threshold:number; enabled:boolean};
+        type History = {debuffFlash?:Aura; auraFlash?:Aura};
+        saved global RennerToolkitDB version 10 using dbVersion legacy RennersAddonsDB = {auraFlash:{threshold:3,enabled:true}};
+        migrate RennerToolkitDB 1 -> 2 (old:History) {}
+        migrate RennerToolkitDB 2 -> 3 (old:History) { old.debuffFlash=null; }
+        migrate RennerToolkitDB 3 -> 4 (old:History, original:History) {
+            const legacy=original.debuffFlash;
+            if (legacy != null) {
+                const dest=old.auraFlash;
+                if (dest == null) { old.auraFlash=legacy; }
+                else {
+                    if (dest.threshold==3 && legacy.threshold!=3) { dest.threshold=legacy.threshold; }
+                    if (dest.enabled==true && legacy.enabled==false) { dest.enabled=false; }
+                }
+            }
+        }
+        migrate RennerToolkitDB 4 -> 5 (old:History) {}
+        migrate RennerToolkitDB 5 -> 6 (old:History) {}
+        migrate RennerToolkitDB 6 -> 7 (old:History) {}
+        migrate RennerToolkitDB 7 -> 8 (old:History) {}
+        migrate RennerToolkitDB 8 -> 9 (old:History) {}
+        migrate RennerToolkitDB 9 -> 10 (old:History) {}
+    "#,
+    );
+    success(&dir);
+    let built = files(&dir);
+    let mutation = built
+        .iter()
+        .map(|(n, s)| {
+            (
+                n.clone(),
+                s.replace(
+                    "function(old, original)",
+                    "function(old, original) error('v4 failure');",
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    let seed = Sim::new().unwrap();
+    seed.eval("__selu_saved_names.RennerToolkitDB=true; __selu_saved_names.RennersAddonsDB=true")
+        .unwrap();
+    seed.eval(include_str!("fixtures/toolkit_saved_oracle.lua"))
+        .unwrap();
+    seed.eval("__selu_test_lua_master_load(); RennerToolkitDB.dbVersion=2; RennerToolkitDB.debuffFlash={threshold=9,enabled=false}; RennerToolkitDB.extension={ [0]='zero', ['0']='string' }").unwrap();
+    let input = seed
+        .logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
+        .unwrap();
+    let mut mutation = mutation;
+    mutation.insert(0, ("capture.lua".into(), "root=RennerToolkitDB".into()));
+    let sim = Sim::login_saved("Saved", &mutation, &input).unwrap();
+    sim.eval("assert(RennerToolkitDB==root and root.dbVersion==3 and root.debuffFlash.threshold==9 and root.__selu_saved_adoption_context.original.debuffFlash.threshold==9)").unwrap();
+    let snapshot = sim
+        .logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
+        .unwrap();
+    let retry = Sim::login_saved("Saved", &built, &snapshot).unwrap();
+    retry.eval("assert(RennerToolkitDB.dbVersion==10 and RennerToolkitDB.auraFlash.threshold==9 and RennerToolkitDB.auraFlash.enabled==false and RennerToolkitDB.__selu_saved_adoption_context==nil)").unwrap();
+    let baseline = Sim::login_saved("LuaMaster", &[], &input).unwrap();
+    baseline
+        .eval(include_str!("fixtures/toolkit_saved_oracle.lua"))
+        .unwrap();
+    baseline.eval("__selu_test_lua_master_load()").unwrap();
+    let baseline_snapshot = baseline
+        .logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
+        .unwrap();
+    assert_eq!(
+        retry
+            .logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
+            .unwrap(),
+        baseline_snapshot
+    );
+    let rollback = Sim::login_saved("LuaMaster", &[], &snapshot).unwrap();
+    rollback
+        .eval(include_str!("fixtures/toolkit_saved_oracle.lua"))
+        .unwrap();
+    rollback.eval("assert(RennerToolkitDB.dbVersion==3 and RennerToolkitDB.debuffFlash.threshold==9); assert(__selu_test_lua_master_load()==RennerToolkitDB); assert(RennerToolkitDB.dbVersion==10); assert(RennerToolkitDB.__selu_saved_adoption_context.original.debuffFlash.threshold==9); assert(RennerToolkitDB.auraFlash.threshold==9 and RennerToolkitDB.auraFlash.enabled==false)").unwrap();
+    let rolled = rollback
+        .logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
+        .unwrap();
+    let cleanup = Sim::login_saved("Saved", &built, &rolled).unwrap();
+    assert_eq!(
+        cleanup
+            .logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
+            .unwrap(),
+        baseline_snapshot
+    );
+}
+
+#[test]
+fn adoption_deferred_inputs_are_general_nested_and_transactional() {
+    let source = r#"
+        type Historical={ input:{ inner?:{choice:number} }; result:number; flag?:boolean };
+        saved global DB version 3 using dbVersion = { input:{}, result:0 };
+        migrate DB 1 -> 2 (old:Historical) { old.input.inner=null; old.flag=null; }
+        migrate DB 2 -> 3 (old:Historical, original:Historical) {
+            const inner=original.input.inner;
+            if(inner!=null) { old.result+=inner.choice; }
+        }
+        on PLAYER_LOGIN() { print(DB.status); }
+    "#;
+    let dir = project(source);
+    success(&dir);
+    let built = files(&dir);
+    let failing = built
+        .iter()
+        .map(|(n, s)| {
+            (
+                n.clone(),
+                s.replace(
+                    "function(old, original)",
+                    "function(old, original) old.input.inner.choice=99; error('failure');",
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    let sim = Sim::new().unwrap();
+    sim.eval("DB={dbVersion=1,input={inner={choice=7}},result=1,flag=false}; root=DB; input=root.input; inner=input.inner").unwrap();
+    sim.load_addon("Saved", &failing).unwrap();
+    sim.eval("assert(DB==root and DB.dbVersion==2 and DB.input==input and input.inner==inner and inner.choice==7 and DB.result==1 and DB.flag==false)").unwrap();
+    let snapshot = sim.logout_saved(&["DB"]).unwrap();
+    let retry = Sim::login_saved("Saved", &built, &snapshot).unwrap();
+    retry.eval("assert(DB.dbVersion==3 and DB.input.inner==nil and DB.result==8 and DB.flag==nil and DB.__selu_saved_adoption_context==nil)").unwrap();
+    let conflicting = built
+        .iter()
+        .map(|(n, s)| {
+            (
+                n.clone(),
+                s.replace(
+                    "function(old, original)",
+                    "function(old, original) old.input.inner={choice=8};",
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    let conflict = Sim::login_saved("Saved", &conflicting, &snapshot).unwrap();
+    conflict.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_adoption_status(&conflict, "failed");
+    assert_eq!(conflict.logout_saved(&["DB"]).unwrap(), snapshot);
+    for bad in [
+        "false",
+        "{format=1,original={},removals=false}",
+        "{format=1,original={dbVersion=false},removals={}}",
+    ] {
+        let sim = Sim::new().unwrap();
+        sim.eval(&format!(
+            "DB={{dbVersion=3,input={{}},result=1,__selu_saved_adoption_context={bad}}}"
+        ))
+        .unwrap();
+        let before = sim.logout_saved(&["DB"]).unwrap();
+        sim.load_addon("Saved", &built).unwrap();
+        sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+        assert_adoption_status(&sim, "corrupt");
+        assert_eq!(sim.logout_saved(&["DB"]).unwrap(), before);
+    }
+}

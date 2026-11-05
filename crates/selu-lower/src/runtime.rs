@@ -50,11 +50,13 @@ impl Lowerer<'_> {
             out.push(raw("local __selu_addon, __selu_ns = ..."));
         }
         out.extend(captures);
+        out.extend(saved::adoption_captures(program));
         if namespace && !self.module.type_only {
             out.push(raw("__selu_ns = __selu_ns or {}"));
         }
         out.extend(wow.into_iter().flatten());
         out.extend(saved::setup(program));
+        out.extend(saved::adoption_setup(program));
         out.extend(self.error_setup(program));
         out.extend(crate::restrictions::emit_restriction_runtime(
             program,
@@ -152,6 +154,14 @@ impl Lowerer<'_> {
             // private to this piece so the cold init helpers can be collected.
             p.exports[0].1 = "__selu_saved".into();
             pieces.push(p);
+        }
+        if saved::has_adoption(program) {
+            pieces.push(piece(
+                "19b-saved-adoption",
+                saved::adoption_setup(program),
+                &[],
+                &["19-saved"],
+            ));
         }
         if self.wow.used {
             pieces.push(piece(

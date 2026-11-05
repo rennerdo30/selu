@@ -515,6 +515,18 @@ impl Parser {
                 } else {
                     1
                 };
+                let version_key = if self.at_ident("using") {
+                    self.bump();
+                    Some(self.ident("a persisted version key")?.0)
+                } else {
+                    None
+                };
+                let legacy = if self.at_ident("legacy") {
+                    self.bump();
+                    Some(self.ident("a legacy saved global")?.0)
+                } else {
+                    None
+                };
                 self.expect(&Tok::Eq, "`=`")?;
                 let defaults = Box::new(self.expr()?);
                 self.semi(start)?;
@@ -523,6 +535,8 @@ impl Parser {
                     name_span,
                     per_character,
                     adopted,
+                    version_key,
+                    legacy,
                     version,
                     defaults,
                 }
@@ -540,11 +554,26 @@ impl Parser {
                 let step_span = self.span_from(step_start);
                 self.expect(&Tok::LParen, "`(`")?;
                 let (n, span) = self.ident("the old data parameter")?;
+                let ty = self.annotation()?;
+                let context = if self.at(&Tok::Comma) {
+                    self.bump();
+                    let (name, span) = self.ident("a migration context parameter")?;
+                    let ty = self.annotation()?;
+                    Some(Box::new(Param {
+                        name,
+                        span,
+                        ty,
+                        default: None,
+                        rest: false,
+                    }))
+                } else {
+                    None
+                };
                 self.expect(&Tok::RParen, "`)`")?;
                 let param = Param {
                     name: n,
                     span,
-                    ty: None,
+                    ty,
                     default: None,
                     rest: false,
                 };
@@ -556,6 +585,7 @@ impl Parser {
                     from,
                     to,
                     param,
+                    context,
                     body,
                 }
             }

@@ -104,3 +104,101 @@ cannot be stored through saved-root field/index assignments or collection
 push/insert/set/add calls, including imported saved roots. Copy their data into
 a plain object instead, for example `{ x: p.x, y: p.y }`. Class metatables and
 methods cannot round-trip through SavedVariables.
+
+## Mapped-version adoption
+
+For a pre-existing database with its own version field, use the explicit
+adoption contract (this does not import Lua code):
+
+```selu
+saved global MyAddonDB version 2 using dbVersion legacy OldAddonDB = {
+    count: 0, enabled: true
+};
+migrate MyAddonDB 1 -> 2 (old: { count: number; enabled: boolean }) {
+    old.count += 1;
+}
+on PLAYER_LOGIN() {
+    MyAddonDB.whenReady((data) => { print(data.count); });
+}
+```
+
+Both exact global names enter the TOC in the declared scope. `legacy` is
+optional. `using` selects the sole persisted version key: this mode never adds
+Selu version metadata. The mapped key is compiler-owned and must be omitted
+from defaults; it cannot use the reserved retry-context namespace. The source binding is a load result with `status: string`,
+`data: <defaults shape>?`, and `whenReady(callback)`. Status is `loading`,
+`ready`, `collision`, `newer`, `corrupt`, or `failed`. Data is available only
+for ready/collision results. Ready callbacks run after publication and defaults;
+callbacks registered after success run immediately. Refusals discard pending
+callbacks. Callbacks must own all persistent writers, including log attachment
+and logout writers. Reading data requires a null check. A collision is usable
+current data plus retained, distinct legacy data requiring explicit reconciliation.
+
+A present current root takes precedence, including a corrupt one (it is never
+overwritten by a legacy value). Otherwise the legacy table is selected by
+identity. Empty or absent data starts at the current version. Populated data
+without the mapped key starts at 1. Non-table roots, malformed versions and
+future versions are preserved without defaults, migration or publication.
+
+Every migration in this mode requires an explicit finite serializable record
+type. Optional fields distinguish absent values from malformed present values.
+Records, primitive values, optional fields, dense arrays and maps with primitive
+keys are supported. Unsupported or recursive readers are rejected (SELU0901).
+Declared fields are the only fields application code may access; extra fields
+remain opaque and survive serialization, including numeric versus string keys.
+Existing array/map elements are validated without receiving defaults. Dense
+arrays reject holes, while numeric maps preserve sparse keys.
+
+The optional second migration parameter is a typed snapshot of the root at
+entry to this login's migration chain. Each step gets its own copy of this
+snapshot, validated against that parameter's closed schema. It supports repairs
+that need data removed by an earlier step. Failed steps leave the last successful
+version in the original selected root. Each successful step commits after output
+validation, retaining existing table identities and aliases. If an attempt stops after a successful step, its original snapshot is retained
+under the reserved `__selu_saved_adoption_context` key (`format = 1`, `original`
+contains the initial serialized root; `removals` lists deferred input paths). This is retry context, not another
+version counter. A later Selu login reuses it while continuing from the mapped
+last-success version. The key is removed on success. Malformed context is
+refused without overwriting it. Source declarations cannot claim this key.
+
+Defaults run only after all steps and validation succeed. Successful publication
+keeps the selected root identity and retires an absent/aliased legacy name.
+Distinct legacy roots are always retained. `selu.saved.toml` records the mapped
+key, alias and historical readers; changing them is rejected (SELU0902).
+SELU0900 covers invalid adoption options and alias collisions.
+
+Deployment requires working native SavedVariables hydration. This contract cannot
+detect a client that incorrectly omits existing globals; installers must refuse
+known broken clients. Simulator checks do not establish native client hydration
+or authorize replacement of player installations.
+
+Future context readers protect their declared root fields and complete input
+subtrees, including opaque extension fields. An earlier step's deletion within
+such an input is deferred. The input stays intact in the last-success save until
+the last context reader commits; deferred removals and its version advance occur
+in that same transaction. This general rule lets an older loader retry its own
+migration using intact legacy inputs after a Selu failure. It is deliberately
+stronger retention than an in-place deletion order. Ordinary Lua master ignores
+the namespaced retry key and preserves it as opaque data; only a subsequent
+successful Selu load can remove that compiler-owned key.
+
+A deferred input path cannot be repurposed before retirement: a conflicting
+write at its consuming step fails without committing or erasing the new value
+into defaults. Reuse that path in a later version after the reader has committed.
+
+Default filling is also transactional: it runs on a copy that retains graph
+provenance. The complete result is then strictly validated through every declared
+field, including aliased records and maps, before committing. Incompatible aliases
+are refused without changing the last-good graph or publishing writers.
+
+Adoption refusals, migration failures and distinct legacy roots emit one warning
+through the existing warning runtime. It names the database, phase or migration
+step and reason; exceptions retain their error text. Validation warnings include
+the field path and expected/actual kind. Warnings do not attach persistent writers
+and respect the existing warning level settings.
+
+Each validation pass memoises successful checks by table identity, schema identity
+and missing-field mode. Active-path cycle detection remains separate. Shared
+subgraphs are checked once per schema/mode instead of expanding every alias path;
+different schemas still validate the same table independently. The strict pass
+uses a fresh memo after default filling, so earlier successes cannot hide changes.

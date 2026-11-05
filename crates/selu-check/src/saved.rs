@@ -8,11 +8,20 @@ impl Ctx<'_> {
             name,
             name_span,
             defaults,
+            version_key,
             ..
         } = &s.kind
         {
+            if version_key.is_some() {
+                self.types.saved_adoptions.insert(name.clone());
+            }
             let ty = self.value(defaults);
-            self.declare(name, name_span, Kind::Saved, ty.clone());
+            self.declare(
+                name,
+                name_span,
+                Kind::Saved,
+                adoption_type(ty, version_key.is_some()),
+            );
         }
     }
     pub(crate) fn saved_access(&mut self, name: &str, span: &Span) {
@@ -86,9 +95,15 @@ impl Ctx<'_> {
                 name,
                 name_span,
                 defaults,
+                version_key,
+                legacy,
+                adopted,
                 ..
             } => {
-                if name.starts_with("__selu") || selu_syntax::is_lua_keyword(name) {
+                if name.starts_with("__selu")
+                    || selu_syntax::is_lua_keyword(name)
+                    || (*adopted && name == "_G")
+                {
                     self.out.push(
                         err("SELU0463", "this saved name is reserved", name_span)
                             .with_help("choose another name"),
@@ -108,16 +123,34 @@ impl Ctx<'_> {
                 }
                 if let selu_syntax::ExprKind::Object(fields) = &defaults.kind {
                     for field in fields {
-                        if field.key == "__selu_version" {
+                        if version_key.as_ref() == Some(&field.key) {
+                            self.out.push(err(
+                                "SELU0900",
+                                "the mapped version key is compiler-owned; omit it from defaults",
+                                &field.key_span,
+                            ));
+                        }
+
+                        if field.key == "__selu_version"
+                            || (version_key.is_some()
+                                && field.key == "__selu_saved_adoption_context")
+                        {
                             self.out.push(err(
                                 "SELU0470",
-                                "__selu_version is reserved for saved data",
+                                format!("{} is reserved for saved data", field.key),
                                 &field.key_span,
                             ));
                         }
                     }
                 }
                 let ty = self.value(defaults);
+                if version_key.is_some() && !closed_schema(&ty, 0) {
+                    self.out.push(err(
+                        "SELU0901",
+                        "adoption requires a finite closed record schema",
+                        &defaults.span,
+                    ));
+                }
                 if contains_class(&ty) {
                     self.class_saved_error(&defaults.span);
                 } else if !serializable(&ty) {
@@ -137,7 +170,37 @@ impl Ctx<'_> {
                         &defaults.span,
                     ));
                 }
-                self.finish_decl(name, ty);
+                if (version_key.is_some() || legacy.is_some()) && !adopted {
+                    self.out.push(err(
+                        "SELU0900",
+                        "adoption options require saved global",
+                        name_span,
+                    ));
+                }
+                if legacy.is_some() && version_key.is_none() {
+                    self.out.push(err(
+                        "SELU0900",
+                        "legacy adoption requires a mapped version key",
+                        name_span,
+                    ));
+                }
+                if legacy.as_ref().is_some_and(|n| {
+                    n == name
+                        || n == "_G"
+                        || n.starts_with("__selu")
+                        || selu_syntax::is_lua_keyword(n)
+                }) {
+                    self.out
+                        .push(err("SELU0900", "invalid legacy global", name_span));
+                }
+                if version_key.as_deref() == Some("__selu_saved_adoption_context") {
+                    self.out.push(err(
+                        "SELU0900",
+                        "the version key cannot use the retry-context namespace",
+                        name_span,
+                    ));
+                }
+                self.finish_decl(name, adoption_type(ty, version_key.is_some()));
             }
             StmtKind::Migrate {
                 name,
@@ -146,6 +209,7 @@ impl Ctx<'_> {
                 from,
                 to,
                 param,
+                context,
                 body,
             } => {
                 if self.lookup(name).is_none_or(|(_, b)| b.kind != Kind::Saved) {
@@ -171,17 +235,61 @@ impl Ctx<'_> {
                 if let Some((_, b)) = self.lookup(name).map(|(i, b)| (i, b.clone())) {
                     self.check_ready(name, &b, &s.span);
                 }
-                if param.name.starts_with("__selu") || selu_syntax::is_lua_keyword(&param.name) {
-                    self.out.push(
-                        err(
-                            "SELU0463",
-                            "this migration parameter name is reserved",
-                            &param.span,
-                        )
-                        .with_help("choose another name"),
-                    );
+                for param in std::iter::once(param).chain(context.as_deref()) {
+                    if param.name.starts_with("__selu") || selu_syntax::is_lua_keyword(&param.name)
+                    {
+                        self.out.push(
+                            err(
+                                "SELU0463",
+                                "this migration parameter name is reserved",
+                                &param.span,
+                            )
+                            .with_help("choose another name"),
+                        );
+                    }
                 }
-                self.function_body(std::slice::from_ref(param), vec![Type::Untyped], None, body);
+                let adoption = self.types.saved_adoptions.contains(name);
+                if adoption && param.ty.is_none() {
+                    self.out.push(err(
+                        "SELU0901",
+                        "adoption migrations require a closed historical schema",
+                        &param.span,
+                    ));
+                }
+                if !adoption && (param.ty.is_some() || context.is_some()) {
+                    self.out.push(err(
+                        "SELU0901",
+                        "typed historical readers require mapped-version adoption",
+                        &param.span,
+                    ));
+                }
+                let ty = self.annotation(&param.ty).unwrap_or(Type::Untyped);
+                if param.ty.is_some()
+                    && (!closed_schema(&ty, 0) || !matches!(crate::shape_of(&ty), Type::Object(_)))
+                {
+                    self.out.push(err(
+                        "SELU0901",
+                        "historical schemas must be closed serializable records",
+                        &param.span,
+                    ));
+                }
+                self.types.saved_readers.insert(s.span.start, ty.clone());
+                let mut params = vec![param.clone()];
+                let mut types = vec![ty];
+                if let Some(context) = context {
+                    let ty = self.annotation(&context.ty).unwrap_or(Type::Untyped);
+                    if !closed_schema(&ty, 0) || !matches!(crate::shape_of(&ty), Type::Object(_)) {
+                        self.out.push(err(
+                            "SELU0901",
+                            "migration context requires a closed historical record",
+                            &context.span,
+                        ));
+                    }
+                    self.types.saved_contexts.insert(s.span.start, ty.clone());
+                    params.push(context.as_ref().clone());
+                    types.push(ty);
+                }
+                self.function_body(&params, types, None, body);
             }
             _ => unreachable!(),
         }
@@ -245,5 +353,53 @@ fn contains_class_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) 
             contains_class_seen(&k, seen) || contains_class_seen(&v, seen)
         }
         _ => false,
+    }
+}
+
+fn adoption_type(ty: Type, adoption: bool) -> Type {
+    if !adoption {
+        return ty;
+    }
+    Type::Object(
+        [
+            ("status".into(), Type::String),
+            ("data".into(), Type::Optional(Box::new(ty.clone()))),
+            (
+                "whenReady".into(),
+                saved_function(vec![saved_function(vec![ty], Type::Void)], Type::Void),
+            ),
+        ]
+        .into(),
+    )
+}
+
+fn closed_schema(ty: &Type, depth: usize) -> bool {
+    if depth > 64 {
+        return false;
+    }
+    match crate::shape_of(ty) {
+        Type::Number | Type::String | Type::Boolean | Type::Null => true,
+        Type::Optional(t) | Type::Array(t) => closed_schema(&t, depth + 1),
+        Type::Object(fs) => fs.values().all(|t| closed_schema(t, depth + 1)),
+        Type::Map(k, v) => {
+            matches!(
+                crate::shape_of(&k),
+                Type::Number | Type::String | Type::Boolean
+            ) && closed_schema(&v, depth + 1)
+        }
+        _ => false,
+    }
+}
+
+fn saved_function(params: Vec<Type>, ret: Type) -> Type {
+    Type::Function {
+        multiple_results: false,
+        unspecified_callback: false,
+        api: Default::default(),
+        api_semantics: Default::default(),
+        required: params.len(),
+        params,
+        ret: Box::new(ret),
+        rest: None,
     }
 }
