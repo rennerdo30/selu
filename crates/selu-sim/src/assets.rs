@@ -83,7 +83,7 @@ impl Resolver {
             .iter()
             .any(|s| matches!(s, Source::AddonMedia(p) if p == &root))
         {
-            self.sources.push(Source::AddonMedia(root));
+            self.sources.insert(0, Source::AddonMedia(root));
             self.cache.get_mut().clear();
         }
     }
@@ -132,7 +132,7 @@ impl Default for Resolver {
 impl Source {
     fn lookup(&self, name: &str) -> Lookup {
         let key = name.to_ascii_lowercase();
-        let client = (key.starts_with("interface/") && !key.starts_with("interface/addons/"))
+        let client = key.starts_with("interface/")
             || key.starts_with("fonts/")
             || key.parse::<u32>().is_ok();
         match self {
@@ -152,14 +152,14 @@ impl Source {
                     }
                     return Lookup::Missing;
                 }
-                if client {
+                if client && !key.starts_with("interface/addons/") {
                     Lookup::Unavailable
                 } else {
                     Lookup::Missing
                 }
             }
             Self::AddonMedia(root) => {
-                if client {
+                if client && !key.starts_with("interface/addons/") {
                     return Lookup::Missing;
                 }
                 for candidate in std::iter::once(name.to_owned())
