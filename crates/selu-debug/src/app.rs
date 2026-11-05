@@ -2241,14 +2241,7 @@ impl Studio {
                     }
                 }
                 (None, "Texture") => {}
-                _ => {
-                    painter.rect_stroke(
-                        rect,
-                        0.0,
-                        Stroke::new(1.0, fade(r, Color32::from_gray(110))),
-                        StrokeKind::Inside,
-                    );
-                }
+                _ => {}
             }
         }
         // Selection and hover outlines on top.
