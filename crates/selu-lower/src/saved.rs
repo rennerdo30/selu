@@ -371,6 +371,7 @@ pub(crate) fn captures(program: &Program) -> LBlock {
         "_G",
         "type",
         "pairs",
+        "next",
         "ipairs",
         "CreateFrame",
         "rawget",
@@ -511,7 +512,7 @@ pub(crate) fn adoption_setup(program: &Program) -> LBlock {
         return vec![];
     }
     let mut body = vec![];
-    for global in ["type", "pairs", "ipairs", "pcall", "tostring"] {
+    for global in ["type", "pairs", "next", "ipairs", "pcall", "tostring"] {
         body.push(local(global, name(global)));
     }
     body.push(crate::raw(include_str!("saved_adoption.lua")));

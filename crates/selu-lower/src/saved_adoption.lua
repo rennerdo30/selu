@@ -1,3 +1,18 @@
+local function __selu_saved_opaque(__selu_value, __selu_seen, __selu_done)
+  local __selu_kind = __selu_saved_type(__selu_value)
+  if __selu_kind == "string" or __selu_kind == "boolean" then return true end
+  if __selu_kind == "number" then return __selu_value - __selu_value == 0 end
+  if __selu_kind ~= "table" or __selu_seen[__selu_value] then return false end
+  if __selu_done[__selu_value] then return true end
+  __selu_seen[__selu_value] = true
+  for __selu_key, __selu_item in __selu_saved_pairs(__selu_value) do
+    local __selu_key_kind = __selu_saved_type(__selu_key)
+    if (__selu_key_kind ~= "string" and __selu_key_kind ~= "boolean" and __selu_key_kind ~= "number") or not __selu_saved_opaque(__selu_key, __selu_seen, __selu_done) or not __selu_saved_opaque(__selu_item, __selu_seen, __selu_done) then return false end
+  end
+  __selu_seen[__selu_value] = nil
+  __selu_done[__selu_value] = true
+  return true
+end
 -- Closed persistence boundary. Unknown fields stay in the table but are never projected.
 -- Cache only complete successes, never an in-progress or failed validation.
 local function __selu_saved_validated(__selu_value, __selu_schema, __selu_missing, __selu_done)
@@ -56,7 +71,10 @@ local function __selu_saved_validate(__selu_value, __selu_schema, __selu_missing
   if __selu_missing and __selu_value == nil then return true end
   if __selu_saved_type(__selu_value) ~= "table" then return false, __selu_path .. ": expected table, got " .. __selu_saved_type(__selu_value) end
   __selu_seen[__selu_value] = true
-  if __selu_schema.fields then
+  if __selu_schema.fields and __selu_saved_next(__selu_schema.fields) == nil then
+    __selu_seen[__selu_value] = nil
+    if not __selu_saved_opaque(__selu_value, __selu_seen, {}) then return false, __selu_path .. ": expected serializable table" end
+  elseif __selu_schema.fields then
     for __selu_key, __selu_field in __selu_saved_pairs(__selu_schema.fields) do
       local __selu_valid, __selu_reason = __selu_saved_validate(__selu_value[__selu_key], __selu_field, __selu_missing, __selu_seen, __selu_path .. "." .. __selu_key, __selu_done)
       if not __selu_valid then return false, __selu_reason end

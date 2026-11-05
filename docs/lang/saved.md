@@ -309,3 +309,20 @@ existing table identities, then publishes `ready` and invokes callbacks.
 
 Mapped adoption retains its existing last-success/retry-context migration
 contract. Ordinary refusal retries from the original untouched graph next login.
+
+Saved Map keys may be finite unions of string, number and boolean types (including
+literal alternatives). Validation checks each alternative exactly: `17`, `"17"`
+and `true` remain distinct keys through iteration, migration and serialization.
+Null, optional, table and open key types are rejected, including in historical
+and `SavedRepair` schemas.
+
+An empty record type `{}` describes an opaque serializable table. Its contents
+must be finite serializable data with primitive keys; functions, cycles and
+non-finite numbers are refused. Typed code may retain or move that table, but
+cannot read arbitrary members or index it. It provides no dynamic lookup or
+untyped access to game values. Additional fields of declared records remain
+opaque as described above.
+
+Annotated defaults receive their schema context immediately, including nested
+empty arrays and optional fields. Only written defaults are filled; omitted
+optional fields stay absent.

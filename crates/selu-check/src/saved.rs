@@ -13,8 +13,11 @@ impl Ctx<'_> {
         } = &s.kind
         {
             self.types.saved_adoptions.insert(name.clone());
-            let inferred = self.value(defaults);
-            let ty = self.annotation(ty).unwrap_or(inferred);
+            let ty = if let Some(ty) = self.annotation(ty) {
+                ty
+            } else {
+                self.value(defaults)
+            };
             self.types.saved_schemas.insert(s.span.start, ty.clone());
             self.declare(name, name_span, Kind::Saved, adoption_type(ty, true));
         }
@@ -137,13 +140,12 @@ impl Ctx<'_> {
                         }
                     }
                 }
-                let inferred = self.value(defaults);
                 let ty = self
                     .types
                     .saved_schemas
                     .get(&s.span.start)
                     .cloned()
-                    .unwrap_or(inferred.clone());
+                    .unwrap_or_else(|| self.value(defaults));
                 let inferred = self.value_expected(defaults, Some(&ty));
                 if !inferred.assignable_to(&ty) {
                     self.out.push(err(
@@ -336,12 +338,7 @@ fn serializable_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) ->
         Type::Optional(t) | Type::Array(t) => serializable_seen(&t, seen),
         Type::Object(fs) => fs.values().all(|t| serializable_seen(t, seen)),
         Type::Union(ts) | Type::Tuple(ts) => ts.iter().all(|t| serializable_seen(t, seen)),
-        Type::Map(k, v) => {
-            matches!(
-                crate::shape_of(&k),
-                Type::Number | Type::String | Type::Boolean
-            ) && serializable_seen(&v, seen)
-        }
+        Type::Map(k, v) => primitive_key(&k, 0) && serializable_seen(&v, seen),
         Type::Set(k) => matches!(
             crate::shape_of(&k),
             Type::Number | Type::String | Type::Boolean
@@ -408,12 +405,7 @@ pub(crate) fn closed_schema(ty: &Type, depth: usize) -> bool {
             ) && closed_schema(&t, depth + 1)
         }
         Type::Object(fs) => fs.values().all(|t| closed_schema(t, depth + 1)),
-        Type::Map(k, v) => {
-            matches!(
-                crate::shape_of(&k),
-                Type::Number | Type::String | Type::Boolean
-            ) && closed_schema(&v, depth + 1)
-        }
+        Type::Map(k, v) => primitive_key(&k, 0) && closed_schema(&v, depth + 1),
         _ => false,
     }
 }
@@ -428,5 +420,22 @@ fn saved_function(params: Vec<Type>, ret: Type) -> Type {
         params,
         ret: Box::new(ret),
         rest: None,
+    }
+}
+
+// Only finite, non-null primitive alternatives are valid persistent map keys.
+fn primitive_key(ty: &Type, depth: usize) -> bool {
+    if depth > 64 {
+        return false;
+    }
+    match crate::shape_of(ty) {
+        Type::Number
+        | Type::String
+        | Type::Boolean
+        | Type::NumberLiteral(_)
+        | Type::StringLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(ts) => !ts.is_empty() && ts.iter().all(|t| primitive_key(t, depth + 1)),
+        _ => false,
     }
 }
