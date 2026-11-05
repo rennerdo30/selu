@@ -91,6 +91,109 @@ fn reference_names(value: &serde_json::Value, names: &mut std::collections::BTre
     }
 }
 
+/// Complete API and candidate-source diff shared by game-build and extraction updates.
+pub fn api_diff(project: &Path, old: &Manifest, newest: &Manifest) -> Result<String> {
+    let mut report = String::new();
+    let old_value = serde_json::to_value(old)?;
+    let new_value = serde_json::to_value(newest)?;
+    for section in [
+        "functions",
+        "events",
+        "widgets",
+        "globals",
+        "tables",
+        "predicates",
+        "enums",
+        "templates",
+        "dataGlobals",
+        "frameFamilies",
+    ] {
+        let entries = |value: &serde_json::Value| -> BTreeMap<String, serde_json::Value> {
+            value[section]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| {
+                    let name = if section == "frameFamilies" {
+                        format!(
+                            "{}...{}",
+                            v.get("prefix")?.as_str()?,
+                            v.get("suffix")?.as_str()?
+                        )
+                    } else if section == "enums" {
+                        format!("Enum.{}", v.get("name")?.as_str()?)
+                    } else {
+                        v.get("name")?.as_str()?.to_owned()
+                    };
+                    Some((name, v.clone()))
+                })
+                .collect()
+        };
+        let before = entries(&old_value);
+        let after = entries(&new_value);
+        let added = after.keys().filter(|k| !before.contains_key(*k)).count();
+        let removed: Vec<_> = before.keys().filter(|k| !after.contains_key(*k)).collect();
+        let changed: Vec<_> = before
+            .keys()
+            .filter(|k| after.get(*k).is_some_and(|v| v != &before[*k]))
+            .collect();
+        report.push_str(&format!(
+            "  {section}: +{added}, -{}, changed {}\n",
+            removed.len(),
+            changed.len()
+        ));
+        for name in removed.iter().chain(&changed) {
+            report.push_str(&format!("    {name}\n"));
+        }
+        let mut affected: std::collections::BTreeSet<String> = removed
+            .iter()
+            .chain(&changed)
+            .map(|name| (*name).clone())
+            .collect();
+        for name in removed.iter().chain(&changed) {
+            reference_names(&before[*name], &mut affected);
+        }
+        if section == "widgets" {
+            for widget in removed.iter().chain(&changed) {
+                let before = widget_methods(old, widget)?;
+                let after = widget_methods(newest, widget)?;
+                for (name, declarations) in before {
+                    if after.get(&name) != Some(&declarations) {
+                        affected.insert(name);
+                    }
+                }
+            }
+        }
+        let mut stack = vec![project.join("src")];
+        while let Some(dir) = stack.pop() {
+            if !dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(dir)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if !path.extension().is_some_and(|e| e == "selu") {
+                    continue;
+                }
+                for (line, text) in std::fs::read_to_string(&path)?.lines().enumerate() {
+                    if affected.iter().any(|name| text.contains(name.as_str())) {
+                        report.push_str(&format!(
+                            "    possible use {}:{}: {}\n",
+                            path.display(),
+                            line + 1,
+                            text.trim()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(report)
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lock {
@@ -154,106 +257,7 @@ impl Lock {
                 report.push_str("WARNING: MAJOR VERSION CHANGE - confirmation required\n");
             }
             if let Some(old) = old {
-                let old_value = serde_json::to_value(old)?;
-                let new_value = serde_json::to_value(newest)?;
-                for section in [
-                    "functions",
-                    "events",
-                    "widgets",
-                    "globals",
-                    "tables",
-                    "predicates",
-                    "enums",
-                    "templates",
-                    "dataGlobals",
-                    "frameFamilies",
-                ] {
-                    let entries =
-                        |value: &serde_json::Value| -> BTreeMap<String, serde_json::Value> {
-                            value[section]
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .filter_map(|v| {
-                                    let name = if section == "frameFamilies" {
-                                        format!(
-                                            "{}...{}",
-                                            v.get("prefix")?.as_str()?,
-                                            v.get("suffix")?.as_str()?
-                                        )
-                                    } else if section == "enums" {
-                                        format!("Enum.{}", v.get("name")?.as_str()?)
-                                    } else {
-                                        v.get("name")?.as_str()?.to_owned()
-                                    };
-                                    Some((name, v.clone()))
-                                })
-                                .collect()
-                        };
-                    let before = entries(&old_value);
-                    let after = entries(&new_value);
-                    let added = after.keys().filter(|k| !before.contains_key(*k)).count();
-                    let removed: Vec<_> =
-                        before.keys().filter(|k| !after.contains_key(*k)).collect();
-                    let changed: Vec<_> = before
-                        .keys()
-                        .filter(|k| after.get(*k).is_some_and(|v| v != &before[*k]))
-                        .collect();
-                    report.push_str(&format!(
-                        "  {section}: +{added}, -{}, changed {}\n",
-                        removed.len(),
-                        changed.len()
-                    ));
-                    for name in removed.iter().chain(&changed) {
-                        report.push_str(&format!("    {name}\n"));
-                    }
-                    let mut affected: std::collections::BTreeSet<String> = removed
-                        .iter()
-                        .chain(&changed)
-                        .map(|name| (*name).clone())
-                        .collect();
-                    for name in removed.iter().chain(&changed) {
-                        reference_names(&before[*name], &mut affected);
-                    }
-                    if section == "widgets" {
-                        for widget in removed.iter().chain(&changed) {
-                            let before = widget_methods(old, widget)?;
-                            let after = widget_methods(newest, widget)?;
-                            for (name, declarations) in before {
-                                if after.get(&name) != Some(&declarations) {
-                                    affected.insert(name);
-                                }
-                            }
-                        }
-                    }
-                    let mut stack = vec![project.join("src")];
-                    while let Some(dir) = stack.pop() {
-                        if !dir.is_dir() {
-                            continue;
-                        }
-                        for entry in std::fs::read_dir(dir)? {
-                            let path = entry?.path();
-                            if path.is_dir() {
-                                stack.push(path);
-                                continue;
-                            }
-                            if !path.extension().is_some_and(|e| e == "selu") {
-                                continue;
-                            }
-                            for (line, text) in std::fs::read_to_string(&path)?.lines().enumerate()
-                            {
-                                if affected.iter().any(|name| text.contains(name.as_str())) {
-                                    report.push_str(&format!(
-                                        "    possible use {}:{}: {}\n",
-                                        path.display(),
-                                        line + 1,
-                                        text.trim()
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
+                report.push_str(&api_diff(project, old, newest)?);
             }
             next.insert(key, format!("{product}@{}", newest.build));
         }

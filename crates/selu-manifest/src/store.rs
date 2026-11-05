@@ -11,12 +11,44 @@ type DecodedChunks = BTreeMap<(usize, usize), Vec<Vec<u8>>>;
 const MAGIC: &[u8; 8] = b"SELUSEG\0";
 const HEADER: usize = 48;
 const LIMIT: u64 = 256 * 1024 * 1024;
+/// Generator contract version. Bump whenever extraction output rules change.
+/// Version 1 is the W2 extraction shipped in the original format-2 pack.
+pub const EXTRACTION_VERSION: u32 = 1;
+const LEGACY_EXTRACTION_VERSION: u32 = 1;
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtractionRevision {
+    version: u32,
+    content: String,
+}
+impl ExtractionRevision {
+    fn id(&self) -> String {
+        format!("v{}-{}", self.version, self.content)
+    }
+}
+fn revision(manifest: &Manifest, version: u32) -> Result<ExtractionRevision> {
+    Ok(ExtractionRevision {
+        version,
+        content: hash(&rmp_serde::to_vec_named(manifest)?),
+    })
+}
+fn game_build(key: &str) -> &str {
+    key.split_once('#').map_or(key, |(build, _)| build)
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BuildDelta {
     base: Option<String>,
     sections: BTreeMap<String, Vec<Run>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision: Option<ExtractionRevision>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    ordinal: u64,
+}
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 #[derive(Clone, Serialize, Deserialize)]
 enum Run {
@@ -47,6 +79,7 @@ struct Segment {
 pub struct Store {
     segments: Vec<Segment>,
     builds: BTreeMap<String, BuildDelta>,
+    latest: BTreeMap<String, String>,
     indexes: RefCell<BTreeMap<String, Index>>,
     chunks: RefCell<DecodedChunks>,
 }
@@ -100,7 +133,12 @@ fn difference(base: Option<String>, old: &Index, new: &Index) -> BuildDelta {
             (name.clone(), runs)
         })
         .collect();
-    BuildDelta { base, sections }
+    BuildDelta {
+        base,
+        sections,
+        revision: None,
+        ordinal: 0,
+    }
 }
 fn reconstruct(delta: &BuildDelta, old: &Index) -> Result<Index> {
     delta
@@ -180,7 +218,7 @@ pub fn fingerprint(directory: &Path) -> Result<String> {
     for path in files(directory)? {
         let mut header = [0; HEADER];
         std::fs::File::open(path)?.read_exact(&mut header)?;
-        if &header[..8] != MAGIC || header[8..12] != [2, 0, 1, 0] {
+        if &header[..8] != MAGIC || !matches!(&header[8..12], [2 | 3, 0, 1, 0]) {
             return Err("invalid store segment header".into());
         }
         digest.update(header);
@@ -263,8 +301,9 @@ pub fn load_cached_selected(
         let manifest = if let Ok(manifest) = read() {
             manifest
         } else {
-            let raw = store.materialize(&target)?;
-            let manifest = store.decode(&target, &raw)?;
+            let key = &store.latest[&target];
+            let raw = store.materialize(key)?;
+            let manifest = store.decode(key, &raw)?;
             // Only requested builds are materialized and cached.
             if std::fs::create_dir_all(&cache).is_ok() {
                 // Serialize the normalized typed manifest directly, without a JSON intermediary.
@@ -294,7 +333,10 @@ impl Store {
         let mut store = Self::default();
         for path in paths {
             let bytes = std::fs::read(path)?;
-            if bytes.len() < HEADER || &bytes[..8] != MAGIC || bytes[8..12] != [2, 0, 1, 0] {
+            if bytes.len() < HEADER
+                || &bytes[..8] != MAGIC
+                || !matches!(&bytes[8..12], [2 | 3, 0, 1, 0])
+            {
                 return Err("unsupported or truncated store header".into());
             }
             if Sha256::digest(&bytes[44..])[..] != bytes[12..44] {
@@ -306,6 +348,22 @@ impl Store {
                 bytes.get(HEADER..payload).ok_or("truncated catalog")?,
             )?)?;
             for (key, delta) in &catalog.builds {
+                if let Some(revision) = &delta.revision {
+                    if bytes[8] != 3
+                        || revision.version == 0
+                        || revision.content.len() != 64
+                        || !revision
+                            .content
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                        || delta.ordinal == 0
+                        || key != &format!("{}#{}", game_build(key), revision.id())
+                    {
+                        return Err("invalid extraction revision index".into());
+                    }
+                } else if bytes[8] != 2 || key.contains('#') || delta.ordinal != 0 {
+                    return Err("invalid legacy extraction index".into());
+                }
                 if store.builds.insert(key.clone(), delta.clone()).is_some() {
                     return Err("duplicate immutable build index".into());
                 }
@@ -365,10 +423,132 @@ impl Store {
                 }
             }
         }
+        let mut ordinals = std::collections::BTreeSet::new();
+        for (key, delta) in &store.builds {
+            let build = game_build(key);
+            if !ordinals.insert((build, delta.ordinal)) {
+                return Err("duplicate extraction ordinal".into());
+            }
+            let rank = |delta: &BuildDelta| {
+                (
+                    delta
+                        .revision
+                        .as_ref()
+                        .map_or(LEGACY_EXTRACTION_VERSION, |r| r.version),
+                    delta.ordinal,
+                )
+            };
+            if store
+                .latest
+                .get(build)
+                .is_none_or(|old| rank(delta) > rank(&store.builds[old]))
+            {
+                store.latest.insert(build.into(), key.clone());
+            }
+        }
         Ok(store)
     }
     pub fn builds(&self) -> impl Iterator<Item = &str> {
-        self.builds.keys().map(String::as_str)
+        self.latest.keys().map(String::as_str)
+    }
+    pub fn extraction_version(&self, target: &str) -> Option<u32> {
+        self.latest.get(target).map(|key| {
+            self.builds[key]
+                .revision
+                .as_ref()
+                .map_or(LEGACY_EXTRACTION_VERSION, |r| r.version)
+        })
+    }
+    pub fn needs_extraction(&self, target: &str, version: u32) -> bool {
+        self.extraction_version(target)
+            .is_none_or(|stored| stored < version)
+    }
+    fn revision_id(&self, key: &str) -> Result<String> {
+        match &self.builds[key].revision {
+            Some(revision) => Ok(revision.id()),
+            None => Ok(revision(
+                &self.decode(key, &self.materialize(key)?)?,
+                LEGACY_EXTRACTION_VERSION,
+            )?
+            .id()),
+        }
+    }
+    /// Audit identifiers, ordered by extractor version then append order.
+    pub fn revisions(&self, target: &str) -> Result<Vec<String>> {
+        let mut keys: Vec<_> = self
+            .builds
+            .iter()
+            .filter(|(key, _)| game_build(key) == target)
+            .collect();
+        keys.sort_by_key(|(_, delta)| {
+            (
+                delta
+                    .revision
+                    .as_ref()
+                    .map_or(LEGACY_EXTRACTION_VERSION, |r| r.version),
+                delta.ordinal,
+            )
+        });
+        keys.into_iter()
+            .map(|(key, _)| self.revision_id(key))
+            .collect()
+    }
+    pub fn latest_revision(&self, target: &str) -> Result<String> {
+        self.revision_id(self.latest.get(target).ok_or_else(|| missing(target))?)
+    }
+    fn revision_key(&self, target: &str, id: &str) -> Result<String> {
+        for key in self.builds.keys().filter(|key| game_build(key) == target) {
+            if self.revision_id(key)? == id {
+                return Ok(key.clone());
+            }
+        }
+        Err(format!("extraction revision {id} missing for {target}").into())
+    }
+    pub fn load_revision(&self, target: &str, id: &str) -> Result<Manifest> {
+        let key = self.revision_key(target, id)?;
+        self.decode(&key, &self.materialize(&key)?)
+    }
+    /// Audit the newest extraction transition for each active locked game build.
+    /// This report never changes the project lock or pins an extraction revision.
+    pub fn extraction_report(&self, project: &Path) -> Result<String> {
+        let lock = crate::lock::Lock::read(project)?;
+        let requested = lock.discovery_targets(&crate::lock::project_targets(project)?)?;
+        let mut builds = std::collections::BTreeSet::new();
+        for target in requested {
+            let spec = crate::TargetSpec::parse(&target).map_err(|e| e.to_string())?;
+            if spec.parts.len() != 4 {
+                return Err("build the project first to create exact game-build locks".into());
+            }
+            builds.insert(format!(
+                "{}@{}",
+                crate::product(&spec.flavour),
+                spec.parts
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(".")
+            ));
+        }
+        let mut report = String::new();
+        for build in builds {
+            let revisions = self.revisions(&build)?;
+            let latest = revisions.last().ok_or_else(|| missing(&build))?;
+            report.push_str(&format!(
+                "{build}: extraction {latest} (automatically used; game pin unchanged)\n"
+            ));
+            if revisions.len() > 1 {
+                let previous = &revisions[revisions.len() - 2];
+                report.push_str(&format!("  newer extraction: {previous} -> {latest}\n"));
+                report.push_str(&crate::lock::api_diff(
+                    project,
+                    &self.load_revision(&build, previous)?,
+                    &self.load_revision(&build, latest)?,
+                )?);
+            } else {
+                report.push_str("  one stored extraction; no earlier revision to compare\n");
+            }
+        }
+        Ok(report)
     }
     fn index(&self, target: &str) -> Result<Index> {
         if let Some(index) = self.indexes.borrow().get(target) {
@@ -465,13 +645,19 @@ impl Store {
         {
             entry.source = *files.get(&entry.source).ok_or("missing provenance file")?;
         }
-        if manifest.target_string() != target {
+        if manifest.target_string() != game_build(target) {
             return Err("store build identity mismatch".into());
+        }
+        if let Some(expected) = &self.builds[target].revision
+            && revision(&manifest, expected.version)?.content != expected.content
+        {
+            return Err("extraction revision content checksum mismatch".into());
         }
         Ok(manifest)
     }
     pub fn load(&self, target: &str) -> Result<Manifest> {
-        self.decode(target, &self.materialize(target)?)
+        let key = self.latest.get(target).ok_or_else(|| missing(target))?;
+        self.decode(key, &self.materialize(key)?)
     }
     /// Compressed catalog, compressed entry tables, and fixed header sizes.
     pub fn size_breakdown(&self) -> (usize, usize, usize) {
@@ -504,6 +690,27 @@ impl Store {
         manifests: &[Manifest],
         chunk_size: usize,
     ) -> Result<u64> {
+        self.append_revision(directory, manifests, EXTRACTION_VERSION, chunk_size)
+    }
+    /// Explicit extractor contract for migrations, audits and re-extraction measurements.
+    pub fn append_with_extraction_version(
+        &mut self,
+        directory: &Path,
+        manifests: &[Manifest],
+        version: u32,
+    ) -> Result<u64> {
+        self.append_revision(directory, manifests, version, 4096)
+    }
+    fn append_revision(
+        &mut self,
+        directory: &Path,
+        manifests: &[Manifest],
+        version: u32,
+        chunk_size: usize,
+    ) -> Result<u64> {
+        if version == 0 {
+            return Err("extraction version must be positive".into());
+        }
         let _writer_lock = writer_lock(directory)?;
         // A caller may have opened this handle before another writer committed.
         *self = Self::open(directory)?;
@@ -522,20 +729,35 @@ impl Store {
         let first = existing.len() as u32;
         let mut entries = Vec::<Vec<u8>>::new();
         let mut indexes = BTreeMap::new();
-        for target in self.builds() {
-            indexes.insert(target.to_owned(), self.index(target)?);
+        for key in self.builds.keys() {
+            indexes.insert(key.clone(), self.index(key)?);
         }
         let mut catalog = Catalog::default();
         let mut manifests: Vec<_> = manifests.iter().collect();
         manifests.sort_by_key(|m| m.target_string());
+        let mut pending = BTreeMap::new();
         for &manifest in &manifests {
             let target = manifest.target_string();
-            if self.builds.contains_key(&target) {
-                if self.load(&target)? != *manifest {
-                    return Err("immutable build already exists with different content".into());
+            let extraction = revision(manifest, version)?;
+            let id = extraction.id();
+            let mut exists = false;
+            for key in self.builds.keys().filter(|key| game_build(key) == target) {
+                if self.revision_id(key)? == id {
+                    exists = true;
+                    break;
                 }
+            }
+            if exists {
                 continue;
             }
+            if let Some(previous) = pending.insert(target.clone(), id.clone())
+                && previous != id
+            {
+                return Err(
+                    "multiple extraction revisions for one build in an append transaction".into(),
+                );
+            }
+            let key = format!("{target}#{id}");
             let mut intern = |value: &Value| -> Result<u32> {
                 let bytes = rmp_serde::to_vec_named(value)?;
                 let digest: [u8; 32] = Sha256::digest(&bytes).into();
@@ -577,7 +799,7 @@ impl Store {
                 }
                 index.insert(section, ids);
             }
-            if let Some(previous) = indexes.get(&target) {
+            if let Some(previous) = indexes.get(&key) {
                 if previous != &index {
                     return Err("conflicting builds in append transaction".into());
                 }
@@ -600,15 +822,23 @@ impl Store {
                 )
             });
             let empty = Index::new();
-            catalog.builds.insert(
-                target.clone(),
-                difference(
-                    base.map(|(key, _)| key.clone()),
-                    base.map(|(_, old)| old).unwrap_or(&empty),
-                    &index,
-                ),
+            let mut delta = difference(
+                base.map(|(key, _)| key.clone()),
+                base.map(|(_, old)| old).unwrap_or(&empty),
+                &index,
             );
-            indexes.insert(target, index);
+            delta.revision = Some(extraction);
+            delta.ordinal = self
+                .builds
+                .iter()
+                .filter(|(key, _)| game_build(key) == target)
+                .map(|(_, d)| d.ordinal)
+                .max()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or("extraction ordinal overflow")?;
+            catalog.builds.insert(key.clone(), delta);
+            indexes.insert(key, index);
         }
         if catalog.builds.is_empty() {
             return Ok(0);
@@ -635,7 +865,7 @@ impl Store {
         payload.extend(index);
         payload.extend(data);
         let mut bytes = MAGIC.to_vec();
-        bytes.extend([2, 0, 1, 0]);
+        bytes.extend([3, 0, 1, 0]);
         bytes.extend(Sha256::digest(&payload));
         bytes.extend(payload);
         std::fs::create_dir_all(directory)?;
@@ -655,11 +885,15 @@ impl Store {
             let candidate = Self::open_paths(combined)?;
             // Expand every index to catch invalid combined copy ranges, and
             // reconstruct pending manifests before making the segment visible.
-            for target in candidate.builds() {
-                candidate.index(target)?;
+            for key in candidate.builds.keys() {
+                candidate.index(key)?;
             }
             for manifest in &manifests {
-                if candidate.load(&manifest.target_string())? != **manifest {
+                if candidate.load_revision(
+                    &manifest.target_string(),
+                    &revision(manifest, version)?.id(),
+                )? != **manifest
+                {
                     return Err("staged manifest differs from pending build".into());
                 }
             }
@@ -686,6 +920,154 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn extraction_report_diffs_locked_build_and_never_moves_game_lock() {
+        let root =
+            std::env::temp_dir().join(format!("selu-extraction-report-{}", std::process::id()));
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(
+            project.join("selu.toml"),
+            "[addon]\nname=\"Extraction\"\ntargets=[\"wow\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("src/main.selu"),
+            "const value = RemovedGlobal;\n",
+        )
+        .unwrap();
+        let old:Manifest=serde_json::from_value(serde_json::json!({"flavour":"wow","build":{"major":12,"minor":1,"patch":5,"build":1},"interface":120105,"globals":[{"name":"RemovedGlobal","type":"number","evidence":"source"}]})).unwrap();
+        let mut new = old.clone();
+        new.globals.clear();
+        let target = old.target_string();
+        let mut lock = crate::lock::Lock::read(&project).unwrap();
+        lock.resolve(&["wow".into()], std::slice::from_ref(&old))
+            .unwrap();
+        lock.write(&project).unwrap();
+        let before = std::fs::read(project.join("selu.lock")).unwrap();
+        let mut store = Store::default();
+        store
+            .append_with_extraction_version(&root.join("store"), &[old], 1)
+            .unwrap();
+        store
+            .append_with_extraction_version(&root.join("store"), std::slice::from_ref(&new), 2)
+            .unwrap();
+        let mut other = new.clone();
+        other.build.build = 99;
+        store
+            .append_with_extraction_version(&root.join("store"), &[other], 2)
+            .unwrap();
+        let report = store.extraction_report(&project).unwrap();
+        assert!(
+            report.contains("newer extraction: v1-")
+                && report.contains(" -> v2-")
+                && report.contains("globals: +0, -1")
+                && report.contains("main.selu:1:")
+                && report.contains("RemovedGlobal"),
+            "{report}"
+        );
+        assert!(!report.contains("12.1.5.99"));
+        assert_eq!(
+            lock.resolve(&["wow".into()], &[store.load(&target).unwrap()])
+                .unwrap(),
+            [new]
+        );
+        assert_eq!(std::fs::read(project.join("selu.lock")).unwrap(), before);
+        assert_eq!(lock.targets["wow"], target);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn extraction_versions_audit_and_older_writers_do_not_rollback() {
+        let root = std::env::temp_dir().join(format!("selu-revision-order-{}", std::process::id()));
+        let old:Manifest=serde_json::from_value(serde_json::json!({"flavour":"wow","build":{"major":12,"minor":1,"patch":5,"build":1},"interface":120105})).unwrap();
+        let target = old.target_string();
+        let mut store = Store::default();
+        store
+            .append_with_extraction_version(&root, std::slice::from_ref(&old), 1)
+            .unwrap();
+        let first = store.latest_revision(&target).unwrap();
+        assert!(store.needs_extraction(&target, 2));
+        // A contract bump is a new immutable extraction even with identical output.
+        assert!(
+            store
+                .append_with_extraction_version(&root, std::slice::from_ref(&old), 2)
+                .unwrap()
+                > 0
+        );
+        let second = store.latest_revision(&target).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            first.split_once('-').unwrap().1,
+            second.split_once('-').unwrap().1
+        );
+        assert!(!store.needs_extraction(&target, 2));
+        let mut stale = old.clone();
+        stale.interface += 1;
+        store
+            .append_with_extraction_version(&root, &[stale.clone()], 1)
+            .unwrap();
+        assert_eq!(store.latest_revision(&target).unwrap(), second);
+        assert_eq!(store.load(&target).unwrap(), old);
+        assert_eq!(
+            store
+                .load_revision(&target, &revision(&stale, 1).unwrap().id())
+                .unwrap(),
+            stale
+        );
+        assert_eq!(store.load_revision(&target, &first).unwrap(), old);
+        assert!(store.load_revision(&target, "v99-missing").is_err());
+        assert_eq!(
+            store
+                .append_with_extraction_version(&root, &[old], 2)
+                .unwrap(),
+            0
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reextraction_appends_without_changing_build_pin_or_prior_bytes() {
+        let root = std::env::temp_dir().join(format!("selu-reextract-{}", std::process::id()));
+        let directory = root.join("store");
+        let cache = root.join("cache");
+        let old:Manifest=serde_json::from_value(serde_json::json!({"flavour":"wow","build":{"major":12,"minor":1,"patch":5,"build":1},"interface":120105})).unwrap();
+        let mut new = old.clone();
+        new.interface += 1;
+        let target = old.target_string();
+        let mut store = Store::default();
+        store
+            .append(&directory, std::slice::from_ref(&old))
+            .unwrap();
+        let initial = files(&directory).unwrap()[0].clone();
+        let bytes = std::fs::read(&initial).unwrap();
+        let original_revision = store.latest_revision(&target).unwrap();
+        assert_eq!(
+            load_cached_selected(&directory, &cache, Some(std::slice::from_ref(&target)))
+                .unwrap()
+                .as_slice(),
+            std::slice::from_ref(&old)
+        );
+        store
+            .append(&directory, std::slice::from_ref(&new))
+            .unwrap();
+        assert_eq!(store.builds().collect::<Vec<_>>(), [target.as_str()]);
+        assert_eq!(store.load(&target).unwrap(), new);
+        assert_eq!(
+            load_cached_selected(&directory, &cache, Some(std::slice::from_ref(&target)))
+                .unwrap()
+                .as_slice(),
+            std::slice::from_ref(&new)
+        );
+        assert_eq!(
+            store.load_revision(&target, &original_revision).unwrap(),
+            old
+        );
+        assert_eq!(store.revisions(&target).unwrap().len(), 2);
+        assert_eq!(store.append(&directory, &[old]).unwrap(), 0);
+        assert_eq!(store.load(&target).unwrap(), new);
+        assert_eq!(std::fs::read(initial).unwrap(), bytes);
+        assert_eq!(files(&directory).unwrap().len(), 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn independent_writers_preserve_both_pending_builds() {
         let root = std::env::temp_dir().join(format!(
@@ -728,14 +1110,6 @@ mod tests {
             .into_iter()
             .map(|p| (p.clone(), std::fs::read(p).unwrap()))
             .collect();
-        let mut invalid = stored.load("wow@12.1.5.1").unwrap();
-        invalid.interface += 1;
-        assert!(
-            Store::open(&directory)
-                .unwrap()
-                .append(&directory, &[invalid])
-                .is_err()
-        );
         let mut noncanonical = stored.load("wow@12.1.5.1").unwrap();
         noncanonical.build.build = 3;
         for name in ["Z", "A"] {
@@ -751,7 +1125,7 @@ mod tests {
             .append(&directory, &[noncanonical])
             .unwrap_err()
             .to_string();
-        assert!(error.contains("staged manifest differs"), "{error}");
+        assert!(error.contains("revision content checksum"), "{error}");
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), before.len());
         for (p, bytes) in before {
             assert_eq!(std::fs::read(p).unwrap(), bytes);
@@ -777,10 +1151,14 @@ mod tests {
             .unwrap();
         // Same-product base is preferred; another product still reuses the closest build.
         assert_eq!(
-            store.builds[&b.target_string()].base,
-            Some(a.target_string())
+            store.builds[&store.latest[&b.target_string()]].base,
+            Some(store.latest[&a.target_string()].clone())
         );
-        assert!(store.builds[&c.target_string()].base.is_some());
+        assert!(
+            store.builds[&store.latest[&c.target_string()]]
+                .base
+                .is_some()
+        );
         assert_eq!(store.load(&b.target_string()).unwrap(), b);
         assert_eq!(store.indexes.borrow().len(), 2);
         let target = [b.target_string()];
@@ -961,7 +1339,17 @@ mod tests {
         assert_eq!(loaded.load(&second.target_string()).unwrap(), second);
         let mut conflict = first.clone();
         conflict.interface += 1;
-        assert!(store.append(&root, &[conflict]).is_err());
+        let original_revision = store.latest_revision(&first.target_string()).unwrap();
+        store
+            .append(&root, std::slice::from_ref(&conflict))
+            .unwrap();
+        assert_eq!(store.load(&first.target_string()).unwrap(), conflict);
+        assert_eq!(
+            store
+                .load_revision(&first.target_string(), &original_revision)
+                .unwrap(),
+            first
+        );
         let duplicate = root.join("duplicate");
         let mut other = Store::default();
         other.append(&duplicate, &[first]).unwrap();

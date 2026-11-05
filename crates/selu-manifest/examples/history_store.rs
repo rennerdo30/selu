@@ -5,6 +5,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let directory = root.join("manifests/store");
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--reextract") {
+        let mut old = selu_manifest::load_manifest(Path::new(&args[1]))?;
+        let mut new = selu_manifest::load_manifest(Path::new(&args[2]))?;
+        old.flavour = selu_manifest::product(&old.flavour).into();
+        new.flavour = selu_manifest::product(&new.flavour).into();
+        assert_eq!(old.target_string(), new.target_string());
+        let output = Path::new(&args[3]);
+        assert!(!output.exists(), "measurement stores must be fresh");
+        let changed = output.join("changed");
+        let mut pack = store::Store::default();
+        let initial =
+            pack.append_with_extraction_version(&changed, std::slice::from_ref(&old), 1)?;
+        let first = pack.latest_revision(&old.target_string())?;
+        let prior: Vec<_> = std::fs::read_dir(&changed)?
+            .map(|entry| {
+                let path = entry?.path();
+                let bytes = std::fs::read(&path)?;
+                Ok((path, bytes))
+            })
+            .collect::<std::io::Result<_>>()?;
+        let delta = pack.append_with_extraction_version(&changed, std::slice::from_ref(&new), 2)?;
+        assert_eq!(pack.load_revision(&old.target_string(), &first)?, old);
+        assert_eq!(pack.load(&new.target_string())?, new);
+        for (path, bytes) in prior {
+            assert_eq!(std::fs::read(path)?, bytes);
+        }
+        println!(
+            "same-build actual pre-W2 -> W2 re-extraction: initial {initial} bytes, appended {delta} bytes"
+        );
+        println!(
+            "re-extraction no-op: {} bytes",
+            pack.append_with_extraction_version(&changed, std::slice::from_ref(&new), 2)?
+        );
+        let only_version = output.join("version-only");
+        let mut pack = store::Store::default();
+        pack.append_with_extraction_version(&only_version, std::slice::from_ref(&new), 1)?;
+        println!(
+            "identical output, new extractor version: {} bytes",
+            pack.append_with_extraction_version(&only_version, &[new], 2)?
+        );
+        return Ok(());
+    }
     if args.first().is_some_and(|a| a == "--verify") {
         let pack = store::Store::open(Path::new(&args[1]))?;
         let snapshots = selu_manifest::load_manifest_dir(Path::new(&args[2]))?;

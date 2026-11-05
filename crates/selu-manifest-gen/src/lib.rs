@@ -1,3 +1,4 @@
+pub use selu_manifest::store::EXTRACTION_VERSION;
 pub mod coverage;
 pub mod factory;
 pub mod xml;

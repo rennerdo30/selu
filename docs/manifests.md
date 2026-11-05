@@ -224,8 +224,9 @@ MessagePack named maps. Decoding is bounded to 256 MiB. JSON fixtures remain rea
 History segments in `manifests/store/*.selus` are plain Git files, with no LFS
 requirement. The unpublished initial pack was rebuilt from the six W2 snapshots
 on master `719f404` and fresh generation of each branch's latest build. It contains
-no pre-W2 snapshot at the retained pins. Future published build identities remain
-immutable; this bootstrap replacement was explicitly authorized before publication. They begin with `SELUSEG\0`, format 2/schema 1 (u16 little endian),
+no pre-W2 snapshot at the retained pins. Each stored extraction revision remains immutable; the game-build identity can
+gain newer extraction revisions. The bootstrap replacement above was explicitly
+authorized before publication. They begin with `SELUSEG\0`, format 2 (legacy) or 3 (revision-aware), schema 1 (u16 little endian),
 a 32-byte SHA-256 checksum of the complete remaining segment, and a u32 compressed
 catalog length. The zstd-compressed MessagePack catalog contains build delta indexes
 and entry-block offsets; independent zstd entry blocks follow. The checksum covers
@@ -243,8 +244,8 @@ distant changes. Scalars use sections prefixed with `=`. Provenance uses source-
 entry IDs internally and is restored to each manifest's sourceFiles indices, so a
 new source file does not duplicate unchanged records. The writer hashes existing
 entries once per non-empty update, then appends one new segment containing only new
-entries and new build indexes. Existing files are never rewritten. Repeated updates
-add zero bytes; conflicting content for an existing product/full-build ID is an error.
+entries and new build indexes. Existing files are never rewritten. Repeated identical extraction updates add
+zero bytes. Game builds can gain new immutable extraction revisions, described below.
 
 Writers serialize with an exclusive OS lock on `manifests/store.lock`, next to the
 store. The lock file is gitignored and keeps a stable identity; its handle releases
@@ -271,6 +272,65 @@ new cache directory. Missing or corrupt cache files rebuild only that requested
 build; an unwritable cache still permits uncached loading. Cache snapshots use the
 same versioned Z MessagePack/zstd container, with direct typed serialization.
 No all-build cache population runs on first use.
+
+## Extraction revisions and compiler improvements
+
+A game build and an extraction revision are separate identities. `selu.lock` still
+pins only `product@major.minor.patch.build`. Loading that game build selects its
+newest stored extraction, so a compiler extraction fix can improve an existing pin.
+No project target, output directory, TOC or lock key contains an extraction ID.
+
+The generator's `EXTRACTION_VERSION` is re-exported from
+`selu_manifest::store::EXTRACTION_VERSION`. It is **1 for the W2 baseline**. Bump this
+constant whenever extraction output rules change, including sourced signatures or
+overlay changes. Extraction IDs are `v<version>-<sha256>`, where the hash covers the
+named-MessagePack Manifest content in schema-1 serialization order. That order is
+part of the hash protocol. The game build and content, not compression settings,
+determine the ID. A version bump with unchanged content still creates a revision;
+repeating the same version/content writes zero bytes.
+
+Format-3 catalogs key each index by `(game build, extraction ID)` and record its
+extractor version, content hash and monotonically allocated per-build ordinal.
+Entries remain dense integers shared across all revisions. New revisions copy from
+the closest stored index and insert only changed IDs, using the same compressed
+append-only segments, integrity checks, exclusive writer lock and pre-publication
+validation. A revision is immutable; an older ID always reconstructs its original
+content. Selection uses highest numeric extractor version, then append order within
+that version. Replaying an existing extraction or using an older extractor cannot
+roll back the latest selection. Multiple different revisions for one game build in
+a single append transaction are rejected as ambiguous.
+
+The existing format-2 W2 pack stays byte-for-byte intact. Its game-build indexes are
+read as extraction version 1, with content-derived audit IDs computed on demand.
+New segments use format 3; the reader supports both. Ordinary loads do not reconstruct
+all old builds to derive revision IDs. A new segment changes the store fingerprint,
+which invalidates derived caches even when game-build pins did not change.
+
+`selu-manifest-gen update [product...]` compares the stored extractor version with
+the current constant. A bump regenerates unchanged branch builds and retained older
+stored builds for those products, from their recorded source commits. It adds their
+new revision deltas, with API diffs, without adding historical game builds. A normal
+unchanged update with the same constant is a zero-byte no-op. Migration imports only
+standalone snapshots produced by the current extractor; it never relabels existing
+stored revisions as a newer extractor.
+
+Audit commands (run from the compiler workspace, or pass an explicit store):
+
+```text
+selu-manifest-gen revisions wow@12.1.5.70391
+selu-manifest-gen revisions path/to/store wow@12.1.5.70391
+selu-manifest-gen dump path/to/store wow@12.1.5.70391 --revision v1-<hash>
+selu-manifest-gen extraction-report path/to/project path/to/store
+```
+
+`dump` without `--revision` reads the newest extraction. `revisions` lists all IDs and
+marks the latest. `extraction-report` reads active game-build pins from `selu.lock`
+(or exact project targets), reports their latest stored extraction transition, and
+shows the complete API diff and candidate source uses using the same implementation
+as lock updates. It does not modify the project or claim to remember which extractor
+was last used locally. Newest extractions are already used automatically. For older
+transitions, use the listed revision IDs with `dump --revision`. Exact game pins and
+major-game-version confirmation behavior remain unchanged.
 
 ## Checked engine supplements and source factories (W)
 
