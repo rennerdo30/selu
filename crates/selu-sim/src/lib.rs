@@ -197,3 +197,5 @@ mod tests {
         assert!(sim.prints().is_empty());
     }
 }
+
+mod snapshot_cache;
