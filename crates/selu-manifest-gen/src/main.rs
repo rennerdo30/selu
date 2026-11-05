@@ -508,8 +508,8 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|a| a == "migrate") {
-        // Import standalone snapshots only. Stored extractions retain their
-        // original contract version; migrating must not relabel old revisions.
+        // Standalone snapshots have no validated extractor provenance. Import
+        // only new builds or identical content, never a new current revision.
         let mut manifests = Vec::new();
         let mut directories = vec![std::path::PathBuf::from("manifests")];
         while let Some(directory) = directories.pop() {
@@ -535,7 +535,7 @@ fn run() -> Result<()> {
         }
         let destination = Path::new(args.get(1).map(String::as_str).unwrap_or("manifests/store"));
         let mut store = selu_manifest::store::Store::open(destination)?;
-        let growth = store.append(destination, &manifests)?;
+        let growth = store.import_unversioned(destination, &manifests)?;
         let verified = selu_manifest::store::Store::open(destination)?;
         for manifest in &manifests {
             if verified.load(&manifest.target_string())? != *manifest {

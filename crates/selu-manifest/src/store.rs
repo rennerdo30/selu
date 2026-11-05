@@ -350,7 +350,6 @@ impl Store {
             for (key, delta) in &catalog.builds {
                 if let Some(revision) = &delta.revision {
                     if bytes[8] != 3
-                        || revision.version == 0
                         || revision.content.len() != 64
                         || !revision
                             .content
@@ -690,33 +689,54 @@ impl Store {
         manifests: &[Manifest],
         chunk_size: usize,
     ) -> Result<u64> {
-        self.append_revision(directory, manifests, EXTRACTION_VERSION, chunk_size)
+        self.append_revision(directory, manifests, Some(EXTRACTION_VERSION), chunk_size)
     }
-    /// Explicit extractor contract for migrations, audits and re-extraction measurements.
+    /// Import snapshots without extractor provenance. They cannot replace an existing
+    /// build; new builds use version 0 so the generator will re-extract them.
+    pub fn import_unversioned(&mut self, directory: &Path, manifests: &[Manifest]) -> Result<u64> {
+        self.append_revision(directory, manifests, None, 4096)
+    }
+    /// Explicit extractor contract for trusted generation, audits and measurements.
     pub fn append_with_extraction_version(
         &mut self,
         directory: &Path,
         manifests: &[Manifest],
         version: u32,
     ) -> Result<u64> {
-        self.append_revision(directory, manifests, version, 4096)
+        self.append_revision(directory, manifests, Some(version), 4096)
     }
     fn append_revision(
         &mut self,
         directory: &Path,
-        manifests: &[Manifest],
-        version: u32,
+        inputs: &[Manifest],
+        version: Option<u32>,
         chunk_size: usize,
     ) -> Result<u64> {
-        if version == 0 {
+        if version == Some(0) {
             return Err("extraction version must be positive".into());
         }
         let _writer_lock = writer_lock(directory)?;
         // A caller may have opened this handle before another writer committed.
         *self = Self::open(directory)?;
+        // Admission must use the state reopened under the writer lock. Unversioned
+        // inputs are never evidence of a newer extraction, even for an older writer.
+        let mut manifests = Vec::new();
+        for manifest in inputs {
+            let target = manifest.target_string();
+            if version.is_none() && self.latest.contains_key(&target) {
+                if self.load(&target)? != *manifest {
+                    return Err(format!(
+                        "unversioned import conflicts with stored build {target}; run update to re-extract from game sources"
+                    ).into());
+                }
+            } else {
+                manifests.push(manifest);
+            }
+        }
         if manifests.is_empty() {
             return Ok(0);
         }
+        let version = version.unwrap_or(0);
         if chunk_size == 0 {
             return Err("zero chunk size".into());
         }
@@ -733,7 +753,6 @@ impl Store {
             indexes.insert(key.clone(), self.index(key)?);
         }
         let mut catalog = Catalog::default();
-        let mut manifests: Vec<_> = manifests.iter().collect();
         manifests.sort_by_key(|m| m.target_string());
         let mut pending = BTreeMap::new();
         for &manifest in &manifests {
@@ -919,6 +938,46 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unversioned_import_rechecks_stale_handle_and_rejects_whole_batch() {
+        let root =
+            std::env::temp_dir().join(format!("selu-import-admission-{}", std::process::id()));
+        let old: crate::Manifest = serde_json::from_value(serde_json::json!({
+            "flavour":"wow", "build":{"major":12,"minor":1,"patch":5,"build":1},
+            "interface":120105
+        }))
+        .unwrap();
+        let mut stale = super::Store::open(&root).unwrap();
+        let mut writer = super::Store::default();
+        writer.append(&root, std::slice::from_ref(&old)).unwrap();
+        let mut current = old.clone();
+        current.interface += 1;
+        writer
+            .append(&root, std::slice::from_ref(&current))
+            .unwrap();
+        let before = std::fs::read_dir(&root).unwrap().count();
+        let mut new_build = old.clone();
+        new_build.build.build += 1;
+        let error = stale
+            .import_unversioned(&root, &[new_build.clone(), old])
+            .unwrap_err();
+        assert!(error.to_string().contains("unversioned import"));
+        let reopened = super::Store::open(&root).unwrap();
+        assert_eq!(reopened.load(&current.target_string()).unwrap(), current);
+        assert!(
+            !reopened
+                .builds()
+                .any(|build| build == new_build.target_string())
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), before);
+        assert_eq!(stale.import_unversioned(&root, &[current]).unwrap(), 0);
+        assert!(
+            stale
+                .append_with_extraction_version(&root, &[new_build], 0)
+                .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
     use super::*;
     #[test]
     fn extraction_report_diffs_locked_build_and_never_moves_game_lock() {

@@ -283,7 +283,17 @@ No project target, output directory, TOC or lock key contains an extraction ID.
 The generator's `EXTRACTION_VERSION` is re-exported from
 `selu_manifest::store::EXTRACTION_VERSION`. It is **1 for the W2 baseline**. Bump this
 constant whenever extraction output rules change, including sourced signatures or
-overlay changes. Extraction IDs are `v<version>-<sha256>`, where the hash covers the
+overlay changes. The workspace test `extraction_sources_and_overlays_require_version_bump`
+enforces this with a frozen SHA-256 contract per version in
+`crates/selu-manifest-gen/tests/extraction_version.rs`. It discovers extractor Rust
+modules and all overlays, and covers generation orchestration, manifest schema,
+normalization and encoding inputs. Paths and contents are hashed in sorted order
+with LF normalization. When changing these inputs, bump `EXTRACTION_VERSION` and
+append the new version/digest to `CONTRACTS`; preserve previous entries. CLI-only
+import/report changes do not affect the extraction contract. This is intentionally
+conservative about changes within covered source files.
+
+Extraction IDs are `v<version>-<sha256>`, where the hash covers the
 named-MessagePack Manifest content in schema-1 serialization order. That order is
 part of the hash protocol. The game build and content, not compression settings,
 determine the ID. A version bump with unchanged content still creates a revision;
@@ -310,9 +320,19 @@ which invalidates derived caches even when game-build pins did not change.
 the current constant. A bump regenerates unchanged branch builds and retained older
 stored builds for those products, from their recorded source commits. It adds their
 new revision deltas, with API diffs, without adding historical game builds. A normal
-unchanged update with the same constant is a zero-byte no-op. Migration imports only
-standalone snapshots produced by the current extractor; it never relabels existing
-stored revisions as a newer extractor.
+unchanged update with the same constant is a zero-byte no-op.
+
+Standalone `.selum` and JSON files do not prove which extractor produced them.
+`migrate` therefore treats them as unversioned. Under the exclusive writer lock,
+an import matching an existing build's selected content is a zero-byte no-op;
+different content is rejected with the game-build ID and a direction to run
+`update`. Rejection publishes none of that import batch. A previously unseen build
+can be bootstrapped as reserved revision **v0** (unknown extractor), which always
+needs real re-extraction by `update` before it counts as current. Version 0 is
+reserved for this import path; trusted generator appends require a positive version.
+An import cannot create a newer revision of an existing build, even when its content
+matches a historical revision. Only re-extraction or validated extractor provenance
+can establish a current revision; `migrate` provides no provenance override.
 
 Audit commands (run from the compiler workspace, or pass an explicit store):
 

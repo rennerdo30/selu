@@ -16,6 +16,7 @@ tar = "0.4.46"
 full_moon = { version = "3", default-features = false }
 
 [dev-dependencies]
+sha2 = "0.11.1"
 selu-check = { path = "../selu-check" }
 selu-syntax = { path = "../selu-syntax" }
 selu-lower = { path = "../selu-lower" }
