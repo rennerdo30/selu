@@ -474,3 +474,89 @@ fn validation_memo_distinguishes_schema_mode_and_active_paths() {
     )
     .unwrap();
 }
+#[test]
+fn sd_contextual_empty_defaults() {
+    for options in ["", "using dbVersion"] {
+        let src = format!(
+            r#"saved global DB {options}: {{ items:number[]; nested:{{ rows:number[][]; partial:{{x?:number;y?:number}} }}; maps:Map<string,number[]>; optional?:number[] }} = {{ items:[], nested:{{ rows:[[]], partial:{{x:2}} }}, maps:new Map<string,number[]>(), optional:[] }};
+        function attach() {{ DB.whenReady(data => {{ print(data.items.length); }}); }} attach();"#
+        );
+        let sim = vm("");
+        load(&sim, &src);
+        sim.eval("assert(#DB.items==0 and #DB.nested.rows==1 and #DB.nested.rows[1]==0 and DB.nested.partial.x==2 and DB.nested.partial.y==nil and #DB.optional==0)").unwrap();
+    }
+}
+
+#[test]
+fn sd_primitive_keys_migrate_without_coercion() {
+    let src = r#"
+        type Key = string | number | boolean;
+        type Value = string | number | boolean | {};
+        type Values = Map<Key,Value>;
+        saved global DB version 2 using dbVersion legacy OldDB: { values:Values } = { values:new Map<Key,Value>() };
+        migrate DB 1 -> 2 (old:{values:Values; incoming:SavedRepair<Values>}) {
+            const incoming=old.incoming;
+            if (typeof incoming == "table") {
+                for (const [key,value] of incoming) {
+                    if (old.values.get(key) == null) { old.values.set(key,value); }
+                }
+            }
+        }
+        function attach() { DB.whenReady(data => { print("ready"); }); } attach();
+    "#;
+    let sim = vm(
+        "OldDB={dbVersion=1,values={[17]='existing'},incoming={[17]='replace',['17']='string',[true]={nested={[false]='kept'}},[false]=false}}; root=OldDB; opaque=OldDB.incoming[true]",
+    );
+    load(&sim, src);
+    sim.eval("assert(DB==root and OldDB==nil and DB.dbVersion==2); assert(DB.values[17]=='existing' and DB.values['17']=='string' and DB.values[true]==opaque and DB.values[false]==false and opaque.nested[false]=='kept')").unwrap();
+    assert_eq!(sim.prints(), ["ready"]);
+}
+
+#[test]
+fn sd_opaque_tables_do_not_expose_fields() {
+    for access in ["value.secret", "value[\"secret\"]"] {
+        let src = format!(
+            "saved global DB using dbVersion:{{value:{{}}}}={{value:{{}}}}; function read() {{ DB.whenReady(data => {{ const value=data.value; print({access}); }}); }}"
+        );
+        assert!(!common::codes(&src).is_empty());
+    }
+}
+#[test]
+fn sd_opaque_values_require_serializable_tables() {
+    let src = "saved global DB using dbVersion:{value:{}}={value:{}}; function attach(){DB.whenReady(data=>{print(\"ready\");});} attach(); on PLAYER_LOGIN(){print(DB.status);}";
+    for input in [
+        "DB={dbVersion=1,value=7}",
+        "DB={dbVersion=1,value={bad=function() end}}",
+        "DB={dbVersion=1,value={}}; DB.value.self=DB.value",
+        "DB={dbVersion=1,value={[{}]='bad'}}",
+    ] {
+        let sim = vm(input);
+        load(&sim, src);
+        assert_eq!(sim.prints().last().unwrap(), "corrupt");
+        assert!(!sim.prints().iter().any(|s| s == "ready"));
+    }
+}
+#[test]
+fn sd_key_alternatives_are_closed_and_exact() {
+    for key in ["number?", "{}", "unknown", "string | {}", "string | null"] {
+        let src = format!(
+            "saved global DB using dbVersion:{{values:Map<{key},number>}}={{values:new Map<{key},number>()}};"
+        );
+        assert!(common::codes(&src).iter().any(|c| c == "SELU0901"), "{key}");
+    }
+    let src = r#"type Key = 17 | "17" | true;
+        saved global DB using dbVersion: {values:Map<Key,number>}={values:new Map<Key,number>()};
+        on PLAYER_LOGIN(){print(DB.status);}"#;
+    for (input, status) in [
+        (
+            "DB={dbVersion=1,values={[17]=1,['17']=2,[true]=3}}",
+            "ready",
+        ),
+        ("DB={dbVersion=1,values={[false]=4}}", "corrupt"),
+        ("DB={dbVersion=1,values={[18]=4}}", "corrupt"),
+    ] {
+        let sim = vm(input);
+        load(&sim, src);
+        assert_eq!(sim.prints().last().unwrap(), status);
+    }
+}
