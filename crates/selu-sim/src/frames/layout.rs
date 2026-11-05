@@ -20,7 +20,17 @@ pub fn factor(p: &str) -> (f64, f64) {
     )
 }
 pub fn resolve(a: &mut Arena, ctx: &Ctx) {
-    for r in &mut a.regions {
+    if !a.dirty {
+        return;
+    }
+    for (index, r) in a.regions.iter_mut().enumerate() {
+        if !a.full_layout
+            && !a.styles_dirty
+            && !a.dirty_regions.is_empty()
+            && !a.dirty_regions.contains(&index)
+        {
+            continue;
+        }
         let original_style = r.visual.clone();
         let mut object = r
             .table
@@ -125,32 +135,64 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
                     r.font_path = path;
                     r.font_size = size;
                     r.font_flags = flags;
+                    a.full_layout = true;
+                    a.dirty_regions.clear();
                     a.dirty = true;
                 }
             }
             break;
         }
         if r.visual != original_style {
+            a.full_layout = true;
+            a.dirty_regions.clear();
             a.dirty = true;
         }
     }
-    if !a.dirty {
-        return;
-    }
+    a.styles_dirty = false;
     let before = a
         .regions
         .iter()
         .map(|r| (r.visible, r.rect, r.effective_scale))
         .collect::<Vec<_>>();
-    let mut inherited = vec![0u8; a.regions.len()];
+    // Seed the dependency closure from mutations; external bulk invalidations
+    // (root resize, input, font roots) retain conservative full resolution.
+    let mut changed = vec![a.full_layout || a.dirty_regions.is_empty(); a.regions.len()];
+    for i in a.dirty_regions.drain() {
+        changed[i] = true;
+    }
+    loop {
+        let mut more = false;
+        for (i, r) in a.regions.iter().enumerate() {
+            if !changed[i]
+                && (r.parent.is_some_and(|p| changed[p])
+                    || r.points
+                        .iter()
+                        .any(|p| changed.get(p.relative).copied().unwrap_or(true)))
+            {
+                changed[i] = true;
+                more = true;
+            }
+        }
+        if !more {
+            break;
+        }
+    }
+    let mut inherited = changed
+        .iter()
+        .map(|v| if *v { 0u8 } else { 2 })
+        .collect::<Vec<_>>();
     for i in 0..a.regions.len() {
         inherit(i, a, &mut inherited, ctx);
     }
-    let mut marks = vec![0u8; a.regions.len()];
+    let mut marks = changed
+        .iter()
+        .map(|v| if *v { 0u8 } else { 2 })
+        .collect::<Vec<_>>();
     for i in 0..a.regions.len() {
         visit(i, a, &mut marks, ctx);
     }
     a.dirty = false;
+    a.full_layout = false;
     for (i, r) in a.regions.iter().enumerate() {
         let (visible, rect, old_scale) = before[i];
         if visible != r.visible {
@@ -266,7 +308,7 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
     let metric = a
         .fonts
         .layout(r.display_text().unwrap_or(""), &r.text_style(), None, None);
-    let intrinsic = r.kind == "FontString";
+    let intrinsic = r.kind == "FontString" || (r.kind == "EditBox" && r.multi_line);
     let width = if intrinsic && r.width == 0.0 {
         metric.width
     } else {
@@ -275,7 +317,12 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
     let horizontal = axis(&xs, width * scale);
     let logical_width = horizontal.map(|(_, w)| w / scale).unwrap_or(width);
     let height = if intrinsic && r.height == 0.0 {
-        text_height(&r, logical_width, &a.fonts)
+        text_height(
+            &r,
+            (logical_width - r.visual.text_insets[0] - r.visual.text_insets[1]).max(0.0),
+            &a.fonts,
+        ) + r.visual.text_insets[2]
+            + r.visual.text_insets[3]
     } else {
         r.height
     };

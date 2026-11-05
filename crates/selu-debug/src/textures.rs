@@ -1,5 +1,8 @@
 //! Sandboxed addon media. Failed lookups are cached by Studio too.
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(test)]
+use std::path::{Component, Path};
+#[cfg(test)]
 pub fn resolve(roots: &[PathBuf], name: &str) -> Result<PathBuf, String> {
     let normalized = name.replace('\\', "/");
     let mut relative = normalized.as_str();
@@ -41,21 +44,30 @@ pub fn resolve(roots: &[PathBuf], name: &str) -> Result<PathBuf, String> {
     Err("unavailable asset".into())
 }
 pub fn load(roots: &[PathBuf], name: &str) -> Result<eframe::egui::ColorImage, String> {
-    let file = resolve(roots, name)?;
-    if std::fs::metadata(&file).map_err(|e| e.to_string())?.len() > 32 * 1024 * 1024 {
-        return Err("texture exceeds 32 MiB".into());
+    let mut resolver = selu_sim::assets::Resolver::default();
+    for root in roots {
+        if let Ok(root) = root.canonicalize() {
+            resolver.add_addon(root);
+        }
     }
-    if file
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("blp"))
-    {
-        return blp(&std::fs::read(file).map_err(|e| e.to_string())?);
+    let bytes = match resolver.lookup(name) {
+        selu_sim::assets::Lookup::Found(bytes) => bytes,
+        selu_sim::assets::Lookup::Unavailable => return Err("unavailable client asset".into()),
+        selu_sim::assets::Lookup::Missing => return Err("missing addon asset".into()),
+    };
+    if bytes.starts_with(b"BLP") {
+        return blp(&bytes);
     }
-    let mut reader = image::ImageReader::open(file).map_err(|e| e.to_string())?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| e.to_string())?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(4096);
     limits.max_image_height = Some(4096);
     reader.limits(limits);
+    if reader.format().is_none() {
+        reader.set_format(image::ImageFormat::Tga);
+    }
     let image = reader.decode().map_err(|e| e.to_string())?.to_rgba8();
     Ok(eframe::egui::ColorImage::from_rgba_unmultiplied(
         [image.width() as usize, image.height() as usize],

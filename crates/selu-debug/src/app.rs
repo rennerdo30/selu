@@ -2046,6 +2046,7 @@ impl Studio {
                         match t {
                             TextureFill::File(f) => f.clone(),
                             TextureFill::Atlas(a) => format!("atlas {a}"),
+                            TextureFill::Gradient { .. } => "gradient".into(),
                             TextureFill::Color(c) => {
                                 format!("color {:.2} {:.2} {:.2} {:.2}", c[0], c[1], c[2], c[3])
                             }
@@ -2110,6 +2111,40 @@ impl Studio {
                 continue;
             };
             match (&r.texture, r.widget.as_str()) {
+                (Some(TextureFill::Gradient { vertical, min, max }), _) => {
+                    let color = |c: &[f32; 4]| {
+                        fade(
+                            r,
+                            Color32::from_rgba_unmultiplied(
+                                (c[0] * r.visual.tint[0] * 255.0) as u8,
+                                (c[1] * r.visual.tint[1] * 255.0) as u8,
+                                (c[2] * r.visual.tint[2] * 255.0) as u8,
+                                (c[3] * r.visual.tint[3] * 255.0) as u8,
+                            ),
+                        )
+                    };
+                    let (lo, hi) = (color(min), color(max));
+                    let colors = if *vertical {
+                        [hi, hi, lo, lo]
+                    } else {
+                        [lo, hi, hi, lo]
+                    };
+                    let mut mesh = egui::Mesh::default();
+                    for (pos, color) in [
+                        rect.left_top(),
+                        rect.right_top(),
+                        rect.right_bottom(),
+                        rect.left_bottom(),
+                    ]
+                    .into_iter()
+                    .zip(colors)
+                    {
+                        mesh.colored_vertex(pos, color);
+                    }
+                    mesh.add_triangle(0, 1, 2);
+                    mesh.add_triangle(0, 2, 3);
+                    painter.add(egui::Shape::mesh(mesh));
+                }
                 (Some(TextureFill::Color(c)), _) => {
                     let tint = r.visual.tint;
                     let col = Color32::from_rgba_unmultiplied(
@@ -2159,14 +2194,37 @@ impl Studio {
                         fade(r, Color32::LIGHT_GRAY),
                     );
                 }
-                (None, "FontString") => {
+                (None, "FontString" | "EditBox") => {
+                    let inset = r.visual.text_insets;
+                    let factor = r
+                        .text_layout
+                        .as_ref()
+                        .map(|l| r.visual.size / l.font_size)
+                        .unwrap_or(1.0) as f32
+                        * scale;
+                    let text_rect = ERect::from_min_max(
+                        rect.min + egui::vec2(inset[0] as f32, inset[2] as f32) * factor,
+                        rect.max - egui::vec2(inset[1] as f32, inset[3] as f32) * factor,
+                    );
+                    let text_painter =
+                        painter.with_clip_rect(text_rect.intersect(painter.clip_rect()));
                     crate::text_render::TextPainter {
                         ctx: ui.ctx(),
                         roots: &self.opts.addons,
                         glyphs: &mut self.glyphs,
                         textures: &mut self.textures,
                     }
-                    .paint(&painter, r, rect, scale);
+                    .paint(
+                        &text_painter,
+                        r,
+                        text_rect.translate(
+                            egui::vec2(
+                                -r.visual.text_scroll.0 as f32,
+                                -r.visual.text_scroll.1 as f32,
+                            ) * factor,
+                        ),
+                        scale,
+                    );
                 }
                 (None, "Texture") => {}
                 _ => {}

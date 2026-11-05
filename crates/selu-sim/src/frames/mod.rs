@@ -22,6 +22,8 @@ impl RegionModel for LuaTableModel {
             a.regions[0].width = logical_size.0;
             a.regions[0].height = logical_size.1;
             a.dirty = true;
+            a.full_layout = true;
+            a.dirty_regions.clear();
         }
         layout::resolve(&mut a, ctx);
         Ok(())
@@ -52,7 +54,12 @@ impl RegionModel for LuaTableModel {
                     }),
                     widget: r.kind.clone(),
                     name: r.name.clone(),
-                    rect: r.rect,
+                    rect: r.rect.map(|mut q| {
+                        let (x, y) = arena::animation_offset(&a, i);
+                        q.left += x;
+                        q.bottom += y;
+                        q
+                    }),
                     size: Some((r.width, r.height)),
                     shown: r.shown,
                     visible: r.visible,
@@ -64,6 +71,11 @@ impl RegionModel for LuaTableModel {
                         font: r.font_path.clone(),
                         size: r.font_size * r.effective_scale,
                         flags: r.font_flags.clone(),
+                        text_scroll: if r.kind == "EditBox" {
+                            r.scroll
+                        } else {
+                            (0.0, 0.0)
+                        },
                         ..r.visual.clone()
                     },
                     clip: arena::clip(&a, i),
@@ -74,8 +86,18 @@ impl RegionModel for LuaTableModel {
                         let mut shaped = a.fonts.layout(
                             text,
                             &style,
-                            r.rect.map(|q| q.width / r.effective_scale),
-                            r.rect.map(|q| q.height / r.effective_scale),
+                            r.rect.map(|q| {
+                                (q.width / r.effective_scale
+                                    - r.visual.text_insets[0]
+                                    - r.visual.text_insets[1])
+                                    .max(0.0)
+                            }),
+                            r.rect.filter(|_| r.kind != "EditBox").map(|q| {
+                                (q.height / r.effective_scale
+                                    - r.visual.text_insets[2]
+                                    - r.visual.text_insets[3])
+                                    .max(0.0)
+                            }),
                         );
                         crate::text::rasterize(&a.fonts.face(&style.font), style.size, &mut shaped);
                         shaped
@@ -271,6 +293,7 @@ pub fn configure_ui_size(lua: &Lua, size: (f64, f64)) -> mlua::Result<()> {
         a.regions[0].width = size.0;
         a.regions[0].height = size.1;
         a.dirty = true;
+        a.full_layout = true;
     }
     Ok(())
 }

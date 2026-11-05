@@ -238,6 +238,8 @@ fn widget_has_script_uses_documented_types() {
 
 #[test]
 fn modelled_setters_return_documented_success() {
+    // https://warcraft.wiki.gg/wiki/API:TextureBase_SetTexture : since 4.0.1
+    // SetTexture returns true even for an invalid asset; availability is separate.
     lua(
         "local t=UIParent:CreateTexture();assert(t:SetTexture('icon')==true);local f=UIParent:CreateFontString();assert(f:SetFont('Fonts/FRIZQT__.TTF',12)==true)",
     );
