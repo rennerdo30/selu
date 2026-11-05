@@ -49,6 +49,29 @@ pub(super) fn emit_restriction_runtime(
         walk(visit::Child::Stmt(s), types, &mut queue, &mut read);
     }
     let mut out = Vec::new();
+    // These helpers have no per-module state and can be shared by runtime key.
+    let mut reasoned = false;
+    fn find(c: visit::Child<'_>, types: &TypeTable, found: &mut bool) {
+        match c {
+            visit::Child::Expr(e) => {
+                if let ExprKind::Call { callee, .. } = &e.kind {
+                    *found |= matches!(&callee.kind, ExprKind::Ident(n) if matches!(n.as_str(), "readNumber" | "readBool" | "readString"))
+                        && types.get(callee.id).is_none();
+                }
+                visit::child_exprs_and_stmts(e, &mut |c| find(c, types, found));
+            }
+            visit::Child::Stmt(s) => {
+                visit::child_stmts_and_exprs(s, &mut |c| find(c, types, found))
+            }
+        }
+    }
+    for s in &program.stmts {
+        find(visit::Child::Stmt(s), types, &mut reasoned);
+    }
+    if reasoned {
+        out.push(raw(REASONED_RUNTIME));
+    }
+
     if read
         && manifest
             .function("canaccessvalue")
@@ -82,6 +105,17 @@ pub(crate) fn runtime_pieces(
 ) -> Vec<crate::runtime::Piece> {
     let mut blocks = emit_restriction_runtime(program, types, manifest);
     let mut pieces = Vec::new();
+    if blocks
+        .first()
+        .is_some_and(|s| matches!(&s.kind, LStmtKind::Raw(text) if text == REASONED_RUNTIME))
+    {
+        pieces.push(crate::runtime::piece(
+            "59-reasoned-read",
+            vec![blocks.remove(0)],
+            &["__selu_readNumber", "__selu_readBool", "__selu_readString"],
+            &[],
+        ));
+    }
     if blocks
         .first()
         .is_some_and(|s| matches!(&s.kind, LStmtKind::Raw(text) if text == READ_RUNTIME))
@@ -162,6 +196,13 @@ impl Lowerer<'_> {
         args: &[Expr],
         pre: &mut LBlock,
     ) -> LExpr {
+        if let ExprKind::Ident(n) = &callee.kind
+            && matches!(n.as_str(), "readNumber" | "readBool" | "readString")
+            && self.types.get(callee.id).is_none()
+        {
+            let value = self.expr(&args[0], pre);
+            return lua::call(name(&format!("__selu_{n}")), vec![value]);
+        }
         if matches!(&callee.kind,ExprKind::Ident(n) if n=="readable")
             && self.types.get(callee.id).is_none()
         {
@@ -199,3 +240,26 @@ impl Lowerer<'_> {
         }
     }
 }
+
+const REASONED_RUNTIME: &str = r#"local __selu_read_pcall, __selu_read_type = pcall, type
+local function __selu_read_failure(reason) return { ok = false, reason = reason } end
+local function __selu_prove_number(value) return value + 0 end
+local function __selu_prove_bool(value) return value and true or false end
+local function __selu_prove_string(value) return value .. "" end
+local function __selu_reasoned(fn, kind, prove)
+  local ok, value = __selu_read_pcall(fn)
+  if not ok then return __selu_read_failure("unreadable") end
+  if issecretvalue then
+    local checked, secret = __selu_read_pcall(issecretvalue, value)
+    if checked and secret then return __selu_read_failure("secret") end
+  end
+  if value == nil then return __selu_read_failure(kind == "number" and "none" or "unreadable") end
+  if kind ~= "boolean" and __selu_read_type(value) ~= kind then return __selu_read_failure("unreadable") end
+  local usable, result = __selu_read_pcall(prove, value)
+  if not usable then return __selu_read_failure("secret") end
+  if kind ~= "boolean" then result = value end
+  return { ok = true, value = result }
+end
+local function __selu_readNumber(fn) return __selu_reasoned(fn, "number", __selu_prove_number) end
+local function __selu_readBool(fn) return __selu_reasoned(fn, "boolean", __selu_prove_bool) end
+local function __selu_readString(fn) return __selu_reasoned(fn, "string", __selu_prove_string) end"#;

@@ -284,6 +284,14 @@ nonstandard blend modes remain fidelity limits.
 Font objects use `sim_globals::create_font(lua, name)`. `fonts::create_font` is
 only a re-export. Session stand-ins and CreateFont share the SIM1 constructor;
 there is one constructor and one global installer after integration.
+
+Manifest-free sessions resolve six standard GameFont Normal/Highlight templates
+through a private native-template cache and the same constructor, without
+inventing Lua globals. Named profiles use the Roman 12/10/16 shadow faces from
+Blizzard's [FontStyles.xml](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_Fonts_Shared/Shared/FontStyles.xml)
+and [Fonts.xml](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_Fonts_Shared/Shared/Fonts.xml).
+Other missing templates are explicit errors; manifest-declared Font globals
+continue through SIM1's typed shape lookup.
 The committed visual fixture is `crates/selu-sim/tests/fixtures/rendering`.
 
 ## SIM1: loading real addons

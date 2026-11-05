@@ -201,7 +201,7 @@ fn native_templates_work_without_inventing_untyped_globals() {
         assert(rawget(_G,'GameFontHighlightSmall')==nil)
         local t=UIParent:CreateFontString(nil,'OVERLAY','GameFontHighlightSmall')
         t:SetText('ready');t:SetPoint('TOPLEFT')
-        assert(t:GetText()=='ready' and t:GetStringWidth()>0)
+        assert(t:GetText()=='ready' and t:GetStringWidth()>0 and select(2,t:GetFont())==10)
         assert(rawget(_G,'GameFontHighlightSmall')==nil)
         assert(not pcall(function() UIParent:CreateFontString(nil,'OVERLAY','NotARealFontTemplate') end))
     "#).unwrap();

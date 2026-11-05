@@ -350,6 +350,56 @@ impl crate::Ctx<'_> {
         callee: &selu_syntax::Expr,
         args: &[selu_syntax::Expr],
     ) -> Option<crate::Type> {
+        if let selu_syntax::ExprKind::Ident(n) = &callee.kind
+            && matches!(n.as_str(), "readNumber" | "readBool" | "readString")
+            && self.lookup(n).is_none()
+        {
+            use crate::Type;
+            let result = match n.as_str() {
+                "readNumber" => Type::Number,
+                "readBool" => Type::Boolean,
+                _ => Type::String,
+            };
+            if args.len() != 1 {
+                self.out.push(crate::err(
+                    "SELU0603",
+                    "reasoned read needs one getter",
+                    &e.span,
+                ));
+                return Some(Type::Error);
+            }
+            let getter = self.value(&args[0]);
+            if !matches!(getter, Type::Function { required: 0, .. }) {
+                self.out.push(crate::err(
+                    "SELU0603",
+                    "reasoned read needs a getter callable without arguments",
+                    &args[0].span,
+                ));
+            }
+            return Some(Type::union(vec![
+                Type::Object(
+                    [
+                        ("ok".into(), Type::BooleanLiteral(true)),
+                        ("value".into(), result),
+                    ]
+                    .into(),
+                ),
+                Type::Object(
+                    [
+                        ("ok".into(), Type::BooleanLiteral(false)),
+                        (
+                            "reason".into(),
+                            Type::union(vec![
+                                Type::StringLiteral("none".into()),
+                                Type::StringLiteral("secret".into()),
+                                Type::StringLiteral("unreadable".into()),
+                            ]),
+                        ),
+                    ]
+                    .into(),
+                ),
+            ]));
+        }
         if !matches!(&callee.kind, selu_syntax::ExprKind::Ident(n) if n == "readable" && self.lookup(n).is_none())
         {
             return None;

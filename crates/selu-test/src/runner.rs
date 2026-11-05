@@ -143,6 +143,14 @@ fn overlay(m: &mut selu_manifest::Manifest) {
 
 /// Build the addon with the same compiler used by `selu build`, then run each file.
 pub fn run(options: &RunOptions) -> Result<Report, RunError> {
+    let trace = cfg!(debug_assertions) && std::env::var_os("SELU_TEST_TIMINGS").is_some();
+    let mut phase = trace.then(std::time::Instant::now);
+    let mut timing = |label: &str| {
+        if let Some(start) = phase.as_mut() {
+            eprintln!("selu test timing {label}: {:?}", start.elapsed());
+            *start = std::time::Instant::now();
+        }
+    };
     let files = discover(&options.project_dir).map_err(|e| RunError::Io(e.to_string()))?;
     if files.is_empty() {
         return Err(RunError::NoTests);
@@ -199,6 +207,7 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
     let manifest = &manifest;
     let modules = project::project_sources_roots(&options.project_dir.join("src"), &roots)
         .map_err(|_| build_error("module discovery failed"))?;
+    timing("build and discovery");
     let mut exports = BTreeMap::<String, selu_check::ModuleExports>::new();
     for module in &modules {
         let mut bindings = selu_check::ModuleBindings::default();
@@ -208,10 +217,13 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
         let (_, signature) = selu_check::check_module(&module.program, manifest, bindings);
         exports.insert(module.key.clone(), signature);
     }
+    timing("module signatures");
     let mut report = Report {
         target: Some(target.clone()),
         results: vec![],
     };
+    let mut test_manifest = manifest.clone();
+    overlay(&mut test_manifest);
     for file in files {
         let source =
             std::fs::read_to_string(options.project_dir.join(&file)).map_err(build_error)?;
@@ -236,8 +248,6 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
                 lower_imports.insert(from.clone(), (key, signature));
             }
         }
-        let mut test_manifest = manifest.clone();
-        overlay(&mut test_manifest);
         let (checked, _) = selu_check::check_module_with_options(
             &program,
             &test_manifest,
@@ -268,6 +278,7 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
                 maps.push(selu_sourcemap::SourceMap::from_json(&text).map_err(build_error)?);
             }
         }
+        timing("test compile");
         let session = Rc::new(RefCell::new(
             Session::new(SessionConfig {
                 target: Some(manifest.target_string()),
@@ -306,6 +317,7 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
                 .push(failure(&file, vec!["setup".into()], error, &maps, &session));
             continue;
         }
+        timing("session and addon load");
         let lua = session.borrow().sim().lua().clone();
         let test_ctx = session.borrow().sim().ctx().clone();
         let registrations = Rc::new(RefCell::new(Registrations::default()));
@@ -396,6 +408,7 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
             notes.dedup();
             report.results.last_mut().unwrap().not_simulated = notes;
         }
+        timing("test registration and execution");
     }
     Ok(report)
 }

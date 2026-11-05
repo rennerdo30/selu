@@ -105,7 +105,14 @@ impl Ctx<'_> {
                     ));
                 }
             }
-            return Some(Type::Void);
+            return Some(Type::Object(
+                [
+                    ("ensureInstalled".into(), handle_method(Type::Void)),
+                    ("isInstalled".into(), handle_method(Type::Boolean)),
+                    ("downstreamFailureCount".into(), handle_method(Type::Number)),
+                ]
+                .into(),
+            ));
         }
         if n == "keybinding" {
             return Some(self.binding_call(e, args));
@@ -217,5 +224,18 @@ impl Ctx<'_> {
             );
         }
         Some(Type::Void)
+    }
+}
+
+fn handle_method(ret: Type) -> Type {
+    Type::Function {
+        multiple_results: false,
+        unspecified_callback: false,
+        api: Default::default(),
+        api_semantics: Default::default(),
+        params: vec![],
+        required: 0,
+        rest: None,
+        ret: Box::new(ret),
     }
 }

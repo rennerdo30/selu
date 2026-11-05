@@ -58,7 +58,7 @@ pub fn fallback() -> FontArc {
 /// Resolve native font templates even in manifest-free simulator sessions.
 /// This is a private template registry, not a source of untyped Lua globals.
 pub fn template(lua: &mlua::Lua, name: &str) -> mlua::Result<mlua::Table> {
-    use mlua::{Function, Table, Value};
+    use mlua::{Table, Value};
     match lua.globals().raw_get::<Value>(name)? {
         Value::Table(t) => return Ok(t),
         Value::Nil => {}
@@ -73,21 +73,11 @@ pub fn template(lua: &mlua::Lua, name: &str) -> mlua::Result<mlua::Table> {
     {
         return lua.globals().get(name);
     }
-    // Blizzard_Fonts_Shared/Shared/FontStyles.xml and Fonts.xml:
-    // GameFont{Normal,Highlight}{,Small,Large}, Roman shadow faces 12/10/16.
-    let (size, highlight) = match name {
-        "GameFontNormal" => (12.0, false),
-        "GameFontNormalSmall" => (10.0, false),
-        "GameFontNormalLarge" => (16.0, false),
-        "GameFontHighlight" => (12.0, true),
-        "GameFontHighlightSmall" => (10.0, true),
-        "GameFontHighlightLarge" => (16.0, true),
-        _ => {
-            return Err(mlua::Error::runtime(format!(
-                "unknown font template: {name}"
-            )));
-        }
-    };
+    if native_style(name).is_none() {
+        return Err(mlua::Error::runtime(format!(
+            "unknown font template: {name}"
+        )));
+    }
     let registry = match lua.named_registry_value::<Option<Table>>("selu:font-templates")? {
         Some(t) => t,
         None => {
@@ -100,15 +90,30 @@ pub fn template(lua: &mlua::Lua, name: &str) -> mlua::Result<mlua::Table> {
         return Ok(t);
     }
     let font = create_font(lua, name)?;
-    font.get::<Function>("SetFont")?
-        .call::<()>((font.clone(), "Fonts/FRIZQT__.TTF", size, ""))?;
-    let (g, b) = if highlight { (1.0, 1.0) } else { (0.82, 0.0) };
-    font.get::<Function>("SetTextColor")?
-        .call::<()>((font.clone(), 1.0, g, b, 1.0))?;
-    font.get::<Function>("SetShadowOffset")?
-        .call::<()>((font.clone(), 1.0, -1.0))?;
     registry.raw_set(name, font.clone())?;
     Ok(font)
+}
+/// Visual profiles from Blizzard_Fonts_Shared/Shared/FontStyles.xml and
+/// Fonts.xml (Roman GameFont Normal/Highlight shadow faces). These describe
+/// native templates; they do not introduce compiler declarations or globals.
+pub(crate) fn native_style(name: &str) -> Option<(f64, [f64; 4])> {
+    let (size, highlight) = match name {
+        "GameFontNormal" => (12.0, false),
+        "GameFontNormalSmall" => (10.0, false),
+        "GameFontNormalLarge" => (16.0, false),
+        "GameFontHighlight" => (12.0, true),
+        "GameFontHighlightSmall" => (10.0, true),
+        "GameFontHighlightLarge" => (16.0, true),
+        _ => return None,
+    };
+    Some((
+        size,
+        if highlight {
+            [1.0; 4]
+        } else {
+            [1.0, 0.82, 0.0, 1.0]
+        },
+    ))
 }
 /// Called before addon chunks, including on reload and load-on-demand.
 pub fn register_addon_root(lua: &mlua::Lua, dir: &Path) -> mlua::Result<()> {

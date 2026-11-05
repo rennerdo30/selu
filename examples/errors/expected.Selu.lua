@@ -28,6 +28,21 @@ do
   local __selu_tostring = __selu_ns.__selu_tostring
   local __selu_error_setmetatable = __selu_ns.__selu_error_setmetatable
   local __selu_error_getmetatable = __selu_ns.__selu_error_getmetatable
+  local __selu_trace = nil
+  local function __selu_stack()
+    if not __selu_trace then return nil end
+    local ok, value = __selu_pcall(__selu_trace)
+    if not ok then return nil end
+    if issecretvalue then
+      local checked, secret = __selu_pcall(issecretvalue, value)
+      if not checked or secret then return nil end
+    end
+    if canaccessvalue then
+      local checked, accessible = __selu_pcall(canaccessvalue, value)
+      if not checked or not accessible then return nil end
+    end
+    if type(value) == "string" then return value end
+  end
   local function __selu_error_text(value)
     return __selu_tostring(value) .. ""
   end
@@ -45,8 +60,13 @@ do
   end
   local function __selu_wrap_error(value)
     local ok, isError = __selu_pcall(__selu_is_error, value)
-    if ok and isError then return value end
-    return __selu_new_error(__selu_safe_error_text(value), nil, value)
+    if ok and isError then
+      if value.stack == nil then value.stack = __selu_stack() end
+      return value
+    end
+    local wrapped = __selu_new_error(__selu_safe_error_text(value), nil, value)
+    wrapped.stack = __selu_stack()
+    return wrapped
   end
   local function __selu_raise(value)
     if __selu_errors.depth == 0 then
@@ -58,6 +78,7 @@ do
   __selu_ns.__selu_new_error = __selu_new_error
   __selu_ns.__selu_wrap_error = __selu_wrap_error
   __selu_ns.__selu_raise = __selu_raise
+  __selu_ns.__selu_stack = __selu_stack
 end
 -- Selu: protect-0002
 do

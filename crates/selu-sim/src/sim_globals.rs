@@ -4,9 +4,9 @@ use mlua::{Lua, Table, Value};
 /// Single construction boundary for SIM2's visual font model.
 pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
     let constructor:mlua::Function=lua.load(r#"
-        return function(name)
-            local f={_font={"Fonts/FRIZQT__.TTF",12,""},_name=name}
-            local defaults={TextColor={1,1,1,1},ShadowColor={0,0,0,1},ShadowOffset={0,0},JustifyH={"LEFT"},JustifyV={"MIDDLE"},Spacing={0}}
+        return function(name,size,color,offset)
+            local f={_font={"Fonts/FRIZQT__.TTF",size,""},_name=name}
+            local defaults={TextColor=color,ShadowColor={0,0,0,1},ShadowOffset={offset,-offset},JustifyH={"LEFT"},JustifyV={"MIDDLE"},Spacing={0}}
             f._defaults=defaults
             function f:GetName() return self._name end
             function f:GetObjectType() return "Font" end
@@ -32,7 +32,10 @@ pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
             return f
         end
     "#).eval()?;
-    constructor.call(name)
+    let native = crate::fonts::native_style(name);
+    let (size, color) = native.unwrap_or((12.0, [1.0; 4]));
+    let color = lua.create_sequence_from(color)?;
+    constructor.call((name, size, color, if native.is_some() { 1.0 } else { 0.0 }))
 }
 
 fn json_value(lua: &Lua, value: &serde_json::Value) -> SimResult<Value> {

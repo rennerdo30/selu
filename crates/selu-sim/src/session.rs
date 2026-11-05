@@ -244,8 +244,8 @@ fn register_addon_snapshot(vm: &Vm, dir: &Path, config: &SessionConfig) -> SimRe
     }
     let mut checked = lock(&vm.state).checked_manifests.clone();
     let target = snapshot_target(config, &checked);
-    match selu_manifest::resolution::compiled_manifest_for_target(dir, target.as_deref())
-        .map_err(|e| runtime(e.to_string()))?
+    match crate::snapshot_cache::compiled_manifest_for_target(dir, target.as_deref())
+        .map_err(runtime)?
     {
         Some(m) => {
             checked.insert(dir.to_path_buf(), m);
@@ -708,8 +708,8 @@ impl Session {
         let target = snapshot_target(&self.config, &old_checked);
         let mut snapshots = CheckedManifests::new();
         for dir in &addons {
-            match selu_manifest::resolution::compiled_manifest_for_target(dir, target.as_deref())
-                .map_err(|e| runtime(e.to_string()))?
+            match crate::snapshot_cache::compiled_manifest_for_target(dir, target.as_deref())
+                .map_err(runtime)?
             {
                 Some(m) => {
                     snapshots.insert(dir.clone(), m);

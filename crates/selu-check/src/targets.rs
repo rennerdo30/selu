@@ -36,21 +36,34 @@ pub fn exists(m: &Manifest, n: &str) -> bool {
     m.function(n).is_some() || m.event(n).is_some() || m.has_global(n) || enum_exists(m, n)
 }
 pub fn with_fallbacks(primary: &Manifest, targets: &[Manifest]) -> Manifest {
+    use std::collections::HashSet;
     let mut m = primary.clone();
+    let mut functions: HashSet<_> = m
+        .functions
+        .iter()
+        .filter(|f| f.available)
+        .map(|f| f.name.clone())
+        .collect();
+    let mut events: HashSet<_> = m.events.iter().map(|f| f.name.clone()).collect();
+    let mut globals: HashSet<_> = m.globals.iter().map(|f| f.name.clone()).collect();
     for t in targets {
+        if std::ptr::eq(primary, t) {
+            continue;
+        }
         for (into, from) in [
             (&mut m.tables, &t.tables),
             (&mut m.widgets, &t.widgets),
             (&mut m.predicates, &t.predicates),
         ] {
+            let mut names: HashSet<_> = into.iter().map(|d| d.name.clone()).collect();
             for d in from {
-                if !into.iter().any(|x| x.name == d.name) {
+                if names.insert(d.name.clone()) {
                     into.push(d.clone());
                 }
             }
         }
         for f in &t.functions {
-            if f.available && m.function(&f.name).is_none() {
+            if f.available && functions.insert(f.name.clone()) {
                 m.functions.retain(|x| x.name != f.name);
                 m.functions.push(f.clone());
             }
@@ -68,12 +81,12 @@ pub fn with_fallbacks(primary: &Manifest, targets: &[Manifest]) -> Manifest {
             }
         }
         for e in &t.events {
-            if m.event(&e.name).is_none() {
+            if events.insert(e.name.clone()) {
                 m.events.push(e.clone());
             }
         }
         for g in &t.globals {
-            if !m.globals.iter().any(|x| x.name == g.name) {
+            if globals.insert(g.name.clone()) {
                 m.globals.push(g.clone());
             }
         }
@@ -81,6 +94,7 @@ pub fn with_fallbacks(primary: &Manifest, targets: &[Manifest]) -> Manifest {
     crate::restrictions::strictest_policies(&mut m, targets);
     m
 }
+
 impl Ctx<'_> {
     pub(crate) fn target_is_active(&self, m: &Manifest) -> bool {
         self.scopes.iter().all(|s| {

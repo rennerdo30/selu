@@ -176,3 +176,20 @@ The simulator exposes combat transitions, IsProtected state, secret sentinels,
 canaccessvalue/issecretvalue and normal error capture. SetText/GetText retain a
 secret sentinel. This models selected behavior, not the client's full taint,
 secure-action, inherited-protection or rendering system. Package F is not needed.
+
+## Reasoned reads
+
+`readNumber(() => value)`, `readBool(() => value)` and
+`readString(() => value)` invoke a zero-argument getter under protection.
+They return `{ok: true, value: number | boolean | string}` (the specific
+reader fixes the value type) or `{ok: false, reason: "none" | "secret" | "unreadable"}`.
+Use `if (result.ok == true)` to narrow the discriminated union. The getter
+may return Secret<T>; no opaque payload is exposed in the failure arm.
+
+These follow Toolkit Core.lua SafeNumber/SafeBool: getter failure is
+unreadable; absent numbers are none; absent booleans are unreadable. Numbers
+must have number type; booleans use Lua truth conversion (including truthy
+zero and empty strings). A protected issecretvalue probe precedes all payload comparisons, including the nil check, and the protected
+arithmetic/truth proof. A failed proof is secret. The string variant requires
+string type and proves concatenation; absence is unreadable. False is preserved.
+This read point exposes a safe reason, never a secret value to branch on.
