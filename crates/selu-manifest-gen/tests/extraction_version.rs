@@ -3,10 +3,20 @@
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-const CONTRACTS: &[(u32, &str)] = &[(
-    1,
-    "65607550cd6a16c24eb6c75bedc4211ab3e71749d9135fb6e0d7c5e52df2fa8c",
-)];
+const CONTRACTS: &[(u32, &str)] = &[
+    (
+        1,
+        "65607550cd6a16c24eb6c75bedc4211ab3e71749d9135fb6e0d7c5e52df2fa8c",
+    ),
+    (
+        2,
+        "f84cf31b73fe2bbc63e9171ea7bca0efe2de4028ae3e58230d0d7095e1efa8b7",
+    ),
+    (
+        3,
+        "354b4541b86c03a5ee4d28660d9135ec365537f965cef033672aa0cf1576aea6",
+    ),
+];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {
     for entry in std::fs::read_dir(directory).unwrap() {

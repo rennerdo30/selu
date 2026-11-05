@@ -281,7 +281,7 @@ newest stored extraction, so a compiler extraction fix can improve an existing p
 No project target, output directory, TOC or lock key contains an extraction ID.
 
 The generator's `EXTRACTION_VERSION` is re-exported from
-`selu_manifest::store::EXTRACTION_VERSION`. It is **1 for the W2 baseline**. Bump this
+`selu_manifest::store::EXTRACTION_VERSION`. It is **3 for the corrected W3 pool overlay** (2 is its retained initial revision; 1 is the W2 baseline). Bump this
 constant whenever extraction output rules change, including sourced signatures or
 overlay changes. The workspace test `extraction_sources_and_overlays_require_version_bump`
 enforces this with a frozen SHA-256 contract per version in
@@ -380,8 +380,16 @@ recursive limits and dynamic return branches supply no factory proof.
 Parameters and results without sufficient evidence retain the existing untyped
 game-value policy. W2 follows uniquely indexed helper bodies within fixed bounds
 and invalidates contracts when opaque calls or callbacks can reach the objects.
-The six reviewed source pins now withhold their pool contracts, including typed
-Acquire and EnumerateActive methods; the generator does not guess those contracts.
+The conservative analysis still withholds pool contracts. W3 applies reviewed
+source overlays in `pools.rs` through the same overlay validator. The pool source
+must match a reviewed content digest; a changed implementation requires review.
+Each pool widget retains pinned file/line citations in `SeluPoolEvidence`.
+Acquire is nullable at capacity; object-pool elements remain untyped. Literal
+frame types specialize the returned pool and its iterator/release contract.
+Collections enumerate objects only. GetPool is nullable; unsecured GetOrCreatePool
+also returns the new flag, while secure proxy forwarding retains only the pool.
+Older Classic sources lack DoesObjectBelongToPool. Secure collection proxies list
+that name without a defining implementation, so it is withheld there as well.
 Factory objects and mixins are source metadata, not a TOC-loading guarantee.
 
 `SeluIterator` in return attributes records source-proven Lua iterator yields.

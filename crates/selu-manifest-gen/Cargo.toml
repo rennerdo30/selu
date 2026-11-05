@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+sha2 = "0.11.1"
 selu-manifest = { path = "../selu-manifest" }
 mlua = { version = "0.10", features = ["lua51", "vendored"] }
 serde.workspace = true
@@ -16,7 +17,6 @@ tar = "0.4.46"
 full_moon = { version = "3", default-features = false }
 
 [dev-dependencies]
-sha2 = "0.11.1"
 selu-check = { path = "../selu-check" }
 selu-syntax = { path = "../selu-syntax" }
 selu-lower = { path = "../selu-lower" }
