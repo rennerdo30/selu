@@ -109,6 +109,7 @@ impl Ctx<'_> {
                 [
                     ("ensureInstalled".into(), handle_method(Type::Void)),
                     ("isInstalled".into(), handle_method(Type::Boolean)),
+                    ("downstreamFailureCount".into(), handle_method(Type::Number)),
                 ]
                 .into(),
             ));

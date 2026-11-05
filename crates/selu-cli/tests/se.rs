@@ -68,10 +68,10 @@ seterrorhandler(function() prior = prior + 1 end)
     )
     .unwrap();
     sim.fire("ADDON_LOADED", vec![]).unwrap();
-    sim.eval("assert(custody.isInstalled()); geterrorhandler()('replaced'); assert(prior == 1)")
+    sim.eval("assert(custody.isInstalled()); geterrorhandler()('replaced'); assert(prior == 2)")
         .unwrap();
     sim.fire("PLAYER_ENTERING_WORLD", vec![]).unwrap();
-    sim.eval("geterrorhandler()('world'); assert(prior == 2)")
+    sim.eval("geterrorhandler()('world'); assert(prior == 3)")
         .unwrap();
     assert_eq!(sim.prints(), ["wrapped", "replaced", "world"]);
 }
@@ -153,4 +153,39 @@ fn shared_runtime_native_boundary_has_stack_helper() {
     session.load_addon_dir(&root.join("dist/SEShared")).unwrap();
     session.sim().eval("geterrorhandler()('native')").unwrap();
     assert_eq!(session.sim().prints(), ["native", "missing"]);
+}
+#[test]
+fn review_wrapper_keeps_original_sink() {
+    let lua = compile(r#"global custody = onError(e => { print(e.message); });"#);
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("prior=0; seterrorhandler(function(...) prior=prior+1; assert(select('#',...) == 4); local a,b,c,d=...; assert(a=='x' and b==nil and c==false and d==17) end)").unwrap();
+    sim.load_files(&[("probe.lua".into(), lua)]).unwrap();
+    sim.eval("local ours=geterrorhandler(); seterrorhandler(function(...) ours('changed') end); for i=1,100 do custody.ensureInstalled() end; geterrorhandler()('x',nil,false,17); assert(prior==1, 'original sink calls: '..prior)").unwrap();
+    assert_eq!(sim.prints(), ["x"]);
+}
+#[test]
+fn review_throwing_predecessor_is_contained() {
+    let lua = compile(
+        r#"global custody = onError(e => { print(e.message); }); const failures: number = custody.downstreamFailureCount();"#,
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("seterrorhandler(function() error('broken predecessor') end)")
+        .unwrap();
+    sim.load_files(&[("probe.lua".into(), lua)]).unwrap();
+    sim.eval("local ok=pcall(geterrorhandler(),'x'); assert(ok,'predecessor exception escaped'); geterrorhandler()('again'); assert(custody.downstreamFailureCount()==2)").unwrap();
+    assert_eq!(sim.prints(), ["x", "again"]);
+}
+#[test]
+fn review_reasoned_reads_admit_secrecy_before_payload_comparison() {
+    let lua = compile(
+        "const n = readNumber(() => 0); const b = readBool(() => false); const s = readString(() => null);",
+    );
+    let runtime = &lua[lua.find("local function __selu_reasoned").unwrap()..];
+    assert!(
+        runtime
+            .find("__selu_read_pcall(issecretvalue, value)")
+            .unwrap()
+            < runtime.find("value == nil").unwrap(),
+        "secret admission must precede every payload comparison"
+    );
 }

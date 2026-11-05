@@ -249,12 +249,12 @@ local function __selu_prove_string(value) return value .. "" end
 local function __selu_reasoned(fn, kind, prove)
   local ok, value = __selu_read_pcall(fn)
   if not ok then return __selu_read_failure("unreadable") end
-  if value == nil then return __selu_read_failure(kind == "number" and "none" or "unreadable") end
-  if kind ~= "boolean" and __selu_read_type(value) ~= kind then return __selu_read_failure("unreadable") end
   if issecretvalue then
     local checked, secret = __selu_read_pcall(issecretvalue, value)
     if checked and secret then return __selu_read_failure("secret") end
   end
+  if value == nil then return __selu_read_failure(kind == "number" and "none" or "unreadable") end
+  if kind ~= "boolean" and __selu_read_type(value) ~= kind then return __selu_read_failure("unreadable") end
   local usable, result = __selu_read_pcall(prove, value)
   if not usable then return __selu_read_failure("secret") end
   if kind ~= "boolean" then result = value end

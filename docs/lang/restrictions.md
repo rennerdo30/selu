@@ -189,7 +189,7 @@ may return Secret<T>; no opaque payload is exposed in the failure arm.
 These follow Toolkit Core.lua SafeNumber/SafeBool: getter failure is
 unreadable; absent numbers are none; absent booleans are unreadable. Numbers
 must have number type; booleans use Lua truth conversion (including truthy
-zero and empty strings). A protected issecretvalue probe precedes the protected
+zero and empty strings). A protected issecretvalue probe precedes all payload comparisons, including the nil check, and the protected
 arithmetic/truth proof. A failed proof is secret. The string variant requires
 string type and proves concatenation; absence is unreadable. False is preserved.
 This read point exposes a safe reason, never a secret value to branch on.

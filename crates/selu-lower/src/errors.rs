@@ -653,10 +653,25 @@ pub(crate) const ON_ERROR_RUNTIME: &str = r#"local function __selu_on_error(call
     state.handle.ensureInstalled()
     return state.handle
   end
-  state = { callback = callback, busy = false }
+  state = { callback = callback, busy = false, original = geterrorhandler(), failures = 0 }
+  local function downstream(fn, ...)
+    local ok, result = __selu_pcall(fn, ...)
+    if not ok then
+      state.failures = state.failures + 1
+      return nil
+    end
+    return result
+  end
+  local function original()
+    if state.originalForwarded then return end
+    state.originalForwarded = true
+    return downstream(state.original, unpack(state.arguments, 1, state.arguments.n))
+  end
   local function handler(...)
-    if state.busy then return end
+    if state.busy then return original() end
     state.busy = true
+    state.originalForwarded = false
+    state.arguments = { n = select('#', ...), ... }
     local value = select(1, ...)
     local normalized
     local accessible = true
@@ -678,13 +693,16 @@ pub(crate) const ON_ERROR_RUNTIME: &str = r#"local function __selu_on_error(call
     __selu_errors.depth = 0
     __selu_pcall(state.callback, normalized)
     __selu_errors.depth = depth
-    local ok, result = __selu_pcall(state.previous, ...)
+    local result
+    if state.previous == state.original then result = original()
+    else result = downstream(state.previous, ...) end
+    state.arguments = nil
     state.busy = false
-    if not ok then __selu_error(result, 0) end
     return result
   end
   state.handle = {
     isInstalled = function() return geterrorhandler() == handler end,
+    downstreamFailureCount = function() return state.failures end,
     ensureInstalled = function()
       local current = geterrorhandler()
       if current ~= handler then

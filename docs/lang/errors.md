@@ -173,3 +173,12 @@ const errors = onError(e => { print(e.message); });
 on ADDON_LOADED(name) { errors.ensureInstalled(); }
 on PLAYER_ENTERING_WORLD() { errors.ensureInstalled(); }
 ```
+
+When a replaced handler wraps the adapter and calls it back, the cycle is cut
+by forwarding to the original downstream sink exactly once, with the outer
+invocation's original arguments (including false and nil slots). The original
+sink is retained independently of the current predecessor. Downstream exceptions
+are contained and the guard is cleaned up. `downstreamFailureCount(): number`
+on the handle reports the cumulative number of failed downstream invocations;
+it records no potentially secret error payload. Re-registration retains this
+counter along with the handle.
