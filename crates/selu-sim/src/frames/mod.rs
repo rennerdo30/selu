@@ -60,8 +60,26 @@ impl RegionModel for LuaTableModel {
                     level: Some(r.level),
                     layer: Some(r.layer),
                     alpha: r.effective_alpha,
+                    visual: crate::core::VisualStyle {
+                        font: r.font_path.clone(),
+                        size: r.font_size * r.effective_scale,
+                        flags: r.font_flags.clone(),
+                        ..r.visual.clone()
+                    },
+                    clip: arena::clip(&a, i),
                     texture: r.texture.clone(),
                     text: r.display_text().map(str::to_owned),
+                    text_layout: r.display_text().map(|text| {
+                        let style = r.text_style();
+                        let mut shaped = a.fonts.layout(
+                            text,
+                            &style,
+                            r.rect.map(|q| q.width / r.effective_scale),
+                            r.rect.map(|q| q.height / r.effective_scale),
+                        );
+                        crate::text::rasterize(&a.fonts.face(&style.font), style.size, &mut shaped);
+                        shaped
+                    }),
                     scripts,
                     created_at: r.created_at.clone(),
                 })
@@ -158,8 +176,11 @@ mod tests {
             texture.texture,
             Some(crate::TextureFill::Color([1.0, 0.0, 0.0, 0.5]))
         );
-        // Font string: top left at (874, 566), 4 chars x 6 px wide, 12 tall.
-        assert_eq!(rect(font), Some((874.0, 554.0, 24.0, 12.0)));
+        // Font-backed advances and ascent/descent replace the old 24x12 guess.
+        let (w, h) = crate::text::expected_fallback("abcd", 12.0);
+        let q = font.rect.unwrap();
+        assert!((q.left - 874.0).abs() < 1e-5 && (q.bottom - (566.0 - h)).abs() < 1e-5);
+        assert!((q.width - w).abs() < 1e-5 && (q.height - h).abs() < 1e-5);
     }
 
     #[test]
@@ -252,4 +273,73 @@ pub fn configure_ui_size(lua: &Lua, size: (f64, f64)) -> mlua::Result<()> {
         a.dirty = true;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fidelity_tests {
+    use crate::Sim;
+    #[test]
+    fn scroll_offsets_and_nested_clip_reach_snapshot() {
+        let sim = Sim::new().unwrap();
+        sim.eval(
+            r#"
+            local v = CreateFrame('ScrollFrame', 'Viewport', UIParent)
+            v:SetSize(100, 50); v:SetPoint('BOTTOMLEFT', 20, 30)
+            local c = CreateFrame('Frame', 'Content', v); c:SetSize(200, 150)
+            v:SetScrollChild(c); v:SetHorizontalScroll(10); v:SetVerticalScroll(25)
+            local t = c:CreateTexture('Overflow'); t:SetAllPoints(); t:SetColorTexture(1,0,0,1)
+            assert(v:GetHorizontalScrollRange() == 100)
+            assert(v:GetVerticalScrollRange() == 100)
+        "#,
+        )
+        .unwrap();
+        let snap = sim.snapshot().unwrap();
+        let content = snap
+            .regions
+            .iter()
+            .find(|r| r.name.as_deref() == Some("Content"))
+            .unwrap();
+        let q = content.rect.unwrap();
+        assert_eq!(
+            (q.left, q.bottom, q.width, q.height),
+            (10.0, -45.0, 200.0, 150.0)
+        );
+        let overflow = snap
+            .regions
+            .iter()
+            .find(|r| r.name.as_deref() == Some("Overflow"))
+            .unwrap();
+        assert_eq!(overflow.clip, snap.regions[1].rect);
+        assert_eq!(overflow.rect, content.rect);
+    }
+    #[test]
+    fn overlapping_frames_raise_lower_and_visual_state() {
+        let sim = Sim::new().unwrap();
+        sim.eval(r#"
+            local a = CreateFrame('Frame', 'A'); a:SetSize(50,50); a:SetPoint('CENTER'); a:EnableMouse(true)
+            local b = CreateFrame('Frame', 'B'); b:SetSize(50,50); b:SetPoint('CENTER'); b:EnableMouse(true)
+            a:Raise(); assert(a:GetFrameLevel() > b:GetFrameLevel())
+            a:Lower(); assert(a:GetFrameLevel() < b:GetFrameLevel())
+            b:SetFrameLevel(50)
+            local t = b:CreateTexture('Tint', 'OVERLAY', nil, -3)
+            t:SetVertexColor(0.2,0.4,0.6,0.8); t:SetTexCoord(0.1,0.9,0.2,0.8)
+            local f = CreateFont('FixtureFont'); f:SetFont('Media/font.ttf', 18, 'OUTLINE')
+            local label = b:CreateFontString('Label'); label:SetFontObject(f); label:SetTextColor(1,0,0,1)
+        "#).unwrap();
+        let snap = sim.snapshot().unwrap();
+        let tint = snap
+            .regions
+            .iter()
+            .find(|r| r.name.as_deref() == Some("Tint"))
+            .unwrap();
+        assert_eq!(tint.visual.uv, [0.1, 0.9, 0.2, 0.8]);
+        assert_eq!(tint.layer, Some((crate::DrawLayer::Overlay, -3)));
+        let label = snap
+            .regions
+            .iter()
+            .find(|r| r.name.as_deref() == Some("Label"))
+            .unwrap();
+        assert_eq!(label.visual.size, 18.0);
+        assert_eq!(label.visual.color, [1.0, 0.0, 0.0, 1.0]);
+    }
 }

@@ -3,31 +3,39 @@ use mlua::{Lua, Table, Value};
 
 /// Single construction boundary for SIM2's visual font model.
 pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
-    let constructor: mlua::Function = lua.load(r#"
-        return function(name)
-            local f = { name = name, path = "Fonts/FRIZQT__.TTF", size = 12, flags = "" }
+    let constructor:mlua::Function=lua.load(r#"
+        return function(name,size,color,offset)
+            local f={_font={"Fonts/FRIZQT__.TTF",size,""},_name=name}
+            local defaults={TextColor=color,ShadowColor={0,0,0,1},ShadowOffset={offset,-offset},JustifyH={"LEFT"},JustifyV={"MIDDLE"},Spacing={0}}
+            f._defaults=defaults
+            function f:GetName() return self._name end
             function f:GetObjectType() return "Font" end
-            function f:GetName() return self.name end
-            function f:GetFont() return self.path, self.size, self.flags end
-            function f:SetFont(path, size, flags) self.path, self.size, self.flags = path, size, flags or ""; return true end
-            function f:SetFontObject(other) self:SetFont(other:GetFont()) end
-            function f:GetFontObject() return self end
-            function f:SetTextColor(...) self.color = {...} end
-            function f:GetTextColor() return unpack(self.color or {1,1,1,1}) end
-            function f:SetShadowColor(...) self.shadow = {...} end
-            function f:GetShadowColor() return unpack(self.shadow or {0,0,0,1}) end
-            function f:SetShadowOffset(x,y) self.sx,self.sy=x,y end
-            function f:GetShadowOffset() return self.sx or 0,self.sy or 0 end
-            function f:SetJustifyH(v) self.h=v end
-            function f:GetJustifyH() return self.h or "LEFT" end
-            function f:SetJustifyV(v) self.v=v end
-            function f:GetJustifyV() return self.v or "MIDDLE" end
-            function f:SetSpacing(v) self.spacing=v end
-            function f:GetSpacing() return self.spacing or 0 end
+            function f:SetFont(path,size,flags) self._font_explicit=true;self._font={path,size,flags or ""};return true end
+            function f:GetFont() if self._parent and not self._font_explicit then return self._parent:GetFont() end;return unpack(self._font) end
+            function f:SetFontObject(parent)
+                if type(parent)=="string" then parent=_G[parent] end
+                assert(type(parent)=="table" and parent.GetFont,"font object expected")
+                local p=parent
+                while p do assert(p~=self,"font inheritance cycle");p=rawget(p,"_parent") end
+                self._parent=parent;self._font_explicit=false
+            end
+            function f:GetFontObject() return self._parent or self end
+            for _,key in ipairs({"TextColor","ShadowColor","ShadowOffset","JustifyH","JustifyV","Spacing"}) do
+                f["Set"..key]=function(self,...) self["_"..key]={...} end
+                f["Get"..key]=function(self)
+                    local value=rawget(self,"_"..key)
+                    if value then return unpack(value) end
+                    if self._parent then return self._parent["Get"..key](self._parent) end
+                    return unpack(defaults[key])
+                end
+            end
             return f
         end
     "#).eval()?;
-    constructor.call(name)
+    let native = crate::fonts::native_style(name);
+    let (size, color) = native.unwrap_or((12.0, [1.0; 4]));
+    let color = lua.create_sequence_from(color)?;
+    constructor.call((name, size, color, if native.is_some() { 1.0 } else { 0.0 }))
 }
 
 fn json_value(lua: &Lua, value: &serde_json::Value) -> SimResult<Value> {

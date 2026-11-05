@@ -645,6 +645,7 @@ impl Session {
                 .get::<Table>("__selu_saved_names")?
                 .raw_set(name.as_str(), true)?;
         }
+        crate::fonts::register_addon_root(sim.lua(), dir)?;
         let files =
             loader::read_files_with_diagnostics(&toc, |message| lock(&sim.logs).push(message))
                 .map_err(runtime)?;

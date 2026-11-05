@@ -29,21 +29,47 @@ local x,y,w,h=p:GetRect();assert(x==100 and y==100 and w==20 and h==20, 'valid p
 "#);
 }
 
+fn reference_text_metrics(text: &str) -> (f64, f64) {
+    use ab_glyph::Font;
+    let f = ab_glyph::FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).unwrap();
+    let mut width = 0.0;
+    let mut previous = None;
+    for c in text.chars() {
+        let id = f.glyph_id(c);
+        width += f.h_advance_unscaled(id);
+        if let Some(p) = previous {
+            width += f.kern_unscaled(p, id);
+        }
+        previous = Some(id);
+    }
+    (
+        (width * 12.0 / f.units_per_em().unwrap()) as f64,
+        ((f.ascent_unscaled() - f.descent_unscaled() + f.line_gap_unscaled()) * 12.0
+            / f.units_per_em().unwrap()) as f64,
+    )
+}
 #[test]
 fn intrinsic_fontstring_dimensions() {
-    lua(r#"
+    // Was 24x12 from the fixed half-size model; derive from the font tables.
+    let (width, height) = reference_text_metrics("abcd");
+    lua(&format!(
+        r#"
 local f=UIParent:CreateFontString();f:SetFont('Fonts/FRIZQT__.TTF',12);f:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',0,0);f:SetText('abcd')
-local x,y,w,h=f:GetRect();assert(w==24 and h==12,'expected metric 24x12, got '..w..'x'..h)
-"#);
+local x,y,w,h=f:GetRect();assert(math.abs(w-{width})<0.00001 and math.abs(h-{height})<0.00001,'incorrect font metrics')
+"#
+    ));
 }
-
 #[test]
 fn wrapping_uses_resolved_anchor_width() {
-    lua(r#"
+    let (width, height) = reference_text_metrics("abcd");
+    let width = width + 0.001;
+    lua(&format!(
+        r#"
 local f=UIParent:CreateFontString();f:SetFont('Fonts/FRIZQT__.TTF',12);f:SetText('abcdefgh')
-f:SetPoint('TOPLEFT',UIParent,'TOPLEFT',0,0);f:SetPoint('TOPRIGHT',UIParent,'TOPLEFT',24,0)
-assert(f:GetWidth()==24);assert(f:GetStringHeight()==24,'expected two lines, got '..f:GetStringHeight())
-"#);
+f:SetPoint('TOPLEFT',UIParent,'TOPLEFT',0,0);f:SetPoint('TOPRIGHT',UIParent,'TOPLEFT',{width},0)
+assert(math.abs(f:GetWidth()-{width})<0.00001);assert(math.abs(f:GetStringHeight()-2*{height})<0.00001,'expected two measured lines, got '..f:GetStringHeight())
+"#
+    ));
 }
 
 #[test]

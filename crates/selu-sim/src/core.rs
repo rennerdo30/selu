@@ -112,6 +112,54 @@ pub enum TextureFill {
     Color([f32; 4]),
 }
 
+/// Visual state shared by layout, snapshots and Studio.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VisualStyle {
+    pub font: String,
+    pub size: f64,
+    pub flags: String,
+    pub color: [f32; 4],
+    pub shadow: [f32; 4],
+    pub shadow_offset: (f64, f64),
+    pub justify_h: String,
+    pub justify_v: String,
+    pub wrap: bool,
+    pub max_lines: usize,
+    #[serde(default = "default_true")]
+    pub non_space_wrap: bool,
+    #[serde(default = "default_true")]
+    pub ellipsis: bool,
+    #[serde(default)]
+    pub spacing: f64,
+    pub uv: [f32; 4],
+    pub tint: [f32; 4],
+    pub blend: String,
+}
+fn default_true() -> bool {
+    true
+}
+impl Default for VisualStyle {
+    fn default() -> Self {
+        Self {
+            font: String::new(),
+            size: 12.0,
+            flags: String::new(),
+            color: [1.0; 4],
+            shadow: [0.0; 4],
+            shadow_offset: (0.0, 0.0),
+            justify_h: "LEFT".into(),
+            justify_v: "TOP".into(),
+            wrap: true,
+            max_lines: 0,
+            non_space_wrap: true,
+            ellipsis: true,
+            spacing: 0.0,
+            uv: [0.0, 1.0, 0.0, 1.0],
+            tint: [1.0; 4],
+            blend: "BLEND".into(),
+        }
+    }
+}
 /// One region as the front ends see it. Fields that the current model does
 /// not know yet are `None`; S1 fills them from the arena.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,8 +184,14 @@ pub struct RegionSnapshot {
     pub layer: Option<(DrawLayer, i8)>,
     /// Effective alpha (own alpha times the ancestors').
     pub alpha: f64,
+    #[serde(default)]
+    pub visual: VisualStyle,
+    #[serde(default)]
+    pub clip: Option<Rect>,
     pub texture: Option<TextureFill>,
     pub text: Option<String>,
+    #[serde(default)]
+    pub text_layout: Option<crate::text::TextLayout>,
     /// Script handlers set on the region, sorted (`OnClick`, `OnEvent`, ...).
     pub scripts: Vec<String>,
     /// Where the region was created, when known.
@@ -873,8 +927,11 @@ mod tests {
                 level: Some(1),
                 layer: Some((DrawLayer::Artwork, 0)),
                 alpha: 1.0,
+                visual: VisualStyle::default(),
+                clip: None,
                 texture: Some(TextureFill::Color([1.0, 0.0, 0.0, 1.0])),
                 text: None,
+                text_layout: None,
                 scripts: vec!["OnEvent".into()],
                 created_at: None,
             }],
@@ -886,64 +943,41 @@ mod tests {
     }
 }
 
-/// Fixed-width metric shared with Studio: Unicode characters have width
-/// `0.5 * font_size`, lines have height `font_size`. WoW markup is ignored.
+/// Font-backed measurement using the same fallback face as region layout.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextMeasurement {
     pub width: f64,
     pub height: f64,
 }
 pub fn measure_text(text: &str, font_size: f64) -> TextMeasurement {
-    let mut chars = text.chars().peekable();
-    let (mut width, mut longest, mut lines) = (0usize, 0usize, 1usize);
-    while let Some(c) = chars.next() {
-        if c == '|' {
-            match chars.peek().copied() {
-                Some('c') => {
-                    chars.next();
-                    for _ in 0..8 {
-                        chars.next();
-                    }
-                    continue;
-                }
-                Some('r') | Some('h') => {
-                    chars.next();
-                    continue;
-                }
-                Some('T') | Some('H') => {
-                    let end = if chars.next() == Some('T') { 't' } else { 'h' };
-                    while let Some(c) = chars.next() {
-                        if c == '|' && chars.peek() == Some(&end) {
-                            chars.next();
-                            break;
-                        }
-                    }
-                    continue;
-                }
-                Some('|') => {
-                    chars.next();
-                }
-                _ => {}
-            }
-        }
-        if c == '\n' {
-            longest = longest.max(width);
-            width = 0;
-            lines += 1;
-        } else {
-            width += 1;
-        }
-    }
+    let style = VisualStyle {
+        size: font_size,
+        ..Default::default()
+    };
+    let layout = crate::fonts::FontBook::default().layout(text, &style, None, None);
     TextMeasurement {
-        width: longest.max(width) as f64 * 0.5 * font_size,
-        height: lines as f64 * font_size,
+        width: layout.width,
+        height: layout.height,
     }
 }
+#[cfg(test)]
+mod proportional_falsifier {
+    #[test]
+    fn measured_advances_come_from_the_font() {
+        assert!(
+            super::measure_text("WWW", 18.0).width > super::measure_text("iii", 18.0).width * 2.0
+        );
+    }
+}
+
 #[cfg(test)]
 mod text_tests {
     #[test]
     fn unicode_and_markup() {
         let m = super::measure_text("|cffffffff\u{732b}\u{e9}|r\n|Hitem:1|hX|h|Ticon:12|t", 12.0);
-        assert_eq!((m.width, m.height), (12.0, 24.0));
+        let (first, h) = crate::text::expected_fallback("\u{732b}\u{e9}", 12.0);
+        let second = crate::text::expected_fallback("X", 12.0).0 + 12.0;
+        assert!((m.width - first.max(second)).abs() < 1e-5);
+        assert!((m.height - 2.0 * h).abs() < 1e-5);
     }
 }

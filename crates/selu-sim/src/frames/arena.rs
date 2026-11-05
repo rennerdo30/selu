@@ -32,6 +32,11 @@ pub struct Region {
     pub effective_alpha: f64,
     pub text: Option<String>,
     pub texture: Option<TextureFill>,
+    pub visual: crate::core::VisualStyle,
+    pub font_overrides: u8,
+    pub clips_children: bool,
+    pub scroll_child: Option<usize>,
+    pub scroll: (f64, f64),
     pub font_size: f64,
     pub font_path: String,
     pub font_flags: String,
@@ -49,6 +54,7 @@ pub struct Region {
 }
 #[derive(Default)]
 pub struct Arena {
+    pub fonts: crate::fonts::FontBook,
     pub regions: Vec<Region>,
     pub dirty: bool,
     pub cursor: (f64, f64),
@@ -89,6 +95,14 @@ pub fn focus(a: &mut Arena, ctx: &crate::Ctx, target: Option<usize>) {
 }
 
 impl Region {
+    pub fn text_style(&self) -> crate::core::VisualStyle {
+        crate::core::VisualStyle {
+            font: self.font_path.clone(),
+            size: self.font_size,
+            flags: self.font_flags.clone(),
+            ..self.visual.clone()
+        }
+    }
     /// Display placeholders never stringify or expose opaque secret payloads.
     pub fn display_text(&self) -> Option<&str> {
         if matches!(self.text_value, mlua::Value::LightUserData(_)) {
@@ -97,4 +111,33 @@ impl Region {
             self.text.as_deref()
         }
     }
+}
+
+/// Intersection of every clipping ancestor, in screen coordinates.
+pub fn clip(a: &Arena, i: usize) -> Option<crate::Rect> {
+    let mut parent = a.regions[i].parent;
+    let mut result: Option<crate::Rect> = None;
+    for _ in 0..a.regions.len() {
+        let Some(p) = parent else { break };
+        let r = &a.regions[p];
+        if (r.clips_children || r.kind == "ScrollFrame")
+            && let Some(q) = r.rect
+        {
+            result = Some(match result {
+                None => q,
+                Some(c) => {
+                    let left = c.left.max(q.left);
+                    let bottom = c.bottom.max(q.bottom);
+                    crate::Rect {
+                        left,
+                        bottom,
+                        width: ((c.left + c.width).min(q.left + q.width) - left).max(0.0),
+                        height: ((c.bottom + c.height).min(q.bottom + q.height) - bottom).max(0.0),
+                    }
+                }
+            });
+        }
+        parent = r.parent;
+    }
+    result
 }
