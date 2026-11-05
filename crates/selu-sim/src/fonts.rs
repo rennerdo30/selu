@@ -14,6 +14,13 @@ pub struct FontBook {
     layouts: RefCell<HashMap<String, crate::text::TextLayout>>,
 }
 impl FontBook {
+    pub fn open_client(&mut self, root: &std::path::Path, product: &str) -> Result<(), String> {
+        self.assets.open_client(root, product)?;
+        self.faces.get_mut().clear();
+        self.layouts.get_mut().clear();
+        Ok(())
+    }
+
     pub fn asset(&self, name: &str) -> bool {
         matches!(self.assets.lookup(name), crate::assets::Lookup::Found(_))
     }

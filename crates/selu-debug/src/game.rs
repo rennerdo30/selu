@@ -149,6 +149,10 @@ pub fn battlenet_exe() -> Option<PathBuf> {
 /// User settings for game testing, kept in `%APPDATA%\Selu\studio.toml`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
+    #[serde(default)]
+    pub disable_client_assets: bool,
+    #[serde(default)]
+    pub client_install: Option<PathBuf>,
     /// Install folders added by hand.
     #[serde(default)]
     pub extra_roots: Vec<PathBuf>,

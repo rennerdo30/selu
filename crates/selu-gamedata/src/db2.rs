@@ -3,7 +3,7 @@ use crate::{
     Result, Storage,
     local::{le, slice},
 };
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Atlas {
     pub name: String,
     pub file_data_id: u32,

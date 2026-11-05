@@ -68,6 +68,17 @@ impl RegionModel for LuaTableModel {
                     layer: Some(r.layer),
                     alpha: r.effective_alpha,
                     visual: crate::core::VisualStyle {
+                        uv: if let Some(b) = r.atlas_uv {
+                            let u = r.visual.uv;
+                            [
+                                b[0] + u[0] * (b[1] - b[0]),
+                                b[0] + u[1] * (b[1] - b[0]),
+                                b[2] + u[2] * (b[3] - b[2]),
+                                b[2] + u[3] * (b[3] - b[2]),
+                            ]
+                        } else {
+                            r.visual.uv
+                        },
                         font: r.font_path.clone(),
                         size: r.font_size * r.effective_scale,
                         flags: r.font_flags.clone(),

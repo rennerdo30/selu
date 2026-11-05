@@ -13,6 +13,7 @@ name = "selu-studio"
 path = "src/main.rs"
 
 [dependencies]
+selu-gamedata = { path = "../selu-gamedata" }
 selu-sim = { path = "../selu-sim" }
 selu-sourcemap = { path = "../selu-sourcemap" }
 selu-manifest = { path = "../selu-manifest" }
