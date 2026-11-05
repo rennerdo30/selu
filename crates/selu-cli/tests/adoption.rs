@@ -185,3 +185,82 @@ fn diagnostics_use_existing_warning_runtime_without_persistent_attachment() {
         assert_eq!(sim.logout_saved(&["DB", "OldDB"]).unwrap(), before);
     }
 }
+
+#[test]
+fn shared_map_validation_visits_are_bounded_including_strict_pass() {
+    let mut ty = "number".to_string();
+    for _ in 0..6 {
+        ty = format!("Map<string,{ty}>");
+    }
+    let src = source(&format!("{{items:new {ty}()}}"), 1, "");
+    let sim = vm(r#"
+        node=1;
+        for i=1,6 do node={a=node,b=node,c=node,d=node,e=node,f=node,g=node,h=node} end;
+        DB={dbVersion=1,items=node}; root=DB; top=node;
+        visits=0; counting=true;
+        local original=pairs;
+        pairs=function(t)
+            local iter,state,key=original(t);
+            return function(state,key)
+                local next_key,value=iter(state,key);
+                if next_key~=nil and counting then
+                    visits=visits+1;
+                    if visits>10000 then counting=false; error('10000 visit safety cap') end
+                end
+                return next_key,value;
+            end,state,key;
+        end
+    "#);
+    load(&sim, &src);
+    sim.eval("counting=false; print(visits)").unwrap();
+    let messages = sim.prints();
+    let visits = messages.last().unwrap().parse::<usize>().unwrap();
+    // 50 unique input entries: two root keys and six maps of eight edges.
+    // Eight traversals cover both validation passes, clones, commit and defaults.
+    let visit_bound = 8 * (2 + 6 * 8);
+    println!("shared six-level graph: {visits} iterator visits; bound {visit_bound}");
+    assert!(
+        visits <= visit_bound,
+        "{visits} visits exceeds {visit_bound}: {messages:?}"
+    );
+    assert_eq!(
+        &messages[..messages.len() - 1],
+        ["writer", "ready", "writer"]
+    );
+    sim.eval("assert(DB==root and DB.items==top and DB.dbVersion==1); local cursor=top; for i=1,6 do assert(cursor.a==cursor.b and cursor.a==cursor.c and cursor.a==cursor.d and cursor.a==cursor.e and cursor.a==cursor.f and cursor.a==cursor.g and cursor.a==cursor.h); cursor=cursor.a end; assert(cursor==1)").unwrap();
+}
+
+#[test]
+fn validation_memo_distinguishes_schema_mode_and_active_paths() {
+    // Expose the private validator only in this test VM, without a source API.
+    let lua = common::compile(&source("{count:0}", 1, ""));
+    let marker = "-- Copy with provenance";
+    let instrumented = lua.replace(
+        marker,
+        &format!("__selu_test_validate=__selu_saved_validate\n{marker}"),
+    );
+    assert_ne!(lua, instrumented);
+    let sim = vm("DB={dbVersion=1,count=7}");
+    sim.load_addon("Addon", &[("main.lua".into(), instrumented)])
+        .unwrap();
+    sim.eval(
+        r#"
+        local memo={}; local numeric={fields={x="number"}}; local text={fields={x="string"}};
+        local empty={};
+        assert(__selu_test_validate(empty,numeric,true,{},"$",memo));
+        assert(not __selu_test_validate(empty,numeric,false,{},"$",memo));
+        local active={[empty]=true};
+        local ok,reason=__selu_test_validate(empty,numeric,true,active,"$",memo);
+        assert(not ok and string.find(reason,"cyclic record",1,true));
+        assert(__selu_test_validate(empty,numeric,true,{},"$",memo));
+        local shared={x=7};
+        assert(__selu_test_validate(shared,numeric,false,{},"$",memo));
+        assert(not __selu_test_validate(shared,text,false,{},"$",memo));
+        local failed={x=false};
+        assert(not __selu_test_validate(failed,numeric,false,{},"$",memo));
+        failed.x=7;
+        assert(__selu_test_validate(failed,numeric,false,{},"$",memo));
+    "#,
+    )
+    .unwrap();
+}

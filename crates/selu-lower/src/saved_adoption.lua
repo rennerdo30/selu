@@ -1,21 +1,42 @@
 -- Closed persistence boundary. Unknown fields stay in the table but are never projected.
-local function __selu_saved_validate(__selu_value, __selu_schema, __selu_missing, __selu_seen, __selu_path)
+-- Cache only complete successes, never an in-progress or failed validation.
+local function __selu_saved_validated(__selu_value, __selu_schema, __selu_missing, __selu_done)
+  if __selu_saved_type(__selu_value) == "table" then
+    local __selu_schemas = __selu_done[__selu_value] or {}
+    local __selu_modes = __selu_schemas[__selu_schema] or {}
+    __selu_done[__selu_value] = __selu_schemas
+    __selu_schemas[__selu_schema] = __selu_modes
+    __selu_modes[__selu_missing] = true
+  end
+  return true
+end
+local function __selu_saved_validate(__selu_value, __selu_schema, __selu_missing, __selu_seen, __selu_path, __selu_done)
   __selu_path = __selu_path or "$"
+  __selu_done = __selu_done or {}
   if __selu_saved_type(__selu_schema) == "string" then
     if (__selu_missing and __selu_value == nil) or __selu_saved_type(__selu_value) == __selu_schema then return true end
     return false, __selu_path .. ": expected " .. __selu_schema .. ", got " .. __selu_saved_type(__selu_value)
   end
+  -- Completed results are pass-local and schema/mode specific; active ancestors
+  -- still refuse cycles even when this triple succeeded on a different path.
+  if __selu_saved_type(__selu_value) == "table" then
+    if __selu_seen[__selu_value] then return false, __selu_path .. ": cyclic record" end
+    local __selu_schemas = __selu_done[__selu_value]
+    local __selu_modes = __selu_schemas and __selu_schemas[__selu_schema]
+    if __selu_modes and __selu_modes[__selu_missing] then return true end
+  end
   if __selu_schema.optional then
     if __selu_value == nil then return true end
-    return __selu_saved_validate(__selu_value, __selu_schema.optional, false, __selu_seen, __selu_path)
+    local __selu_valid, __selu_reason = __selu_saved_validate(__selu_value, __selu_schema.optional, false, __selu_seen, __selu_path, __selu_done)
+    if not __selu_valid then return false, __selu_reason end
+    return __selu_saved_validated(__selu_value, __selu_schema, __selu_missing, __selu_done)
   end
   if __selu_missing and __selu_value == nil then return true end
   if __selu_saved_type(__selu_value) ~= "table" then return false, __selu_path .. ": expected table, got " .. __selu_saved_type(__selu_value) end
-  if __selu_seen[__selu_value] then return false, __selu_path .. ": cyclic record" end
   __selu_seen[__selu_value] = true
   if __selu_schema.fields then
     for __selu_key, __selu_field in __selu_saved_pairs(__selu_schema.fields) do
-      local __selu_valid, __selu_reason = __selu_saved_validate(__selu_value[__selu_key], __selu_field, __selu_missing, __selu_seen, __selu_path .. "." .. __selu_key)
+      local __selu_valid, __selu_reason = __selu_saved_validate(__selu_value[__selu_key], __selu_field, __selu_missing, __selu_seen, __selu_path .. "." .. __selu_key, __selu_done)
       if not __selu_valid then return false, __selu_reason end
     end
   elseif __selu_schema.array then
@@ -24,20 +45,20 @@ local function __selu_saved_validate(__selu_value, __selu_schema, __selu_missing
       if __selu_saved_type(__selu_key) ~= "number" or __selu_key < 1 or __selu_key % 1 ~= 0 then return false, __selu_path .. ": invalid array index" end
       __selu_count = __selu_count + 1
       if __selu_key > __selu_max then __selu_max = __selu_key end
-      local __selu_valid, __selu_reason = __selu_saved_validate(__selu_item, __selu_schema.array, false, __selu_seen, __selu_path .. "[" .. __selu_saved_tostring(__selu_key) .. "]")
+      local __selu_valid, __selu_reason = __selu_saved_validate(__selu_item, __selu_schema.array, false, __selu_seen, __selu_path .. "[" .. __selu_saved_tostring(__selu_key) .. "]", __selu_done)
       if not __selu_valid then return false, __selu_reason end
     end
     if __selu_count ~= __selu_max then return false, __selu_path .. ": array has holes" end
   elseif __selu_schema.key then
     for __selu_key, __selu_item in __selu_saved_pairs(__selu_value) do
-      local __selu_valid, __selu_reason = __selu_saved_validate(__selu_key, __selu_schema.key, false, __selu_seen, __selu_path .. "[key]")
+      local __selu_valid, __selu_reason = __selu_saved_validate(__selu_key, __selu_schema.key, false, __selu_seen, __selu_path .. "[key]", __selu_done)
       if not __selu_valid then return false, __selu_reason end
-      __selu_valid, __selu_reason = __selu_saved_validate(__selu_item, __selu_schema.value, false, __selu_seen, __selu_path .. "[value]")
+      __selu_valid, __selu_reason = __selu_saved_validate(__selu_item, __selu_schema.value, false, __selu_seen, __selu_path .. "[value]", __selu_done)
       if not __selu_valid then return false, __selu_reason end
     end
   else return false, __selu_path .. ": invalid schema" end
   __selu_seen[__selu_value] = nil
-  return true
+  return __selu_saved_validated(__selu_value, __selu_schema, __selu_missing, __selu_done)
 end
 -- Copy with provenance so successful commits keep existing table identities and aliases.
 local function __selu_saved_clone(__selu_value, __selu_forward, __selu_reverse)

@@ -196,3 +196,9 @@ through the existing warning runtime. It names the database, phase or migration
 step and reason; exceptions retain their error text. Validation warnings include
 the field path and expected/actual kind. Warnings do not attach persistent writers
 and respect the existing warning level settings.
+
+Each validation pass memoises successful checks by table identity, schema identity
+and missing-field mode. Active-path cycle detection remains separate. Shared
+subgraphs are checked once per schema/mode instead of expanding every alias path;
+different schemas still validate the same table independently. The strict pass
+uses a fresh memo after default filling, so earlier successes cannot hide changes.
