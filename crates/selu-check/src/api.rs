@@ -162,6 +162,7 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         api_semantics: crate::types::ApiSemantics {
             untyped_return_tail: flag(d, "SeluUntypedReturnTail"),
             frame_factory: false,
+            pool_factory: flag(d, "SeluPoolFactory"),
             secret_results: crate::restrictions::secret_results(m, d),
             protected: flag(d, "IsProtectedFunction"),
             widget_protected: false,
@@ -473,6 +474,34 @@ impl Ctx<'_> {
     pub(crate) fn api_result(&mut self, e: &Expr, args: &[Expr], ty: &Type, ret: Type) -> Type {
         if matches!(ty, Type::Function {api_semantics,..} if api_semantics.plain_result) {
             return crate::restrictions::plain_results(ret);
+        }
+        if matches!(ty,Type::Function { api_semantics, .. } if api_semantics.pool_factory) {
+            if let Some(ExprKind::Str(name)) = args.first().map(|e| &e.kind)
+                && widget_decl(self.manifest, name).is_some()
+            {
+                let prefix = match &ret {
+                    Type::Tuple(values) => match values.first() {
+                        Some(Type::Widget(pool, _)) => pool.strip_suffix("_Frame"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(prefix) = prefix else {
+                    return ret;
+                };
+                let specialized = format!("{prefix}_{name}");
+                if widget_decl(self.manifest, &specialized).is_some() {
+                    let mut result = match ret {
+                        Type::Tuple(values) => values,
+                        other => vec![other],
+                    };
+                    if let Some(first) = result.first_mut() {
+                        *first = widget(self.manifest, &specialized);
+                    }
+                    return Type::Tuple(result);
+                }
+            }
+            return ret;
         }
         if !matches!(ty,Type::Function { api_semantics, .. } if api_semantics.frame_factory) {
             return ret;

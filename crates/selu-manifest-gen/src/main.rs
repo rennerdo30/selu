@@ -165,6 +165,13 @@ fn generate(args: &[String]) -> Result<()> {
             m.interface = build.major * 10000 + build.minor * 100 + build.patch;
         }
     }
+    let schema_path = "Interface/AddOns/Blizzard_SharedXML/UI.xsd";
+    let mut pool_sources = factory_sources;
+    pool_sources.push((
+        schema_path.into(),
+        git(repo, &["show", &format!("{commit}:{schema_path}")])?,
+    ));
+    selu_manifest_gen::pools::extend(&mut m, &pool_sources)?;
     if m.interface == 0 {
         return Err("interface requires a sourced overlay".into());
     }
@@ -422,6 +429,13 @@ fn update(args: &[String]) -> Result<()> {
         }
     }
     println!("{} builds: appended {growth} bytes", pending.len());
+    // Keep limitations visible even on an idempotent update with no pending builds.
+    for target in store.builds() {
+        print!(
+            "{}",
+            selu_manifest_gen::pools::warning_summary(&store.load(target)?)
+        );
+    }
     for &(branch, product) in CLIENTS {
         if !refs
             .lines()

@@ -49,30 +49,9 @@ function CreateProvenScrollBoxListLinearView() return CreateFromMixins(View); en
     );
     m
 }
-fn assert_pool_methods_withheld(m: &Manifest, factory: &str) {
-    let f = m.function(factory).unwrap();
-    if let Some(signature) = &f.signature {
-        let ty = signature.returns[0].ty.as_ref().unwrap();
-        let w = m.widgets.iter().find(|w| &w.name == ty).unwrap();
-        for name in ["Acquire", "Release", "EnumerateActive"] {
-            assert!(
-                !w.methods.iter().any(|d| d.name == name),
-                "{factory}.{name} has no complete callback-effect proof"
-            );
-        }
-    }
-}
 #[test]
 fn toolkit_pool_and_scrollbox_shapes() {
     let m = retail();
-    for factory in [
-        "CreateObjectPool",
-        "CreateFramePool",
-        "CreateTexturePool",
-        "CreateFontStringPool",
-    ] {
-        assert_pool_methods_withheld(&m, factory);
-    }
     for factory in ["CreateDataProvider", "CreateScrollBoxListLinearView"] {
         assert!(
             m.function(factory).unwrap().signature.is_some(),
@@ -99,16 +78,43 @@ GameTooltip.ClearLines();const count:number=GameTooltip.NumLines();
     assert!(check(&m, "const p=CreateFramePool(\"Frame\"); p.Undeclared();").has_errors());
 }
 #[test]
-fn region_factories_withhold_unproven_callback_effect_contracts() {
+fn sourced_toolkit_pool_contracts() {
     let m = retail();
-    for factory in [
-        "CreateFramePool",
-        "CreateObjectPool",
-        "CreateTexturePool",
-        "CreateFontStringPool",
-        "CreateMaskTexturePool",
+    // DialogKeys:1066, Skin/Framework:718 and actionbar_skin_runtime:279.
+    let src = r#"
+const dressPool=CreateFramePool("DressUpModel");for(const [dress] of dressPool.EnumerateActive()){const typed:DressUpModel=dress;}
+const pool=CreateFramePool("Button",UIParent);
+for (const [button,active] of pool.EnumerateActive()) { button.SetText("hello"); const a:boolean=active; }
+const [button,isNew]=pool.Acquire();
+if (button != null) { button.SetText("hello"); pool.Release(button); }
+pool.ReleaseAll(); const count:number=pool.GetNumActive();
+const collection=CreateFramePoolCollection();
+const child=collection.CreatePool("Button",UIParent,"ButtonTemplate");
+for (const [button,active] of child.EnumerateActive()) { button.SetText("hello"); }
+for (const frame of collection.EnumerateActive()) { frame.Hide(); }
+const fonts=CreateFontStringPool(UIParent); for(const [font] of fonts.EnumerateActive()){font.SetText("hello");}
+const textures=CreateTexturePool(UIParent);for(const [texture] of textures.EnumerateActive()){texture.SetTexture(123);}
+const masks=CreateMaskTexturePool(UIParent);for(const [mask] of masks.EnumerateActive()){mask.SetTexture(123);}
+const actors=CreateActorPool(CreateFrame("ModelScene"));for(const [actor] of actors.EnumerateActive()){actor.ClearModel();}
+const unsecured=CreateUnsecuredFramePoolCollection();
+const [created,isNewPool]=unsecured.GetOrCreatePool("Button",UIParent,"ButtonTemplate");const fresh:boolean=isNewPool;
+for(const [button] of created.EnumerateActive()){button.SetText("hello");}
+const found=collection.GetPool("ButtonTemplate");if(found!=null){found.ReleaseAll();}
+"#;
+    let c = check(&m, src);
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    for bad in [
+        r#"const p=CreateUnsecuredObjectPool(()=>UIParent);"#,
+        r#"const c=CreateFramePoolCollection();c.CreatePool("Button",UIParent);"#,
+        r#"const p=CreateActorPool(UIParent);"#,
+        r#"const p=CreateActorPool(CreateFrame("ModelScene"));for(const [actor] of p.EnumerateActive()){actor.NotDeclared();}"#,
+        r#"const p=CreateFramePool("Button");p.Release(42);"#,
+        r#"const p=CreateFramePool("Button");p.Acquire(42);"#,
+        r#"const p=CreateFramePool("Button");p.GetNumActive(42);"#,
+        r#"const p=CreateTexturePool(UIParent);p.Release(UIParent);"#,
+        r#"const p=CreateFramePool("Button");p.Release(UIParent);"#,
     ] {
-        assert_pool_methods_withheld(&m, factory);
+        assert!(check(&m, bad).has_errors(), "{bad}");
     }
 }
 #[test]
@@ -275,5 +281,63 @@ function CreateKnown() local function Allocate() return CreateFrame("Frame"); en
             .as_deref()
             .filter(|s| !s.is_empty());
         assert_eq!(ty, expected, "{name}");
+    }
+}
+
+#[test]
+fn sourced_pool_coverage_at_every_retained_build() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store");
+    let store = selu_manifest::store::Store::open(&directory).unwrap();
+    for target in store.builds() {
+        let m = load_build(&directory, target).unwrap();
+        if m.source.as_ref().is_some_and(|source| {
+            source
+                .warnings
+                .iter()
+                .any(|w| w.starts_with(&format!("pool contracts withheld for {target}:")))
+        }) {
+            assert!(
+                !m.widgets
+                    .iter()
+                    .any(|w| w.attributes.contains_key("SeluPoolEvidence")),
+                "{target}: stale pool overlay"
+            );
+            continue;
+        }
+        for prefix in ["Create", "CreateSecure", "CreateUnsecured"] {
+            for kind in [
+                "Frame",
+                "Texture",
+                "FontString",
+                "MaskTexture",
+                "Object",
+                "Actor",
+            ] {
+                let name = format!("{prefix}{kind}Pool");
+                let Some(f) = m.function(&name) else {
+                    continue;
+                };
+                let d = f
+                    .signature
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{target}: {name}"));
+                let pool = &d.returns[0].ty;
+                assert!(
+                    pool.as_ref().is_some_and(|s| s.starts_with("W3")),
+                    "{target}: {name}"
+                );
+                let call = match kind {
+                    "Frame" => format!(r#"{name}("Button",UIParent)"#),
+                    "Object" => format!("{name}(()=>UIParent,()=>{{}})"),
+                    "Actor" => format!("{name}(CreateFrame(\"ModelScene\"))"),
+                    _ => format!("{name}(UIParent)"),
+                };
+                let src = format!(
+                    "const p={call}; for (const [element,active] of p.EnumerateActive()) {{ const a:boolean=active; }} p.ReleaseAll(); const n:number=p.GetNumActive();"
+                );
+                let c = check(&m, &src);
+                assert!(!c.has_errors(), "{target}: {name}: {:?}", c.diagnostics);
+            }
+        }
     }
 }

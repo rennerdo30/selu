@@ -1,6 +1,7 @@
 pub use selu_manifest::store::EXTRACTION_VERSION;
 pub mod coverage;
 pub mod factory;
+pub mod pools;
 pub mod xml;
 use mlua::{Lua, LuaOptions, StdLib, Table, Value};
 use selu_manifest::{Declaration, EventEntry, EventParam, Evidence, FunctionEntry, Manifest};

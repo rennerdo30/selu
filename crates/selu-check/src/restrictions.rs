@@ -458,6 +458,7 @@ fn forget_plain(ty: crate::Type) -> crate::Type {
             rest,
         } => {
             api_semantics.frame_factory = false;
+            api_semantics.pool_factory = false;
             api_semantics.plain_result = false;
             api_semantics.dynamic_protected |=
                 (api.0.is_some() || unspecified_callback) && !api_semantics.widget_protected;

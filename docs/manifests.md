@@ -281,7 +281,7 @@ newest stored extraction, so a compiler extraction fix can improve an existing p
 No project target, output directory, TOC or lock key contains an extraction ID.
 
 The generator's `EXTRACTION_VERSION` is re-exported from
-`selu_manifest::store::EXTRACTION_VERSION`. It is **1 for the W2 baseline**. Bump this
+`selu_manifest::store::EXTRACTION_VERSION`. It is **4 for non-fatal pool withholding warnings** (3 is the corrected W3 overlay, 2 its retained initial revision, and 1 the W2 baseline). Bump this
 constant whenever extraction output rules change, including sourced signatures or
 overlay changes. The workspace test `extraction_sources_and_overlays_require_version_bump`
 enforces this with a frozen SHA-256 contract per version in
@@ -380,8 +380,24 @@ recursive limits and dynamic return branches supply no factory proof.
 Parameters and results without sufficient evidence retain the existing untyped
 game-value policy. W2 follows uniquely indexed helper bodies within fixed bounds
 and invalidates contracts when opaque calls or callbacks can reach the objects.
-The six reviewed source pins now withhold their pool contracts, including typed
-Acquire and EnumerateActive methods; the generator does not guess those contracts.
+The conservative analysis still withholds pool contracts. W3 applies reviewed
+source overlays in `pools.rs` through the same overlay validator. The pool source
+must match a reviewed content digest. An unknown or missing Pools.lua,
+SecureTypes.lua or ProxyUtil.lua withholds pool signatures and object declarations,
+using the existing untyped game-value policy for unavailable contracts. W2's
+conservative source analysis and extraction of all other APIs continue normally.
+`source.warnings` in provenance records the affected build and file. `update`
+prints these limitations with `WARNING:` in its summary, including on an
+idempotent update. Empty warning lists are omitted; older manifests default to
+no warnings. Internal inconsistencies in a reviewed overlay (such as missing
+ModelScene API evidence) remain errors.
+Each pool widget retains pinned file/line citations in `SeluPoolEvidence`.
+Acquire is nullable at capacity; object-pool elements remain untyped. Literal
+frame types specialize the returned pool and its iterator/release contract.
+Collections enumerate objects only. GetPool is nullable; unsecured GetOrCreatePool
+also returns the new flag, while secure proxy forwarding retains only the pool.
+Older Classic sources lack DoesObjectBelongToPool. Secure collection proxies list
+that name without a defining implementation, so it is withheld there as well.
 Factory objects and mixins are source metadata, not a TOC-loading guarantee.
 
 `SeluIterator` in return attributes records source-proven Lua iterator yields.
@@ -411,3 +427,27 @@ iterator wrapper is generated.
 | `wowt` | `ptr` | 12.1.7.70668 | 120107 | `9fc0ba94381153262856ed0120a2675f1a11c30a` |
 | `wowxptr` | `ptr2` | 12.1.5.70340 | 120105 | `12380f8cdc541b7f0963f74cbe0874c21a857fbb` |
 <!-- selu-store-builds:end -->
+
+## Reviewing a new pool-source digest
+
+After the owner updates the source clone, review the new immutable pin with
+read-only `git show` and `git diff` against a reviewed pin. Inspect Pools.lua,
+SecureTypes.lua and ProxyUtil.lua together: constructor aliases, public proxy
+exports, parameter order/defaults, capacity nilability, release/reset behaviour,
+iterator state/control and yields, and collection forwarding/truncation. Check
+widget identities against that pin's UI.xsd and generated API documentation.
+A successful extraction or compilation alone is not evidence for a contract.
+
+Compute SHA-256 of each changed file's `git show <pin>:<path>` content after
+normalizing CRLF to LF (UTF-8); `reviewed_file` in `pools.rs` uses that exact
+normalization. Add the digest to the corresponding reviewed-file list only after
+confirming the declared signatures. Preserve older digests for historical pins.
+If behaviour differs, add source-specific handling and compiler regressions;
+do not accept the digest by weakening signatures or guessing unknown types.
+
+Run the pool withholding regression, factory argument/iterator tests, and the
+full required gate. Bump `EXTRACTION_VERSION`, append the new frozen digest in
+`tests/extraction_version.rs`, then run the normal generator `update` path to
+re-extract both tracking tips and retained locked builds. Confirm the reviewed
+build's warning is gone and its pool contracts are restored. Existing store
+segments and revisions remain immutable; never edit them to accept a digest.

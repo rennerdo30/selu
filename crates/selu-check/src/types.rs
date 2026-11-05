@@ -24,6 +24,7 @@ impl PartialEq for ApiOrigin {
 pub struct ApiSemantics {
     pub untyped_return_tail: bool,
     pub frame_factory: bool,
+    pub pool_factory: bool,
     pub secret_results: Vec<bool>,
     pub protected: bool,
     pub widget_protected: bool,
@@ -405,6 +406,7 @@ impl Type {
                 result.accepts_secrets = left.accepts_secrets && right.accepts_secrets;
                 result.plain_result = left.plain_result && right.plain_result;
                 result.frame_factory = left.frame_factory && right.frame_factory;
+                result.pool_factory = left.pool_factory && right.pool_factory;
                 let count = left.secret_results.len().max(right.secret_results.len());
                 result.secret_results = (0..count)
                     .map(|i| {

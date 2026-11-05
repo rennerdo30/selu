@@ -574,6 +574,9 @@ pub struct Declaration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Source {
+    /// Non-fatal extraction limitations retained with this build revision.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     pub commit: String,
     pub version: String,
     pub interface_source: String,
