@@ -22,6 +22,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Read assets from local game storage (never downloads).
+    Gamedata {
+        #[arg(long)]
+        install: PathBuf,
+        #[arg(long, default_value = "wowf")]
+        product: String,
+        #[arg(long)]
+        listfile: Option<PathBuf>,
+        /// info or cat
+        action: String,
+        file: Option<String>,
+    },
     /// Compile a Selu project to `dist/<Name>/`.
     Build {
         /// Project folder holding `selu.toml` (default: current folder).
@@ -85,6 +97,19 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match &cli.command {
+        Command::Gamedata {
+            install,
+            product,
+            listfile,
+            action,
+            file,
+        } => gamedata(
+            install,
+            product,
+            listfile.as_deref(),
+            action,
+            file.as_deref(),
+        ),
         Command::Build {
             path,
             target,
@@ -136,6 +161,47 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(code) => code,
     }
+}
+
+fn gamedata(
+    install: &Path,
+    product: &str,
+    listfile: Option<&Path>,
+    action: &str,
+    file: Option<&str>,
+) -> Result<(), ExitCode> {
+    let run = || -> selu_gamedata::Result<()> {
+        let storage = selu_gamedata::Storage::open(install, product, listfile)?;
+        match action {
+            "info" => println!(
+                "{} {}: {} root entries",
+                storage.build.product,
+                storage.build.version,
+                storage.entry_count()
+            ),
+            "atlas" => {
+                println!(
+                    "{:#?}",
+                    storage.atlas(file.ok_or("atlas requires a name")?)?
+                );
+            }
+            "cat" => {
+                use std::io::Write;
+                let file = file.ok_or("cat requires a path or FileDataID")?;
+                let bytes = match file.parse() {
+                    Ok(id) => storage.read(id)?,
+                    Err(_) => storage.read_path(file)?,
+                };
+                std::io::stdout().lock().write_all(&bytes)?;
+            }
+            _ => return Err("expected info, cat or atlas".into()),
+        }
+        Ok(())
+    };
+    run().map_err(|error| {
+        eprintln!("gamedata: {error}");
+        ExitCode::FAILURE
+    })
 }
 
 /// The `.selu` files `selu fmt` works on for one argument.

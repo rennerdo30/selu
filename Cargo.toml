@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/selu-gamedata",
     "crates/selu-diagnostics",
     "crates/selu-syntax",
     "crates/selu-manifest",
