@@ -103,9 +103,19 @@ fn shared_snapshots_select_and_validate_the_session_target() {
                 s.reload().unwrap();
             }
             s.eval(&format!(
-                "assert(_G['{yes}2']==nil); assert(_G['{no}2']~=nil)"
+                "assert(_G['{yes}2']==nil); assert(_G['{no}2']==nil)"
             ))
             .unwrap();
+            assert!(
+                !s.logs()
+                    .iter()
+                    .any(|l| l == &format!("not simulated: {yes}2"))
+            );
+            assert!(
+                s.logs()
+                    .iter()
+                    .any(|l| l == &format!("not simulated: {no}2"))
+            );
         }
     }
     let mut wrong = selu_sim::Session::new(selu_sim::SessionConfig {
