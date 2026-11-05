@@ -131,9 +131,8 @@ fn generate(args: &[String]) -> Result<()> {
             continue;
         }
         source_globals.parse(&path, &text)?;
-        if text.contains("CreateFromMixins") {
-            factory_sources.push((path.clone(), text.clone()));
-        }
+        // Helper bodies are needed for bounded factory effect proofs too.
+        factory_sources.push((path.clone(), text.clone()));
         files += 1;
         if path.starts_with("Interface/AddOns/Blizzard_APIDocumentationGenerated/") {
             sources.push(text);

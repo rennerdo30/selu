@@ -939,6 +939,16 @@ impl Ctx<'_> {
     /// operand): it must be a real value.
     fn value(&mut self, e: &Expr) -> Type {
         let t = self.expr(e);
+        if crate::game_iterator(&t).is_some()
+            || matches!(&t, Type::Tuple(ts) if ts.iter().any(|t| crate::game_iterator(t).is_some()))
+        {
+            self.out.push(err(
+                "SELU0357",
+                "an API iterator triple must be called directly in a for ... of loop",
+                &e.span,
+            ));
+            return Type::Error;
+        }
         let t = self.check_tuple_value(e, t);
         match t {
             Type::Cond => {

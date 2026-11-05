@@ -222,7 +222,10 @@ Single-build snapshots and derived caches retain Z's `.selum` encoding:
 MessagePack named maps. Decoding is bounded to 256 MiB. JSON fixtures remain readable.
 
 History segments in `manifests/store/*.selus` are plain Git files, with no LFS
-requirement. They begin with `SELUSEG\0`, format 2/schema 1 (u16 little endian),
+requirement. The unpublished initial pack was rebuilt from the six W2 snapshots
+on master `719f404` and fresh generation of each branch's latest build. It contains
+no pre-W2 snapshot at the retained pins. Future published build identities remain
+immutable; this bootstrap replacement was explicitly authorized before publication. They begin with `SELUSEG\0`, format 2/schema 1 (u16 little endian),
 a 32-byte SHA-256 checksum of the complete remaining segment, and a u32 compressed
 catalog length. The zstd-compressed MessagePack catalog contains build delta indexes
 and entry-block offsets; independent zstd entry blocks follow. The checksum covers
@@ -290,13 +293,15 @@ that all dynamic widget types have been recovered.
 A bounded source analysis follows lexical closures, local mixins, public aliases,
 Mixin/CreateFromMixins and CreateAndInitFromMixin construction, and the pinned
 ProxyUtil helpers' explicit exported method lists. It creates nominal checked
-object signatures for proven factory results, including pools, ScrollBox views
-and DataProviders. Private helpers stay private. Analysis never executes Blizzard
+object signatures for proven factory results, including ScrollBox views and
+DataProviders. Private helpers stay private. Analysis never executes Blizzard
 Lua and does not expose Lua construction helpers to Selu. Unresolved operations,
 recursive limits and dynamic return branches supply no factory proof.
 Parameters and results without sufficient evidence retain the existing untyped
-game-value policy. Pool allocator closures prove base Frame/Texture/FontString
-results; Acquire is nullable because a capacity-limited pool can be exhausted.
+game-value policy. W2 follows uniquely indexed helper bodies within fixed bounds
+and invalidates contracts when opaque calls or callbacks can reach the objects.
+The six reviewed source pins now withhold their pool contracts, including typed
+Acquire and EnumerateActive methods; the generator does not guess those contracts.
 Factory objects and mixins are source metadata, not a TOC-loading guarantee.
 
 `SeluIterator` in return attributes records source-proven Lua iterator yields.

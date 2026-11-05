@@ -5,6 +5,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let directory = root.join("manifests/store");
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--verify") {
+        let pack = store::Store::open(Path::new(&args[1]))?;
+        let snapshots = selu_manifest::load_manifest_dir(Path::new(&args[2]))?;
+        assert_eq!(
+            pack.builds().count(),
+            snapshots.len(),
+            "stored build set differs from fresh generation"
+        );
+        for mut manifest in snapshots {
+            manifest.flavour = selu_manifest::product(&manifest.flavour).into();
+            let target = manifest.target_string();
+            if pack.load(&target)? != manifest {
+                return Err(
+                    format!("reconstruction differs from fresh generation for {target}").into(),
+                );
+            }
+        }
+        println!(
+            "verified all {} reconstructions against fresh generation",
+            pack.builds().count()
+        );
+        return Ok(());
+    }
     if args.first().is_some_and(|a| a == "--load") {
         let start = Instant::now();
         let manifests = store::load_cached_selected(
@@ -27,6 +50,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.first().is_some_and(|a| a == "--repack") {
         let mut snapshots = selu_manifest::load_manifest_dir(Path::new(&args[1]))?;
+        for manifest in &mut snapshots {
+            manifest.flavour = selu_manifest::product(&manifest.flavour).into();
+        }
         snapshots.sort_by_key(|m| m.target_string());
         let mut pack = store::Store::default();
         let start = Instant::now();
@@ -92,9 +118,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-    let cache = root
-        .join("target/history-measurement")
-        .join(format!("{}", std::process::id()));
+    let cache = root.join("target/history-measurement").join(format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
     let baseline_root = args
         .iter()
         .position(|a| a == "--baseline")
