@@ -8,20 +8,15 @@ impl Ctx<'_> {
             name,
             name_span,
             defaults,
-            version_key,
+            ty,
             ..
         } = &s.kind
         {
-            if version_key.is_some() {
-                self.types.saved_adoptions.insert(name.clone());
-            }
-            let ty = self.value(defaults);
-            self.declare(
-                name,
-                name_span,
-                Kind::Saved,
-                adoption_type(ty, version_key.is_some()),
-            );
+            self.types.saved_adoptions.insert(name.clone());
+            let inferred = self.value(defaults);
+            let ty = self.annotation(ty).unwrap_or(inferred);
+            self.types.saved_schemas.insert(s.span.start, ty.clone());
+            self.declare(name, name_span, Kind::Saved, adoption_type(ty, true));
         }
     }
     pub(crate) fn saved_access(&mut self, name: &str, span: &Span) {
@@ -41,7 +36,7 @@ impl Ctx<'_> {
             );
         }
     }
-    fn saved_root(&self, target: &selu_syntax::Expr) -> bool {
+    pub(crate) fn is_saved_root(&self, target: &selu_syntax::Expr) -> bool {
         use selu_syntax::ExprKind;
         match &target.kind {
             ExprKind::Ident(name) => self.lookup(name).is_some_and(|(_, b)| {
@@ -50,7 +45,7 @@ impl Ctx<'_> {
             }),
             ExprKind::Member { object, .. }
             | ExprKind::OptionalMember { object, .. }
-            | ExprKind::Index { object, .. } => self.saved_root(object),
+            | ExprKind::Index { object, .. } => self.is_saved_root(object),
             _ => false,
         }
     }
@@ -58,7 +53,7 @@ impl Ctx<'_> {
         self.out.push(err("SELU0469", "class instances cannot be saved because their metatables and methods cannot be persisted", span).with_help("copy the fields into a plain object, for example { x: p.x, y: p.y }"));
     }
     pub(crate) fn saved_write_value(&mut self, target: &selu_syntax::Expr, ty: &Type, span: &Span) {
-        if self.saved_root(target) && contains_class(ty) {
+        if self.is_saved_root(target) && contains_class(ty) {
             self.class_saved_error(span);
         }
     }
@@ -69,7 +64,7 @@ impl Ctx<'_> {
     ) {
         if let selu_syntax::ExprKind::Member { object, name } = &callee.kind
             && matches!(name.as_str(), "push" | "insert" | "set" | "add")
-            && self.saved_root(object)
+            && self.is_saved_root(object)
         {
             for arg in args {
                 if self.types.get(arg.id).is_some_and(contains_class) {
@@ -132,8 +127,7 @@ impl Ctx<'_> {
                         }
 
                         if field.key == "__selu_version"
-                            || (version_key.is_some()
-                                && field.key == "__selu_saved_adoption_context")
+                            || field.key == "__selu_saved_adoption_context"
                         {
                             self.out.push(err(
                                 "SELU0470",
@@ -143,11 +137,25 @@ impl Ctx<'_> {
                         }
                     }
                 }
-                let ty = self.value(defaults);
-                if version_key.is_some() && !closed_schema(&ty, 0) {
+                let inferred = self.value(defaults);
+                let ty = self
+                    .types
+                    .saved_schemas
+                    .get(&s.span.start)
+                    .cloned()
+                    .unwrap_or(inferred.clone());
+                let inferred = self.value_expected(defaults, Some(&ty));
+                if !inferred.assignable_to(&ty) {
+                    self.out.push(err(
+                        "SELU0313",
+                        format!("defaults of type {inferred} do not fit {ty}"),
+                        &defaults.span,
+                    ));
+                }
+                if !closed_schema(&ty, 0) {
                     self.out.push(err(
                         "SELU0901",
-                        "adoption requires a finite closed record schema",
+                        "saved declarations require a finite closed record schema",
                         &defaults.span,
                     ));
                 }
@@ -163,7 +171,7 @@ impl Ctx<'_> {
                         .with_help("use primitive map keys and serializable values at every depth"),
                     );
                 }
-                if !matches!(ty, Type::Object(_)) {
+                if !matches!(crate::shape_of(&ty), Type::Object(_)) {
                     self.out.push(err(
                         "SELU0464",
                         "saved defaults must be an object",
@@ -200,7 +208,7 @@ impl Ctx<'_> {
                         name_span,
                     ));
                 }
-                self.finish_decl(name, adoption_type(ty, version_key.is_some()));
+                self.finish_decl(name, adoption_type(ty, true));
             }
             StmtKind::Migrate {
                 name,
@@ -252,7 +260,7 @@ impl Ctx<'_> {
                 if adoption && param.ty.is_none() {
                     self.out.push(err(
                         "SELU0901",
-                        "adoption migrations require a closed historical schema",
+                        "saved migrations require a closed historical schema",
                         &param.span,
                     ));
                 }
@@ -318,10 +326,16 @@ fn serializable_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) ->
         return true;
     }
     match crate::shape_of(ty) {
-        Type::Number | Type::String | Type::Boolean | Type::Null => true,
+        Type::Number
+        | Type::String
+        | Type::Boolean
+        | Type::Null
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
         Type::Optional(t) | Type::Array(t) => serializable_seen(&t, seen),
         Type::Object(fs) => fs.values().all(|t| serializable_seen(t, seen)),
-        Type::Tuple(ts) => ts.iter().all(|t| serializable_seen(t, seen)),
+        Type::Union(ts) | Type::Tuple(ts) => ts.iter().all(|t| serializable_seen(t, seen)),
         Type::Map(k, v) => {
             matches!(
                 crate::shape_of(&k),
@@ -335,7 +349,7 @@ fn serializable_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) ->
         _ => false,
     }
 }
-fn contains_class(ty: &Type) -> bool {
+pub(crate) fn contains_class(ty: &Type) -> bool {
     contains_class_seen(ty, &mut Default::default())
 }
 fn contains_class_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) -> bool {
@@ -348,7 +362,7 @@ fn contains_class_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) 
         Type::Class(..) | Type::ClassObject(_) => true,
         Type::Optional(t) | Type::Array(t) | Type::Set(t) => contains_class_seen(&t, seen),
         Type::Object(fs) => fs.values().any(|t| contains_class_seen(t, seen)),
-        Type::Tuple(ts) => ts.iter().any(|t| contains_class_seen(t, seen)),
+        Type::Union(ts) | Type::Tuple(ts) => ts.iter().any(|t| contains_class_seen(t, seen)),
         Type::Map(k, v) | Type::WeakMap(k, v) => {
             contains_class_seen(&k, seen) || contains_class_seen(&v, seen)
         }
@@ -378,8 +392,15 @@ pub(crate) fn closed_schema(ty: &Type, depth: usize) -> bool {
         return false;
     }
     match crate::shape_of(ty) {
-        Type::Number | Type::String | Type::Boolean | Type::Null => true,
+        Type::Number
+        | Type::String
+        | Type::Boolean
+        | Type::Null
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => true,
         Type::Optional(t) | Type::Array(t) => closed_schema(&t, depth + 1),
+        Type::Union(ts) => ts.iter().all(|t| closed_schema(t, depth + 1)),
         Type::SavedRepair(t) => {
             matches!(
                 crate::shape_of(&t),

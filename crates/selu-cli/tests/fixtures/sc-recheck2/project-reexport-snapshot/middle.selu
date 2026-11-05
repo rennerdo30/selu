@@ -1,0 +1,1 @@
+import {x,clear} from "./state";export const y=x;export function reset(){clear();}

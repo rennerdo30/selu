@@ -3,7 +3,7 @@ use crate::{Ctx, Kind, Type, err, types};
 use selu_syntax::{ClassDecl, ClassMemberKind as M, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use std::collections::{BTreeMap, HashMap};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct ClassContext {
     pub(crate) infos: HashMap<String, ClassInfo>,
     initialized: bool,
@@ -430,12 +430,16 @@ impl Ctx<'_> {
                         } else {
                             info.fields.get(name)
                         };
+                        let entry_flow = self.flow_state();
                         if !m.is_static {
                             self.fn_depth += 1;
                         }
                         let t = self.value_expected(e, want);
                         if !m.is_static {
                             self.fn_depth -= 1;
+                            // Instance initializers execute at construction, not
+                            // while their declaration is being checked.
+                            self.restore_flow(entry_flow);
                         }
                         if ty.is_none() {
                             let i = self.classes.infos.get_mut(&key).unwrap();
@@ -537,6 +541,7 @@ impl Ctx<'_> {
                 };
                 if let (Some(a), Some(w)) = (actual, expected)
                     && (!a.assignable_to(w)
+                        || (matches!(m.kind, M::Field { .. }) && !w.assignable_to(a))
                         || (!m.is_static
                             && have.methods.contains(name) != base.methods.contains(name)))
                 {

@@ -23,3 +23,74 @@ The named-types example prints `Quest` and `7` on PLAYER_LOGIN. Its expected out
 Interface method signatures retain final rest parameters. Rest parameters before another parameter and defaults in signatures are rejected. Declaration diagnostics point at duplicate parameter/member names and are emitted once per declaration. Resolved alias bodies are validated recursively, including unused declarations; aliases cannot conceal nullable array elements or nonserializable saved data.
 
 Saved-schema descriptors record recursively resolved shapes, including collection parameters, while preserving the byte spelling of existing inline descriptors. Introducing an equivalent alias does not change history; changing an alias body is a storage-shape change requiring the usual version bump and migration. Recursive shapes use numeric back-references rather than type labels.
+
+## Unions
+
+`A | B` accepts either member, including primitive, literal, object and named
+types. Unions work inside containers and generic arguments; use `(A | B)[]`
+for an array of either member. A member fits its union; a union fits a target
+only when every member fits it. Union annotations are erased from Lua.
+
+`typeof x == "string"` selects string members, `x != null` removes absence,
+and equality with a literal selects matching members. Object unions can use a
+literal discriminant, for example `{kind: "a"; value: string} |
+{kind: "b"; value: number}` and `if (x.kind == "a")`. The ordinary branch,
+short-circuit and early-return narrowing rules apply. Selu currently has no
+switch or pattern-match statement requiring an exhaustiveness check.
+
+Known limit: declared return types are checked on explicit return statements,
+but the checker does not yet require every control-flow path to return. In
+particular, omitting a literal-union case can fall through without a diagnostic.
+Missing-return exhaustiveness is deferred; write an explicit return on every path.
+
+Union member writes must fit every possible receiver arm; narrow an object union
+before writing an arm-specific field. Calls discard refinements of mutable
+bindings assigned by a capturing closure, including refinements from null checks.
+A union of functions can be called when every member accepts the arguments; its
+result is the union of member return types.
+
+Flow facts are keyed by declaration identity, so shadowed names are independent.
+Locals, parameters and const bindings are locally stable when closures do not
+assign them. Captured writers and mutable module exports (including imported
+live bindings) make a binding externally mutable. Facts derived from writable
+object or class fields are externally dependent too. Every call discards these
+external facts; a subsequent guard can establish a new fact. Uncaptured locals
+and scalar const bindings keep their guards across calls.
+
+Conditions carry their evaluated true/false states through short-circuit
+operators. Branches intersect the surviving outgoing facts after writes and
+calls, rather than restoring facts from the guard's syntax. Loop entry discards
+facts for body-written bindings and external facts when the body can call code;
+exception regions use similarly conservative entry states. Recheck a value
+inside the loop or take a stable local snapshot when necessary.
+
+Writable structural fields are invariant: a string field cannot be exposed as
+`string | number` through a mutable object or class view. Const bindings do not
+make their fields readonly. Fresh literals are checked in their destination
+context; existing mutable aliases must support writes in both directions.
+
+Existing mutable views cannot recover additional writable fields after width
+erasure, even optional ones. Missing optional fields are introduced in the type
+of a fresh contextually checked literal only; this adds no runtime keys. Declare
+optional fields on the original record or construct a fresh record when adding
+such a view.
+
+The invariant-field rule also applies to class field overrides: an inherited
+writer must remain safe for a subclass. Method signature compatibility keeps
+its ordinary parameter/return rules. Checking a delayed function or instance
+initializer does not execute its effects in the enclosing flow state.
+
+Guards also refine access paths such as `this.x`, `obj.field`, a nested
+`this.v.kind` discriminant, and `arr[i]` with an identifier or numeric literal
+index. Paths distinguish the identities of both the root and index bindings.
+Every call discards path facts. Reassigning a root or index discards dependent
+paths; a field or indexed write conservatively discards all field-dependent
+facts because another root may alias the same table. Loop entry applies the
+same write and call rules before checking the body. Guard again after effects.
+
+A closure may inherit a scalar guard on an outer local or parameter only when
+that binding has no assignment anywhere after its declaration (including in
+closures). Initializers do not count as assignments. Field-derived facts never
+inherit into a delayed body. Fresh collection method arguments, including
+`Map.set` and array `push`, receive their expected element context; existing
+mutable aliases remain invariant.

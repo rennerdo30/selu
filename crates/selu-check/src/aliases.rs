@@ -2,7 +2,7 @@
 use crate::{Ctx, Narrowings, Type, err};
 use selu_syntax::{Expr, ExprKind, Stmt, StmtKind, TypeDecl, TypeExpr, TypeExprKind as K};
 use std::collections::HashMap;
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Aliases {
     pub(crate) declarations: HashMap<String, TypeDecl>,
     active: Vec<String>,
@@ -356,11 +356,12 @@ impl Ctx<'_> {
                 }
             }
             K::Optional(t) => self.alias_rewrite(t, env, names),
-            K::Tuple(ts) => {
+            K::Union(ts) | K::Tuple(ts) => {
                 for t in ts {
                     self.alias_rewrite(t, env, names);
                 }
             }
+            K::StringLiteral(_) | K::NumberLiteral(_) | K::BooleanLiteral(_) => {}
             K::Object(fs) => {
                 for f in fs {
                     self.alias_rewrite(&mut f.ty, env, names);
@@ -385,14 +386,136 @@ impl Ctx<'_> {
             return None;
         }
         for (test, literal) in [(left, right), (right, left)] {
+            let lit = match &literal.kind {
+                ExprKind::Str(s) => Some(Type::StringLiteral(s.clone())),
+                ExprKind::Number(s) => Some(Type::NumberLiteral(s.clone())),
+                ExprKind::Bool(b) => Some(Type::BooleanLiteral(*b)),
+                ExprKind::Null => Some(Type::Null),
+                _ => None,
+            };
+            if let Some(lit) = lit {
+                let mut yes = vec![];
+                let mut no = vec![];
+                if let (Some(key), Some(original)) =
+                    (self.access_key(test), self.checked_access_type(test))
+                    && matches!(shape_of(&original), Type::Union(_) | Type::Optional(_))
+                {
+                    let members = original.members();
+                    let select = |equal| {
+                        Type::union(
+                            members
+                                .iter()
+                                .filter_map(|t| {
+                                    if equal && lit.assignable_to(t) {
+                                        Some(lit.clone())
+                                    } else if !equal && (t.is_open() || !t.assignable_to(&lit)) {
+                                        Some(t.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect(),
+                        )
+                    };
+                    yes.push((key.clone(), select(true)));
+                    no.push((key, select(false)));
+                }
+                if let ExprKind::Member { object, name } = &test.kind
+                    && let (Some(key), Some(original)) = (
+                        self.discriminant_key(object),
+                        self.checked_access_type(object),
+                    )
+                    && matches!(shape_of(&original), Type::Union(_) | Type::Optional(_))
+                {
+                    let members = original.members();
+                    let select = |equal| {
+                        Type::union(
+                            members
+                                .iter()
+                                .filter(|t| {
+                                    let fields = match shape_of(t) {
+                                        Type::Class(_, _, fs) | Type::Object(fs) => fs,
+                                        _ => return true,
+                                    };
+                                    let Some(value) = fields.get(name) else {
+                                        return true;
+                                    };
+                                    if equal {
+                                        lit.assignable_to(value)
+                                    } else {
+                                        !value.assignable_to(&lit)
+                                    }
+                                })
+                                .cloned()
+                                .collect(),
+                        )
+                    };
+                    yes.push((key.clone(), select(true)));
+                    no.push((key, select(false)));
+                }
+                if !yes.is_empty() {
+                    return Some(if op == "==" { (yes, no) } else { (no, yes) });
+                }
+            }
+
             if let (ExprKind::Unary { op: unary, expr }, ExprKind::Str(tag)) =
                 (&test.kind, &literal.kind)
                 && unary == "typeof"
-                && let ExprKind::Ident(n) = &expr.kind
+                && let Some(key) = self.access_key(expr)
             {
-                let original = self.type_of(n)?;
+                let original = self.checked_access_type(expr)?;
                 let non_null = original.non_null();
                 let shape = shape_of(&non_null);
+                if matches!(shape_of(&original), Type::Union(_) | Type::Optional(_)) {
+                    let matches = |t: &Type| -> Option<bool> {
+                        let category = match shape_of(t) {
+                            Type::String | Type::StringLiteral(_) => "string",
+                            Type::Number | Type::NumberLiteral(_) => "number",
+                            Type::Boolean | Type::BooleanLiteral(_) => "boolean",
+                            Type::Null => "nil",
+                            Type::Object(_)
+                            | Type::Map(..)
+                            | Type::Array(_)
+                            | Type::Set(_)
+                            | Type::WeakMap(..)
+                            | Type::Tuple(_)
+                            | Type::Class(..)
+                            | Type::ClassObject(_)
+                            | Type::Widget(..) => "table",
+                            Type::Function { .. } => "function",
+                            _ => return None,
+                        };
+                        Some(tag == category)
+                    };
+                    let members = original.members();
+                    // Unknown runtime categories are retained on both branches.
+                    let select = |yes| {
+                        Type::union(
+                            members
+                                .iter()
+                                .filter_map(|t| match matches(t) {
+                                    Some(b) => (b == yes).then(|| t.clone()),
+                                    None if yes
+                                        && matches!(shape_of(t), Type::Unknown | Type::Untyped) =>
+                                    {
+                                        Some(match tag.as_str() {
+                                            "nil" => Type::Null,
+                                            "string" => Type::String,
+                                            "number" => Type::Number,
+                                            "boolean" => Type::Boolean,
+                                            "table" => Type::Object(Default::default()),
+                                            _ => t.clone(),
+                                        })
+                                    }
+                                    None => Some(t.clone()),
+                                })
+                                .collect(),
+                        )
+                    };
+                    let yes = vec![(key.clone(), select(true))];
+                    let no = vec![(key.clone(), select(false))];
+                    return Some(if op == "==" { (yes, no) } else { (no, yes) });
+                }
                 if let Type::SavedRepair(table) = &shape {
                     let narrowed = match tag.as_str() {
                         "table" => *table.clone(),
@@ -402,7 +525,7 @@ impl Ctx<'_> {
                         "nil" if original.is_optional() => Type::Null,
                         _ => return None,
                     };
-                    let yes = vec![(n.clone(), narrowed)];
+                    let yes = vec![(key.clone(), narrowed)];
                     // Keep the full union on the opposite branch: it must still
                     // guard or replace the value before accessing any members.
                     return Some(if op == "==" {
@@ -428,9 +551,9 @@ impl Ctx<'_> {
                 };
                 let (yes, no) = if tag == "nil" {
                     (
-                        vec![(n.clone(), Type::Null)],
+                        vec![(key.clone(), Type::Null)],
                         if original.is_optional() {
-                            vec![(n.clone(), non_null)]
+                            vec![(key.clone(), non_null)]
                         } else {
                             vec![]
                         },
@@ -460,9 +583,9 @@ impl Ctx<'_> {
                         return None;
                     };
                     (
-                        vec![(n.clone(), ty)],
+                        vec![(key.clone(), ty)],
                         if original.is_optional() && category == tag {
-                            vec![(n.clone(), Type::Null)]
+                            vec![(key.clone(), Type::Null)]
                         } else {
                             vec![]
                         },
@@ -486,11 +609,12 @@ fn rename_types(t: &mut TypeExpr, names: &HashMap<String, String>) {
             }
         }
         K::Array(t) | K::Optional(t) => rename_types(t, names),
-        K::Tuple(ts) => {
+        K::Union(ts) | K::Tuple(ts) => {
             for t in ts {
                 rename_types(t, names);
             }
         }
+        K::StringLiteral(_) | K::NumberLiteral(_) | K::BooleanLiteral(_) => {}
         K::Object(fs) => {
             for f in fs {
                 rename_types(&mut f.ty, names);
@@ -523,6 +647,8 @@ pub(crate) fn declaration_key(d: &TypeDecl) -> String {
 pub(crate) fn identity_key(t: &Type) -> String {
     let parts = match t {
         Type::Named(_, s) => return s.key.clone(),
+        Type::StringLiteral(s) | Type::NumberLiteral(s) => vec![s.clone()],
+        Type::BooleanLiteral(b) => vec![b.to_string()],
         Type::Class(n, ..) | Type::ClassObject(n) | Type::Widget(n, _) => vec![n.clone()],
         Type::Optional(t)
         | Type::SavedRepair(t)
@@ -536,7 +662,9 @@ pub(crate) fn identity_key(t: &Type) -> String {
             .iter()
             .map(|(n, t)| format!("{n:?}:{}", identity_key(t)))
             .collect(),
-        Type::Tuple(ts) | Type::ApiIterator(ts) => ts.iter().map(identity_key).collect(),
+        Type::Union(ts) | Type::Tuple(ts) | Type::ApiIterator(ts) => {
+            ts.iter().map(identity_key).collect()
+        }
         Type::ApiOpaque(n, ts) => std::iter::once(n.clone())
             .chain(ts.iter().map(identity_key))
             .collect(),
@@ -562,24 +690,24 @@ pub(crate) fn identity_key(t: &Type) -> String {
 }
 
 fn unguarded_cycle(t: &Type) -> bool {
-    let mut t = t.clone();
-    let mut seen = std::collections::HashSet::new();
-    loop {
+    fn visit(t: &Type, seen: &mut std::collections::HashSet<String>) -> bool {
         match t {
             Type::Named(_, s) => {
                 if !seen.insert(s.key.clone()) {
                     return true;
                 }
-                let Some(next) = s.get() else {
-                    return false;
-                };
-                t = next;
+                let result = s.get().is_some_and(|t| visit(&t, seen));
+                seen.remove(&s.key);
+                result
             }
-            Type::Optional(inner) | Type::Secret(inner) => t = *inner,
-            _ => return false,
+            Type::Optional(t) => visit(t, seen),
+            Type::Union(ts) => ts.iter().any(|t| visit(t, seen)),
+            _ => false,
         }
     }
+    visit(t, &mut Default::default())
 }
+
 fn validate_resolved(
     t: &Type,
     span: &selu_diagnostics::Span,
@@ -613,7 +741,7 @@ fn validate_resolved(
                 validate_resolved(t, span, seen, out);
             }
         }
-        Type::Tuple(ts) => {
+        Type::Union(ts) | Type::Tuple(ts) => {
             for t in ts {
                 validate_resolved(&t, span, seen, out);
             }
@@ -638,6 +766,18 @@ pub(crate) fn non_null_of(t: &Type) -> Type {
     let mut seen = std::collections::HashSet::new();
     loop {
         match t {
+            Type::Union(ts) => {
+                let ts: Vec<_> = ts
+                    .into_iter()
+                    .filter(|t| !matches!(shape_of(t), Type::Null))
+                    .map(|t| t.non_null())
+                    .collect();
+                return if ts.len() == 1 {
+                    ts[0].clone()
+                } else {
+                    Type::Union(ts)
+                };
+            }
             Type::Optional(inner) => t = *inner,
             Type::Named(_, ref s) if matches!(shape_of(&t), Type::Optional(_) | Type::Null) => {
                 if !seen.insert(s.key.clone()) {

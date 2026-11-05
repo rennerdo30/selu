@@ -82,7 +82,13 @@ impl Ctx<'_> {
                 {
                     self.module.saved_imports.insert(local.clone());
                 }
-                self.declare(local, span, Kind::Import, ty.clone());
+                let external = self
+                    .module
+                    .imports
+                    .get(from)
+                    .and_then(|m| m.get(remote))
+                    .is_some_and(|e| e.mutable);
+                self.declare_classified(local, span, Kind::Import, ty.clone(), external);
                 self.finish_decl(local, ty);
             }
         }

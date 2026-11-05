@@ -1,0 +1,6 @@
+// Core.lua:100 requires an empty record; XPBarETA.lua:367 later writes it.
+type Position = { p?: string; rp?: string; x?: number; y?: number };
+function emptyPosition(): Position { return {}; }
+saved global RennerToolkitDB using dbVersion legacy RennersAddonsDB: { xpEta: { fallbackPos: Position } } = {
+    xpEta: { fallbackPos: {} }
+};

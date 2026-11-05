@@ -777,3 +777,29 @@ fn sb_native_callbacks_may_ignore_supplied_arguments() {
         .contains(&"SELU0481".into())
     );
 }
+
+#[test]
+fn assignment_targets_emit_each_diagnostic_once() {
+    let prefix = r#"const f = CreateFrame("Frame", null, UIParent, "BackdropTemplate"); const box = {nested: f}; const xs = [f]; const entries = new Map<string, Frame>();"#;
+    for (suffix, expected) in [
+        ("f.customFlag = true;", vec!["SELU0582"]),
+        ("box.nested.custom = 1;", vec!["SELU0582"]),
+        ("xs[0].custom = 1;", vec!["SELU0582"]),
+        ("xs[false] = f;", vec!["SELU0352"]),
+        (
+            "entries.set('x', {bad: f.missing});",
+            vec!["SELU0582", "SELU0355"],
+        ),
+        ("f.custom += 1;", vec!["SELU0582"]),
+        ("box.nested.custom++;", vec!["SELU0582"]),
+        ("xs[false] += 1;", vec!["SELU0352", "SELU0323"]),
+    ] {
+        let checked = review_checked(&format!("{prefix}{suffix}"), "wow");
+        let got: Vec<_> = checked
+            .diagnostics
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect();
+        assert_eq!(got, expected, "{suffix}: {:?}", checked.diagnostics);
+    }
+}

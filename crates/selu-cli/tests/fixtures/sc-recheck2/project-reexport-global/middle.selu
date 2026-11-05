@@ -1,0 +1,1 @@
+import {x,clear} from "./state";export function get():number?{return x;}export function reset(){clear();}

@@ -1,0 +1,1 @@
+function f(x:boolean|string|null):string {if(typeof x=="boolean"){if(x==false){return "false";}return "true";}if(x==null){return "nil";}return x;}print(f(false),f(null),f("s"));

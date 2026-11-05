@@ -1,0 +1,1 @@
+function invoke<T>(x:T,cb:(v:T)=>void){cb(x);}let x:number?=1;function f():number{if(x!=null){invoke<number>(0,()=>{x=null;});return x;}return 0;}print(f());

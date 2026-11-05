@@ -1,0 +1,1 @@
+type V={value:string}|{value:number}; const v:V={value:17}; print(v.value);

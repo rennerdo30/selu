@@ -1,0 +1,1 @@
+type F=((x:string)=>number)|((x:string)=>string); function f(g:F):string|number {return g("ok");} print(f((x:string):number=>1));

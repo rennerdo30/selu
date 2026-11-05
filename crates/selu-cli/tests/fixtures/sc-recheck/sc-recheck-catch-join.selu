@@ -1,0 +1,1 @@
+let x:number?=1;function f():number{if(x!=null){try{throw new Error("e");}catch(e){x=null;}return x;}return 0;}print(f());

@@ -50,7 +50,7 @@ impl Lowerer<'_> {
             out.push(raw("local __selu_addon, __selu_ns = ..."));
         }
         out.extend(captures);
-        out.extend(saved::adoption_captures(program));
+        out.extend(saved::adoption_captures(program, &self.module.addon_name));
         if namespace && !self.module.type_only {
             out.push(raw("__selu_ns = __selu_ns or {}"));
         }

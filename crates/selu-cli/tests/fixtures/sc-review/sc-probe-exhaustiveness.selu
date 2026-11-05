@@ -1,0 +1,1 @@
+function f(x:"a"|"b"):number {if(x=="a"){return 1;}} print(f("b"));

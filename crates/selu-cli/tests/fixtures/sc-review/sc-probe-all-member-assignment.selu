@@ -1,0 +1,1 @@
+type A=string|number; const x:A|boolean=true; const y:A=x; print(y);

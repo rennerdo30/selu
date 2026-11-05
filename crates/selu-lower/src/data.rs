@@ -737,7 +737,14 @@ impl Lowerer<'_> {
 }
 
 fn typed_field(value: LExpr, f: &str, ty: Option<&Type>) -> LExpr {
-    if f == "length" && ty.is_some_and(|t| matches!(t.non_null(), Type::Array(_) | Type::String)) {
+    fn sequence(t: &Type) -> bool {
+        match selu_check::shape_of(&t.non_null()) {
+            Type::Array(_) | Type::String | Type::StringLiteral(_) => true,
+            Type::Union(ts) => !ts.is_empty() && ts.iter().all(sequence),
+            _ => false,
+        }
+    }
+    if f == "length" && ty.is_some_and(sequence) {
         len(value)
     } else {
         field(value, f)

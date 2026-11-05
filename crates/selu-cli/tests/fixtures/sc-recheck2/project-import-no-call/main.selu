@@ -1,0 +1,1 @@
+import {x} from "./state";function f():number{if(x!=null){const y:number=x;return y;}return 0;}print(f());

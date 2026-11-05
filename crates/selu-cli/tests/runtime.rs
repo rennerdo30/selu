@@ -76,7 +76,7 @@ fn saved_initializes_before_user_addon_loaded_handler() {
         .unwrap();
     let p = selu_syntax::parse(
         "t.selu",
-        "saved settings = { enabled: true }; on ADDON_LOADED(addon) { print(settings.enabled); }",
+        "saved settings = { enabled: true }; on ADDON_LOADED(addon) { settings.whenReady(data => { print(data.enabled); }); }",
     )
     .unwrap();
     let c = selu_check::check_program(&p, manifest);
@@ -168,7 +168,7 @@ fn saved_init_helpers_are_collectible_after_loading() {
     .unwrap();
     std::fs::write(
         dir.join("src/main.selu"),
-        "import { settings } from \"./state\"; on PLAYER_LOGIN() { print(settings.count); }",
+        "import { settings } from \"./state\"; on PLAYER_LOGIN() { settings.whenReady(data => { print(data.count); }); }",
     )
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_selu"))

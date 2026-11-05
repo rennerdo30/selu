@@ -1,0 +1,1 @@
+let x:number?=1;function clear(){x=null;}function f():number{if(x!=null){const y:number=x;return y;}return 0;}print(f());

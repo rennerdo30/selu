@@ -101,7 +101,7 @@ impl Ctx<'_> {
             self.finish_decl(&p.name, t.clone());
         }
         self.block(body, &params, Vec::new());
-        self.scopes.pop();
+        self.close_scope();
         self.function_expected.pop();
     }
     pub(crate) fn checked_parameter_types(&self, params: &[Param], fixed: Vec<Type>) -> Vec<Type> {
@@ -125,7 +125,116 @@ impl Ctx<'_> {
     /// Package B can use this for callbacks: records the expression's type.
     pub(crate) fn value_expected(&mut self, e: &Expr, expected: Option<&Type>) -> Type {
         let shaped = expected.map(|t| self.alias_shape(t.clone()));
+        let shaped = shaped.map(|t| {
+            if !matches!(e.kind, ExprKind::Null) {
+                self.alias_shape(t.non_null())
+            } else {
+                t
+            }
+        });
         let expected = shaped.as_ref();
+        if let Some(Type::SavedRepair(table)) = expected
+            && matches!(e.kind, ExprKind::Object(_) | ExprKind::Array(_))
+        {
+            return self.value_expected(e, Some(table));
+        }
+        if let Some(Type::Union(_)) = expected {
+            // References and calls already have checked types; a source union
+            // need not fit one target arm when it fits the complete union.
+            if !matches!(
+                e.kind,
+                ExprKind::Object(_)
+                    | ExprKind::Array(_)
+                    | ExprKind::Function { .. }
+                    | ExprKind::Str(_)
+                    | ExprKind::Number(_)
+                    | ExprKind::Bool(_)
+                    | ExprKind::Null
+                    | ExprKind::Unary { .. }
+            ) {
+                return self.value(e);
+            }
+            for member in expected.unwrap().members() {
+                if let Some(t) = self.try_value_context(e, &member) {
+                    return t;
+                }
+            }
+            // An uncontextualized callback could infer open parameters and
+            // appear assignable after all checked alternatives failed.
+            self.out.push(err(
+                "SELU0313",
+                format!(
+                    "expression does not fit any member of `{}`",
+                    expected.unwrap()
+                ),
+                &e.span,
+            ));
+            return self.value(e);
+        }
+        let literal = match (&e.kind, expected) {
+            (ExprKind::Str(s), Some(Type::StringLiteral(_))) => {
+                Some(Type::StringLiteral(s.clone()))
+            }
+            (ExprKind::Number(s), Some(Type::NumberLiteral(_))) => {
+                Some(Type::NumberLiteral(s.clone()))
+            }
+            (ExprKind::Bool(b), Some(Type::BooleanLiteral(_))) => Some(Type::BooleanLiteral(*b)),
+            (ExprKind::Unary { op, expr }, Some(Type::NumberLiteral(_))) if op == "-" => {
+                if let ExprKind::Number(s) = &expr.kind {
+                    Some(Type::NumberLiteral(format!("-{s}")))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(t) = literal {
+            self.types.set(e.id, t.clone());
+            return t;
+        }
+        if let (ExprKind::Object(values), Some(Type::Object(fields))) = (&e.kind, expected) {
+            let mut checked: std::collections::BTreeMap<_, _> = values
+                .iter()
+                .map(|v| {
+                    (v.key.clone(), {
+                        let actual = self.value_expected(&v.value, fields.get(&v.key));
+                        if let Some(want) = fields.get(&v.key)
+                            && actual.assignable_to(want)
+                            && !crate::saved::contains_class(&actual)
+                        {
+                            want.clone()
+                        } else {
+                            actual
+                        }
+                    })
+                })
+                .collect();
+            // Only a fresh literal can introduce absent writable optional
+            // fields. An existing alias may hide an incompatible field.
+            for (name, ty) in fields {
+                if ty.is_optional() {
+                    checked.entry(name.clone()).or_insert_with(|| ty.clone());
+                }
+            }
+            let t = Type::Object(checked);
+            self.types.set(e.id, t.clone());
+            return t;
+        }
+        if let (ExprKind::Array(items), Some(Type::Array(element))) = (&e.kind, expected) {
+            for item in items {
+                let got = self.value_expected(item, Some(element));
+                if !got.assignable_to(element) {
+                    self.out.push(err(
+                        "SELU0351",
+                        format!("array element {got} does not fit {element}"),
+                        &item.span,
+                    ));
+                }
+            }
+            let t = Type::Array(element.clone());
+            self.types.set(e.id, t.clone());
+            return t;
+        }
         if let ExprKind::Array(items) = &e.kind
             && items.is_empty()
             && let Some(Type::Array(_)) = expected
@@ -141,6 +250,58 @@ impl Ctx<'_> {
         } else {
             self.value(e)
         }
+    }
+    fn try_value_context(&mut self, e: &Expr, expected: &Type) -> Option<Type> {
+        let mut diagnostics = Vec::new();
+        let mut trial = Ctx {
+            manifest: self.manifest,
+            flow_info: self.flow_info.clone(),
+            next_binding: self.next_binding,
+            out: &mut diagnostics,
+            binding_statements: self.binding_statements.clone(),
+            secret_capable: self.secret_capable,
+            protected_functions: self.protected_functions.clone(),
+            protected_methods: self.protected_methods,
+            options: self.options,
+            module: self.module.clone(),
+            aliases: self.aliases.clone(),
+            classes: self.classes.clone(),
+            loops: self.loops.clone(),
+            availability: self.availability.clone(),
+            scopes: self.scopes.clone(),
+            fn_depth: self.fn_depth,
+            returns: self.returns.clone(),
+            function_expected: self.function_expected.clone(),
+            types: self.types.clone(),
+        };
+        let t = trial.value_expected(e, Some(expected));
+        if !t.assignable_to(expected)
+            || trial
+                .out
+                .iter()
+                .any(|d| d.severity == selu_diagnostics::Severity::Error)
+        {
+            return None;
+        }
+        self.flow_info = trial.flow_info;
+        self.next_binding = trial.next_binding;
+        self.binding_statements = trial.binding_statements;
+        self.secret_capable = trial.secret_capable;
+        self.protected_functions = trial.protected_functions;
+        self.protected_methods = trial.protected_methods;
+        self.options = trial.options;
+        self.module = trial.module;
+        self.aliases = trial.aliases;
+        self.classes = trial.classes;
+        self.loops = trial.loops;
+        self.availability = trial.availability;
+        self.scopes = trial.scopes;
+        self.fn_depth = trial.fn_depth;
+        self.returns = trial.returns;
+        self.function_expected = trial.function_expected;
+        self.types = trial.types;
+        self.out.extend(diagnostics);
+        Some(t)
     }
     pub(crate) fn function_arguments(&mut self, args: &[Expr], callee: &Type) -> Vec<Type> {
         args.iter()
@@ -260,7 +421,8 @@ impl Ctx<'_> {
             self.types.set(e.id, t.clone());
             return t;
         }
-        self.value(e)
+        let expected = self.function_expected.last().cloned().flatten();
+        self.value_expected(e, expected.as_ref())
     }
     pub(crate) fn destructure(&mut self, s: &Stmt) {
         let StmtKind::Destructure { pattern, init, .. } = &s.kind else {

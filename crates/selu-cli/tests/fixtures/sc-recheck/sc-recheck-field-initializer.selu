@@ -1,0 +1,1 @@
+let x:number?=1;class C{v=(x=null);}function f():number{if(x!=null){const c=new C();return x;}return 0;}print(f());

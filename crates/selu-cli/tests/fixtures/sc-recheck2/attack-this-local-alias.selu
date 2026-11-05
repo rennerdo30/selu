@@ -1,0 +1,1 @@
+type V={kind:"a";value:string}|{kind:"b";value:number};class C{v:V={kind:"a",value:"s"};clear(){this.v={kind:"b",value:4};}read():string{const v=this.v;if(v.kind=="a"){this.clear();return v.value;}return "other";}}print(new C().read());

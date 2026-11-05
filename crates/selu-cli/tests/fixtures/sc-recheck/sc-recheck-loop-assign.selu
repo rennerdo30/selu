@@ -1,0 +1,1 @@
+function f(x:string|number):string{if(typeof x=="string"){let n=0;while(n<2){const y:string=x;x=2;n+=1;if(n==2){return y;}}}return "other";}print(f("s"));

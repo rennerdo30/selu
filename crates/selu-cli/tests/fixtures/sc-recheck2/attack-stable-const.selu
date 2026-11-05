@@ -1,0 +1,1 @@
+const x:number?=1;function noop(){}function f():number{if(x!=null){noop();print(x);return x;}return 0;}print(f());

@@ -1,0 +1,1 @@
+import {x} from "./state";function f():number{if(x!=null){print(x);return x;}return 0;}print(f());

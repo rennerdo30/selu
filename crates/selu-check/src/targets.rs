@@ -1,11 +1,12 @@
 //! Client availability and scoped capability facts.
-use crate::{Ctx, Narrowings, Type, err};
+use crate::{Ctx, FactKey, Narrowings, Type, err};
 use selu_diagnostics::Span;
 use selu_manifest::Manifest;
 use selu_syntax::{Expr, ExprKind};
 
+#[derive(Clone)]
 pub struct Availability {
-    targets: Vec<Manifest>,
+    targets: std::sync::Arc<Vec<Manifest>>,
 }
 impl Availability {
     pub(crate) fn manifests(&self) -> &[Manifest] {
@@ -13,7 +14,7 @@ impl Availability {
     }
     pub fn new(targets: &[Manifest]) -> Self {
         Self {
-            targets: targets.to_vec(),
+            targets: std::sync::Arc::new(targets.to_vec()),
         }
     }
 }
@@ -84,6 +85,9 @@ impl Ctx<'_> {
     pub(crate) fn target_is_active(&self, m: &Manifest) -> bool {
         self.scopes.iter().all(|s| {
             s.narrowed.keys().all(|k| {
+                let FactKey::Capability(k) = k else {
+                    return true;
+                };
                 if let Some(x) = k.strip_prefix("@has:") {
                     exists(m, x)
                 } else if let Some(x) = k.strip_prefix("@lacks:") {
@@ -175,9 +179,9 @@ impl Ctx<'_> {
             return None;
         }
         if self.scopes.iter().any(|s| {
-            s.narrowed
-                .keys()
-                .any(|k| k.starts_with(&format!("@has:{n}.")))
+            s.narrowed.keys().any(
+                |k| matches!(k, FactKey::Capability(k) if k.starts_with(&format!("@has:{n}."))),
+            )
         }) {
             return None;
         }
@@ -235,8 +239,8 @@ impl Ctx<'_> {
         }
         let n = args[0].dotted_name()?;
         Some((
-            vec![(format!("@has:{n}"), Type::Untyped)],
-            vec![(format!("@lacks:{n}"), Type::Untyped)],
+            vec![(FactKey::Capability(format!("@has:{n}")), Type::Untyped)],
+            vec![(FactKey::Capability(format!("@lacks:{n}")), Type::Untyped)],
         ))
     }
 }

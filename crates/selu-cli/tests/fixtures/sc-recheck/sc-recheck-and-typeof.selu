@@ -1,0 +1,1 @@
+let x:string|number="s";function clear():boolean{x=2;return true;}function f():string{if(typeof x=="string"&&clear()){return x;}return "other";}print(f());

@@ -1,0 +1,1 @@
+function f(x:boolean):"a"|"b" {if(x){return "b";}return "a";}print(f(true));

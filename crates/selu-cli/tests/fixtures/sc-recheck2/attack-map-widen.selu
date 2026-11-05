@@ -1,0 +1,1 @@
+const a=new Map<string,{value:string}>();const b:Map<string,{value:string|number}>=a;b.set("x",{value:4});

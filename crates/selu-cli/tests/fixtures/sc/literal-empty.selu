@@ -1,0 +1,9 @@
+type Position = { p?: string; rp?: string; x?: number; y?: number };
+saved global RennerToolkitDB using dbVersion legacy RennersAddonsDB: { xpEta: { fallbackPos: Position } } = {
+    xpEta: { fallbackPos: {} }
+};
+export function position(): string? {
+    const data = RennerToolkitDB.data;
+    if (data != null) { return data.xpEta.fallbackPos.p; }
+    return null;
+}

@@ -1,0 +1,1 @@
+export let x:number?=1;export function clear(){x=null;}

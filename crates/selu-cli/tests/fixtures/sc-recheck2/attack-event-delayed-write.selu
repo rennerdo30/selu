@@ -1,0 +1,1 @@
+let x:number?=1;on PLAYER_LOGIN(){x=null;}function f():number{if(x!=null){print(x);return x;}return 0;}print(f());

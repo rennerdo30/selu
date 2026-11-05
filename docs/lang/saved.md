@@ -6,7 +6,7 @@ must be literal serializable objects/arrays, primitives or empty typed Maps.
 Functions are rejected recursively, including inside collection types. Map and
 set keys must be primitive numbers, strings or booleans; table keys and weak
 maps cannot be persisted. Names obey the usual Lua keyword and reserved
-`__selu` prefix checks. The root object binding is immutable; mutate its fields.
+`__selu` prefix checks. The source binding is an immutable typed load result. Mutate its data only inside a `whenReady` callback, or after checking `data != null`.
 
 The default global name is `<AddonName>_<savedName>`, using `[addon].name` from
 `selu.toml` at compile time. For example, addon `SavedSettings` and declaration
@@ -21,12 +21,12 @@ Adopt its existing SavedVariables global explicitly:
 
 ```selu
 saved global MyAddonDB version 2 = { count: 0 };
-migrate MyAddonDB 1 -> 2 (old) {
-    old.count = old.x;
+migrate MyAddonDB 1 -> 2 (old: { x?: number; count?: number }) {
+    old.count = old.x ?? 0;
     old.x = null;
 }
 on PLAYER_LOGIN() {
-    print(MyAddonDB.count);
+    MyAddonDB.whenReady((data) => { print(data.count); });
 }
 ```
 
@@ -49,17 +49,17 @@ and [ADDON_LOADED](https://warcraft.wiki.gg/wiki/ADDON_LOADED).
 The [AddOn loading process](https://warcraft.wiki.gg/wiki/AddOn_loading_process)
 also documents the optional `LoadSavedVariablesFirst` override; Selu does not
 require that override. Generated loaders read saved globals only on their own
-addon's event and ignore events naming other addons. In mapped-version mode,
+addon's event and ignore events naming other addons. For all declarations,
 the source result stays `loading` until then: no saved-global assignment or
 ready callback runs during chunk execution.
 
 Declarations and migrations are file-scoped; write each migration after its
 saved declaration. Keep exactly one adjacent migration for every version step
-from 1 to the current positive integer version. A migration receives an untyped
-historical object in its written parameter. Each attempt receives a deep copy
-of the last good data; success commits its version and object together. Failure
-logs a warning, stops that declaration's chain and preserves the last good
-version. The next login attempts the failed step again. External side effects
+from 1 to the current positive integer version. A migration requires a finite,
+closed historical schema on its parameter. Each attempt receives a deep copy.
+Mapped adoption commits validated steps and retains the last successful version
+on failure. Ordinary loading commits the complete attempt only on success;
+failure retains the original restored graph and version. Both retry next login. External side effects
 of a migration cannot be rolled back; confine changes to its parameter.
 
 Root `__selu_version` is reserved. Version metadata must be a positive integer.
@@ -141,7 +141,7 @@ Both exact global names enter the TOC in the declared scope. `legacy` is
 optional. `using` selects the sole persisted version key: this mode never adds
 Selu version metadata. The mapped key is compiler-owned and must be omitted
 from defaults; it cannot use the reserved retry-context namespace. The source binding is a load result with `status: string`,
-`data: <defaults shape>?`, and `whenReady(callback)`. Status is `loading`,
+`data: <declared or defaults-inferred shape>?`, and `whenReady(callback)`. Status is `loading`,
 `ready`, `collision`, `newer`, `corrupt`, or `failed`. Data is available only
 for ready/collision results. Ready callbacks run after publication and defaults;
 callbacks registered after success run immediately. Refusals discard pending
@@ -248,3 +248,64 @@ and missing-field mode. Active-path cycle detection remains separate. Shared
 subgraphs are checked once per schema/mode instead of expanding every alias path;
 different schemas still validate the same table independently. The strict pass
 uses a fresh memo after default filling, so earlier successes cannot hide changes.
+
+## Independent current schemas
+
+A saved declaration may specify its current schema independently of defaults:
+
+```selu
+type Position = { p?: string; rp?: string; x?: number; y?: number };
+type Settings = { fallbackPos: Position; value: string | number };
+saved global DB using dbVersion: Settings = { fallbackPos: {}, value: 0 };
+```
+
+The annotation may also follow the saved name before version/adoption options.
+Defaults must remain literal data and are checked against the schema; a factory
+call is not a literal default. Optional fields can be omitted. Only keys present
+in defaults are filled: `{p: "BOTTOM", x: 0}` retains absent `rp` and `y`.
+Adoption validates the entire annotated schema before publication, including
+exact union alternatives and literal values, without coercion. Schema history
+records the annotation rather than the smaller default object. The existing
+candidate-copy, alias validation, memoisation and transactional commit paths
+remain in use.
+
+## Ordinary declarations now fail closed
+
+Ordinary declarations (including `saved perCharacter` and `saved global` without
+`using`) expose the same `status`, optional `data`, and `whenReady` API as mapped
+adoption. This changes the old direct-field API: replace `settings.enabled` with
+access inside `settings.whenReady((data) => { ... })`, or null-check
+`settings.data`. Register persistent writers inside the ready callback.
+
+```selu
+saved settings = { enabled: true };
+function initialize() {
+  settings.whenReady((data) => {
+    on PLAYER_LOGIN() { print(data.enabled); }
+  });
+}
+initialize();
+```
+
+The ordinary loader uses the reserved `__selu_version` key. It reads the restored
+root only on its own addon's `ADDON_LOADED`. Missing globals start fresh at the
+current version; populated unversioned roots start at version 1. Validation uses
+the explicit schema, or the complete defaults-inferred schema when no annotation
+is written. Union alternatives and literals are exact; no coercion occurs.
+Missing defaulted keys are filled on a copy and the full result is validated
+before publication, with the same table/schema/mode memoisation and independent
+active-path cycle detection as mapped adoption.
+
+Ordinary migration parameters now require explicit finite closed historical
+schemas too. This removes the former unchecked historical input. Typed context
+readers are allowed. Unlike the old ordinary loader's partial commit on migration
+failure, the complete ordinary load attempt is transactional. Invalid metadata,
+malformed data, failed migrations and future versions leave the client-restored
+global graph, identity, aliases and version untouched. The result reports
+`corrupt`, `failed`, or `newer`, with absent data; ready callbacks and their writers
+are suppressed. A database-specific warning explains the refusal. Logout writes
+the original retained value. A successful attempt commits while preserving
+existing table identities, then publishes `ready` and invokes callbacks.
+
+Mapped adoption retains its existing last-success/retry-context migration
+contract. Ordinary refusal retries from the original untouched graph next login.

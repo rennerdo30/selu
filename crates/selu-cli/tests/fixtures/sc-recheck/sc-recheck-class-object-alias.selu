@@ -1,0 +1,1 @@
+type V={kind:"a";value:string}|{kind:"b";value:number};class C{value:string|number="s";kind:string="a";change(){this.value=4;}}function f(x:V,c:C):string{if(x.kind=="a"){c.change();return x.value;}return "other";}const c=new C();print(f(c,c));

@@ -1,0 +1,1 @@
+type A=string|number; type V=A|boolean; function f(x:V):string {if(typeof x=="string"){return x;}return "other";} print(f("s"));

@@ -44,7 +44,7 @@ impl Ctx<'_> {
             ),
             ExprKind::Index { object, index } => {
                 let t = crate::shape_of(&self.value(object));
-                let i = crate::shape_of(&self.value(index));
+                let i = self.value(index).operand_type();
                 if i != Type::Number && !i.is_open() {
                     self.out.push(
                         err("SELU0352", "an array index must be a number", &index.span)
@@ -168,34 +168,6 @@ impl Ctx<'_> {
         self.value_expected(e, expected)
     }
 
-    pub(crate) fn data_write(&mut self, target: &Expr, value: &Type) {
-        let ty = if let ExprKind::Member { object, name } = &target.kind {
-            let t = crate::shape_of(&self.value(object));
-            if name == "length" && matches!(t, Type::Array(_) | Type::String) {
-                self.out.push(
-                    err("SELU0355", "length is read-only", &target.span)
-                        .with_help("use array methods to change its length"),
-                );
-                return;
-            }
-            let ty = self.member(&t, name, object);
-            self.types.set(target.id, ty.clone());
-            ty
-        } else {
-            self.expr(target)
-        };
-        if !value.assignable_to(&ty) {
-            self.out.push(
-                err(
-                    "SELU0355",
-                    format!("cannot store `{value}` in `{ty}`"),
-                    &target.span,
-                )
-                .with_help("assign a value of the field or element type"),
-            );
-        }
-    }
-
     pub(crate) fn data_member(&mut self, t: &Type, field: &str, e: &Expr) -> Option<Type> {
         match t {
             Type::Object(fields) => Some(fields.get(field).cloned().unwrap_or_else(|| {
@@ -209,7 +181,9 @@ impl Ctx<'_> {
                 );
                 Type::Error
             })),
-            Type::Array(_) | Type::String if field == "length" => Some(Type::Number),
+            Type::Array(_) | Type::String | Type::StringLiteral(_) if field == "length" => {
+                Some(Type::Number)
+            }
             _ => None,
         }
     }
@@ -337,7 +311,7 @@ impl Ctx<'_> {
         }
         self.restriction_data_call(callee, &params, &ret);
         for (arg, want) in args.iter().zip(&params) {
-            let got = self.value(arg);
+            let got = self.value_expected(arg, Some(want));
             if !got.assignable_to(want) {
                 self.out.push(
                     err(
@@ -363,7 +337,9 @@ impl Ctx<'_> {
         else {
             unreachable!()
         };
+        self.prepare_region(body, &[iter]);
         let iter_type = self.expr(iter);
+        let loop_entry = self.flow_state();
         let mut t = crate::shape_of(&iter_type);
         if let Type::Tuple(items) = &t
             && items.len() == 1
@@ -446,7 +422,8 @@ impl Ctx<'_> {
         self.loops.push(crate::loops::LoopCtx);
         self.block(body, &[], vec![]);
         self.loops.pop();
-        self.scopes.pop();
+        self.close_scope();
+        self.restore_flow(loop_entry);
     }
 }
 
@@ -457,7 +434,7 @@ impl Ctx<'_> {
             .get(e.id)
             .cloned()
             .unwrap_or_else(|| self.value(e));
-        crate::shape_of(&t)
+        t.operand_type()
     }
 
     pub(crate) fn data_annotation(&mut self, t: &selu_syntax::TypeExpr) -> Type {
@@ -474,11 +451,12 @@ impl Ctx<'_> {
                     validate(inner, out);
                 }
                 K::Optional(inner) => validate(inner, out),
-                K::Tuple(items) | K::Named { args: items, .. } => {
+                K::Union(items) | K::Tuple(items) | K::Named { args: items, .. } => {
                     for t in items {
                         validate(t, out);
                     }
                 }
+                K::StringLiteral(_) | K::NumberLiteral(_) | K::BooleanLiteral(_) => {}
                 K::Object(fields) => {
                     for f in fields {
                         validate(&f.ty, out);

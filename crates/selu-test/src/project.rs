@@ -740,6 +740,13 @@ fn collect_saved(
         active.push(ty.clone());
         let result = match &ty {
             Type::Optional(t) => format!("{}?", descriptor(t, active)),
+            Type::Union(ts) => format!(
+                "({})",
+                ts.iter()
+                    .map(|t| descriptor(t, active))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
             Type::SavedRepair(t) => format!("SavedRepair<{}>", descriptor(t, active)),
             Type::Array(t) => format!("{}[]", descriptor(t, active)),
             Type::Map(k, v) => format!("Map<{}, {}>", descriptor(k, active), descriptor(v, active)),
@@ -804,7 +811,10 @@ fn collect_saved(
         {
             let mut fs = std::collections::BTreeMap::new();
             fields(
-                types.get(defaults.id).expect("checked defaults"),
+                types
+                    .saved_schemas
+                    .get(&saved_inner(s).span.start)
+                    .unwrap_or_else(|| types.get(defaults.id).expect("checked defaults")),
                 String::new(),
                 &mut fs,
                 &mut Vec::new(),
@@ -829,7 +839,6 @@ fn collect_saved(
                         .filter_map(|s| {
                             if let selu_syntax::StmtKind::Migrate { name: n, from, .. } = &s.kind
                                 && n == name
-                                && version_key.is_some()
                             {
                                 return types.saved_readers.get(&s.span.start).map(|t| {
                                     (

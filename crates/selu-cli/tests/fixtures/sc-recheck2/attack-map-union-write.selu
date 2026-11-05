@@ -1,0 +1,1 @@
+type V={kind:"a";value:string}|{kind:"b";value:number};function f(x:V):string{const m=new Map<string,V>();m.set("x",x);if(x.kind=="a"){const y=m.get("x");if(y!=null){y.value=4;}return x.value;}return "other";}print(f({kind:"a",value:"s"}));

@@ -1,0 +1,1 @@
+let x:number?=1;const frame=CreateFrame("Frame");function f():number{if(x!=null){frame.SetScript("OnEvent",()=>{x=null;});return x;}return 0;}print(f());

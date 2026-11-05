@@ -646,7 +646,7 @@ fn sb_seed_character_reload_and_strict_gate() {
         });
     "#,
     );
-    std::fs::write(dir.join("src/main.selu"), "saved perCharacter state = { count: 0 }; on PLAYER_LOGIN() { state.count += 1; print(state.count); }").unwrap();
+    std::fs::write(dir.join("src/main.selu"), "saved perCharacter state = { count: 0 }; on PLAYER_LOGIN() { state.whenReady(data => { data.count += 1; print(data.count); }); }").unwrap();
     let value = selu_sim::saved::SavedValue::Table(vec![(
         selu_sim::saved::SavedValue::String(b"count".to_vec()),
         selu_sim::saved::SavedValue::Number(41.0),

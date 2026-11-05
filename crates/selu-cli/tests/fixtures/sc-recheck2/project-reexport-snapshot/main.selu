@@ -1,0 +1,1 @@
+import {y,reset} from "./middle";function f():number{if(y!=null){reset();return y;}return 0;}print(f());

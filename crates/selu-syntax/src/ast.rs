@@ -17,8 +17,15 @@ pub struct TypeExpr {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeExprKind {
+    Union(Vec<TypeExpr>),
+    StringLiteral(String),
+    NumberLiteral(String),
+    BooleanLiteral(bool),
     /// `number`, `Frame`, `Map<K, V>` (with `args`).
-    Named { name: String, args: Vec<TypeExpr> },
+    Named {
+        name: String,
+        args: Vec<TypeExpr>,
+    },
     /// `T?`
     Optional(Box<TypeExpr>),
     /// `T[]`
@@ -83,6 +90,7 @@ pub enum StmtKind {
         legacy: Option<String>,
         version: u32,
         defaults: Box<Expr>,
+        ty: Option<TypeExpr>,
     },
     Migrate {
         name: String,

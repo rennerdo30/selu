@@ -1,0 +1,1 @@
+let x:string|number="s"; function change(){x=2;} function f():string{if(typeof x=="string"){change();return x;} return "other";} print(f());

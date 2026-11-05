@@ -1,0 +1,1 @@
+let cb:()=>void=()=>{};function register(f:()=>void){cb=f;}function fire(){cb();}let x:number?=1;function f():number{register(()=>{x=null;});if(x!=null){fire();return x;}return 0;}print(f());

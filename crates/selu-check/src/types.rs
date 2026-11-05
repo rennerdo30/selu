@@ -90,6 +90,10 @@ impl PartialEq for NamedShape {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
+    Union(Vec<Type>),
+    StringLiteral(String),
+    NumberLiteral(String),
+    BooleanLiteral(bool),
     Unknown,
     Named(String, NamedShape),
     /// Nominal identity, base identities, and the checked instance member shape.
@@ -143,6 +147,50 @@ pub enum Type {
 }
 
 impl Type {
+    /// Runtime alternatives, resolving nested aliases and optional wrappers.
+    pub(crate) fn members(&self) -> Vec<Type> {
+        match crate::shape_of(self) {
+            Type::Union(ts) => ts.iter().flat_map(Type::members).collect(),
+            Type::Optional(t) => t.members().into_iter().chain([Type::Null]).collect(),
+            Type::SavedRepair(t) => t
+                .members()
+                .into_iter()
+                .chain([Type::String, Type::Number, Type::Boolean])
+                .collect(),
+            t => vec![t],
+        }
+    }
+    pub(crate) fn union(ts: Vec<Type>) -> Type {
+        let mut members = Vec::new();
+        for t in ts.into_iter().flat_map(|t| t.members()) {
+            if !members.contains(&t) {
+                members.push(t);
+            }
+        }
+        if members.len() == 1 {
+            members.remove(0)
+        } else {
+            Type::Union(members)
+        }
+    }
+
+    pub(crate) fn operand_type(&self) -> Type {
+        match crate::shape_of(self) {
+            Type::StringLiteral(_) => Type::String,
+            Type::NumberLiteral(_) => Type::Number,
+            Type::BooleanLiteral(_) => Type::Boolean,
+            Type::Union(ts) if !ts.is_empty() => {
+                let first = ts[0].operand_type();
+                if ts.iter().all(|t| t.operand_type() == first) {
+                    first
+                } else {
+                    self.clone()
+                }
+            }
+            t => t,
+        }
+    }
+
     pub(crate) fn result_convention_matches(&self, other: &Type) -> bool {
         let a = crate::shape_of(self);
         let b = crate::shape_of(other);
@@ -204,6 +252,7 @@ impl Type {
         match crate::aliases::shape_of(self) {
             Type::Optional(_) | Type::Null => true,
             Type::Secret(t) => t.is_optional(),
+            Type::Union(ts) => ts.iter().any(Type::is_optional),
             _ => false,
         }
     }
@@ -266,14 +315,22 @@ impl Type {
             return true;
         }
         match (self, to) {
+            (Type::NumberLiteral(a), Type::NumberLiteral(b)) => a
+                .parse::<f64>()
+                .ok()
+                .zip(b.parse::<f64>().ok())
+                .is_some_and(|(a, b)| a == b),
             (Type::Class(have, bases, _), Type::Class(name, _, _)) => {
                 have == name || bases.contains(name)
             }
             (Type::Class(_, _, have), Type::Object(want)) => want.iter().all(|(k, w)| {
                 !matches!(w.non_null(), Type::Function { .. })
                     && match have.get(k) {
-                        Some(h) => h.assignable_seen(w, seen),
-                        None => w.is_optional(),
+                        Some(h) => {
+                            h.assignable_seen(w, &mut seen.clone())
+                                && w.assignable_seen(h, &mut seen.clone())
+                        }
+                        None => false,
                     }
             }),
             (Type::ApiOpaque(_, members), target) if !members.is_empty() => {
@@ -289,9 +346,22 @@ impl Type {
             (Type::Secret(a), Type::Secret(b)) => a.assignable_seen(b, seen),
             (Type::Secret(_), _) => false,
             (t, Type::Secret(b)) => t.assignable_seen(b, seen),
+            (Type::Union(ts), target) => ts
+                .iter()
+                .all(|t| t.assignable_seen(target, &mut seen.clone())),
             (Type::Null, Type::Optional(_)) => true,
             (Type::Optional(a), Type::Optional(b)) => a.assignable_seen(b, seen),
             (t, Type::Optional(inner)) => t.assignable_seen(inner, seen),
+            (Type::StringLiteral(_), Type::String)
+            | (Type::NumberLiteral(_), Type::Number)
+            | (Type::BooleanLiteral(_), Type::Boolean) => true,
+            (Type::Optional(inner), Type::Union(_)) => {
+                inner.assignable_seen(to, &mut seen.clone())
+                    && Type::Null.assignable_seen(to, &mut seen.clone())
+            }
+            (source, Type::Union(ts)) => ts
+                .iter()
+                .any(|t| source.assignable_seen(t, &mut seen.clone())),
             (Type::SavedRepair(a), Type::SavedRepair(b)) => a.assignable_seen(b, seen),
             (Type::SavedRepair(_), _) => false,
             (Type::Number | Type::String | Type::Boolean, Type::SavedRepair(_)) => true,
@@ -311,12 +381,16 @@ impl Type {
             (Type::Tuple(a), Type::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.assignable_seen(y, seen))
             }
-            // Structural: every field `to` needs must be there and fit; a
-            // missing field is fine when `to` allows null for it.
+            // Existing writable views must expose compatible writes both ways.
+            // Fresh literals acquire absent optional fields contextually;
+            // erased aliases cannot safely recover hidden writable fields.
             (Type::Object(have), Type::Object(want)) => {
                 want.iter().all(|(k, w)| match have.get(k) {
-                    Some(h) => h.assignable_seen(w, seen),
-                    None => w.is_optional(),
+                    Some(h) => {
+                        h.assignable_seen(w, &mut seen.clone())
+                            && w.assignable_seen(h, &mut seen.clone())
+                    }
+                    None => false,
                 })
             }
             (
@@ -455,6 +529,18 @@ impl fmt::Display for Type {
             Type::Boolean => write!(f, "boolean"),
             Type::Null => write!(f, "null"),
             Type::Optional(t) => write!(f, "{t}?"),
+            Type::StringLiteral(s) => write!(f, "{s:?}"),
+            Type::NumberLiteral(s) => f.write_str(s),
+            Type::BooleanLiteral(b) => write!(f, "{b}"),
+            Type::Union(ts) => {
+                for (i, t) in ts.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(" | ")?;
+                    }
+                    write!(f, "{t}")?;
+                }
+                Ok(())
+            }
             Type::SavedRepair(t) => write!(f, "SavedRepair<{t}>"),
             Type::Secret(t) => write!(f, "Secret<{t}>"),
             Type::Array(t) => write!(f, "{t}[]"),
@@ -511,6 +597,14 @@ pub fn resolve_classes(
     classes: &HashMap<String, Type>,
 ) -> Type {
     match &t.kind {
+        TypeExprKind::StringLiteral(s) => Type::StringLiteral(s.clone()),
+        TypeExprKind::NumberLiteral(s) => Type::NumberLiteral(s.clone()),
+        TypeExprKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
+        TypeExprKind::Union(ts) => Type::Union(
+            ts.iter()
+                .map(|t| resolve_classes(t, out, classes))
+                .collect(),
+        ),
         TypeExprKind::Optional(inner) => Type::optional(resolve_classes(inner, out, classes)),
         TypeExprKind::Array(inner) => Type::Array(Box::new(resolve_classes(inner, out, classes))),
         TypeExprKind::Tuple(items) => Type::Tuple(
@@ -675,6 +769,8 @@ pub fn resolve_quiet(t: &TypeExpr) -> Type {
 pub struct TypeTable {
     pub(crate) saved_adoptions: std::collections::HashSet<String>,
     pub saved_contexts: HashMap<usize, Type>,
+    pub(crate) saved_parameters: std::collections::HashSet<usize>,
+    pub saved_schemas: HashMap<usize, Type>,
     pub saved_readers: HashMap<usize, Type>,
     pub(crate) named_roots: Vec<NamedShape>,
     types: HashMap<ExprId, Type>,
@@ -713,7 +809,8 @@ impl TypeTable {
         self.types.get(&id)
     }
     pub fn is_string(&self, id: ExprId) -> bool {
-        self.get(id) == Some(&Type::String)
+        self.get(id)
+            .is_some_and(|t| t.operand_type() == Type::String)
     }
     /// Marks a name use whose value can't change while the program runs: a
     /// `const`, a function declaration, or a game global (Selu code can't
@@ -764,7 +861,14 @@ mod tests {
         assert_eq!(show("(a: number) => void"), "(number) => void");
         assert_eq!(show("[string, boolean]"), "[string, boolean]");
         assert_eq!(show("Frame"), "unknown");
-        assert!(ty("{ a: number; b: string }").assignable_to(&ty("{ a: number; c?: boolean }")));
+        // An existing view may hide an incompatible c field. Optional writable
+        // fields can be added by a fresh literal context, not by alias conversion.
+        assert!(!ty("{ a: number; b: string }").assignable_to(&ty("{ a: number; c?: boolean }")));
+        assert!(
+            ty("{ a: number; b: string; c?: boolean }")
+                .assignable_to(&ty("{ a: number; c?: boolean }"))
+        );
+        assert!(!ty("{ value: string }").assignable_to(&ty("{ value: string | number }")));
         assert!(!ty("{ a: number }").assignable_to(&ty("{ a: number; b: string }")));
         assert!(!ty("number[]").assignable_to(&ty("number?[]")));
     }
