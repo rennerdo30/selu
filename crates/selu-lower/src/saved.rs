@@ -326,29 +326,92 @@ impl Lowerer<'_> {
                 version,
                 defaults,
                 adopted,
+                version_key,
+                legacy,
                 ..
             } => {
                 if !forward {
                     out.push(s(LStmtKind::Local(vec![saved.clone()], vec![])));
                 }
+                if version_key.is_some() {
+                    out.push(assign(name(saved), helper("pending", vec![])));
+                }
                 let key = declaration_global(&self.module.addon_name, saved, *adopted);
                 let entry = ix(f(rt(), "entries"), st(&key));
                 out.push(assign(entry.clone(), LExpr::Table(vec![])));
+                if version_key.is_some() {
+                    out.push(assign(
+                        ix(f(rt(), "readers"), st(&key)),
+                        LExpr::Table(vec![]),
+                    ));
+                    out.push(assign(
+                        ix(f(rt(), "contexts"), st(&key)),
+                        LExpr::Table(vec![]),
+                    ));
+                }
                 let mut body = vec![];
                 let defaults_value = self.expr(defaults, &mut body);
-                body.push(assign(
-                    name(saved),
-                    helper(
-                        "load",
+                if let Some(version_key) = version_key {
+                    let legacy_value = legacy
+                        .as_ref()
+                        .map_or(LExpr::Nil, |_| g(&format!("legacy_{saved}")));
+                    let publish = LExpr::Function(LFunction {
+                        params: vec!["__selu_saved_result".into(), "__selu_saved_retire".into()],
+                        vararg: false,
+                        body: {
+                            let mut b = vec![];
+                            b.push(iff(
+                                bin(BinOp::Ne, f(g("result"), "data"), LExpr::Nil),
+                                vec![invoke(call(
+                                    &format!("publish_{saved}"),
+                                    vec![f(g("result"), "data")],
+                                ))],
+                            ));
+                            if legacy.is_some() {
+                                b.push(iff(
+                                    g("retire"),
+                                    vec![invoke(call(&format!("retire_{saved}"), vec![]))],
+                                ));
+                            }
+                            b.push(invoke(helper(
+                                "publishAdoption",
+                                vec![name(saved), g("result")],
+                            )));
+                            b
+                        },
+                    });
+                    // Direct, compiler-owned global references; no dynamic global lookup.
+                    // The source binding shadows the global, so capture the native root first.
+                    body.push(invoke(helper(
+                        "adopt",
                         vec![
-                            st(&key),
+                            g(&format!("root_{saved}")),
+                            legacy_value,
+                            st(version_key),
                             n(*version),
                             defaults_value,
-                            objects(self.types.get(defaults.id)),
+                            schema(self.types.get(defaults.id).expect("checked defaults")),
                             entry,
+                            ix(f(rt(), "readers"), st(&key)),
+                            ix(f(rt(), "contexts"), st(&key)),
+                            publish,
                         ],
-                    ),
-                ));
+                    )));
+                } else {
+                    body.push(assign(
+                        name(saved),
+                        helper(
+                            "load",
+                            vec![
+                                st(&key),
+                                n(*version),
+                                defaults_value,
+                                objects(self.types.get(defaults.id)),
+                                entry,
+                            ],
+                        ),
+                    ));
+                }
                 let loaders = f(rt(), "loaders");
                 out.push(assign(
                     ix(
@@ -362,6 +425,7 @@ impl Lowerer<'_> {
                 name: saved,
                 from,
                 param,
+                context,
                 body,
                 ..
             } => {
@@ -371,7 +435,22 @@ impl Lowerer<'_> {
                     .get(saved)
                     .cloned()
                     .expect("saved declaration checked");
-                let func = self.function(std::slice::from_ref(param), body);
+                let mut params = vec![param.clone()];
+                params.extend(context.iter().map(|p| p.as_ref().clone()));
+                let func = self.function(&params, body);
+                if let Some(ty) = self.types.saved_contexts.get(&stmt.span.start) {
+                    out.push(assign(
+                        ix(ix(f(rt(), "contexts"), st(&key)), n(*from)),
+                        schema(ty),
+                    ));
+                }
+                let reader = self.types.saved_readers.get(&stmt.span.start);
+                if param.ty.is_some() {
+                    out.push(assign(
+                        ix(ix(f(rt(), "readers"), st(&key)), n(*from)),
+                        schema(reader.expect("checked reader")),
+                    ));
+                }
                 out.push(assign(
                     ix(ix(f(rt(), "entries"), st(&key)), n(*from)),
                     LExpr::Function(func),
@@ -422,4 +501,82 @@ pub(crate) fn globals(program: &Program, addon: &str) -> std::collections::HashM
             }
         })
         .collect()
+}
+
+fn schema(ty: &selu_check::Type) -> LExpr {
+    use selu_check::Type;
+    match selu_check::shape_of(ty) {
+        Type::Number => st("number"),
+        Type::String => st("string"),
+        Type::Boolean => st("boolean"),
+        Type::Null => st("nil"),
+        Type::Optional(t) => LExpr::Table(vec![LField::Named("optional".into(), schema(&t))]),
+        Type::Array(t) => LExpr::Table(vec![LField::Named("array".into(), schema(&t))]),
+        Type::Map(k, v) => LExpr::Table(vec![
+            LField::Named("key".into(), schema(&k)),
+            LField::Named("value".into(), schema(&v)),
+        ]),
+        Type::Object(fs) => LExpr::Table(vec![LField::Named(
+            "fields".into(),
+            LExpr::Table(
+                fs.iter()
+                    .map(|(k, v)| LField::Keyed(st(k), schema(v)))
+                    .collect(),
+            ),
+        )]),
+        _ => st("invalid"),
+    }
+}
+
+pub(crate) fn adoption_captures(program: &Program) -> LBlock {
+    let mut out = vec![];
+    for stmt in &program.stmts {
+        if let StmtKind::Saved {
+            name: saved,
+            version_key: Some(_),
+            legacy,
+            ..
+        } = &inner(stmt).kind
+        {
+            out.push(local(&format!("root_{saved}"), name(saved)));
+            if let Some(legacy) = legacy {
+                out.push(local(&format!("legacy_{saved}"), name(legacy)));
+                out.push(local(
+                    &format!("retire_{saved}"),
+                    fun(&[], vec![assign(name(legacy), LExpr::Nil)]),
+                ));
+            }
+
+            out.push(local(
+                &format!("publish_{saved}"),
+                fun(&["value"], vec![assign(name(saved), g("value"))]),
+            ));
+        }
+    }
+    out
+}
+
+pub(crate) fn has_adoption(program: &Program) -> bool {
+    program.stmts.iter().any(|s| {
+        matches!(
+            inner(s).kind,
+            StmtKind::Saved {
+                version_key: Some(_),
+                ..
+            }
+        )
+    })
+}
+pub(crate) fn adoption_setup(program: &Program) -> LBlock {
+    if !has_adoption(program) {
+        return vec![];
+    }
+    let mut body = vec![];
+    for global in ["type", "pairs", "ipairs", "pcall", "tostring"] {
+        body.push(local(global, name(global)));
+    }
+    body.push(crate::raw(include_str!("saved_adoption.lua")));
+    body.push(assign(f(rt(), "contexts"), LExpr::Table(vec![])));
+    body.push(assign(f(rt(), "readers"), LExpr::Table(vec![])));
+    vec![iff(eq(f(rt(), "adopt"), LExpr::Nil), body)]
 }

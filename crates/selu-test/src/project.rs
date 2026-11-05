@@ -708,6 +708,12 @@ struct SavedShape {
     version: u32,
     per_character: bool,
     fields: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    readers: std::collections::BTreeMap<String, String>,
 }
 fn saved_inner(s: &selu_syntax::Stmt) -> &selu_syntax::Stmt {
     if let selu_syntax::StmtKind::Export(inner) = &s.kind {
@@ -789,6 +795,8 @@ fn collect_saved(
             version,
             per_character,
             adopted,
+            legacy,
+            version_key,
             defaults,
             ..
         } = &saved_inner(s).kind
@@ -802,12 +810,44 @@ fn collect_saved(
             );
             let global = selu_lower::saved::declaration_global(addon, name, *adopted);
             globals.push((global.clone(), *per_character));
+            if let Some(legacy) = legacy {
+                globals.push((legacy.clone(), *per_character));
+            }
             shapes.insert(
                 global,
                 SavedShape {
                     version: *version,
                     per_character: *per_character,
                     fields: fs,
+                    version_key: version_key.clone(),
+                    legacy: legacy.clone(),
+                    readers: module
+                        .program
+                        .stmts
+                        .iter()
+                        .filter_map(|s| {
+                            if let selu_syntax::StmtKind::Migrate { name: n, from, .. } = &s.kind
+                                && n == name
+                                && version_key.is_some()
+                            {
+                                return types.saved_readers.get(&s.span.start).map(|t| {
+                                    (
+                                        from.to_string(),
+                                        format!(
+                                            "{};context={}",
+                                            descriptor(t, &mut vec![]),
+                                            types
+                                                .saved_contexts
+                                                .get(&s.span.start)
+                                                .map(|t| descriptor(t, &mut vec![]))
+                                                .unwrap_or_default()
+                                        ),
+                                    )
+                                });
+                            }
+                            None
+                        })
+                        .collect(),
                 },
             );
         }
@@ -880,6 +920,22 @@ fn validate_saved(
             );
             return Err(ExitCode::FAILURE);
         };
+        if before.version_key != after.version_key
+            || before.legacy != after.legacy
+            || before
+                .readers
+                .iter()
+                .any(|(v, t)| after.readers.get(v) != Some(t))
+        {
+            saved_diagnostic(
+                key,
+                "SELU0902",
+                "saved adoption contract or historical schema changed".into(),
+                modules,
+                addon,
+            );
+            return Err(ExitCode::FAILURE);
+        }
         let breaking = before.per_character != after.per_character
             || before
                 .fields
@@ -970,6 +1026,24 @@ fn validate_saved_names(modules: &[ModuleSource], addon: &str) -> Result<(), Exi
                 }
                 names.insert(name, (module, name_span));
                 globals.insert(global, (module, name_span));
+            }
+        }
+    }
+    for module in modules {
+        for stmt in &module.program.stmts {
+            if let selu_syntax::StmtKind::Saved {
+                legacy: Some(legacy),
+                name_span,
+                ..
+            } = &saved_inner(stmt).kind
+                && globals
+                    .insert(legacy.clone(), (module, name_span))
+                    .is_some()
+            {
+                eprintln!(
+                    "SELU0900: legacy saved global {legacy} collides with another declaration"
+                );
+                return Err(ExitCode::FAILURE);
             }
         }
     }

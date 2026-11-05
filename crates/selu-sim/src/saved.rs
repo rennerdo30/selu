@@ -82,6 +82,10 @@ impl Sim {
         for (name, value) in &saved.0 {
             sim.lua
                 .globals()
+                .raw_get::<mlua::Table>("__selu_saved_names")?
+                .raw_set(name.as_str(), true)?;
+            sim.lua
+                .globals()
                 .raw_set(name.as_str(), restore(&sim.lua, value)?)?;
         }
         sim.load_addon(addon, files)?;

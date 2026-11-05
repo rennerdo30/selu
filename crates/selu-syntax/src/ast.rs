@@ -79,6 +79,8 @@ pub enum StmtKind {
         name_span: Span,
         per_character: bool,
         adopted: bool,
+        version_key: Option<String>,
+        legacy: Option<String>,
         version: u32,
         defaults: Box<Expr>,
     },
@@ -89,6 +91,7 @@ pub enum StmtKind {
         from: u32,
         to: u32,
         param: Param,
+        context: Option<Box<Param>>,
         body: Vec<Stmt>,
     },
     VarDecl {

@@ -58,7 +58,12 @@ impl Origins {
                 catch: Some((Some(param), _)),
                 ..
             } => self.params(std::slice::from_ref(param)),
-            StmtKind::Migrate { param, .. } => self.params(std::slice::from_ref(param)),
+            StmtKind::Migrate { param, context, .. } => {
+                self.params(std::slice::from_ref(param));
+                if let Some(context) = context {
+                    self.params(std::slice::from_ref(context.as_ref()));
+                }
+            }
             StmtKind::Global { name, .. } => self.binding(name),
             StmtKind::Import { names, default, .. } => {
                 for (_, n, _, _) in names {

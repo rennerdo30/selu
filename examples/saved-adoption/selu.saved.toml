@@ -1,0 +1,13 @@
+[saved.ExampleDB]
+version = 2
+per_character = false
+version_key = "dbVersion"
+legacy = "ExampleLegacyDB"
+
+[saved.ExampleDB.fields]
+"" = "object"
+"/5:count" = "number"
+"/7:enabled" = "boolean"
+
+[saved.ExampleDB.readers]
+1 = "{ count: number; enabled: boolean };context="
