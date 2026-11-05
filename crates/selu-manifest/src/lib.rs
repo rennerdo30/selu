@@ -300,24 +300,41 @@ pub fn product(name: &str) -> &str {
         _ => name,
     }
 }
-/// Display text is derived metadata, never a project target identity.
+/// The expansion a Classic client's major version replays, for display only.
+fn classic_expansion(major: u32) -> Option<&'static str> {
+    Some(match major {
+        2 => "Burning Crusade",
+        3 => "Wrath of the Lich King",
+        4 => "Cataclysm",
+        5 => "Mists of Pandaria",
+        6 => "Warlords of Draenor",
+        _ => return None,
+    })
+}
+
+/// Display text is derived metadata, never a project target identity: it is
+/// computed from the product code and the build, so it follows Blizzard's
+/// channels when they move to a new expansion.
 pub fn display_name(product: &str, build: &Build) -> String {
+    let classic = |suffix: &str| match classic_expansion(build.major) {
+        Some(expansion) => format!("{expansion} Classic{suffix}"),
+        None => format!("Classic{suffix}"),
+    };
     let name = match product {
-        "wow" => "World of Warcraft",
-        "wowt" => "World of Warcraft PTR",
-        "wowxptr" => "World of Warcraft PTR 2",
-        "wow_beta" => "World of Warcraft Beta",
-        "wowf" => "Forever",
-        "wow_classic" if build.major == 5 => "Mists of Pandaria Classic",
-        "wow_classic" => "Classic",
-        "wow_classic_ptr" => "Classic PTR",
-        "wow_classic_beta" => "Classic Beta",
-        "wow_classic_era" => "Classic Era",
-        "wow_classic_era_ptr" => "Classic Era PTR",
-        "wow_anniversary" => "Classic Anniversary",
-        "wow_anniversary_ptr" => "Classic Anniversary PTR",
-        "wow_classic_titan" => "Classic Titan",
-        _ => product,
+        "wow" => "World of Warcraft".to_string(),
+        "wowt" => "World of Warcraft PTR".to_string(),
+        "wowxptr" => "World of Warcraft PTR 2".to_string(),
+        "wow_beta" => "World of Warcraft Beta".to_string(),
+        "wowf" => "World of Warcraft: Forever".to_string(),
+        "wow_classic" => classic(""),
+        "wow_classic_ptr" => classic(" PTR"),
+        "wow_classic_beta" => classic(" Beta"),
+        "wow_classic_era" => "Classic Era".to_string(),
+        "wow_classic_era_ptr" => "Classic Era PTR".to_string(),
+        "wow_anniversary" => classic(" Anniversary"),
+        "wow_anniversary_ptr" => classic(" Anniversary PTR"),
+        "wow_classic_titan" => "Titan Reforged".to_string(),
+        _ => product.to_string(),
     };
     format!("{name} {}.{}.{}", build.major, build.minor, build.patch)
 }
