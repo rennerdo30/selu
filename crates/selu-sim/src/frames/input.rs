@@ -158,8 +158,7 @@ impl crate::session::Vm {
             if let Some(i) = a.focus {
                 let r = &mut a.regions[i];
                 r.text = Some(format!("{}{text}", r.text.as_deref().unwrap_or("")));
-                r.text_value =
-                    Value::String(self.lua().create_string(r.text.as_deref().unwrap_or(""))?);
+                r.text_value = Value::Nil;
                 let t = r.table.clone();
                 a.dirty = true;
                 drop(a);

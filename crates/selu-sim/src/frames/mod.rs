@@ -14,9 +14,13 @@ impl RegionModel for LuaTableModel {
     fn resolve_layout(&self, lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
         let store = arena::store(lua);
         let mut a = store.borrow_mut();
-        if (a.regions[0].width, a.regions[0].height) != self.ui_size {
-            a.regions[0].width = self.ui_size.0;
-            a.regions[0].height = self.ui_size.1;
+        let logical_size = (
+            self.ui_size.0 / a.regions[0].scale,
+            self.ui_size.1 / a.regions[0].scale,
+        );
+        if (a.regions[0].width, a.regions[0].height) != logical_size {
+            a.regions[0].width = logical_size.0;
+            a.regions[0].height = logical_size.1;
             a.dirty = true;
         }
         layout::resolve(&mut a, ctx);
@@ -203,8 +207,8 @@ pub struct Fallback {
     pub target: String,
     pub empty_shape: String,
 }
-/// Missing lowercase addon fields always read nil. Without a manifest,
-/// uppercase keys temporarily retain the historical callable fallback.
+/// Missing addon fields read nil. Only methods found in a supplied or bundled
+/// widget catalog receive a callable fallback.
 pub fn missing_method(widget: &str, key: &str, manifest: Option<&MethodList>) -> Option<Fallback> {
     if !key.chars().next().is_some_and(char::is_uppercase) {
         return None;
@@ -215,8 +219,7 @@ pub fn missing_method(widget: &str, key: &str, manifest: Option<&MethodList>) ->
         manifest::methods(widget)
             .iter()
             .find(|(name, _)| *name == key)
-            .map(|(_, shape)| (*shape).to_owned())
-            .unwrap_or_default()
+            .map(|(_, shape)| (*shape).to_owned())?
     };
     Some(Fallback {
         target: format!("{widget}:{key}"),

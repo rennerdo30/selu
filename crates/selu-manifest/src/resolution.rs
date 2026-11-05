@@ -108,6 +108,12 @@ pub fn load_checked_manifest(path: &Path, target: Option<&str>) -> Result<Manife
             format!("cannot read snapshot {}: {e}", path.display()),
         )
     })?;
+    if bytes.starts_with(b"SELUSEG") || path.extension().is_some_and(|e| e == "selus") {
+        return Err(Diagnostic::error(
+            "SELU0202",
+            "--manifest expects a checked SELUMAN snapshot, not a .selus history store; use --manifest-dir <manifests directory> with --target <product@build>",
+        ));
+    }
     let snapshot: Snapshot = crate::format::decode(&bytes).map_err(|e| {
         Diagnostic::error(
             "SELU0202",

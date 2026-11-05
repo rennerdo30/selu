@@ -240,3 +240,76 @@ resolution, the immutable snapshot view) and does all wiring in `lib.rs`;
 after that S1 and S2 own disjoint files. The existing `Sim` API keeps working
 through round 8 as a thin wrapper over `Session`, so no other test has to
 change at once.
+
+## SIM1: loading real addons
+
+Missing Lua files listed in a TOC produce `missing TOC file: <path>
+(continuing)` and loading proceeds. Existing files still undergo canonical
+sandbox validation; permission failures and unsupported XML remain errors.
+Historical addon-author reports describe missing TOC entries as logged load
+failures that do not stop loading ([Excessive load times](https://wowinterface.com/forums/archive/index.php/t-36339.html)).
+A [BfA beta report](https://www.wowinterface.com/forums/archive/index.php/https-/index.php/t-56283.html)
+describes a regression from that behaviour. This is the simulator's chosen
+compatibility behaviour, not native verification of every modern client.
+
+Unknown globals remain nil and record `not simulated: X` once. Only manifest
+function entries receive callable stand-ins. Manifest Font, table and widget
+globals get the declared shape; `sim_globals::create_font` is the single Font
+constructor boundary for SIM2. Native error handler routing from SB remains
+unchanged. `debugprofilestop` returns simulated milliseconds; texture file IDs
+are numeric IDs only, with nil for paths/atlases rather than invented IDs.
+
+`StaticPopup_Show` retains the latest 16 popup records in `__selu_popups`
+(text, two button labels and data), and emits their text to Studio's console.
+Button actions and visual popup rendering are not implemented by SIM1.
+
+Use `--manifest-dir <repository>/manifests --target wowf@1.60.1.70790` for external
+Lua addon copies. `--manifest` instead takes a checked SELUMAN snapshot;
+SELUSEG `.selus` history packs are rejected with an actionable explanation.
+Session logs identify the resolved target/build or explicitly report none.
+
+`debugstack(start?, count1?, count2?)` returns newline-separated Lua frame
+locations and function names from the current coroutine, using defaults
+1, 12 and 10 as described in the [client API documentation](https://warcraft.wiki.gg/wiki/API:debugstack).
+It truncates the middle with `...` and bounds inspection at 1024 frames.
+Addresses are excluded for deterministic tests. The optional explicit
+coroutine overload is not implemented; current-coroutine calls are supported.
+
+The SIM1 screen model uses `SessionConfig.ui_size` as physical resolution
+(default 1920x1080). `GetPhysicalScreenSize` returns that pair;
+`GetScreenWidth`/`GetScreenHeight` return resolution divided by UIParent's
+effective scale. Scaling UIParent preserves its physical viewport by updating
+its logical size. Children multiply their scales through their ancestors.
+Non-positive and non-finite scales are rejected without mutation.
+The screen signatures come from Blizzard's
+[ScreenDocumentation.lua](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/ScreenDocumentation.lua);
+[GetScreenWidth](https://warcraft.wiki.gg/wiki/API_GetScreenWidth) describes
+UIParent units, and a [native client error report](https://us.forums.blizzard.com/en/wow/t/disabled-all-addons-and-still-getting-this-lua-error/449049)
+shows the positive-scale validation. No native-client NaN experiment was run.
+UI.lua in the assessment copy does not read the UI scale CVars.
+
+The actual Toolkit scale failure was caused by returning an invented callable
+for its absent `RA_kitOriginalScale` field. Missing widget members now use only
+known method signatures; unknown addon fields, including uppercase names, stay
+nil. The former no-op tests now probe an actual known unmodelled method,
+`SetMovable`; global fallback tests assert nil and retain log-once assertions.
+Tooltip ownership is stateful. The native Minimap global has an explicitly
+sourced widget shape from Blizzard's
+[Minimap.xml](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_Minimap/Mainline/Minimap.xml);
+map imagery is not simulated. Hook callbacks retain registry keys rather than
+auxiliary-stack function references, preserving error routing and flush order.
+
+SIM1 also seeds a deterministic simulated player from the session character
+and realm (level 1 Warrior, 100 health), without startup transition events.
+This is synthetic scenario data, never a real saved file or game account.
+`GetRealmName` reads the session realm. Ordinary text is retained in Rust and
+materialized as a Lua string only for `GetText`; opaque secret values retain
+identity. Transitions with no installed script do not queue frame handles.
+These keep real addon construction beneath Lua 5.1's auxiliary reference limit
+without changing snapshot text fields or SIM2's visual model.
+
+The Toolkit copy has a visual skinning defect independent of native child
+structure: `Modules/Skin/Collections.lua` assigns `sideTabs = SideTabs`
+(a Lua function), while `Modules/Skin/Framework.lua` passes that value to
+`ipairs` in `Parts` before looking up any child. No template field was invented
+to bypass this. Animation groups remain a separate follow-up package.

@@ -437,6 +437,7 @@ dependencies = [
  "mlua",
  "selu-manifest",
  "serde",
+ "serde_json",
  "toml",
 ]
 
