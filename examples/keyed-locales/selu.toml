@@ -1,0 +1,3 @@
+[addon]
+name = "KeyedLocales"
+targets = ["wowf@1.60.1.70790"]

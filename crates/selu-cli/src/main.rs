@@ -43,6 +43,9 @@ enum Command {
         /// Only tests whose name contains this text.
         #[arg(long)]
         filter: Option<String>,
+        /// Require nonempty scenarios and refuse simulator gaps (port CI).
+        #[arg(long)]
+        strict: bool,
         #[arg(long)]
         json: bool,
     },
@@ -108,11 +111,13 @@ fn main() -> ExitCode {
             manifest_dir,
             target,
             filter,
+            strict,
             json,
         } => test(
             path.as_deref().unwrap_or(Path::new(".")),
             target.clone(),
             filter.clone(),
+            *strict,
             *json,
             manifest_dir.clone(),
         ),
@@ -251,6 +256,7 @@ fn test(
     project_dir: &Path,
     target: Option<String>,
     filter: Option<String>,
+    strict: bool,
     json: bool,
     manifest_dir: Option<PathBuf>,
 ) -> Result<(), ExitCode> {
@@ -270,7 +276,11 @@ fn test(
                     report.to_human()
                 }
             );
-            match report.exit_code() {
+            match if strict {
+                report.strict_exit_code()
+            } else {
+                report.exit_code()
+            } {
                 0 => Ok(()),
                 code => Err(ExitCode::from(code)),
             }

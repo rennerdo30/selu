@@ -97,6 +97,14 @@ impl Lowerer<'_> {
                 &["__selu_new_error", "__selu_wrap_error", "__selu_raise"],
                 &["10-errors-state", "11-errors-captures"],
             ));
+            if self.wow.error_handler {
+                pieces.push(piece(
+                    "12-native-error-boundary",
+                    vec![raw(errors::ON_ERROR_RUNTIME)],
+                    &["__selu_on_error"],
+                    &["10-errors-state", "11-errors-captures", "12-errors"],
+                ));
+            }
             let setup = self.error_setup(program);
             let protect = setup.last().unwrap().clone();
             // Each return width has its own scalar helper; never pack results.

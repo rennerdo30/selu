@@ -98,3 +98,32 @@ report. `selu_test::run` is a synchronous library API; it builds to the project'
 `dist/` directory and does not start a subprocess or Studio.
 
 See `examples/hello/tests/` and `examples/classes/tests/` for executable examples.
+
+For port CI, `selu test --strict` fails empty selections and any scenario that
+encounters a simulator gap, including gaps reported during boot or callbacks.
+Ordinary `selu test` retains its report-only gap behavior.
+
+A test file may have a data-only sibling: `tests/a.test.scenario.json` for
+`tests/a.test.selu`. The checked fixture schema has optional `character` and
+`saved` fields and rejects other fields. `saved` maps TOC-declared global names
+to the serialized `SavedValue` data enum (`Nil`, `Boolean`, `Number`, `String`
+with UTF-8 byte arrays, and `Table` with key/value pairs). For example:
+
+```json
+{"character":"Player","saved":{"MyAddon_settings":{"Table":[[{"String":[99,111,117,110,116]},{"Number":41}]]}}}
+```
+
+Fixtures seed the ordinary loader before addon load and ADDON_LOADED, including
+malformed historical values; undeclared globals and late seeding fail. No Lua is
+loaded from the fixture. `sim.switchCharacter("Other")` persists the old character,
+loads the next character's saved tree and performs the usual login sequence.
+Account data stays shared. Like reload, it retires old production handles. Use
+fresh `sim.frame`, `sim.prints`, and `sim.callbackCounts` observations afterward;
+imported old-generation functions remain invalid. Counts reset with the VM.
+Inventory/aura/quest/taxi/CVar/message/native-frame fixtures belong to later waves.
+
+SELU0631 identifies invalid scenario schemas or saved fixtures.
+Fixture failures retain a structured diagnostic with the fixture pathname and a
+source span. Schema failures underline the relevant JSON key where available;
+saved-global validation underlines that global's key within `saved`, including
+escaped JSON keys. Invalid JSON retains its parser position.

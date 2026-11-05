@@ -220,7 +220,7 @@ on PLAYER_LOGIN() {
   position();
   rate.load();
   update();
-  C_Timer.NewTicker(15, (_ticker: () => void) => {
+  C_Timer.NewTicker(15, () => {
     update();
   });
 }

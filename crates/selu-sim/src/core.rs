@@ -539,6 +539,52 @@ pub(crate) fn callback_dispatch<R>(
     result
 }
 
+#[derive(Debug)]
+struct NativeBoundaryFailure(String);
+impl std::fmt::Display for NativeBoundaryFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for NativeBoundaryFailure {}
+pub(crate) fn boundary_was_reported(error: &mlua::Error) -> bool {
+    error.downcast_ref::<NativeBoundaryFailure>().is_some()
+        || error.parent().is_some_and(boundary_was_reported)
+}
+fn render_boundary_error(lua: &Lua, error: mlua::Value) -> mlua::Result<String> {
+    if let mlua::Value::String(text) = error {
+        return Ok(text.to_string_lossy());
+    }
+    let fallback = error.type_name().to_string();
+    let mut text = lua
+        .globals()
+        .get::<mlua::Function>("tostring")
+        .and_then(|format| format.call::<mlua::Value>(error))
+        .ok()
+        .and_then(|v| {
+            if let mlua::Value::String(s) = v {
+                Some(s.to_string_lossy())
+            } else {
+                None
+            }
+        })
+        .unwrap_or(fallback);
+    // xpcall invokes its handler before unwinding the failing stack.
+    text.push_str("\nstack traceback:");
+    for level in 0..128 {
+        let Some(frame) = lua.inspect_stack(level) else {
+            break;
+        };
+        let source = frame.source();
+        if source.what == "C" {
+            continue;
+        }
+        let name = source.short_src.as_deref().unwrap_or("?");
+        text.push_str(&format!("\n\t{name}:{}", frame.curr_line()));
+    }
+    Ok(text)
+}
+
 /// Protect Lua calls *before* mlua stringifies non-string error objects.
 /// The handler is only at the host boundary: addon pcall/coroutine code
 /// continues to receive the original error value unchanged.
@@ -552,37 +598,23 @@ pub(crate) fn call_lua<R: mlua::FromLuaMulti>(
         Some(function) => function,
         None => {
             let render = lua.create_function(|lua, error: mlua::Value| {
-                if let mlua::Value::String(text) = error {
-                    return Ok(text.to_string_lossy());
+                if let mlua::Value::Error(ref cause) = error
+                    && boundary_was_reported(cause)
+                {
+                    return Ok(error);
                 }
-                let fallback = error.type_name().to_string();
-                let mut text = lua
-                    .globals()
-                    .get::<mlua::Function>("tostring")
-                    .and_then(|format| format.call::<mlua::Value>(error))
-                    .ok()
-                    .and_then(|v| {
-                        if let mlua::Value::String(s) = v {
-                            Some(s.to_string_lossy())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(fallback);
-                // xpcall invokes its handler before unwinding the failing stack.
-                text.push_str("\nstack traceback:");
-                for level in 0..128 {
-                    let Some(frame) = lua.inspect_stack(level) else {
-                        break;
-                    };
-                    let source = frame.source();
-                    if source.what == "C" {
-                        continue;
-                    }
-                    let name = source.short_src.as_deref().unwrap_or("?");
-                    text.push_str(&format!("\n\t{name}:{}", frame.curr_line()));
+                let notified = crate::world::notify_native_error(lua, error.clone())?;
+                let message = render_boundary_error(lua, error)?;
+                if notified {
+                    lua.app_data_ref::<Ctx>()
+                        .unwrap()
+                        .runtime_failure("native boundary", message.clone());
+                    Ok(mlua::Value::Error(Box::new(mlua::Error::external(
+                        NativeBoundaryFailure(message),
+                    ))))
+                } else {
+                    Ok(mlua::Value::String(lua.create_string(message)?))
                 }
-                Ok(text)
             })?;
             let factory: mlua::Function = lua
                 .load(
@@ -724,7 +756,9 @@ pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
         }
         if let Err(e) = next(lua) {
             let text = e.to_string();
-            ctx.runtime_failure("flush", text.clone());
+            if !boundary_was_reported(&e) {
+                ctx.runtime_failure("flush", text.clone());
+            }
             ctx.log(format!("error: {text}"));
             ctx.record(TraceKind::Error, "flush", vec![text]);
         }

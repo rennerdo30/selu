@@ -484,6 +484,7 @@ pub fn uses_errors(program: &selu_syntax::Program) -> bool {
             Child::Expr(e) => {
                 *found |=
                     matches!(&e.kind, selu_syntax::ExprKind::New {class,..} if class=="Error");
+                *found |= matches!(&e.kind, selu_syntax::ExprKind::Call {callee,..} if callee.dotted_name().as_deref() == Some("onError"));
                 visit::child_exprs_and_stmts(e, &mut |c| inspect(c, found));
             }
         }
@@ -529,14 +530,18 @@ impl Lowerer<'_> {
         let mut results = vec!["ok".to_string(), "status".to_string()];
         results.extend((1..=width).map(|i| format!("value{i}")));
         let results = results.join(", ");
-        vec![
+        let mut setup = vec![
             crate::raw(ERROR_STATE),
             crate::raw(ERROR_RUNTIME),
             // Save and restore: a callback entry may reset the count meanwhile.
             crate::raw(&format!(
                 "local function __selu_protect(fn, ...)\n  local depth = __selu_errors.depth\n  __selu_errors.depth = depth + 1\n  local {results} = __selu_pcall(fn, ...)\n  __selu_errors.depth = depth\n  return {results}\nend"
             )),
-        ]
+        ];
+        if self.wow.error_handler {
+            setup.insert(2, crate::raw(ON_ERROR_RUNTIME));
+        }
+        setup
     }
     /// Runtime for callback entry points, after the body is lowered. Files
     /// without try/throw get only the shared state when their addon uses it.
@@ -609,4 +614,26 @@ local function __selu_raise(value)
   else
     __selu_error(value, 0)
   end
+end"#;
+
+pub(crate) const ON_ERROR_RUNTIME: &str = r#"local function __selu_on_error(callback)
+  local previous = geterrorhandler()
+  seterrorhandler(function(...)
+    local value = select(1, ...)
+    local normalized
+    local accessible = not issecretvalue or not issecretvalue(value)
+    if not accessible then
+      normalized = __selu_new_error("<secret error>")
+    else
+      local ok, existing = __selu_pcall(function() return __selu_error_getmetatable(value) == __selu_errors.meta end)
+      if ok and existing then normalized = value
+      elseif type(value) == "string" then normalized = __selu_new_error(value)
+      else normalized = __selu_new_error("<" .. type(value) .. " error>") end
+    end
+    local depth = __selu_errors.depth
+    __selu_errors.depth = 0
+    __selu_pcall(callback, normalized)
+    __selu_errors.depth = depth
+    return previous(...)
+  end)
 end"#;
