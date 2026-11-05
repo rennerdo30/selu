@@ -381,7 +381,9 @@ impl Ctx<'_> {
         else {
             unreachable!()
         };
+        self.prepare_region(body, &[iter]);
         let iter_type = self.expr(iter);
+        let loop_entry = self.flow_state();
         let mut t = crate::shape_of(&iter_type);
         if let Type::Tuple(items) = &t
             && items.len() == 1
@@ -464,7 +466,8 @@ impl Ctx<'_> {
         self.loops.push(crate::loops::LoopCtx);
         self.block(body, &[], vec![]);
         self.loops.pop();
-        self.scopes.pop();
+        self.close_scope();
+        self.restore_flow(loop_entry);
     }
 }
 

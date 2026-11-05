@@ -1,0 +1,1 @@
+class C{value:string="s";}const c=new C();const y:{value:string|number}=c;y.value=4;function f():string{return c.value;}print(f());

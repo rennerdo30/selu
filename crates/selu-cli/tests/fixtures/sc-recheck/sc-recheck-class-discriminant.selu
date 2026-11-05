@@ -1,0 +1,1 @@
+class A{kind:"a"="a";value:string="wrong";}class B{kind:"b"="b";value:number=1;}function f(x:A|B):number{if(x.kind=="a"){return x.value;}return 0;}print(f(new A()));

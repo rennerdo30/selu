@@ -6,14 +6,26 @@ use selu_syntax::{
 use std::collections::{HashMap, HashSet};
 #[derive(Default)]
 struct Scan {
+    assignments: HashMap<selu_syntax::ExprId, usize>,
+    exports: HashSet<usize>,
     scopes: Vec<HashMap<String, (usize, usize)>>,
     depth: usize,
     writes: HashSet<usize>,
 }
-pub(crate) fn captured_writes(p: &Program) -> HashSet<usize> {
+#[derive(Clone, Default)]
+pub(crate) struct FlowInfo {
+    pub captured: HashSet<usize>,
+    pub assignments: HashMap<selu_syntax::ExprId, usize>,
+    pub exports: HashSet<usize>,
+}
+pub(crate) fn analyze(p: &Program) -> FlowInfo {
     let mut s = Scan::default();
     s.block(&p.stmts, &[]);
-    s.writes
+    FlowInfo {
+        captured: s.writes,
+        assignments: s.assignments,
+        exports: s.exports,
+    }
 }
 impl Scan {
     fn bind(&mut self, n: &str, start: usize) {
@@ -24,7 +36,18 @@ impl Scan {
     }
     fn decl(&mut self, s: &Stmt) {
         match &s.kind {
-            StmtKind::Export(s) => self.decl(s),
+            StmtKind::Export(s) => {
+                if let StmtKind::VarDecl {
+                    is_const: false,
+                    name_span,
+                    ..
+                }
+                | StmtKind::Global { name_span, .. } = &s.kind
+                {
+                    self.exports.insert(name_span.start);
+                }
+                self.decl(s);
+            }
             StmtKind::VarDecl {
                 name, name_span, ..
             }
@@ -223,9 +246,11 @@ impl Scan {
         if let Some(target) = target
             && let ExprKind::Ident(n) = &target.kind
             && let Some((start, depth)) = self.scopes.iter().rev().find_map(|s| s.get(n))
-            && *depth < self.depth
         {
-            self.writes.insert(*start);
+            self.assignments.insert(e.id, *start);
+            if *depth < self.depth {
+                self.writes.insert(*start);
+            }
         }
         visit::child_exprs_and_stmts(e, &mut |c| self.child(c));
     }

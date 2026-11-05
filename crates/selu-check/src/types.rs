@@ -326,8 +326,11 @@ impl Type {
             (Type::Class(_, _, have), Type::Object(want)) => want.iter().all(|(k, w)| {
                 !matches!(w.non_null(), Type::Function { .. })
                     && match have.get(k) {
-                        Some(h) => h.assignable_seen(w, seen),
-                        None => w.is_optional(),
+                        Some(h) => {
+                            h.assignable_seen(w, &mut seen.clone())
+                                && w.assignable_seen(h, &mut seen.clone())
+                        }
+                        None => false,
                     }
             }),
             (Type::ApiOpaque(_, members), target) if !members.is_empty() => {
@@ -378,12 +381,16 @@ impl Type {
             (Type::Tuple(a), Type::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.assignable_seen(y, seen))
             }
-            // Structural: every field `to` needs must be there and fit; a
-            // missing field is fine when `to` allows null for it.
+            // Existing writable views must expose compatible writes both ways.
+            // Fresh literals acquire absent optional fields contextually;
+            // erased aliases cannot safely recover hidden writable fields.
             (Type::Object(have), Type::Object(want)) => {
                 want.iter().all(|(k, w)| match have.get(k) {
-                    Some(h) => h.assignable_seen(w, seen),
-                    None => w.is_optional(),
+                    Some(h) => {
+                        h.assignable_seen(w, &mut seen.clone())
+                            && w.assignable_seen(h, &mut seen.clone())
+                    }
+                    None => false,
                 })
             }
             (
@@ -854,7 +861,14 @@ mod tests {
         assert_eq!(show("(a: number) => void"), "(number) => void");
         assert_eq!(show("[string, boolean]"), "[string, boolean]");
         assert_eq!(show("Frame"), "unknown");
-        assert!(ty("{ a: number; b: string }").assignable_to(&ty("{ a: number; c?: boolean }")));
+        // An existing view may hide an incompatible c field. Optional writable
+        // fields can be added by a fresh literal context, not by alias conversion.
+        assert!(!ty("{ a: number; b: string }").assignable_to(&ty("{ a: number; c?: boolean }")));
+        assert!(
+            ty("{ a: number; b: string; c?: boolean }")
+                .assignable_to(&ty("{ a: number; c?: boolean }"))
+        );
+        assert!(!ty("{ value: string }").assignable_to(&ty("{ value: string | number }")));
         assert!(!ty("{ a: number }").assignable_to(&ty("{ a: number; b: string }")));
         assert!(!ty("number[]").assignable_to(&ty("number?[]")));
     }

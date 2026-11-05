@@ -35,6 +35,7 @@ mod bindings;
 mod data;
 mod errors;
 mod flow;
+mod flow_state;
 mod functions;
 mod loops;
 pub mod patterns;
@@ -80,7 +81,8 @@ pub fn check_program_with_options(
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         binding_statements: bindings::module_statements(program),
-        captured_writes: flow::captured_writes(program),
+        flow_info: flow::analyze(program),
+        next_binding: 0,
         module: ModuleBindings::default(),
         manifest,
         secret_capable: restrictions::has_secrets(manifest),
@@ -159,7 +161,8 @@ pub fn check_module_targets_with_options(
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         binding_statements: bindings::module_statements(program),
-        captured_writes: flow::captured_writes(program),
+        flow_info: flow::analyze(program),
+        next_binding: 0,
         module: imports,
         manifest,
         secret_capable: restrictions::has_secrets(manifest),
@@ -222,6 +225,8 @@ enum Kind {
 
 #[derive(Debug, Clone)]
 struct Binding {
+    id: BindingId,
+    external: bool,
     origin: usize,
     kind: Kind,
     ty: Type,
@@ -233,8 +238,10 @@ struct Binding {
 
 /// A narrower type for a name inside part of a scope (`x` is a `number`, not
 /// a `number?`, after `if (x == null) return;`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Narrow {
+    external: bool,
+    field: bool,
     ty: Type,
     fn_depth: usize,
 }
@@ -242,13 +249,23 @@ struct Narrow {
 #[derive(Clone, Default)]
 struct Scope {
     names: HashMap<String, Binding>,
-    narrowed: HashMap<String, Narrow>,
+    narrowed: HashMap<FactKey, Narrow>,
 }
 
-type Narrowings = Vec<(String, Type)>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct BindingId(usize);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FactKey {
+    Binding(BindingId),
+    Field(BindingId),
+    Capability(String),
+}
+type Narrowings = Vec<(FactKey, Type)>;
+type FlowState = HashMap<FactKey, Narrow>;
 
 struct Ctx<'a> {
-    captured_writes: std::collections::HashSet<usize>,
+    flow_info: flow::FlowInfo,
+    next_binding: usize,
     binding_statements: std::collections::HashSet<selu_syntax::ExprId>,
     secret_capable: bool,
     protected_functions: Vec<Type>,
@@ -320,51 +337,13 @@ impl Ctx<'_> {
     fn type_of(&self, name: &str) -> Option<Type> {
         let (at, b) = self.lookup(name)?;
         for scope in self.scopes[at..].iter().rev() {
-            if let Some(n) = scope.narrowed.get(name)
-                && (n.fn_depth == self.fn_depth || b.kind == Kind::Const)
+            if let Some(n) = scope.narrowed.get(&FactKey::Binding(b.id))
+                && (n.fn_depth == self.fn_depth || (b.kind == Kind::Const && !n.external))
             {
                 return Some(n.ty.clone());
             }
         }
         Some(b.ty.clone())
-    }
-
-    fn invalidate_captured_facts(&mut self) {
-        let bindings: Vec<_> = self
-            .scopes
-            .iter()
-            .enumerate()
-            .flat_map(|(at, s)| {
-                s.names
-                    .iter()
-                    .filter(|(_, b)| {
-                        self.captured_writes.contains(&b.origin)
-                            && matches!(
-                                b.kind,
-                                Kind::Let | Kind::Param | Kind::Global | Kind::Import
-                            )
-                    })
-                    .map(move |(n, _)| (at, n.clone()))
-            })
-            .collect();
-        for (at, name) in bindings {
-            for scope in &mut self.scopes[at..] {
-                if scope
-                    .narrowed
-                    .get(&name)
-                    .is_some_and(|n| n.fn_depth == self.fn_depth)
-                {
-                    scope.narrowed.remove(&name);
-                }
-            }
-        }
-    }
-    fn narrow_here(&mut self, narrowings: Narrowings) {
-        let fn_depth = self.fn_depth;
-        let scope = self.scopes.last_mut().expect("a scope is open");
-        for (name, ty) in narrowings {
-            scope.narrowed.insert(name, Narrow { ty, fn_depth });
-        }
     }
 
     /// Declares `name` in the innermost scope; only parameters start ready.
@@ -374,7 +353,22 @@ impl Ctx<'_> {
                 .push(err("SELU0648", "`_G` cannot be bound in Selu", span));
         }
         self.reserved_error_name(name, span);
+        let external = self.flow_info.captured.contains(&span.start)
+            || self.flow_info.exports.contains(&span.start)
+            || kind == Kind::Global;
+        self.declare_classified(name, span, kind, ty, external);
+    }
+    fn declare_classified(
+        &mut self,
+        name: &str,
+        span: &Span,
+        kind: Kind,
+        ty: Type,
+        external: bool,
+    ) {
         let fn_depth = self.fn_depth;
+        let id = BindingId(self.next_binding);
+        self.next_binding += 1;
         let scope = self.scopes.last_mut().expect("a scope is open");
         if scope.names.contains_key(name) {
             self.out.push(
@@ -388,6 +382,8 @@ impl Ctx<'_> {
         scope.names.insert(
             name.to_string(),
             Binding {
+                id,
+                external,
                 origin: span.start,
                 kind,
                 ty,
@@ -512,7 +508,7 @@ impl Ctx<'_> {
                     .insert(aliases::declaration_key(d), context.clone());
             }
         }
-        self.scopes.pop();
+        self.close_scope();
     }
 
     fn declare_global(&mut self, name: &str, name_span: &Span, stmt_span: &Span, top: bool) {
@@ -553,6 +549,7 @@ impl Ctx<'_> {
         written_ret: Option<Type>,
         body: &[Stmt],
     ) -> Type {
+        let entry_flow = self.flow_state();
         let loops = std::mem::take(&mut self.loops);
         self.fn_depth += 1;
         self.returns.push(Vec::new());
@@ -561,6 +558,7 @@ impl Ctx<'_> {
         let returns = self.returns.pop().unwrap_or_default();
         self.fn_depth -= 1;
         self.loops = loops;
+        self.restore_flow(entry_flow);
         if let Some(written) = written_ret {
             for (t, span) in &returns {
                 let ok = if *t == Type::Void {
@@ -713,17 +711,23 @@ impl Ctx<'_> {
                 then_branch,
                 else_branch,
             } => {
-                let (then_n, else_n) = self.condition(cond);
-                self.block(then_branch, &[], then_n.clone());
+                let (yes, no) = self.condition(cond);
+                self.restore_flow(yes);
+                self.block(then_branch, &[], vec![]);
+                let then_out = self.flow_state();
+                self.restore_flow(no);
                 if let Some(e) = else_branch {
-                    self.block(e, &[], else_n.clone());
+                    self.block(e, &[], vec![]);
                 }
-                // `if (x == null) return;`: after the `if`, x is not null.
-                if always_exits(then_branch) {
-                    self.narrow_here(else_n);
-                } else if else_branch.as_deref().is_some_and(always_exits) {
-                    self.narrow_here(then_n);
+                let else_out = self.flow_state();
+                let mut outgoing = Vec::new();
+                if !always_exits(then_branch) {
+                    outgoing.push(then_out);
                 }
+                if !else_branch.as_deref().is_some_and(always_exits) {
+                    outgoing.push(else_out);
+                }
+                self.restore_flow(flow_state::intersect(outgoing));
             }
             StmtKind::Block(b) => self.block(b, &[], Vec::new()),
             StmtKind::While { .. }
@@ -902,7 +906,7 @@ impl Ctx<'_> {
         if self.module_write(name, span) {
             return;
         }
-        let Some((at, b)) = self.lookup(name).map(|(i, b)| (i, b.clone())) else {
+        let Some((_, b)) = self.lookup(name).map(|(i, b)| (i, b.clone())) else {
             if self.manifest.has_global(name) {
                 self.out.push(
                     err("SELU0315", format!("`{name}` belongs to the game and can't be replaced"), span)
@@ -959,22 +963,9 @@ impl Ctx<'_> {
             ));
             return;
         }
-        // Narrowing after the assignment: a non-null value narrows here; a
-        // value that may be null undoes narrowings up to the declaration,
-        // since this branch may or may not have run.
-        let fn_depth = self.fn_depth;
-        if b.ty.is_optional() && !value.is_optional() && !value.is_open() {
-            self.narrow_here(vec![(name.to_string(), value.clone())]);
-        } else {
-            for scope in &mut self.scopes[at..] {
-                scope.narrowed.insert(
-                    name.to_string(),
-                    Narrow {
-                        ty: b.ty.clone(),
-                        fn_depth,
-                    },
-                );
-            }
+        self.kill_binding(b.id);
+        if !value.is_open() && value.assignable_to(&b.ty) {
+            self.narrow_here(vec![(FactKey::Binding(b.id), value.clone())]);
         }
     }
 
@@ -1017,10 +1008,8 @@ impl Ctx<'_> {
 
     /// An expression used as a condition (SPEC-V1 2.2: a `boolean` or a
     /// `T?`), and the narrowings that hold when it is true and when false.
-    fn condition(&mut self, e: &Expr) -> (Narrowings, Narrowings) {
-        let t = self.expr(e);
-        self.check_condition_type(e, &t);
-        self.narrowings(e)
+    fn condition(&mut self, e: &Expr) -> (FlowState, FlowState) {
+        self.flow_condition(e)
     }
 
     fn check_condition_type(&mut self, e: &Expr, t: &Type) {
@@ -1060,12 +1049,12 @@ impl Ctx<'_> {
         if let Some(n) = self.has_narrowings(e) {
             return n;
         }
-        let optional_name = |x: &Expr| -> Option<(String, Type)> {
+        let optional_name = |x: &Expr| -> Option<(FactKey, Type)> {
             let ExprKind::Ident(n) = &x.kind else {
                 return None;
             };
             match self.alias_shape(self.type_of(n)?) {
-                Type::Optional(_) => Some((n.clone(), self.type_of(n)?.non_null())),
+                Type::Optional(_) => Some((self.fact_key(n), self.type_of(n)?.non_null())),
                 _ => None,
             }
         };
@@ -1091,16 +1080,6 @@ impl Ctx<'_> {
                     (vec![], narrowed)
                 }
             }
-            ExprKind::Binary { op, left, right } if op == "&&" => {
-                let (mut t, _) = self.narrowings(left);
-                t.extend(self.narrowings(right).0);
-                (t, vec![])
-            }
-            ExprKind::Binary { op, left, right } if op == "||" => {
-                let (_, mut f) = self.narrowings(left);
-                f.extend(self.narrowings(right).1);
-                (vec![], f)
-            }
             _ => (vec![], vec![]),
         }
     }
@@ -1108,7 +1087,7 @@ impl Ctx<'_> {
     fn expr(&mut self, e: &Expr) -> Type {
         let t = self.expr_inner(e);
         if matches!(e.kind, ExprKind::Call { .. } | ExprKind::New { .. }) {
-            self.invalidate_captured_facts();
+            self.invalidate_external_facts();
         }
 
         let t = self.refresh_class_type(t);
@@ -1257,18 +1236,9 @@ impl Ctx<'_> {
     fn binary(&mut self, e: &Expr, op: &str, left: &Expr, right: &Expr) -> Type {
         match op {
             "&&" | "||" => {
-                let l = self.expr(left);
-                let l = self.check_tuple_value(left, l);
-                self.check_condition_type(left, &l);
-                // The right side runs only when the left one is true (`&&`)
-                // or false (`||`), so it sees that narrowing.
-                let (t, f) = self.narrowings(left);
-                self.scopes.push(Scope::default());
-                self.narrow_here(if op == "&&" { t } else { f });
-                let r = self.expr(right);
-                let r = self.check_tuple_value(right, r);
-                self.scopes.pop();
-                self.check_condition_type(right, &r);
+                self.flow_condition(e);
+                let l = self.types.get(left.id).cloned().unwrap_or(Type::Error);
+                let r = self.types.get(right.id).cloned().unwrap_or(Type::Error);
                 match (&shape_of(&l), &shape_of(&r)) {
                     (Type::Unknown, _) | (_, Type::Unknown) => Type::Error,
                     (Type::Boolean, Type::Boolean) => Type::Boolean,

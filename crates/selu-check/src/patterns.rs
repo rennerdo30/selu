@@ -429,7 +429,7 @@ impl Ctx<'_> {
         self.loops.push(crate::loops::LoopCtx);
         self.block(body, &[], vec![]);
         self.loops.pop();
-        self.scopes.pop();
+        self.close_scope();
         true
     }
 }

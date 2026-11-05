@@ -48,3 +48,34 @@ before writing an arm-specific field. Calls discard refinements of mutable
 bindings assigned by a capturing closure, including refinements from null checks.
 A union of functions can be called when every member accepts the arguments; its
 result is the union of member return types.
+
+Flow facts are keyed by declaration identity, so shadowed names are independent.
+Locals, parameters and const bindings are locally stable when closures do not
+assign them. Captured writers and mutable module exports (including imported
+live bindings) make a binding externally mutable. Facts derived from writable
+object or class fields are externally dependent too. Every call discards these
+external facts; a subsequent guard can establish a new fact. Uncaptured locals
+and scalar const bindings keep their guards across calls.
+
+Conditions carry their evaluated true/false states through short-circuit
+operators. Branches intersect the surviving outgoing facts after writes and
+calls, rather than restoring facts from the guard's syntax. Loop entry discards
+facts for body-written bindings and external facts when the body can call code;
+exception regions use similarly conservative entry states. Recheck a value
+inside the loop or take a stable local snapshot when necessary.
+
+Writable structural fields are invariant: a string field cannot be exposed as
+`string | number` through a mutable object or class view. Const bindings do not
+make their fields readonly. Fresh literals are checked in their destination
+context; existing mutable aliases must support writes in both directions.
+
+Existing mutable views cannot recover additional writable fields after width
+erasure, even optional ones. Missing optional fields are introduced in the type
+of a fresh contextually checked literal only; this adds no runtime keys. Declare
+optional fields on the original record or construct a fresh record when adding
+such a view.
+
+The invariant-field rule also applies to class field overrides: an inherited
+writer must remain safe for a subclass. Method signature compatibility keeps
+its ordinary parameter/return rules. Checking a delayed function or instance
+initializer does not execute its effects in the enclosing flow state.

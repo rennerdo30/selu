@@ -349,7 +349,7 @@ fn serializable_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) ->
         _ => false,
     }
 }
-fn contains_class(ty: &Type) -> bool {
+pub(crate) fn contains_class(ty: &Type) -> bool {
     contains_class_seen(ty, &mut Default::default())
 }
 fn contains_class_seen(ty: &Type, seen: &mut std::collections::HashSet<String>) -> bool {

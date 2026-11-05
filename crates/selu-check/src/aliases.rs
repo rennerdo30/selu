@@ -412,10 +412,13 @@ impl Ctx<'_> {
                                 .filter_map(|t| {
                                     let value = if let Some(f) = field {
                                         match shape_of(t) {
-                                            Type::Object(fs) => {
-                                                fs.get(f).cloned().unwrap_or(Type::Null)
+                                            Type::Class(_, _, fs) | Type::Object(fs) => {
+                                                match fs.get(f) {
+                                                    Some(t) => t.clone(),
+                                                    None => return Some(t.clone()),
+                                                }
                                             }
-                                            _ => Type::Null,
+                                            _ => return Some(t.clone()),
                                         }
                                     } else {
                                         t.clone()
@@ -435,8 +438,13 @@ impl Ctx<'_> {
                                 .collect();
                             Type::union(members)
                         };
-                        let yes = vec![(n.clone(), select(true))];
-                        let no = vec![(n.clone(), select(false))];
+                        let key = if field.is_some() {
+                            self.field_fact_key(n)
+                        } else {
+                            self.fact_key(n)
+                        };
+                        let yes = vec![(key.clone(), select(true))];
+                        let no = vec![(key, select(false))];
                         return Some(if op == "==" { (yes, no) } else { (no, yes) });
                     }
                 }
@@ -496,8 +504,8 @@ impl Ctx<'_> {
                                 .collect(),
                         )
                     };
-                    let yes = vec![(n.clone(), select(true))];
-                    let no = vec![(n.clone(), select(false))];
+                    let yes = vec![(self.fact_key(n), select(true))];
+                    let no = vec![(self.fact_key(n), select(false))];
                     return Some(if op == "==" { (yes, no) } else { (no, yes) });
                 }
                 if let Type::SavedRepair(table) = &shape {
@@ -509,7 +517,7 @@ impl Ctx<'_> {
                         "nil" if original.is_optional() => Type::Null,
                         _ => return None,
                     };
-                    let yes = vec![(n.clone(), narrowed)];
+                    let yes = vec![(self.fact_key(n), narrowed)];
                     // Keep the full union on the opposite branch: it must still
                     // guard or replace the value before accessing any members.
                     return Some(if op == "==" {
@@ -535,9 +543,9 @@ impl Ctx<'_> {
                 };
                 let (yes, no) = if tag == "nil" {
                     (
-                        vec![(n.clone(), Type::Null)],
+                        vec![(self.fact_key(n), Type::Null)],
                         if original.is_optional() {
-                            vec![(n.clone(), non_null)]
+                            vec![(self.fact_key(n), non_null)]
                         } else {
                             vec![]
                         },
@@ -567,9 +575,9 @@ impl Ctx<'_> {
                         return None;
                     };
                     (
-                        vec![(n.clone(), ty)],
+                        vec![(self.fact_key(n), ty)],
                         if original.is_optional() && category == tag {
-                            vec![(n.clone(), Type::Null)]
+                            vec![(self.fact_key(n), Type::Null)]
                         } else {
                             vec![]
                         },

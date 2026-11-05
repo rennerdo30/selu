@@ -69,12 +69,24 @@ impl Ctx<'_> {
                 catch,
                 finally,
             } => {
+                self.prepare_region(body, &[]);
+                let entry = self.flow_state();
                 self.block(body, &[], Default::default());
+                let body_out = self.flow_state();
+                let mut outgoing = Vec::new();
+                if !crate::always_exits(body) {
+                    outgoing.push(body_out);
+                }
                 if let Some((p, b)) = catch {
+                    self.restore_flow(entry);
                     let params: Vec<(Param, Type)> =
                         p.iter().map(|p| (p.clone(), error_type())).collect();
                     self.block(b, &params, Default::default());
+                    if !crate::always_exits(b) {
+                        outgoing.push(self.flow_state());
+                    }
                 }
+                self.restore_flow(crate::flow_state::intersect(outgoing));
                 if let Some(b) = finally {
                     self.block(b, &[], Default::default());
                 }

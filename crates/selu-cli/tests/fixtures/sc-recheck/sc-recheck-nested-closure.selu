@@ -1,0 +1,1 @@
+let x:number?=1;function outer(){const inner=()=>{x=null;};inner();}function f():number{if(x!=null){outer();return x;}return 0;}print(f());

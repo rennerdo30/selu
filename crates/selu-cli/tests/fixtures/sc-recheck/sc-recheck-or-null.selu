@@ -1,0 +1,1 @@
+let x:number?=1;function clear():boolean{x=null;return false;}function f():number{if(x==null||clear()){return 0;}return x;}print(f());

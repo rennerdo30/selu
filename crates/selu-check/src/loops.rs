@@ -21,16 +21,23 @@ impl Ctx<'_> {
                 }
             }
             StmtKind::While { cond, body } => {
+                self.prepare_region(body, &[cond]);
+                let entry = self.flow_state();
                 let (yes, _) = self.condition(cond);
+                self.restore_flow(yes);
                 self.loops.push(LoopCtx);
-                self.block(body, &[], yes);
+                self.block(body, &[], vec![]);
+                self.restore_flow(entry);
                 self.loops.pop();
             }
             StmtKind::DoWhile { body, cond } => {
+                self.prepare_region(body, &[cond]);
+                let entry = self.flow_state();
                 self.loops.push(LoopCtx);
                 self.block(body, &[], Vec::new());
                 self.loops.pop();
                 self.condition(cond);
+                self.restore_flow(entry);
             }
             StmtKind::For {
                 init,
@@ -42,24 +49,24 @@ impl Ctx<'_> {
                 if let Some(init) = init {
                     self.block_for_init(init);
                 }
-                let yes = cond
-                    .as_ref()
-                    .map(|c| self.condition(c).0)
-                    .unwrap_or_default();
-                self.loops.push(LoopCtx);
-                self.block(body, &[], yes.clone());
-                if let Some(u) = update {
-                    // A body's writes, calls or transfers may invalidate facts
-                    // on paths reaching the update. Do not guess across them.
-                    let yes = yes
-                        .into_iter()
-                        .filter(|(name, _)| !body.iter().any(|s| invalidates_stmt(s, name)))
-                        .collect();
-                    self.scopes.push(Scope::default());
-                    self.narrow_here(yes);
-                    self.expr(u);
-                    self.scopes.pop();
+                let extra: Vec<&Expr> = cond
+                    .iter()
+                    .chain(update.iter())
+                    .map(|e| e.as_ref())
+                    .collect();
+                self.prepare_region(body, &extra);
+                let entry = self.flow_state();
+                if let Some(c) = cond {
+                    let (yes, _) = self.condition(c);
+                    self.restore_flow(yes);
                 }
+                self.loops.push(LoopCtx);
+                self.block(body, &[], vec![]);
+                if let Some(u) = update {
+                    self.prepare_region(body, &[]);
+                    self.expr(u);
+                }
+                self.restore_flow(entry);
                 self.loops.pop();
                 if let Some(init) = init
                     && let StmtKind::VarDecl { name, .. } = &init.kind
@@ -68,7 +75,7 @@ impl Ctx<'_> {
                         reject_capture(stmt, name, self.out);
                     }
                 }
-                self.scopes.pop();
+                self.close_scope();
             }
             _ => unreachable!(),
         }
@@ -109,14 +116,13 @@ impl Ctx<'_> {
                 otherwise,
             } => {
                 let (yes, no) = self.condition(cond);
-                self.scopes.push(Scope::default());
-                self.narrow_here(yes);
+                self.restore_flow(yes);
                 let a = self.value(then);
-                self.scopes.pop();
-                self.scopes.push(Scope::default());
-                self.narrow_here(no);
+                let then_out = self.flow_state();
+                self.restore_flow(no);
                 let b = self.value(otherwise);
-                self.scopes.pop();
+                let else_out = self.flow_state();
+                self.restore_flow(crate::flow_state::intersect(vec![then_out, else_out]));
                 Type::join(&a, &b).unwrap_or_else(|| {
                     self.out.push(
                         err(
@@ -158,7 +164,7 @@ impl Ctx<'_> {
     fn control_write(&mut self, target: &Expr, t: &Type) {
         match &target.kind {
             ExprKind::Ident(n) => self.write(n, &target.span, t),
-            ExprKind::Member { .. } | ExprKind::Index { .. } => {}
+            ExprKind::Member { .. } | ExprKind::Index { .. } => self.data_write(target, t),
             _ => self.out.push(
                 err(
                     "SELU0344",
@@ -241,38 +247,4 @@ fn captured_expr(e: &Expr, name: &str) -> Option<selu_diagnostics::Span> {
         }
     });
     found
-}
-fn invalidates_stmt(s: &Stmt, name: &str) -> bool {
-    if matches!(s.kind, StmtKind::Continue) {
-        return true;
-    }
-    let mut invalid = false;
-    visit::child_stmts_and_exprs(s, &mut |c| {
-        invalid |= match c {
-            visit::Child::Stmt(s) => invalidates_stmt(s, name),
-            visit::Child::Expr(e) => invalidates_expr(e, name),
-        }
-    });
-    invalid
-}
-fn invalidates_expr(e: &Expr, name: &str) -> bool {
-    match &e.kind {
-        ExprKind::Call { .. } => return true,
-        ExprKind::Assign { target, .. }
-        | ExprKind::CompoundAssign { target, .. }
-        | ExprKind::Update { target, .. }
-            if matches!(&target.kind, ExprKind::Ident(n) if n == name) =>
-        {
-            return true;
-        }
-        _ => {}
-    }
-    let mut invalid = false;
-    visit::child_exprs_and_stmts(e, &mut |c| {
-        invalid |= match c {
-            visit::Child::Stmt(s) => invalidates_stmt(s, name),
-            visit::Child::Expr(e) => invalidates_expr(e, name),
-        }
-    });
-    invalid
 }

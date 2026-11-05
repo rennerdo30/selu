@@ -1,0 +1,1 @@
+class C{x:number?=1;clear(){this.x=null;}f():number{if(this.x!=null){this.clear();return this.x;}return 0;}}print(new C().f());

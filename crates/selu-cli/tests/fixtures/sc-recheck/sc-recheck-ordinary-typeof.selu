@@ -1,0 +1,1 @@
+function f(x:string|number):string{if(typeof x=="string"){print(x.length);return x.upper();}return "other";}print(f("ok"));

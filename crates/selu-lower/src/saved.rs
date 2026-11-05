@@ -206,17 +206,18 @@ fn inner(s: &Stmt) -> &Stmt {
         s
     }
 }
-fn objects(ty: Option<&selu_check::Type>) -> LExpr {
-    let fields = if let Some(selu_check::Type::Object(fs)) = ty {
+fn objects(defaults: &selu_syntax::Expr) -> LExpr {
+    let fields = if let selu_syntax::ExprKind::Object(fs) = &defaults.kind {
         fs.iter()
-            .filter(|(_, t)| matches!(t, selu_check::Type::Object(_)))
-            .map(|(k, t)| LField::Named(k.clone(), objects(Some(t))))
+            .filter(|f| matches!(f.value.kind, selu_syntax::ExprKind::Object(_)))
+            .map(|f| LField::Named(f.key.clone(), objects(&f.value)))
             .collect()
     } else {
         vec![]
     };
     LExpr::Table(fields)
 }
+
 impl Lowerer<'_> {
     pub(crate) fn saved_stmt(&mut self, stmt: &Stmt, forward: bool, out: &mut LBlock) {
         match &stmt.kind {
@@ -305,7 +306,7 @@ impl Lowerer<'_> {
                                         self.types.get(defaults.id).expect("checked defaults")
                                     }),
                             ),
-                            objects(self.types.get(defaults.id)),
+                            objects(defaults),
                             entry,
                             ix(f(rt(), "readers"), st(&key)),
                             ix(f(rt(), "contexts"), st(&key)),

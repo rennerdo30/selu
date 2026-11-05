@@ -1,0 +1,1 @@
+let x:number?=1;function clear(){x=null;}function f():number{if(x!=null){let n=0;while(n<2){const y:number=x;clear();n+=1;if(n==2){return y;}}}return 0;}print(f());

@@ -1,0 +1,1 @@
+let x:number?=1;class C{clear():boolean{x=null;return true;}}const c=new C();function f():number{if(x!=null&&c.clear()){return x;}return 0;}print(f());

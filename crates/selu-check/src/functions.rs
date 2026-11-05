@@ -101,7 +101,7 @@ impl Ctx<'_> {
             self.finish_decl(&p.name, t.clone());
         }
         self.block(body, &params, Vec::new());
-        self.scopes.pop();
+        self.close_scope();
         self.function_expected.pop();
     }
     pub(crate) fn checked_parameter_types(&self, params: &[Param], fixed: Vec<Type>) -> Vec<Type> {
@@ -127,12 +127,17 @@ impl Ctx<'_> {
         let shaped = expected.map(|t| self.alias_shape(t.clone()));
         let shaped = shaped.map(|t| {
             if !matches!(e.kind, ExprKind::Null) {
-                t.non_null()
+                self.alias_shape(t.non_null())
             } else {
                 t
             }
         });
         let expected = shaped.as_ref();
+        if let Some(Type::SavedRepair(table)) = expected
+            && matches!(e.kind, ExprKind::Object(_) | ExprKind::Array(_))
+        {
+            return self.value_expected(e, Some(table));
+        }
         if let Some(Type::Union(_)) = expected {
             // References and calls already have checked types; a source union
             // need not fit one target arm when it fits the complete union.
@@ -188,17 +193,30 @@ impl Ctx<'_> {
             return t;
         }
         if let (ExprKind::Object(values), Some(Type::Object(fields))) = (&e.kind, expected) {
-            let t = Type::Object(
-                values
-                    .iter()
-                    .map(|v| {
-                        (
-                            v.key.clone(),
-                            self.value_expected(&v.value, fields.get(&v.key)),
-                        )
+            let mut checked: std::collections::BTreeMap<_, _> = values
+                .iter()
+                .map(|v| {
+                    (v.key.clone(), {
+                        let actual = self.value_expected(&v.value, fields.get(&v.key));
+                        if let Some(want) = fields.get(&v.key)
+                            && actual.assignable_to(want)
+                            && !crate::saved::contains_class(&actual)
+                        {
+                            want.clone()
+                        } else {
+                            actual
+                        }
                     })
-                    .collect(),
-            );
+                })
+                .collect();
+            // Only a fresh literal can introduce absent writable optional
+            // fields. An existing alias may hide an incompatible field.
+            for (name, ty) in fields {
+                if ty.is_optional() {
+                    checked.entry(name.clone()).or_insert_with(|| ty.clone());
+                }
+            }
+            let t = Type::Object(checked);
             self.types.set(e.id, t.clone());
             return t;
         }
@@ -237,7 +255,8 @@ impl Ctx<'_> {
         let mut diagnostics = Vec::new();
         let mut trial = Ctx {
             manifest: self.manifest,
-            captured_writes: self.captured_writes.clone(),
+            flow_info: self.flow_info.clone(),
+            next_binding: self.next_binding,
             out: &mut diagnostics,
             binding_statements: self.binding_statements.clone(),
             secret_capable: self.secret_capable,
@@ -264,7 +283,8 @@ impl Ctx<'_> {
         {
             return None;
         }
-        self.captured_writes = trial.captured_writes;
+        self.flow_info = trial.flow_info;
+        self.next_binding = trial.next_binding;
         self.binding_statements = trial.binding_statements;
         self.secret_capable = trial.secret_capable;
         self.protected_functions = trial.protected_functions;
