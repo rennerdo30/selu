@@ -151,6 +151,19 @@ impl Default for SessionConfig {
     }
 }
 
+/// A saved fixture failed validation; retain its global for source diagnostics.
+#[derive(Debug)]
+pub struct SavedFixtureError {
+    pub global: String,
+    cause: mlua::Error,
+}
+impl std::fmt::Display for SavedFixtureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.cause.fmt(f)
+    }
+}
+impl std::error::Error for SavedFixtureError {}
+
 pub struct Session {
     config: SessionConfig,
     sim: Vm,
@@ -507,12 +520,20 @@ impl Session {
             .chain(toc.list("SavedVariablesPerCharacter"))
             .collect();
         for (name, value) in values {
-            if !names.contains(name) {
-                return Err(runtime(format!("undeclared saved fixture `{name}`")));
-            }
-            // Validate serializable values before committing the fixture.
-            let restored = crate::saved::restore(&self.sim.lua, value)?;
-            crate::saved::capture(restored, &mut HashSet::new())?;
+            let validate = || {
+                if !names.contains(name) {
+                    return Err(runtime(format!("undeclared saved fixture `{name}`")));
+                }
+                let restored = crate::saved::restore(&self.sim.lua, value)?;
+                crate::saved::capture(restored, &mut HashSet::new())?;
+                Ok(())
+            };
+            validate().map_err(|cause| {
+                mlua::Error::external(SavedFixtureError {
+                    global: name.clone(),
+                    cause,
+                })
+            })?;
         }
         for (name, value) in values {
             self.saved

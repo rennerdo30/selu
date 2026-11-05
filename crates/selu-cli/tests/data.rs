@@ -563,7 +563,7 @@ fn sb_native_error_boundary_normalizes_and_chains() {
     sim.set_secret_global("hidden").unwrap();
     sim.eval("geterrorhandler()(hidden, 9)").unwrap();
     assert_eq!(&sim.prints()[4..], ["<secret error>", "userdata\t9"]);
-    assert!(codes("onError((e: string) => {});").contains(&"SELU0630".into()));
+    assert!(codes("onError((e: string) => {});").contains(&"SELU0543".into()));
 }
 
 #[test]
@@ -613,4 +613,33 @@ fn sb_existing_error_identity_survives_native_boundary() {
     sim.eval("seterrorhandler(function() end)").unwrap();
     sim.load_files(&[("t.lua".into(), lua)]).unwrap();
     assert_eq!(sim.prints(), ["true"]);
+}
+
+#[test]
+fn review_on_error_uses_production_error_range() {
+    assert!(codes("onError((e: string) => {});").contains(&"SELU0543".into()));
+    assert!(codes("onError();").contains(&"SELU0543".into()));
+}
+
+#[test]
+fn review_real_callbacks_reach_typed_error_sink_once() {
+    for setup in [
+        "C_Timer.After(.1, function() error('timer failure') end)",
+        "local f=CreateFrame('Frame'); f:SetScript('OnUpdate', function(self) self:SetScript('OnUpdate', nil); error('update failure') end)",
+        "local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent', function() error('event failure') end)",
+        "local f=CreateFrame('Frame'); f:Hide(); f:SetScript('OnShow', function() error('show failure') end); C_Timer.After(.1, function() f:Show() end)",
+    ] {
+        let sim = selu_sim::Sim::new().unwrap();
+        sim.eval("seterrorhandler(function() print('previous') end)")
+            .unwrap();
+        sim.load_files(&[(
+            "t.lua".into(),
+            common::compile("onError(e => { print(\"captured\"); });"),
+        )])
+        .unwrap();
+        sim.eval(setup).unwrap();
+        let _ = sim.fire("PLAYER_LOGIN", vec![]);
+        sim.advance_time(0.1);
+        assert_eq!(sim.prints(), ["captured", "previous"], "{setup}");
+    }
 }

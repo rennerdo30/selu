@@ -20,10 +20,10 @@ use mlua::{Function, Lua};
 pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
     lua.globals().set(
         "__selu_sim_error",
-        lua.create_function(move |lua, error: String| {
-            lua.app_data_ref::<crate::Ctx>()
-                .unwrap()
-                .runtime_failure("callback", error.clone());
+        lua.create_function(move |lua, (error, original): (String, mlua::Value)| {
+            if !matches!(&original, mlua::Value::Error(cause) if crate::core::boundary_was_reported(cause)) {
+                lua.app_data_ref::<crate::Ctx>().unwrap().runtime_failure("callback", error.clone());
+            }
             logs.lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(format!("callback error: {error}"));

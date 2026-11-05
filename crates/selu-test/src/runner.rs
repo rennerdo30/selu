@@ -276,33 +276,27 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
             })
             .map_err(build_error)?,
         ));
-        #[derive(Default, serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Scenario {
-            character: Option<String>,
-            #[serde(default)]
-            saved: BTreeMap<String, selu_sim::saved::SavedValue>,
-        }
         let fixture = options
             .project_dir
             .join(&file)
             .with_extension("scenario.json");
-        let scenario: Scenario = match std::fs::read_to_string(&fixture) {
-            Ok(text) => serde_json::from_str(&text)
-                .map_err(|e| build_error(format!("SELU0631: invalid scenario fixture: {e}")))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Scenario::default(),
-            Err(e) => return Err(build_error(e)),
-        };
-        if let Some(character) = scenario.character {
+        let scenario = crate::scenario::load(&fixture)?;
+        if let Some(character) = &scenario.data.character {
             session
                 .borrow_mut()
-                .switch_character(character)
-                .map_err(build_error)?;
+                .switch_character(character.clone())
+                .map_err(|e| scenario.error(e, &["character".into()]))?;
         }
         session
             .borrow_mut()
-            .seed_saved(&addon, &scenario.saved)
-            .map_err(|e| build_error(format!("SELU0631: invalid saved fixture: {e}")))?;
+            .seed_saved(&addon, &scenario.data.saved)
+            .map_err(|e| {
+                let mut key = vec!["saved".into()];
+                if let Some(cause) = e.downcast_ref::<selu_sim::session::SavedFixtureError>() {
+                    key.push(cause.global.clone());
+                }
+                scenario.error(e, &key)
+            })?;
         let loaded = { session.borrow_mut().load_addon_dir(&addon) };
         let setup = loaded.and_then(|_| session.borrow_mut().login());
         let setup_failures = session.borrow().sim().ctx().runtime_failures();

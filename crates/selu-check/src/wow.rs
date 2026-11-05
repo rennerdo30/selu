@@ -90,7 +90,7 @@ impl Ctx<'_> {
             };
             if args.len() != 1 {
                 self.out.push(err(
-                    "SELU0630",
+                    "SELU0543",
                     "onError needs one (error: Error) => void callback.",
                     &e.span,
                 ));
@@ -99,7 +99,7 @@ impl Ctx<'_> {
                 let actual = self.value_expected(arg, Some(&expected));
                 if !actual.assignable_to(&expected) {
                     self.out.push(err(
-                        "SELU0630",
+                        "SELU0543",
                         "onError needs an Error callback.",
                         &arg.span,
                     ));

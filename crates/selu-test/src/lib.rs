@@ -146,6 +146,10 @@ pub enum RunError {
     NoTests,
     Build(String),
     Io(String),
+    Fixture {
+        diagnostic: selu_diagnostics::Diagnostic,
+        source: String,
+    },
 }
 
 impl std::fmt::Display for RunError {
@@ -154,12 +158,14 @@ impl std::fmt::Display for RunError {
             RunError::NoTests => write!(f, "no *.test.selu files under src/ or tests/"),
             RunError::Build(e) => write!(f, "{e}"),
             RunError::Io(e) => write!(f, "{e}"),
+            RunError::Fixture { diagnostic, source } => write!(f, "{}", diagnostic.render(source)),
         }
     }
 }
 
 mod bridge;
 mod runner;
+mod scenario;
 pub use runner::run;
 
 #[cfg(test)]

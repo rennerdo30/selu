@@ -11,7 +11,7 @@ local function safe(kind, fn, ...)
  endCallback()
  if not ok then
   local converted, message = pcall(tostring, err)
-  __selu_sim_error(converted and message or 'error object could not be formatted')
+  __selu_sim_error(converted and message or 'error object could not be formatted', err)
  end
  flush()
  return ok

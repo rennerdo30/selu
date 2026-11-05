@@ -138,7 +138,7 @@ Lua pcall, error, tostring, setmetatable and getmetatable are captured under
 reserved names before source bindings, so local source names cannot replace them.
 
 `onError((error: Error) => { ... })` installs a typed native diagnostic boundary.
-SELU0630 rejects an incompatible callback or arity. Strings become messages;
+SELU0543 rejects an incompatible callback or arity. Strings become messages;
 existing Selu Errors retain identity; other values are described by Lua type
 without invoking their conversion hooks. Secret values become `<secret error>`.
 The compiler's adapter calls the prior native handler once with the original
@@ -154,3 +154,8 @@ actual timer and OnUpdate callback dispatch counts for the current generation;
 it is an observation, not CPU time or allocations. Native debugprofilestop's
 millisecond contract comes from Blizzard FrameScriptDocumentation.lua. Simulator
 clock advancement does not establish CPU precision or a performance improvement.
+
+Simulator native callback failures reach an installed onError handler before
+host-side formatting. Nested native boundaries forward an internal reported-error
+marker, so the original error reaches the installed handler once. The owning test
+still records the failure even if a caller catches the propagated exception.

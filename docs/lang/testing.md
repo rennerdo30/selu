@@ -123,3 +123,7 @@ imported old-generation functions remain invalid. Counts reset with the VM.
 Inventory/aura/quest/taxi/CVar/message/native-frame fixtures belong to later waves.
 
 SELU0631 identifies invalid scenario schemas or saved fixtures.
+Fixture failures retain a structured diagnostic with the fixture pathname and a
+source span. Schema failures underline the relevant JSON key where available;
+saved-global validation underlines that global's key within `saved`, including
+escaped JSON keys. Invalid JSON retains its parser position.

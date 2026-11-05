@@ -611,3 +611,84 @@ fn sb_native_error_identity_in_shared_project_runtime() {
     assert_eq!(session.prints(), ["true"]);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn review_fixture_errors_name_file_and_key_span() {
+    for (tag, fixture, line, key) in [
+        ("unknown", "{\n  \"unexpected\": true\n}", 2, "unexpected"),
+        (
+            "undeclared",
+            "{\n  \"saved\": {\n    \"notDeclared\": {\"Number\": 1}\n  }\n}",
+            3,
+            "notDeclared",
+        ),
+    ] {
+        let dir = project(
+            &format!("review-fixture-{tag}"),
+            "test(\"fixture\", () => {});",
+        );
+        let path = dir.join("tests/api.test.scenario.json");
+        std::fs::write(&path, fixture).unwrap();
+        let out = run(&dir, None);
+        assert_eq!(out.status.code(), Some(2));
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            error.contains(&format!("api.test.scenario.json:{line}:")),
+            "{error}"
+        );
+        assert!(error.contains(key) && error.contains('^'), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+#[test]
+fn review_real_native_failures_still_fail_the_owning_test() {
+    for (tag, source, body) in [
+        (
+            "timer",
+            "C_Timer.After(0.1, () => { throw new Error(\"owning failure\"); });",
+            "sim.advanceTime(0.1);",
+        ),
+        (
+            "event",
+            "on PLAYER_REGEN_ENABLED() { throw new Error(\"owning failure\"); }",
+            "expect(() => { sim.fire(\"PLAYER_REGEN_ENABLED\"); }).toThrow();",
+        ),
+        (
+            "frame",
+            "export function trigger() { const f=CreateFrame(\"Frame\"); f.Hide(); f.SetScript(\"OnShow\", () => { throw new Error(\"owning failure\"); }); f.Show(); }",
+            "expect(() => { trigger(); }).toThrow();",
+        ),
+    ] {
+        let test_source = format!(
+            "{} test(\"owner\", () => {{ {body} expect(sim.prints()).toContain(\"captured\"); }});",
+            if tag == "frame" {
+                "import { trigger } from \"../src/main\";"
+            } else {
+                ""
+            }
+        );
+        let dir = project(&format!("review-owning-{tag}"), &test_source);
+        std::fs::write(dir.join("selu.toml"), "[addon]\nname = \"Runner\"\ntargets = [\"wowf@1.60.1.70790\"]\n[build]\nstrict_api = true\n").unwrap();
+        std::fs::write(
+            dir.join("src/main.selu"),
+            format!("onError(e => {{ print(\"captured\"); }}); {source}"),
+        )
+        .unwrap();
+        let out = run(&dir, None);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{} {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let report: selu_test::Report = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(report.failed(), 1);
+        let rendered = report.to_human();
+        assert!(
+            rendered.contains("owning failure") && !rendered.contains("to contain"),
+            "{rendered}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

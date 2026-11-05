@@ -13,8 +13,35 @@ pub struct Unit {
     pub auras: Vec<String>,
     pub combat: bool,
 }
+/// Deliver the original value before the host boundary renders it. The default
+/// simulator sink is already represented by existing failure logging.
+pub(crate) fn notify_native_error(lua: &Lua, error: Value) -> SimResult<bool> {
+    if !lua
+        .globals()
+        .raw_get::<bool>("__selu_sim_custom_error_handler")?
+    {
+        return Ok(false);
+    }
+    const ACTIVE: &str = "selu.notifying_native_error";
+    if !lua
+        .named_registry_value::<Option<bool>>(ACTIVE)?
+        .unwrap_or(false)
+    {
+        lua.set_named_registry_value(ACTIVE, true)?;
+        let handler = lua
+            .globals()
+            .raw_get::<mlua::Function>("__selu_sim_native_error_handler")?;
+        // A broken handler cannot replace the original failure or recursively
+        // report itself. The owning dispatch still receives its original error.
+        let _ = handler.call::<()>(error);
+        lua.set_named_registry_value(ACTIVE, false)?;
+    }
+    Ok(true)
+}
+
 pub(crate) fn install_restrictions(lua: &Lua, ctx: &crate::Ctx) -> SimResult<()> {
     let globals = lua.globals();
+    globals.raw_set("__selu_sim_custom_error_handler", false)?;
     {
         let logs = ctx.logs.clone();
         let handler = lua.create_function(move |_, error: Value| {
@@ -27,6 +54,8 @@ pub(crate) fn install_restrictions(lua: &Lua, ctx: &crate::Ctx) -> SimResult<()>
         globals.set(
             "seterrorhandler",
             lua.create_function(|lua, handler: mlua::Function| {
+                lua.globals()
+                    .raw_set("__selu_sim_custom_error_handler", true)?;
                 lua.globals()
                     .set("__selu_sim_native_error_handler", handler)
             })?,
