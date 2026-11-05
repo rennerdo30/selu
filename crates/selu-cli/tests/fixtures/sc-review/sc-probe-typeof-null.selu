@@ -1,0 +1,1 @@
+function f(x: string | number | null): number { if(typeof x == "string"){return 0;}return x;} print(f(null));

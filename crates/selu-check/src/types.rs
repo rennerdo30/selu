@@ -147,6 +147,33 @@ pub enum Type {
 }
 
 impl Type {
+    /// Runtime alternatives, resolving nested aliases and optional wrappers.
+    pub(crate) fn members(&self) -> Vec<Type> {
+        match crate::shape_of(self) {
+            Type::Union(ts) => ts.iter().flat_map(Type::members).collect(),
+            Type::Optional(t) => t.members().into_iter().chain([Type::Null]).collect(),
+            Type::SavedRepair(t) => t
+                .members()
+                .into_iter()
+                .chain([Type::String, Type::Number, Type::Boolean])
+                .collect(),
+            t => vec![t],
+        }
+    }
+    pub(crate) fn union(ts: Vec<Type>) -> Type {
+        let mut members = Vec::new();
+        for t in ts.into_iter().flat_map(|t| t.members()) {
+            if !members.contains(&t) {
+                members.push(t);
+            }
+        }
+        if members.len() == 1 {
+            members.remove(0)
+        } else {
+            Type::Union(members)
+        }
+    }
+
     pub(crate) fn operand_type(&self) -> Type {
         match crate::shape_of(self) {
             Type::StringLiteral(_) => Type::String,
@@ -316,15 +343,19 @@ impl Type {
             (Type::Secret(a), Type::Secret(b)) => a.assignable_seen(b, seen),
             (Type::Secret(_), _) => false,
             (t, Type::Secret(b)) => t.assignable_seen(b, seen),
+            (Type::Union(ts), target) => ts
+                .iter()
+                .all(|t| t.assignable_seen(target, &mut seen.clone())),
             (Type::Null, Type::Optional(_)) => true,
             (Type::Optional(a), Type::Optional(b)) => a.assignable_seen(b, seen),
             (t, Type::Optional(inner)) => t.assignable_seen(inner, seen),
             (Type::StringLiteral(_), Type::String)
             | (Type::NumberLiteral(_), Type::Number)
             | (Type::BooleanLiteral(_), Type::Boolean) => true,
-            (Type::Union(ts), target) => ts
-                .iter()
-                .all(|t| t.assignable_seen(target, &mut seen.clone())),
+            (Type::Optional(inner), Type::Union(_)) => {
+                inner.assignable_seen(to, &mut seen.clone())
+                    && Type::Null.assignable_seen(to, &mut seen.clone())
+            }
             (source, Type::Union(ts)) => ts
                 .iter()
                 .any(|t| source.assignable_seen(t, &mut seen.clone())),

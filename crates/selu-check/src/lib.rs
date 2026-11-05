@@ -34,6 +34,7 @@ mod rules;
 mod bindings;
 mod data;
 mod errors;
+mod flow;
 mod functions;
 mod loops;
 pub mod patterns;
@@ -79,6 +80,7 @@ pub fn check_program_with_options(
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         binding_statements: bindings::module_statements(program),
+        captured_writes: flow::captured_writes(program),
         module: ModuleBindings::default(),
         manifest,
         secret_capable: restrictions::has_secrets(manifest),
@@ -157,6 +159,7 @@ pub fn check_module_targets_with_options(
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         binding_statements: bindings::module_statements(program),
+        captured_writes: flow::captured_writes(program),
         module: imports,
         manifest,
         secret_capable: restrictions::has_secrets(manifest),
@@ -219,6 +222,7 @@ enum Kind {
 
 #[derive(Debug, Clone)]
 struct Binding {
+    origin: usize,
     kind: Kind,
     ty: Type,
     /// Function nesting depth of the declaring scope.
@@ -235,7 +239,7 @@ struct Narrow {
     fn_depth: usize,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Scope {
     names: HashMap<String, Binding>,
     narrowed: HashMap<String, Narrow>,
@@ -244,6 +248,7 @@ struct Scope {
 type Narrowings = Vec<(String, Type)>;
 
 struct Ctx<'a> {
+    captured_writes: std::collections::HashSet<usize>,
     binding_statements: std::collections::HashSet<selu_syntax::ExprId>,
     secret_capable: bool,
     protected_functions: Vec<Type>,
@@ -324,6 +329,36 @@ impl Ctx<'_> {
         Some(b.ty.clone())
     }
 
+    fn invalidate_captured_facts(&mut self) {
+        let bindings: Vec<_> = self
+            .scopes
+            .iter()
+            .enumerate()
+            .flat_map(|(at, s)| {
+                s.names
+                    .iter()
+                    .filter(|(_, b)| {
+                        self.captured_writes.contains(&b.origin)
+                            && matches!(
+                                b.kind,
+                                Kind::Let | Kind::Param | Kind::Global | Kind::Import
+                            )
+                    })
+                    .map(move |(n, _)| (at, n.clone()))
+            })
+            .collect();
+        for (at, name) in bindings {
+            for scope in &mut self.scopes[at..] {
+                if scope
+                    .narrowed
+                    .get(&name)
+                    .is_some_and(|n| n.fn_depth == self.fn_depth)
+                {
+                    scope.narrowed.remove(&name);
+                }
+            }
+        }
+    }
     fn narrow_here(&mut self, narrowings: Narrowings) {
         let fn_depth = self.fn_depth;
         let scope = self.scopes.last_mut().expect("a scope is open");
@@ -353,6 +388,7 @@ impl Ctx<'_> {
         scope.names.insert(
             name.to_string(),
             Binding {
+                origin: span.start,
                 kind,
                 ty,
                 fn_depth,
@@ -1071,6 +1107,10 @@ impl Ctx<'_> {
 
     fn expr(&mut self, e: &Expr) -> Type {
         let t = self.expr_inner(e);
+        if matches!(e.kind, ExprKind::Call { .. } | ExprKind::New { .. }) {
+            self.invalidate_captured_facts();
+        }
+
         let t = self.refresh_class_type(t);
         let t = self.restriction_value_type(e, t);
         self.types.set(e.id, t.clone());
@@ -1111,7 +1151,8 @@ impl Ctx<'_> {
             ExprKind::Binary { op, left, right } => self.binary(e, op, left, right),
             ExprKind::Assign { target, value } => {
                 // The value runs first, then the store.
-                let t = self.value(value);
+                let contexts = self.write_contexts(target);
+                let t = self.value_expected(value, contexts.first());
                 self.saved_write_value(target, &t, &value.span);
                 match &target.kind {
                     ExprKind::Ident(name) => self.write(name, &target.span, &t),
@@ -1474,13 +1515,30 @@ impl Ctx<'_> {
                 }
             }
         }
-        let arg_types = self.function_arguments(args, &callee_type);
-        if self.api_check_call(e, args, &arg_types, &callee_type)
-            && let Type::Function { ret, .. } = &callee_type
-        {
-            return self.api_result(e, args, &callee_type, (**ret).clone());
+        if matches!(callee_type, Type::Union(_)) {
+            let results = callee_type
+                .members()
+                .iter()
+                .map(|t| self.call_signature(e, callee, args, t))
+                .collect();
+            return Type::union(results);
         }
-        match callee_type {
+        self.call_signature(e, callee, args, &callee_type)
+    }
+    fn call_signature(
+        &mut self,
+        e: &Expr,
+        callee: &Expr,
+        args: &[Expr],
+        callee_type: &Type,
+    ) -> Type {
+        let arg_types = self.function_arguments(args, callee_type);
+        if self.api_check_call(e, args, &arg_types, callee_type)
+            && let Type::Function { ret, .. } = callee_type
+        {
+            return self.api_result(e, args, callee_type, (**ret).clone());
+        }
+        match callee_type.clone() {
             Type::Function {
                 params,
                 ret,

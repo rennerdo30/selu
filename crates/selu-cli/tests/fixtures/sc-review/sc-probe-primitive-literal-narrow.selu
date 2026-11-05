@@ -1,0 +1,1 @@
+function f(x:string|number):"a" {if(x=="a"){return x;}return "a";} print(f("a"));

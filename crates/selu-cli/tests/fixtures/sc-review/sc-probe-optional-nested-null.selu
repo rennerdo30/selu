@@ -1,0 +1,1 @@
+type A=string|number; function f(x:A|null):boolean {if(x!=null){return true;}return x;}print(f(null));

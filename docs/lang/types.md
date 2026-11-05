@@ -37,3 +37,14 @@ literal discriminant, for example `{kind: "a"; value: string} |
 {kind: "b"; value: number}` and `if (x.kind == "a")`. The ordinary branch,
 short-circuit and early-return narrowing rules apply. Selu currently has no
 switch or pattern-match statement requiring an exhaustiveness check.
+
+Known limit: declared return types are checked on explicit return statements,
+but the checker does not yet require every control-flow path to return. In
+particular, omitting a literal-union case can fall through without a diagnostic.
+Missing-return exhaustiveness is deferred; write an explicit return on every path.
+
+Union member writes must fit every possible receiver arm; narrow an object union
+before writing an arm-specific field. Calls discard refinements of mutable
+bindings assigned by a capturing closure, including refinements from null checks.
+A union of functions can be called when every member accepts the arguments; its
+result is the union of member return types.

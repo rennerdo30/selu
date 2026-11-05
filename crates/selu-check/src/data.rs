@@ -44,7 +44,7 @@ impl Ctx<'_> {
             ),
             ExprKind::Index { object, index } => {
                 let t = crate::shape_of(&self.value(object));
-                let i = crate::shape_of(&self.value(index));
+                let i = self.value(index).operand_type();
                 if i != Type::Number && !i.is_open() {
                     self.out.push(
                         err("SELU0352", "an array index must be a number", &index.span)
@@ -168,31 +168,47 @@ impl Ctx<'_> {
         self.value_expected(e, expected)
     }
 
+    pub(crate) fn write_contexts(&mut self, target: &Expr) -> Vec<Type> {
+        match &target.kind {
+            ExprKind::Ident(n) => self
+                .lookup(n)
+                .map(|(_, b)| vec![b.ty.clone()])
+                .unwrap_or_default(),
+            ExprKind::Member { object, name } => {
+                let t = self.value(object);
+                t.members()
+                    .iter()
+                    .map(|t| self.member(t, name, object))
+                    .collect()
+            }
+            _ => vec![self.expr(target)],
+        }
+    }
     pub(crate) fn data_write(&mut self, target: &Expr, value: &Type) {
-        let ty = if let ExprKind::Member { object, name } = &target.kind {
-            let t = crate::shape_of(&self.value(object));
-            if name == "length" && matches!(t, Type::Array(_) | Type::String) {
-                self.out.push(
-                    err("SELU0355", "length is read-only", &target.span)
-                        .with_help("use array methods to change its length"),
-                );
+        if let ExprKind::Member { object, name } = &target.kind {
+            let t = self.value(object);
+            if name == "length"
+                && t.members()
+                    .iter()
+                    .any(|t| matches!(t.operand_type(), Type::Array(_) | Type::String))
+            {
+                self.out
+                    .push(err("SELU0355", "length is read-only", &target.span));
                 return;
             }
-            let ty = self.member(&t, name, object);
+        }
+        for ty in self.write_contexts(target) {
             self.types.set(target.id, ty.clone());
-            ty
-        } else {
-            self.expr(target)
-        };
-        if !value.assignable_to(&ty) {
-            self.out.push(
-                err(
-                    "SELU0355",
-                    format!("cannot store `{value}` in `{ty}`"),
-                    &target.span,
-                )
-                .with_help("assign a value of the field or element type"),
-            );
+            if !value.assignable_to(&ty) {
+                self.out.push(
+                    err(
+                        "SELU0355",
+                        format!("cannot store `{value}` in `{ty}`"),
+                        &target.span,
+                    )
+                    .with_help("the value must fit every possible receiver arm"),
+                );
+            }
         }
     }
 
@@ -209,7 +225,9 @@ impl Ctx<'_> {
                 );
                 Type::Error
             })),
-            Type::Array(_) | Type::String if field == "length" => Some(Type::Number),
+            Type::Array(_) | Type::String | Type::StringLiteral(_) if field == "length" => {
+                Some(Type::Number)
+            }
             _ => None,
         }
     }
@@ -457,7 +475,7 @@ impl Ctx<'_> {
             .get(e.id)
             .cloned()
             .unwrap_or_else(|| self.value(e));
-        crate::shape_of(&t)
+        t.operand_type()
     }
 
     pub(crate) fn data_annotation(&mut self, t: &selu_syntax::TypeExpr) -> Type {

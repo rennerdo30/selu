@@ -133,34 +133,38 @@ impl Ctx<'_> {
             }
         });
         let expected = shaped.as_ref();
-        if let Some(Type::Union(members)) = expected {
-            // Select by the literal discriminant before checking an object arm.
-            let candidate = members
-                .iter()
-                .find(|t| match (crate::shape_of(t), &e.kind) {
-                    (Type::Object(fs), ExprKind::Object(values)) => fs.iter().all(|(key, ty)| {
-                        values.iter().find(|v| &v.key == key).is_none_or(|v| {
-                            match (crate::shape_of(ty), &v.value.kind) {
-                                (Type::StringLiteral(a), ExprKind::Str(b)) => a == *b,
-                                (Type::NumberLiteral(a), ExprKind::Number(b)) => a == *b,
-                                (Type::BooleanLiteral(a), ExprKind::Bool(b)) => a == *b,
-                                _ => true,
-                            }
-                        })
-                    }),
-                    (Type::String | Type::StringLiteral(_), ExprKind::Str(_)) => true,
-                    (Type::Number | Type::NumberLiteral(_), ExprKind::Number(_)) => true,
-                    (Type::Number | Type::NumberLiteral(_), ExprKind::Unary { op, expr })
-                        if op == "-" && matches!(expr.kind, ExprKind::Number(_)) =>
-                    {
-                        true
-                    }
-                    (Type::Boolean | Type::BooleanLiteral(_), ExprKind::Bool(_)) => true,
-                    _ => false,
-                });
-            if let Some(t) = candidate {
-                return self.value_expected(e, Some(t));
+        if let Some(Type::Union(_)) = expected {
+            // References and calls already have checked types; a source union
+            // need not fit one target arm when it fits the complete union.
+            if !matches!(
+                e.kind,
+                ExprKind::Object(_)
+                    | ExprKind::Array(_)
+                    | ExprKind::Function { .. }
+                    | ExprKind::Str(_)
+                    | ExprKind::Number(_)
+                    | ExprKind::Bool(_)
+                    | ExprKind::Null
+                    | ExprKind::Unary { .. }
+            ) {
+                return self.value(e);
             }
+            for member in expected.unwrap().members() {
+                if let Some(t) = self.try_value_context(e, &member) {
+                    return t;
+                }
+            }
+            // An uncontextualized callback could infer open parameters and
+            // appear assignable after all checked alternatives failed.
+            self.out.push(err(
+                "SELU0313",
+                format!(
+                    "expression does not fit any member of `{}`",
+                    expected.unwrap()
+                ),
+                &e.span,
+            ));
+            return self.value(e);
         }
         let literal = match (&e.kind, expected) {
             (ExprKind::Str(s), Some(Type::StringLiteral(_))) => {
@@ -228,6 +232,56 @@ impl Ctx<'_> {
         } else {
             self.value(e)
         }
+    }
+    fn try_value_context(&mut self, e: &Expr, expected: &Type) -> Option<Type> {
+        let mut diagnostics = Vec::new();
+        let mut trial = Ctx {
+            manifest: self.manifest,
+            captured_writes: self.captured_writes.clone(),
+            out: &mut diagnostics,
+            binding_statements: self.binding_statements.clone(),
+            secret_capable: self.secret_capable,
+            protected_functions: self.protected_functions.clone(),
+            protected_methods: self.protected_methods,
+            options: self.options,
+            module: self.module.clone(),
+            aliases: self.aliases.clone(),
+            classes: self.classes.clone(),
+            loops: self.loops.clone(),
+            availability: self.availability.clone(),
+            scopes: self.scopes.clone(),
+            fn_depth: self.fn_depth,
+            returns: self.returns.clone(),
+            function_expected: self.function_expected.clone(),
+            types: self.types.clone(),
+        };
+        let t = trial.value_expected(e, Some(expected));
+        if !t.assignable_to(expected)
+            || trial
+                .out
+                .iter()
+                .any(|d| d.severity == selu_diagnostics::Severity::Error)
+        {
+            return None;
+        }
+        self.captured_writes = trial.captured_writes;
+        self.binding_statements = trial.binding_statements;
+        self.secret_capable = trial.secret_capable;
+        self.protected_functions = trial.protected_functions;
+        self.protected_methods = trial.protected_methods;
+        self.options = trial.options;
+        self.module = trial.module;
+        self.aliases = trial.aliases;
+        self.classes = trial.classes;
+        self.loops = trial.loops;
+        self.availability = trial.availability;
+        self.scopes = trial.scopes;
+        self.fn_depth = trial.fn_depth;
+        self.returns = trial.returns;
+        self.function_expected = trial.function_expected;
+        self.types = trial.types;
+        self.out.extend(diagnostics);
+        Some(t)
     }
     pub(crate) fn function_arguments(&mut self, args: &[Expr], callee: &Type) -> Vec<Type> {
         args.iter()

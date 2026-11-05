@@ -740,11 +740,13 @@ fn collect_saved(
         active.push(ty.clone());
         let result = match &ty {
             Type::Optional(t) => format!("{}?", descriptor(t, active)),
-            Type::Union(ts) => ts
-                .iter()
-                .map(|t| descriptor(t, active))
-                .collect::<Vec<_>>()
-                .join(" | "),
+            Type::Union(ts) => format!(
+                "({})",
+                ts.iter()
+                    .map(|t| descriptor(t, active))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
             Type::SavedRepair(t) => format!("SavedRepair<{}>", descriptor(t, active)),
             Type::Array(t) => format!("{}[]", descriptor(t, active)),
             Type::Map(k, v) => format!("Map<{}, {}>", descriptor(k, active), descriptor(v, active)),

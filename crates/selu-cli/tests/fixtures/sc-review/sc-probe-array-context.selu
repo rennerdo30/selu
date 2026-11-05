@@ -1,0 +1,1 @@
+type V={items:string[]}|{items:number[]}; const x:V={items:[1]}; print(x.items);

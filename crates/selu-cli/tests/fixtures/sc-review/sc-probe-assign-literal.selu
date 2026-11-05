@@ -1,0 +1,1 @@
+let x:"a"|"b"="a";x="b";print(x);

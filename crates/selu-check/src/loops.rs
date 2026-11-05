@@ -2,6 +2,7 @@
 use crate::{Ctx, Scope, Type, err};
 use selu_syntax::{Expr, ExprKind, Stmt, StmtKind, visit};
 
+#[derive(Clone)]
 pub(crate) struct LoopCtx;
 
 impl Ctx<'_> {

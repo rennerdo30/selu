@@ -1,0 +1,1 @@
+saved global DB: {x:1|2; b:true|false}={x:2,b:false}; function init(){DB.whenReady((d)=>{print(d.x,d.b);});}init();

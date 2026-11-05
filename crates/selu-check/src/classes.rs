@@ -3,7 +3,7 @@ use crate::{Ctx, Kind, Type, err, types};
 use selu_syntax::{ClassDecl, ClassMemberKind as M, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use std::collections::{BTreeMap, HashMap};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct ClassContext {
     pub(crate) infos: HashMap<String, ClassInfo>,
     initialized: bool,

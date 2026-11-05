@@ -2,7 +2,7 @@
 use crate::{Ctx, Narrowings, Type, err};
 use selu_syntax::{Expr, ExprKind, Stmt, StmtKind, TypeDecl, TypeExpr, TypeExprKind as K};
 use std::collections::HashMap;
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Aliases {
     pub(crate) declarations: HashMap<String, TypeDecl>,
     active: Vec<String>,
@@ -404,11 +404,12 @@ impl Ctx<'_> {
                 };
                 if let Some(n) = name {
                     let original = self.type_of(n)?;
-                    if let Type::Union(ts) = shape_of(&original) {
+                    if matches!(shape_of(&original), Type::Union(_) | Type::Optional(_)) {
+                        let ts = original.members();
                         let select = |equal| {
                             let members: Vec<_> = ts
                                 .iter()
-                                .filter(|t| {
+                                .filter_map(|t| {
                                     let value = if let Some(f) = field {
                                         match shape_of(t) {
                                             Type::Object(fs) => {
@@ -417,21 +418,22 @@ impl Ctx<'_> {
                                             _ => Type::Null,
                                         }
                                     } else {
-                                        (*t).clone()
+                                        t.clone()
                                     };
-                                    if equal {
-                                        lit.assignable_to(&value)
+                                    if equal && lit.assignable_to(&value) {
+                                        Some(if field.is_none() {
+                                            lit.clone()
+                                        } else {
+                                            t.clone()
+                                        })
+                                    } else if !equal && !value.assignable_to(&lit) {
+                                        Some(t.clone())
                                     } else {
-                                        !value.assignable_to(&lit)
+                                        None
                                     }
                                 })
-                                .cloned()
                                 .collect();
-                            if members.len() == 1 {
-                                members[0].clone()
-                            } else {
-                                Type::Union(members)
-                            }
+                            Type::union(members)
                         };
                         let yes = vec![(n.clone(), select(true))];
                         let no = vec![(n.clone(), select(false))];
@@ -448,27 +450,51 @@ impl Ctx<'_> {
                 let original = self.type_of(n)?;
                 let non_null = original.non_null();
                 let shape = shape_of(&non_null);
-                if let Type::Union(members) = &shape {
-                    let matches = |t: &Type| match shape_of(t) {
-                        Type::String | Type::StringLiteral(_) => tag == "string",
-                        Type::Number | Type::NumberLiteral(_) => tag == "number",
-                        Type::Boolean | Type::BooleanLiteral(_) => tag == "boolean",
-                        Type::Null => tag == "nil",
-                        Type::Object(_) | Type::Map(..) | Type::Array(_) => tag == "table",
-                        Type::Function { .. } => tag == "function",
-                        _ => false,
+                if matches!(shape_of(&original), Type::Union(_) | Type::Optional(_)) {
+                    let matches = |t: &Type| -> Option<bool> {
+                        let category = match shape_of(t) {
+                            Type::String | Type::StringLiteral(_) => "string",
+                            Type::Number | Type::NumberLiteral(_) => "number",
+                            Type::Boolean | Type::BooleanLiteral(_) => "boolean",
+                            Type::Null => "nil",
+                            Type::Object(_)
+                            | Type::Map(..)
+                            | Type::Array(_)
+                            | Type::Set(_)
+                            | Type::WeakMap(..)
+                            | Type::Tuple(_)
+                            | Type::Class(..)
+                            | Type::ClassObject(_)
+                            | Type::Widget(..) => "table",
+                            Type::Function { .. } => "function",
+                            _ => return None,
+                        };
+                        Some(tag == category)
                     };
+                    let members = original.members();
+                    // Unknown runtime categories are retained on both branches.
                     let select = |yes| {
-                        let ts: Vec<_> = members
-                            .iter()
-                            .filter(|t| matches(t) == yes)
-                            .cloned()
-                            .collect();
-                        if ts.len() == 1 {
-                            ts[0].clone()
-                        } else {
-                            Type::Union(ts)
-                        }
+                        Type::union(
+                            members
+                                .iter()
+                                .filter_map(|t| match matches(t) {
+                                    Some(b) => (b == yes).then(|| t.clone()),
+                                    None if yes
+                                        && matches!(shape_of(t), Type::Unknown | Type::Untyped) =>
+                                    {
+                                        Some(match tag.as_str() {
+                                            "nil" => Type::Null,
+                                            "string" => Type::String,
+                                            "number" => Type::Number,
+                                            "boolean" => Type::Boolean,
+                                            "table" => Type::Object(Default::default()),
+                                            _ => t.clone(),
+                                        })
+                                    }
+                                    None => Some(t.clone()),
+                                })
+                                .collect(),
+                        )
                     };
                     let yes = vec![(n.clone(), select(true))];
                     let no = vec![(n.clone(), select(false))];

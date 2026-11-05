@@ -4,8 +4,9 @@ use selu_diagnostics::Span;
 use selu_manifest::Manifest;
 use selu_syntax::{Expr, ExprKind};
 
+#[derive(Clone)]
 pub struct Availability {
-    targets: Vec<Manifest>,
+    targets: std::sync::Arc<Vec<Manifest>>,
 }
 impl Availability {
     pub(crate) fn manifests(&self) -> &[Manifest] {
@@ -13,7 +14,7 @@ impl Availability {
     }
     pub fn new(targets: &[Manifest]) -> Self {
         Self {
-            targets: targets.to_vec(),
+            targets: std::sync::Arc::new(targets.to_vec()),
         }
     }
 }

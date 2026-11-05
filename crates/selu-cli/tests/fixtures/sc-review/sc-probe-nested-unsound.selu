@@ -1,0 +1,1 @@
+type A=string|number; function f(x:A|boolean):number {if(typeof x=="string"){return x;}return 0;} print(f("wrong"));

@@ -1,0 +1,1 @@
+type V={kind:"a";value:string}|{kind:"b";value:number}; function f(x:V):string {if(x.kind=="a"){const y=x; const read=()=>y.value; x.value=4; return read();}return "other";} print(f({kind:"a",value:"str"}));

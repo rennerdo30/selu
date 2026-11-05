@@ -1,0 +1,1 @@
+type F=(((x:string)=>number)); const f:F=(x:string):number=>1; print(f("ok"));
