@@ -504,3 +504,142 @@ fn callback_minimum_arity_and_rest() {
         ["SELU0355"]
     );
 }
+#[test]
+fn sb_class_arrays_clear_preserves_aliases() {
+    assert_eq!(
+        run(r#"
+        class Samples { samples: number[] = []; static shared: number[] = []; }
+        const a = new Samples(); const b = new Samples();
+        a.samples.push(4); const alias = a.samples;
+        a.samples.clear(); alias.push(7);
+        print(a.samples.length, a.samples[0], b.samples.length);
+        Samples.shared.push(9); Samples.shared.clear(); print(Samples.shared.length);
+        let calls = 0;
+        function receiver(): number[] { calls += 1; return alias; }
+        receiver().clear(); print(calls, alias.length);
+        alias.clear(); alias.push(8); print(alias[0]);
+    "#),
+        ["1\t7\t0", "0", "1\t0", "8"]
+    );
+}
+#[test]
+fn sb_keyed_locale_catalog_is_checked() {
+    assert_eq!(
+        run(r#"
+        type Sentences = { enabled: string, sold: string };
+        const catalog: { enUS: Sentences, deDE: Sentences } = {
+            enUS: { enabled: "Aura flash enabled.", sold: "Sold your junk." },
+            deDE: { enabled: "Aurablitz aktiviert.", sold: "Dein Plunder wurde verkauft." }
+        };
+        function L(german: boolean): Sentences {
+            if (german) { return catalog.deDE; }
+            return catalog.enUS;
+        }
+        print(L(false).enabled, L(true).sold);
+    "#),
+        ["Aura flash enabled.\tDein Plunder wurde verkauft."]
+    );
+    assert!(!codes("type Sentences = { enabled: string }; const c: { enUS: Sentences, deDE: Sentences } = { enUS: { enabled: \"Enabled.\" } };").is_empty());
+    assert!(!codes("type Sentences = { enabled: string, sold: string }; const c: { enUS: Sentences, deDE: Sentences } = { enUS: { enabled: \"On.\", sold: \"Sold.\" }, deDE: { enabled: \"An.\" } };").is_empty());
+    assert!(!codes("const c = { enabled: \"Enabled.\" }; print(c.missing);").is_empty());
+}
+#[test]
+fn sb_native_error_boundary_normalizes_and_chains() {
+    let lua = common::compile("onError((e: Error) => { print(e.message); });");
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("seterrorhandler(function(value, extra) print(type(value), extra) end)")
+        .unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    sim.eval("geterrorhandler()('early load failure', 7); geterrorhandler()(setmetatable({}, {__tostring=function() error('must not stringify') end}), 8)").unwrap();
+    assert_eq!(
+        sim.prints(),
+        [
+            "early load failure",
+            "string\t7",
+            "<table error>",
+            "table\t8"
+        ]
+    );
+    sim.set_secret_global("hidden").unwrap();
+    sim.eval("geterrorhandler()(hidden, 9)").unwrap();
+    assert_eq!(&sim.prints()[4..], ["<secret error>", "userdata\t9"]);
+    assert!(codes("onError((e: string) => {});").contains(&"SELU0543".into()));
+}
+
+#[test]
+fn sb_error_chaining_preserves_zero_arguments_and_survives_sink_failure() {
+    let lua = common::compile("onError((e: Error) => { throw new Error(e.message); });");
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("seterrorhandler(function(...) print(select('#', ...)) end)")
+        .unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    sim.eval("geterrorhandler()(); geterrorhandler()('failure', nil, 3)")
+        .unwrap();
+    assert_eq!(sim.prints(), ["0", "3"]);
+}
+
+#[test]
+fn sb_record_samples_and_typed_catalog_formatting() {
+    assert_eq!(
+        run(r#"
+        type Sample = { xp: number };
+        class Buffer { samples: Sample[] = []; }
+        const buffer = new Buffer(); buffer.samples.push({ xp: 9 });
+        print(buffer.samples[0].xp); buffer.samples.clear();
+        type Sentences = { sold: (count: number) => string };
+        const catalog: { enUS: Sentences, deDE: Sentences } = {
+            enUS: { sold: (count: number) => `Sold ${count} items. 100% complete.` },
+            deDE: { sold: (count: number) => `${count} Gegenstände verkauft. 100% abgeschlossen.` }
+        };
+        print(catalog.deDE.sold(3));
+    "#),
+        ["9", "3 Gegenstände verkauft. 100% abgeschlossen."]
+    );
+    assert!(!codes("const xs = [1]; xs.clear(2);").is_empty());
+    assert!(!codes("class Buffer { samples: number[] = []; } const b = new Buffer(); b.samples.push(\"bad\");").is_empty());
+    assert!(
+        !codes("const c = { sold: (count: number) => `${count} items.` }; c.sold(\"three\");")
+            .is_empty()
+    );
+}
+
+#[test]
+fn sb_existing_error_identity_survives_native_boundary() {
+    let mut lua = common::compile(
+        "let seen: Error? = null; onError((e: Error) => { if (seen != null) { print(seen == e); } seen = e; });",
+    );
+    lua.push_str("\nlocal original = __selu_new_error('owned'); geterrorhandler()(original); geterrorhandler()(original)");
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("seterrorhandler(function() end)").unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    assert_eq!(sim.prints(), ["true"]);
+}
+
+#[test]
+fn review_on_error_uses_production_error_range() {
+    assert!(codes("onError((e: string) => {});").contains(&"SELU0543".into()));
+    assert!(codes("onError();").contains(&"SELU0543".into()));
+}
+
+#[test]
+fn review_real_callbacks_reach_typed_error_sink_once() {
+    for setup in [
+        "C_Timer.After(.1, function() error('timer failure') end)",
+        "local f=CreateFrame('Frame'); f:SetScript('OnUpdate', function(self) self:SetScript('OnUpdate', nil); error('update failure') end)",
+        "local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent', function() error('event failure') end)",
+        "local f=CreateFrame('Frame'); f:Hide(); f:SetScript('OnShow', function() error('show failure') end); C_Timer.After(.1, function() f:Show() end)",
+    ] {
+        let sim = selu_sim::Sim::new().unwrap();
+        sim.eval("seterrorhandler(function() print('previous') end)")
+            .unwrap();
+        sim.load_files(&[(
+            "t.lua".into(),
+            common::compile("onError(e => { print(\"captured\"); });"),
+        )])
+        .unwrap();
+        sim.eval(setup).unwrap();
+        let _ = sim.fire("PLAYER_LOGIN", vec![]);
+        sim.advance_time(0.1);
+        assert_eq!(sim.prints(), ["captured", "previous"], "{setup}");
+    }
+}

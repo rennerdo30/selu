@@ -126,6 +126,14 @@ impl Ctx<'_> {
     pub(crate) fn value_expected(&mut self, e: &Expr, expected: Option<&Type>) -> Type {
         let shaped = expected.map(|t| self.alias_shape(t.clone()));
         let expected = shaped.as_ref();
+        if let ExprKind::Array(items) = &e.kind
+            && items.is_empty()
+            && let Some(Type::Array(_)) = expected
+        {
+            let t = expected.unwrap().clone();
+            self.types.set(e.id, t.clone());
+            return t;
+        }
         if matches!(e.kind, ExprKind::Function { .. }) {
             let t = self.contextual_function(e, expected);
             self.types.set(e.id, t.clone());

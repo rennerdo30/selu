@@ -247,6 +247,7 @@ impl Ctx<'_> {
         } else {
             match &t {
                 Type::Array(item) => match name.as_str() {
+                    "clear" => (vec![], Type::Void),
                     "push" => (vec![(**item).clone()], Type::Void),
                     "pop" => (vec![], Type::optional((**item).clone())),
                     "insert" => (vec![Type::Number, (**item).clone()], Type::Void),

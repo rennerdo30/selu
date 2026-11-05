@@ -125,3 +125,12 @@ A direct lower_module call also checks collected locale keys. Before integration
 loading first.lua failed with an attempt to index missing __selu_wow.
 
 Keybindings are documented in [bindings.md](bindings.md).
+
+A keyed catalog can use a closed object type for the sentence keys and a second
+closed object requiring enUS and deDE. See `examples/keyed-locales`. Missing
+locales, entries, and member keys are ordinary checker errors. Per-key formatting
+functions can carry fixed typed parameters; use whole sentences, including all
+placeholders, in each locale. SB adds no second compiler locale runtime: the
+production toolkit service, saved override, change notifications and complete
+catalogs are wave-1 toolkit integration work. The existing L template feature
+remains available where source sentences are used as keys.

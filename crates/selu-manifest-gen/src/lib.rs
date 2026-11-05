@@ -296,6 +296,40 @@ fn project(t: &Table, predicates: &BTreeSet<String>) -> mlua::Result<Declaration
 }
 
 pub fn merge_system(m: &mut Manifest, mut system: Declaration) {
+    // UITimerDocumentation.lua conflates the callback and returned timer object.
+    // Source: wow-ui-source 1.13.2:SharedXML/C_TimerAugment.lua:12-58:
+    // callback(ticker), return ticker, idempotent Cancel. Current use:
+    // eac30af:Interface/AddOns/Blizzard_SharedXMLBase/ObjectUpdater.lua:27.
+    if system.namespace.as_deref() == Some("C_Timer") {
+        for callback in &mut system.fields {
+            if callback.name == "TickerCallback" {
+                for arg in &mut callback.arguments {
+                    if arg.name == "cb" && arg.ty.as_deref() == Some("TimerCallback") {
+                        arg.ty = Some("SeluTimerHandle".into());
+                    }
+                }
+            }
+        }
+        for method in &mut system.methods {
+            if matches!(method.name.as_str(), "NewTicker" | "NewTimer") {
+                method.attributes.insert("SeluTimerEvidence".into(), serde_json::json!("wow-ui-source 1.13.2:SharedXML/C_TimerAugment.lua:12-58; eac30af:Interface/AddOns/Blizzard_SharedXMLBase/ObjectUpdater.lua:27"));
+                for ret in &mut method.returns {
+                    if ret.ty.as_deref() == Some("TickerCallback") {
+                        ret.ty = Some("SeluTimerHandle".into());
+                    }
+                }
+            }
+        }
+        if !m.widgets.iter().any(|w| w.name == "SeluTimerHandle") {
+            m.widgets.push(
+                serde_json::from_value(serde_json::json!({
+                    "name":"SeluTimerHandle", "type":"ScriptObject",
+                    "methods":[{"name":"Cancel","type":"Function"}]
+                }))
+                .expect("fixed timer handle schema"),
+            );
+        }
+    }
     m.predicates.append(&mut system.predicates);
     let environment = system.attributes.get("Environment").cloned();
     if let Some(e) = &environment {
@@ -346,7 +380,11 @@ pub fn merge_system(m: &mut Manifest, mut system: Declaration) {
                 restrictions: vec![],
                 returns_secret: false,
                 params: f.arguments.iter().map(|p| p.name.clone()).collect(),
-                evidence: Evidence::Documented,
+                evidence: if f.attributes.contains_key("SeluTimerEvidence") {
+                    Evidence::Source
+                } else {
+                    Evidence::Documented
+                },
                 signature: Some(f.clone()),
                 provenance: None,
             });

@@ -87,6 +87,15 @@ impl Report {
         u8::from(self.failed() > 0)
     }
 
+    /// Port CI requires an exercised scenario and refuses unmodelled behaviour.
+    pub fn strict_exit_code(&self) -> u8 {
+        u8::from(
+            self.results.is_empty()
+                || self.failed() > 0
+                || self.results.iter().any(|r| !r.not_simulated.is_empty()),
+        )
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("reports always serialise")
     }
@@ -137,6 +146,10 @@ pub enum RunError {
     NoTests,
     Build(String),
     Io(String),
+    Fixture {
+        diagnostic: selu_diagnostics::Diagnostic,
+        source: String,
+    },
 }
 
 impl std::fmt::Display for RunError {
@@ -145,12 +158,14 @@ impl std::fmt::Display for RunError {
             RunError::NoTests => write!(f, "no *.test.selu files under src/ or tests/"),
             RunError::Build(e) => write!(f, "{e}"),
             RunError::Io(e) => write!(f, "{e}"),
+            RunError::Fixture { diagnostic, source } => write!(f, "{}", diagnostic.render(source)),
         }
     }
 }
 
 mod bridge;
 mod runner;
+mod scenario;
 pub use runner::run;
 
 #[cfg(test)]
@@ -222,5 +237,27 @@ mod tests {
         let back: Report = serde_json::from_str(&report.to_json()).unwrap();
         assert_eq!(back, report);
         assert_eq!(Report::default().exit_code(), 0);
+    }
+}
+
+#[cfg(test)]
+mod sb_tests {
+    use super::*;
+    #[test]
+    fn strict_gate_rejects_empty_and_gaps() {
+        assert_eq!(Report::default().strict_exit_code(), 1);
+        let mut report = Report {
+            target: None,
+            results: vec![TestResult {
+                file: "tests/a.test.selu".into(),
+                path: vec!["scenario".into()],
+                outcome: Outcome::Passed,
+                not_simulated: vec!["not simulated: API".into()],
+                replay: None,
+            }],
+        };
+        assert_eq!(report.strict_exit_code(), 1);
+        report.results[0].not_simulated.clear();
+        assert_eq!(report.strict_exit_code(), 0);
     }
 }

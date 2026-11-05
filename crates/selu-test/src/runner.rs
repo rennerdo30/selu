@@ -50,6 +50,11 @@ fn overlay(m: &mut selu_manifest::Manifest) {
         ),
         ("sim.reload", json!([]), json!([])),
         (
+            "sim.switchCharacter",
+            json!([{"name":"character","type":"string"}]),
+            json!([]),
+        ),
+        (
             "sim.now",
             json!([]),
             json!([{"name":"seconds","type":"number"}]),
@@ -92,6 +97,8 @@ fn overlay(m: &mut selu_manifest::Manifest) {
     ] {
         add(name, args, returns);
     }
+    m.tables.push(serde_json::from_value(json!({"name":"SeluCallbackCounts","type":"Structure","fields":[{"name":"timers","type":"number"},{"name":"updates","type":"number"}]})).unwrap());
+    m.functions.push(serde_json::from_value(json!({"name":"sim.callbackCounts","evidence":"verified","signature":{"name":"callbackCounts","returns":[{"name":"counts","type":"SeluCallbackCounts"}]}})).unwrap());
     let mut fields = vec![];
     for (name, ty) in [
         ("toBe", "unknown"),
@@ -269,6 +276,27 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
             })
             .map_err(build_error)?,
         ));
+        let fixture = options
+            .project_dir
+            .join(&file)
+            .with_extension("scenario.json");
+        let scenario = crate::scenario::load(&fixture)?;
+        if let Some(character) = &scenario.data.character {
+            session
+                .borrow_mut()
+                .switch_character(character.clone())
+                .map_err(|e| scenario.error(e, &["character".into()]))?;
+        }
+        session
+            .borrow_mut()
+            .seed_saved(&addon, &scenario.data.saved)
+            .map_err(|e| {
+                let mut key = vec!["saved".into()];
+                if let Some(cause) = e.downcast_ref::<selu_sim::session::SavedFixtureError>() {
+                    key.push(cause.global.clone());
+                }
+                scenario.error(e, &key)
+            })?;
         let loaded = { session.borrow_mut().load_addon_dir(&addon) };
         let setup = loaded.and_then(|_| session.borrow_mut().login());
         let setup_failures = session.borrow().sim().ctx().runtime_failures();
@@ -493,6 +521,8 @@ fn install(
         })?,
     )?;
     let r_stale = r.borrow().stale.clone();
+    let switch_observations = r.clone();
+    let switch_stale = r.borrow().stale.clone();
     let observations = r.clone();
     let stale = r.borrow().stale.clone();
     lua.globals().set(
@@ -578,6 +608,42 @@ fn install(
         })?,
     )?;
     let s = session.clone();
+    let stale = switch_stale;
+    let observations = switch_observations;
+    sim.set(
+        "switchCharacter",
+        lua.create_function(move |_, character: String| {
+            let old = s.borrow().sim().ctx().clone();
+            let generation = s.borrow().generation();
+            let result = match s.try_borrow_mut() {
+                Ok(mut session) => session.switch_character(character),
+                Err(_) => Err(mlua::Error::runtime(
+                    "cannot reload during a Session callback",
+                )),
+            };
+            // Replacement precedes addon loading/login; either may have failed.
+            if s.borrow().generation() != generation {
+                stale.set(true);
+                old.stale_sources
+                    .lock()
+                    .unwrap()
+                    .extend(observations.borrow().sources.clone());
+            }
+            // Retirement dispatch and its final flush can add failures, even on Err.
+            let mut observations = observations.borrow_mut();
+            observations.failures.extend(old.runtime_failures());
+            observations.notes.extend(
+                old.logs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .filter(|s| s.contains("not simulated"))
+                    .cloned(),
+            );
+            result
+        })?,
+    )?;
+    let s = session.clone();
     sim.set(
         "setUnit",
         lua.create_function(move |_, (token, unit): (String, mlua::Table)| {
@@ -599,6 +665,18 @@ fn install(
                     combat: unit.get::<Option<bool>>("combat")?.unwrap_or(false),
                 },
             )
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "callbackCounts",
+        lua.create_function(move |lua, ()| {
+            let session = s.borrow();
+            let counts: mlua::Table = session.sim().lua().globals().get("__selu_sim_counts")?;
+            let out = lua.create_table()?;
+            out.set("timers", counts.get::<u64>("timers")?)?;
+            out.set("updates", counts.get::<u64>("updates")?)?;
+            Ok(out)
         })?,
     )?;
     let s = session.clone();

@@ -281,7 +281,7 @@ newest stored extraction, so a compiler extraction fix can improve an existing p
 No project target, output directory, TOC or lock key contains an extraction ID.
 
 The generator's `EXTRACTION_VERSION` is re-exported from
-`selu_manifest::store::EXTRACTION_VERSION`. It is **4 for non-fatal pool withholding warnings** (3 is the corrected W3 overlay, 2 its retained initial revision, and 1 the W2 baseline). Bump this
+`selu_manifest::store::EXTRACTION_VERSION`. It is **5 for timer-handle metadata** (4 is non-fatal pool withholding warnings, 3 the corrected W3 overlay, 2 its retained initial revision, and 1 the W2 baseline). Bump this
 constant whenever extraction output rules change, including sourced signatures or
 overlay changes. The workspace test `extraction_sources_and_overlays_require_version_bump`
 enforces this with a frozen SHA-256 contract per version in
@@ -451,3 +451,13 @@ full required gate. Bump `EXTRACTION_VERSION`, append the new frozen digest in
 re-extract both tracking tips and retained locked builds. Confirm the reviewed
 build's warning is gone and its pool contracts are restored. Existing store
 segments and revisions remain immutable; never edit them to accept a digest.
+
+Extraction version 5 corrects UITimer's conflation of the TickerCallback function
+and its timer object. The callback receives SeluTimerHandle, and NewTicker/NewTimer
+return that same nominal handle with typed Cancel. The source supplement cites
+Blizzard's historical 1.13.2 SharedXML/C_TimerAugment.lua:12-58 (callback argument,
+return, error-stop and cancellation), plus the retained Forever pin's
+Blizzard_SharedXMLBase/ObjectUpdater.lua:27 (current Cancel use). Optional iteration
+metadata is retained. This is source evidence, not a modern native live probe.
+The revision mechanism preserves every previous extraction and selects v5 for
+unchanged game-build locks after `update`; extraction changes never repin a game.

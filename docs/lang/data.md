@@ -6,7 +6,11 @@ Package B starts at `c4d0580527550bdff44c1676053d5178d7b683a2`.
   Reads have type T, not T?: callers must keep indices in bounds. Numeric
   indices must be integers; no runtime bounds or integrality checks are added.
   Use Map for sparse data. Null elements and null collection type arguments
-  are errors. Empty arrays require a written array type on the declaration.
+  are errors. Empty arrays require a written array type on the declaration,
+  class field (including static fields), or contextual function parameter.
+  `array.clear()` removes every sequence element in place with a descending
+  numeric loop; aliases retain the same table, and the receiver is evaluated once.
+  It takes no arguments and returns void.
 - Only a call or vararg in the final array slot is parenthesized, to prevent
   multiple-return expansion. Other values print without extra brackets. Structural object fields use the existing checker.
   Optional access tests nil explicitly, evaluates the receiver once, and

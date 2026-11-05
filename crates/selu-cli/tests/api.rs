@@ -756,3 +756,24 @@ fn cached_manifests() -> &'static Vec<selu_manifest::Manifest> {
         .collect()
     })
 }
+#[test]
+fn sb_native_callbacks_may_ignore_supplied_arguments() {
+    assert!(codes("C_Timer.NewTicker(1, () => {});", "wowf").is_empty());
+    assert!(
+        codes(
+            "C_Timer.NewTicker(1, ticker => { ticker.Cancel(); });",
+            "wowf"
+        )
+        .is_empty()
+    );
+    assert!(
+        codes("C_Timer.NewTicker(1, (ticker: number) => {});", "wowf").contains(&"SELU0481".into())
+    );
+    assert!(
+        codes(
+            "C_Timer.NewTicker(1, (ticker, extra: number) => {});",
+            "wowf"
+        )
+        .contains(&"SELU0481".into())
+    );
+}
