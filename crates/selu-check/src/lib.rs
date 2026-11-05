@@ -1521,6 +1521,10 @@ impl Ctx<'_> {
         callee_type: &Type,
     ) -> Type {
         let arg_types = self.function_arguments(args, callee_type);
+        let specialized =
+            self.table_signature(callee_type, arg_types.first(), arg_types.get(1), args.len());
+        let callee_type = &specialized;
+        self.types.set(callee.id, specialized.clone());
         if self.api_check_call(e, args, &arg_types, callee_type)
             && let Type::Function { ret, .. } = callee_type
         {

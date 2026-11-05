@@ -59,7 +59,7 @@ for the next checker round, not wired into checking in M1.
 ## Overlays and provenance
 
 `overlay.toml` beside the output is merged after generation. Supported entries:
-`[interface]` with `value`, `basis` and `note`; `[[functions]]` and `[[widgets]]`
+`[interface]` with `value`, `basis` and `note`; `[[functions]]`, `[[tables]]` and `[[widgets]]`
 with `entry` and `note`; `[[globals]]` with `name` and `note`. Every overlay entry
 requires explicit `evidence` (`documented`, `source`, `verified`). Verified evidence
 requires a nonempty `live_probe` record. Entries replace matching
@@ -424,7 +424,7 @@ iterator wrapper is generated.
 | `wow_classic` | `classic` | 5.5.4.70631 | 50504 | `e5d9b3a22c3f0f6f41ebac0e454f4969594261cf` |
 | `wow` | `live` | 12.1.5.70783 | 120105 | `297d7aaaa736f346b3e036f38ee088eaf7f8c07f` |
 | `wowf` | `forever` | 1.60.1.70790 | 16001 | `eac30af597e5aaa43a60f6675ef5fdcea100375f` |
-| `wowt` | `ptr` | 12.1.7.70668 | 120107 | `9fc0ba94381153262856ed0120a2675f1a11c30a` |
+| `wowt` | `ptr` | 12.1.7.70740 | 120107 | `e927c305f67ed6b3b460bc00d0c39055747b9119` |
 | `wowxptr` | `ptr2` | 12.1.5.70340 | 120105 | `12380f8cdc541b7f0963f74cbe0874c21a857fbb` |
 <!-- selu-store-builds:end -->
 
@@ -461,3 +461,46 @@ Blizzard_SharedXMLBase/ObjectUpdater.lua:27 (current Cancel use). Optional itera
 metadata is retained. This is source evidence, not a modern native live probe.
 The revision mechanism preserves every previous extraction and selects v5 for
 unchanged game-build locks after `update`; extraction changes never repin a game.
+
+## Native object extraction
+
+Extraction v6 connects the documented `CScriptObject` identity to
+`SimpleObjectAPI`. In retail source pin
+`18c6d677b605b312f3d813d498404631fb941977`,
+`SimpleObjectAPIDocumentation.lua` declares `GetParent` with that return type
+and `SecretReturnsForAspect = Hierarchy`. The secret policy is preserved.
+Use `readable(parent)` before invoking the base object's documented methods.
+`GetName` belongs to `SimpleFrameScriptObjectAPI`, so the base object contract
+does not assert that method. Toolkit parent traversal must follow the unwrap
+pattern and must not annotate the result into a Frame without evidence.
+
+`UI.xsd` AnimationRef members and matching `SimpleAnim*API` documentation
+jointly authorize literal animation factory specialization. Missing either
+source withholds the specialization. Dynamic type arguments retain the base
+animation contract. Tests check literal Alpha methods and reject a boolean
+alpha value.
+
+The fixed Lua 5.1 manual sources the standard-library overlays, including
+variadic formatting, numeric conversion, string captures, math and table
+operations. `tonumber` retains a nilable number result. `Optional` permits an
+argument to be omitted without admitting nil (for example math.random).
+`SeluReturnTail` preserves optional typed capture positions in direct native
+result destructuring. Unsupported generic element results remain untyped game
+values; no host-value escape hatch is introduced.
+
+The six retained product pins have sourced ItemInfo ID/link inputs, date/time
+variants, and a closed StaticPopupDialogs entry subset. `[[tables]]` overlays
+use the same evidence/note/live-probe validation as widget overlays.
+`SeluClosed` prevents extra fields on the popup entry, including through aliases.
+Date's literal format specializes the documented string/table result; a dynamic
+format keeps both alternatives. The date table passed to time has separate
+input defaults from the required date-result fields.
+
+SetScript/HookScript literal names select `SeluScriptCallbacks` declarations.
+The callbacks retain their receiver type, supported parameter types, and pinned
+file:line citations. OnMouseWheel, OnClick and OnEnter are reviewed at all six
+retained source pins. Retail also reviews OnLeave, OnAttributeChanged,
+OnShow/OnHide, OnKeyDown/OnKeyUp and OnUpdate. Unreviewed scripts preserve the
+existing LuaFunctionReference behavior. Unknown parameter types stay untyped.
+Native factories and callback facts intersect when function values join; mutable
+aliases lose facts that depend on native function identity.

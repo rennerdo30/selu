@@ -286,3 +286,227 @@ widget = "GameTooltip"
 evidence = "source"
 note = "Pinned 7014c309a25338905c41dc3799a93f9719ebb533: Interface/AddOns/Blizzard_Calendar/Classic/Blizzard_Calendar.lua:2108, GameTooltip:ClearLines();; zero-argument Blizzard call. Interface/AddOns/Blizzard_SharedXML/UI.xsd defines GameTooltipType extending FrameType; XSD has no method declarations. No return contract evidenced; result follows untyped game-value policy."
 entry = { name = "ClearLines", type = "Function", arguments = [], returns = [{ name = "result" }] }
+
+# SF fixed Lua 5.1 contracts
+[[tables]]
+evidence="documented"
+note="Lua 5.1 manual 5.4 string/number conversion"
+entry={ "name" = "LuaStringNumber", "attributes" = { "SeluScalarUnion" = ["number", "string"] } }
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.1 tonumber; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "tonumber", "params" = ["value", "base"], "evidence" = "documented", "signature" = { "name" = "tonumber", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "" }, { "name" = "base", "type" = "number", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "value", "type" = "number", "attributes" = { "Nilable" = true } }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.1 tostring; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "tostring", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "tostring", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "" }], "returns" = [{ "name" = "value", "type" = "string" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.4 string.format; WoW global format is used at retail pin 18c6d677b605b312f3d813d498404631fb941977 Blizzard_ActionBar/WoWLabs/ActionButtonOverrides.lua:473; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "string.format", "params" = ["format", "..."], "evidence" = "documented", "signature" = { "name" = "string.format", "type" = "Function", "arguments" = [{ "name" = "format", "type" = "string" }, { "name" = "...", "type" = "LuaStringNumber" }], "returns" = [{ "name" = "text", "type" = "string" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.4 string.format; WoW global format is used at retail pin 18c6d677b605b312f3d813d498404631fb941977 Blizzard_ActionBar/WoWLabs/ActionButtonOverrides.lua:473; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "format", "params" = ["format", "..."], "evidence" = "documented", "signature" = { "name" = "format", "type" = "Function", "arguments" = [{ "name" = "format", "type" = "string" }, { "name" = "...", "type" = "LuaStringNumber" }], "returns" = [{ "name" = "text", "type" = "string" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.abs; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.abs", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.abs", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.ceil; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.ceil", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.ceil", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.cos; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.cos", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.cos", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.deg; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.deg", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.deg", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.floor; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.floor", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.floor", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.rad; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.rad", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.rad", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.sin; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.sin", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.sin", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.sqrt; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.sqrt", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.sqrt", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.atan; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.atan", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.atan", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.log; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.log", "params" = ["value"], "evidence" = "documented", "signature" = { "name" = "math.log", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.min; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.min", "params" = ["value", "..."], "evidence" = "documented", "signature" = { "name" = "math.min", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }, { "name" = "...", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.max; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.max", "params" = ["value", "..."], "evidence" = "documented", "signature" = { "name" = "math.max", "type" = "Function", "arguments" = [{ "name" = "value", "type" = "number" }, { "name" = "...", "type" = "number" }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.6 math.random; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "math.random", "params" = ["m", "n"], "evidence" = "documented", "signature" = { "name" = "math.random", "type" = "Function", "arguments" = [{ "name" = "m", "type" = "number", "attributes" = { "Optional" = true } }, { "name" = "n", "type" = "number", "attributes" = { "Optional" = true } }], "returns" = [{ "name" = "value", "type" = "number" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.4 string.char; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "string.char", "params" = ["..."], "evidence" = "documented", "signature" = { "name" = "string.char", "type" = "Function", "arguments" = [{ "name" = "...", "type" = "number" }], "returns" = [{ "name" = "text", "type" = "string" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.4 string.sub; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "string.sub", "params" = ["text", "i", "j"], "evidence" = "documented", "signature" = { "name" = "string.sub", "type" = "Function", "arguments" = [{ "name" = "text", "type" = "string" }, { "name" = "i", "type" = "number" }, { "name" = "j", "type" = "number", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "text", "type" = "string" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.4 string.rep; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "string.rep", "params" = ["text", "n"], "evidence" = "documented", "signature" = { "name" = "string.rep", "type" = "Function", "arguments" = [{ "name" = "text", "type" = "string" }, { "name" = "n", "type" = "number" }], "returns" = [{ "name" = "text", "type" = "string" }] } }
+
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.5 table.concat; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "table.concat", "params" = ["list", "separator", "i", "j"], "evidence" = "documented", "signature" = { "name" = "table.concat", "type" = "Function", "arguments" = [{ "name" = "list", "type" = "table", "attributes" = { "InnerType" = "LuaStringNumber" } }, { "name" = "separator", "type" = "string", "attributes" = { "Nilable" = true } }, { "name" = "i", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "j", "type" = "number", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "text", "type" = "string" }], "attributes" = { "SeluTableOperation" = "concat" } } }
+
+[[functions]]
+evidence="source"
+note="Lua 5.1 manual 5.5 table.insert; generic elements remain untyped"
+entry = { "name" = "table.insert", "params" = ["list", "value"], "evidence" = "source", "signature" = { "name" = "table.insert", "type" = "Function", "arguments" = [{ "name" = "list", "type" = "table", "attributes" = { "InnerType" = "" } }, { "name" = "value", "type" = "" }], "returns" = [], "overloads" = [{ "name" = "table.insert", "type" = "Function", "arguments" = [{ "name" = "list", "type" = "table", "attributes" = { "InnerType" = "" } }, { "name" = "position", "type" = "number" }, { "name" = "value", "type" = "" }], "returns" = [] }], "attributes" = { "SeluTableOperation" = "insert" } } }
+
+[[functions]]
+evidence="source"
+note="Lua 5.1 manual 5.5 table.insert; generic elements remain untyped; Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_SharedXML/HelpTip.lua:264 appends frame to the close list"
+entry = { "name" = "tinsert", "params" = ["list", "value"], "evidence" = "source", "signature" = { "name" = "tinsert", "type" = "Function", "arguments" = [{ "name" = "list", "type" = "table", "attributes" = { "InnerType" = "" } }, { "name" = "value", "type" = "" }], "returns" = [], "overloads" = [{ "name" = "tinsert", "type" = "Function", "arguments" = [{ "name" = "list", "type" = "table", "attributes" = { "InnerType" = "" } }, { "name" = "position", "type" = "number" }, { "name" = "value", "type" = "" }], "returns" = [] }], "attributes" = { "SeluTableOperation" = "insert" } } }
+
+[[functions]]
+evidence="source"
+note="Lua 5.1 manual 5.5 table.remove; generic element result remains untyped"
+entry = { "name" = "table.remove", "params" = ["list", "position"], "evidence" = "source", "signature" = { "name" = "table.remove", "type" = "Function", "arguments" = [{ "name" = "list", "type" = "table", "attributes" = { "InnerType" = "" } }, { "name" = "position", "type" = "number", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "value", "type" = "" }], "attributes" = { "SeluTableOperation" = "remove" } } }
+
+[[functions]]
+evidence="source"
+note="Lua 5.1 manual 5.5 table.sort; generic comparison operands remain untyped"
+entry = { "name" = "table.sort", "params" = ["list", "compare"], "evidence" = "source", "signature" = { "name" = "table.sort", "type" = "Function", "arguments" = [{ "name" = "list", "type" = "table", "attributes" = { "InnerType" = "" } }, { "name" = "compare", "type" = "LuaFunctionReference", "attributes" = { "Nilable" = true } }], "returns" = [], "attributes" = { "SeluTableOperation" = "sort" } } }
+
+# SF native contracts reviewed from this product pin
+[[tables]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 ItemDocumentation.lua GetItemInfo/GetItemInfoInstant positions; Blizzard_AuctionHouseUI/Shared/Blizzard_AuctionHouseSellFrame.lua:425 itemLink, Blizzard_AuctionHouseBrowseResultsFrame.lua:161 itemKey.itemID. Supported ID/link inputs; other representations remain untyped.; declaration/function identity checked in this pin; field reader line citations retained on fields"
+entry={ "name" = "ItemInfo", "attributes" = { "SeluScalarUnion" = ["number", "string"] } }
+[[tables]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:300-360,405-410, callbacks OnAccept/OnCancel in StaticPopup_OnClick; Blizzard_StaticPopup_Game/GameDialog.lua:13-15,209-210; Blizzard_StaticPopup_Glue/GlueDialog.lua:91-109. Closed subset; unlisted fields unsupported.; declaration/function identity checked in this pin; field reader line citations retained on fields"
+entry={ "name" = "StaticPopupDialog", "type" = "Structure", "attributes" = { "SeluClosed" = true }, "fields" = [{ "name" = "text", "type" = "string", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:201" } }, { "name" = "button1", "type" = "string", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:507" } }, { "name" = "button2", "type" = "string", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup_Game/GameDialog.lua:11" } }, { "name" = "button3", "type" = "string", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup_Game/GameDialog.lua:13" } }, { "name" = "subText", "type" = "string", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:91" } }, { "name" = "cancels", "type" = "string", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:314" } }, { "name" = "whileDead", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:332" } }, { "name" = "hideOnEscape", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:378" } }, { "name" = "hasEditBox", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup_Game/GameDialog.lua:206" } }, { "name" = "exclusive", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:310" } }, { "name" = "enterClicksFirstButton", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:380" } }, { "name" = "multiple", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:133" } }, { "name" = "noCancelOnReuse", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:351" } }, { "name" = "timeoutInformationalOnly", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:456" } }, { "name" = "noCloseOnAlt", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:699" } }, { "name" = "noCancelOnEscape", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:787" } }, { "name" = "ignoreKeys", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:744" } }, { "name" = "escapeHides", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:748" } }, { "name" = "notClosableByLogout", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:324" } }, { "name" = "cancelIfNotAllowedWhileLoggingOut", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:322" } }, { "name" = "cancelIfNotAllowedWhileDead", "type" = "bool", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:330" } }, { "name" = "timeout", "type" = "number", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:377" } }, { "name" = "OnAccept", "type" = "StaticPopupOnAccept", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:284" } }, { "name" = "OnCancel", "type" = "StaticPopupOnCancel", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:270" } }, { "name" = "OnShow", "type" = "StaticPopupOnShow", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:559" } }, { "name" = "OnHide", "type" = "StaticPopupOnHide", "attributes" = { "Nilable" = true, "SeluSourceCitation" = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:594" } }] }
+[[tables]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:300-360,405-410, callbacks OnAccept/OnCancel in StaticPopup_OnClick; Blizzard_StaticPopup_Game/GameDialog.lua:13-15,209-210; Blizzard_StaticPopup_Glue/GlueDialog.lua:91-109. Closed subset; unlisted fields unsupported.; declaration/function identity checked in this pin; field reader line citations retained on fields"
+entry={ "name" = "StaticPopupDialogMap", "type" = "table", "attributes" = { "KeyType" = "string", "InnerType" = "StaticPopupDialog" } }
+[[tables]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:300-360,405-410, callbacks OnAccept/OnCancel in StaticPopup_OnClick; Blizzard_StaticPopup_Game/GameDialog.lua:13-15,209-210; Blizzard_StaticPopup_Glue/GlueDialog.lua:91-109. Closed subset; unlisted fields unsupported.; declaration/function identity checked in this pin; field reader line citations retained on fields"
+entry={ "name" = "StaticPopupOnAccept", "type" = "CallbackType", "arguments" = [{ "name" = "self", "type" = "Frame" }, { "name" = "data", "type" = "", "attributes" = { "Nilable" = true } }, { "name" = "data2", "type" = "", "attributes" = { "Nilable" = true } }] }
+[[tables]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:300-360,405-410, callbacks OnAccept/OnCancel in StaticPopup_OnClick; Blizzard_StaticPopup_Game/GameDialog.lua:13-15,209-210; Blizzard_StaticPopup_Glue/GlueDialog.lua:91-109. Closed subset; unlisted fields unsupported.; declaration/function identity checked in this pin; field reader line citations retained on fields"
+entry={ "name" = "StaticPopupOnCancel", "type" = "CallbackType", "arguments" = [{ "name" = "self", "type" = "Frame", "attributes" = { "Nilable" = true } }, { "name" = "data", "type" = "", "attributes" = { "Nilable" = true } }, { "name" = "reason", "type" = "string", "attributes" = { "Nilable" = true } }] }
+[[tables]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:300-360,405-410, callbacks OnAccept/OnCancel in StaticPopup_OnClick; Blizzard_StaticPopup_Game/GameDialog.lua:13-15,209-210; Blizzard_StaticPopup_Glue/GlueDialog.lua:91-109. Closed subset; unlisted fields unsupported.; declaration/function identity checked in this pin; field reader line citations retained on fields"
+entry={ "name" = "StaticPopupOnShow", "type" = "CallbackType", "arguments" = [{ "name" = "self", "type" = "Frame" }, { "name" = "data", "type" = "", "attributes" = { "Nilable" = true } }] }
+[[tables]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:300-360,405-410, callbacks OnAccept/OnCancel in StaticPopup_OnClick; Blizzard_StaticPopup_Game/GameDialog.lua:13-15,209-210; Blizzard_StaticPopup_Glue/GlueDialog.lua:91-109. Closed subset; unlisted fields unsupported.; declaration/function identity checked in this pin; field reader line citations retained on fields"
+entry={ "name" = "StaticPopupOnHide", "type" = "CallbackType", "arguments" = [{ "name" = "self", "type" = "Frame" }, { "name" = "data", "type" = "", "attributes" = { "Nilable" = true } }] }
+[[functions]]
+evidence="source"
+note="Lua 5.1 Reference Manual Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_SharedXML/TimeUtil.lua:21; Blizzard_UIParent/Shared/UIParent.lua:771; Lua 5.1 manual 5.8 os.date/os.time; fixed specification https://www.lua.org/manual/5.1/manual.html; named FrameXML functions reviewed in this pin"
+entry={ "name" = "date", "params" = ["format", "time"], "evidence" = "source", "signature" = { "name" = "date", "type" = "Function", "arguments" = [{ "name" = "format", "type" = "string", "attributes" = { "Nilable" = true } }, { "name" = "time", "type" = "number", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "date", "type" = "LuaDateResult" }] } }
+[[functions]]
+evidence="source"
+note="Lua 5.1 Reference Manual Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_SharedXML/TimeUtil.lua:21; Blizzard_UIParent/Shared/UIParent.lua:771; Lua 5.1 manual 5.8 os.date/os.time; fixed specification https://www.lua.org/manual/5.1/manual.html; named FrameXML functions reviewed in this pin"
+entry={ "name" = "time", "params" = ["date"], "evidence" = "source", "signature" = { "name" = "time", "type" = "Function", "arguments" = [{ "name" = "date", "type" = "LuaDateInput", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "seconds", "type" = "number" }] } }
+[[functions]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua:300-360,405-410, callbacks OnAccept/OnCancel in StaticPopup_OnClick; Blizzard_StaticPopup_Game/GameDialog.lua:13-15,209-210; Blizzard_StaticPopup_Glue/GlueDialog.lua:91-109. Closed subset; unlisted fields unsupported.; named FrameXML functions reviewed in this pin"
+entry={ "name" = "StaticPopup_Show", "params" = ["which", "text_arg1", "text_arg2", "data", "insertedFrame", "customOnHideScript"], "evidence" = "source", "signature" = { "name" = "StaticPopup_Show", "type" = "Function", "arguments" = [{ "name" = "which", "type" = "string" }, { "name" = "text_arg1", "type" = "LuaStringNumber", "attributes" = { "Nilable" = true } }, { "name" = "text_arg2", "type" = "LuaStringNumber", "attributes" = { "Nilable" = true } }, { "name" = "data", "type" = "", "attributes" = { "Nilable" = true } }, { "name" = "insertedFrame", "type" = "Frame", "attributes" = { "Nilable" = true } }, { "name" = "customOnHideScript", "type" = "StaticPopupOnHide", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "dialog", "type" = "Frame", "attributes" = { "Nilable" = true } }] } }
+[[globals]]
+name="StaticPopupDialogs"
+type="StaticPopupDialogMap"
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_StaticPopup/StaticPopup.lua function StaticPopup_Show reads StaticPopupDialogs[which]; entry fields have per-field reader citations"
+
+[[tables]]
+evidence="source"
+note="Lua 5.1 manual 5.8 os.date/os.time; Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_UIParent/Shared/UIParent.lua:771; Blizzard_SharedXML/TimeUtil.lua:21 time arithmetic"
+entry={ "name" = "LuaDateTable", "type" = "Structure", "fields" = [{ "name" = "year", "type" = "number" }, { "name" = "month", "type" = "number" }, { "name" = "day", "type" = "number" }, { "name" = "hour", "type" = "number" }, { "name" = "min", "type" = "number" }, { "name" = "sec", "type" = "number" }, { "name" = "wday", "type" = "number" }, { "name" = "yday", "type" = "number" }, { "name" = "isdst", "type" = "bool" }] }
+[[tables]]
+evidence="source"
+note="Lua 5.1 manual 5.8 os.date/os.time; Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_UIParent/Shared/UIParent.lua:771; Blizzard_SharedXML/TimeUtil.lua:21 time arithmetic"
+entry={ "name" = "LuaDateResult", "attributes" = { "SeluUnion" = ["string", "LuaDateTable"] } }
+[[tables]]
+evidence="source"
+note="Lua 5.1 manual 5.8 os.date/os.time; Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_UIParent/Shared/UIParent.lua:771; Blizzard_SharedXML/TimeUtil.lua:21 time arithmetic"
+entry={ "name" = "LuaDateInput", "type" = "Structure", "fields" = [{ "name" = "year", "type" = "number" }, { "name" = "month", "type" = "number" }, { "name" = "day", "type" = "number" }, { "name" = "hour", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "min", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "sec", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "wday", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "yday", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "isdst", "type" = "bool", "attributes" = { "Nilable" = true } }] }
+
+[[functions]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_SharedXML/StringUtil.lua:18; Blizzard_SharedXML/StringUtil.lua:14-18 strsplittable; Blizzard_SharedXML/LinkUtil.lua:133, achievementID and complete split from linkData. Extra argument types unproven."
+entry={ "name" = "strsplit", "params" = ["separator", "text", "..."], "evidence" = "source", "signature" = { "name" = "strsplit", "type" = "Function", "arguments" = [{ "name" = "separator", "type" = "string" }, { "name" = "text", "type" = "string" }, { "name" = "...", "type" = "" }], "returns" = [{ "name" = "first", "type" = "string", "attributes" = { "Nilable" = true } }], "attributes" = { "SeluReturnTail" = "string" } } }
+[[functions]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_CooldownBroadcaster/Blizzard_CooldownBroadcaster.lua:151; Blizzard_CooldownBroadcaster/Blizzard_CooldownBroadcaster.lua:172,390; string and numeric parts"
+entry={ "name" = "strjoin", "params" = ["separator", "..."], "evidence" = "source", "signature" = { "name" = "strjoin", "type" = "Function", "arguments" = [{ "name" = "separator", "type" = "string" }, { "name" = "...", "type" = "LuaStringNumber" }], "returns" = [{ "name" = "text", "type" = "string" }] } }
+
+[[functions]]
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.4 string.find / 5.1 unpack; generic captures and elements are conservative; https://www.lua.org/manual/5.1/manual.html"
+entry={ "name" = "string.find", "params" = ["text", "pattern", "init", "plain"], "evidence" = "documented", "signature" = { "name" = "string.find", "type" = "Function", "arguments" = [{ "name" = "text", "type" = "string" }, { "name" = "pattern", "type" = "string" }, { "name" = "init", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "plain", "type" = "bool", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "start", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "end", "type" = "number", "attributes" = { "Nilable" = true } }], "attributes" = { "SeluReturnTail" = "LuaStringNumber" } } }
+
+[[functions]]
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.4 string.match / 5.1 unpack; generic captures and elements are conservative; https://www.lua.org/manual/5.1/manual.html"
+entry={ "name" = "string.match", "params" = ["text", "pattern", "init"], "evidence" = "documented", "signature" = { "name" = "string.match", "type" = "Function", "arguments" = [{ "name" = "text", "type" = "string" }, { "name" = "pattern", "type" = "string" }, { "name" = "init", "type" = "number", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "capture", "type" = "LuaStringNumber", "attributes" = { "Nilable" = true } }], "attributes" = { "SeluReturnTail" = "LuaStringNumber" } } }
+
+[[functions]]
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.4 string.gmatch / 5.1 unpack; generic captures and elements are conservative; https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "string.gmatch", "params" = ["text", "pattern"], "evidence" = "documented", "signature" = { "name" = "string.gmatch", "type" = "Function", "arguments" = [{ "name" = "text", "type" = "string" }, { "name" = "pattern", "type" = "string" }], "returns" = [{ "name" = "iterator", "type" = "Function", "returns" = [{ "name" = "capture", "type" = "LuaStringNumber", "attributes" = { "Nilable" = true } }], "attributes" = { "SeluReturnTail" = "LuaStringNumber", "SeluPureCallback" = true } }] } }
+
+[[functions]]
+evidence="documented"
+note="Lua 5.1 Reference Manual 5.4 unpack / 5.1 unpack; generic captures and elements are conservative; https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "unpack", "params" = ["list", "i", "j"], "evidence" = "documented", "signature" = { "name" = "unpack", "type" = "Function", "arguments" = [{ "name" = "list", "type" = "table", "attributes" = { "InnerType" = "" } }, { "name" = "i", "type" = "number", "attributes" = { "Nilable" = true } }, { "name" = "j", "type" = "number", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "value", "type" = "" }], "attributes" = { "SeluUntypedReturnTail" = true, "SeluTableOperation" = "unpack" } } }
+
+[[functions]]
+evidence="source"
+note="Pinned 7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_Calendar/Classic/Blizzard_Calendar.lua:3627; string input/output; extra argument types unproven"
+entry={ "name" = "strtrim", "params" = ["text", "..."], "evidence" = "source", "signature" = { "name" = "strtrim", "type" = "Function", "arguments" = [{ "name" = "text", "type" = "string" }, { "name" = "...", "type" = "" }], "returns" = [{ "name" = "text", "type" = "string" }] } }

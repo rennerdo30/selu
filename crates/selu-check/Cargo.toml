@@ -8,3 +8,4 @@ edition.workspace = true
 selu-diagnostics = { path = "../selu-diagnostics" }
 selu-syntax = { path = "../selu-syntax" }
 selu-manifest = { path = "../selu-manifest" }
+serde_json.workspace = true

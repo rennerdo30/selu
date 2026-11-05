@@ -23,8 +23,15 @@ impl PartialEq for ApiOrigin {
 #[derive(Debug, Clone, Default)]
 pub struct ApiSemantics {
     pub untyped_return_tail: bool,
+    pub typed_return_tail: Option<Box<Type>>,
     pub frame_factory: bool,
+    pub animation_factory: bool,
+    pub date_factory: bool,
     pub pool_factory: bool,
+    pub script_callbacks: BTreeMap<String, Type>,
+    pub native_callback: bool,
+    pub pure_callback: bool,
+    pub table_operation: Option<String>,
     pub secret_results: Vec<bool>,
     pub protected: bool,
     pub widget_protected: bool,
@@ -300,6 +307,13 @@ impl Type {
             return result;
         }
         if let Type::Named(_, t) = to {
+            if t.key.starts_with("@selu_closed:")
+                && let (Type::Object(actual), Some(Type::Object(fields))) =
+                    (crate::shape_of(self), t.get())
+                && actual.keys().any(|key| !fields.contains_key(key))
+            {
+                return false;
+            }
             let key = (
                 crate::aliases::identity_key(self),
                 format!("target:{}", t.key),
@@ -409,6 +423,32 @@ impl Type {
                     ..
                 },
             ) => {
+                if matches!(to, Type::Function { api_semantics, .. } if api_semantics.native_callback)
+                {
+                    return self.result_convention_matches(to)
+                        && (*required <= *to_required
+                            || params
+                                .iter()
+                                .take(*required)
+                                .skip(*to_required)
+                                .all(|p| Type::Null.assignable_seen(p, seen)))
+                        && params.iter().enumerate().all(|(i, p)| {
+                            to_params
+                                .get(i)
+                                .or(to_rest.as_deref())
+                                .is_none_or(|value| value.assignable_seen(p, seen))
+                        })
+                        && rest.as_deref().is_none_or(|p| {
+                            to_params
+                                .iter()
+                                .skip(params.len())
+                                .all(|value| value.assignable_seen(p, seen))
+                                && to_rest
+                                    .as_deref()
+                                    .is_none_or(|value| value.assignable_seen(p, seen))
+                        })
+                        && (ret.assignable_seen(to_ret, seen) || **to_ret == Type::Void);
+                }
                 self.result_convention_matches(to)
                     && required <= to_required
                     && (rest.is_some() || (to_rest.is_none() && params.len() >= to_params.len()))
@@ -487,7 +527,20 @@ impl Type {
                 result.accepts_secrets = left.accepts_secrets && right.accepts_secrets;
                 result.plain_result = left.plain_result && right.plain_result;
                 result.frame_factory = left.frame_factory && right.frame_factory;
+                result.animation_factory = left.animation_factory && right.animation_factory;
+                result.date_factory = left.date_factory && right.date_factory;
                 result.pool_factory = left.pool_factory && right.pool_factory;
+                result.native_callback = left.native_callback && right.native_callback;
+                result.pure_callback = left.pure_callback && right.pure_callback;
+                if left.table_operation != right.table_operation {
+                    result.table_operation = None;
+                }
+                if left.typed_return_tail != right.typed_return_tail {
+                    result.typed_return_tail = None;
+                }
+                result
+                    .script_callbacks
+                    .retain(|name, ty| right.script_callbacks.get(name) == Some(ty));
                 let count = left.secret_results.len().max(right.secret_results.len());
                 result.secret_results = (0..count)
                     .map(|i| {

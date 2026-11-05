@@ -393,6 +393,7 @@ dependencies = [
  "selu-diagnostics",
  "selu-manifest",
  "selu-syntax",
+ "serde_json",
 ]
 
 [[package]]

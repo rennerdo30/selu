@@ -304,9 +304,23 @@ impl Ctx<'_> {
         Some(t)
     }
     pub(crate) fn function_arguments(&mut self, args: &[Expr], callee: &Type) -> Vec<Type> {
+        let first = if matches!(callee, Type::Function { api_semantics, .. } if api_semantics.table_operation.is_some())
+        {
+            args.first().map(|e| self.value(e))
+        } else {
+            None
+        };
+        let specialized = self.script_signature(args, callee);
+        let specialized = self.table_signature(&specialized, first.as_ref(), None, args.len());
+        let callee = &specialized;
         args.iter()
             .enumerate()
             .map(|(i, e)| {
+                if i == 0
+                    && let Some(first) = &first
+                {
+                    return first.clone();
+                }
                 let expected = match callee {
                     Type::Function { params, rest, .. } => params.get(i).or(rest.as_deref()),
                     _ => None,
@@ -444,6 +458,16 @@ impl Ctx<'_> {
         } else {
             false
         };
+        let typed_tail = if let ExprKind::Call { callee, .. } = &init.kind {
+            match self.types.get(callee.id) {
+                Some(Type::Function { api_semantics, .. }) => {
+                    api_semantics.typed_return_tail.as_deref().cloned()
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         let t = crate::shape_of(&t);
         match pattern {
             Pattern::Array(items) => {
@@ -451,6 +475,9 @@ impl Ctx<'_> {
                     if let Some((n, span)) = item {
                         let ty = match &t {
                             Type::Tuple(ts) => ts.get(i).cloned().unwrap_or_else(|| {
+                                if let Some(tail) = &typed_tail {
+                                    return tail.clone();
+                                }
                                 if open_tail {
                                     return Type::Untyped;
                                 }
