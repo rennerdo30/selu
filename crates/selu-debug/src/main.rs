@@ -110,6 +110,16 @@ fn main() -> ExitCode {
     }
     let mut manifest = match manifest_path {
         Some(path) => {
+            // A .selus history store is not a checked snapshot; say so plainly.
+            // (Kept here: resolution.rs is a frozen extraction input.)
+            let store = path.extension().is_some_and(|e| e == "selus")
+                || std::fs::read(&path).is_ok_and(|b| b.starts_with(b"SELUSEG"));
+            if store {
+                eprintln!(
+                    "error[SELU0202]: --manifest expects a checked SELUMAN snapshot, not a .selus history store; use --manifest-dir <manifests directory> with --target <product@build>"
+                );
+                return ExitCode::FAILURE;
+            }
             match selu_manifest::resolution::load_checked_manifest(&path, target.as_deref()) {
                 Ok(m) => Some(m),
                 Err(e) => {

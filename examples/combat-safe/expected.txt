@@ -1,2 +1,2 @@
-Travel reminder prepared for adventurer
+Travel reminder prepared for Player
 Protected panel hide requested; combat may defer it.
