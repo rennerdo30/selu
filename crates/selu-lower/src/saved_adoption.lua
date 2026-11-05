@@ -31,6 +31,11 @@ local function __selu_saved_validate(__selu_value, __selu_schema, __selu_missing
     if not __selu_valid then return false, __selu_reason end
     return __selu_saved_validated(__selu_value, __selu_schema, __selu_missing, __selu_done)
   end
+  if __selu_schema.repair then
+    local __selu_kind = __selu_saved_type(__selu_value)
+    if __selu_kind == "string" or __selu_kind == "number" or __selu_kind == "boolean" then return true end
+    return __selu_saved_validate(__selu_value, __selu_schema.repair, __selu_missing, __selu_seen, __selu_path, __selu_done)
+  end
   if __selu_missing and __selu_value == nil then return true end
   if __selu_saved_type(__selu_value) ~= "table" then return false, __selu_path .. ": expected table, got " .. __selu_saved_type(__selu_value) end
   __selu_seen[__selu_value] = true

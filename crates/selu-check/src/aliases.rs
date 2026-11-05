@@ -393,6 +393,24 @@ impl Ctx<'_> {
                 let original = self.type_of(n)?;
                 let non_null = original.non_null();
                 let shape = shape_of(&non_null);
+                if let Type::SavedRepair(table) = &shape {
+                    let narrowed = match tag.as_str() {
+                        "table" => *table.clone(),
+                        "string" => Type::String,
+                        "number" => Type::Number,
+                        "boolean" => Type::Boolean,
+                        "nil" if original.is_optional() => Type::Null,
+                        _ => return None,
+                    };
+                    let yes = vec![(n.clone(), narrowed)];
+                    // Keep the full union on the opposite branch: it must still
+                    // guard or replace the value before accessing any members.
+                    return Some(if op == "==" {
+                        (yes, vec![])
+                    } else {
+                        (vec![], yes)
+                    });
+                }
                 let category = match shape {
                     Type::Number => "number",
                     Type::String => "string",
@@ -506,7 +524,11 @@ pub(crate) fn identity_key(t: &Type) -> String {
     let parts = match t {
         Type::Named(_, s) => return s.key.clone(),
         Type::Class(n, ..) | Type::ClassObject(n) | Type::Widget(n, _) => vec![n.clone()],
-        Type::Optional(t) | Type::Secret(t) | Type::Array(t) | Type::Set(t) => {
+        Type::Optional(t)
+        | Type::SavedRepair(t)
+        | Type::Secret(t)
+        | Type::Array(t)
+        | Type::Set(t) => {
             vec![identity_key(t)]
         }
         Type::Map(k, v) | Type::WeakMap(k, v) => vec![identity_key(k), identity_key(v)],
@@ -579,7 +601,7 @@ fn validate_resolved(
             }
             validate_resolved(&t, span, seen, out);
         }
-        Type::Optional(t) | Type::Secret(t) | Type::Set(t) => {
+        Type::Optional(t) | Type::SavedRepair(t) | Type::Secret(t) | Type::Set(t) => {
             validate_resolved(&t, span, seen, out)
         }
         Type::Map(k, v) | Type::WeakMap(k, v) => {

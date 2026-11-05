@@ -7,6 +7,117 @@ use selu_manifest::Manifest;
 use selu_sim::Sim;
 use std::path::Path;
 
+pub trait BoundedCommand {
+    fn bounded_output(&mut self) -> std::io::Result<std::process::Output>;
+}
+impl BoundedCommand for std::process::Command {
+    fn bounded_output(&mut self) -> std::io::Result<std::process::Output> {
+        use std::{
+            io::{self, Read},
+            process::Stdio,
+            time::{Duration, Instant},
+        };
+        fn drain(mut pipe: impl Read) -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        }
+        let mut child = self.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        eprintln!("test CLI PID {}, timeout 60s", child.id());
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        // Both pipes must drain while the child runs, even if either stream
+        // exceeds its OS pipe capacity before the other produces any output.
+        let stdout = std::thread::spawn(move || drain(stdout));
+        let stderr = std::thread::spawn(move || drain(stderr));
+        let start = Instant::now();
+        let status = (|| {
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    return Ok(status);
+                }
+                if start.elapsed() > Duration::from_secs(60) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "test CLI exceeded 60s",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })();
+        if status.is_err() {
+            // Retain cleanup on timeout and on wait errors before joining readers.
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let stdout = stdout
+            .join()
+            .unwrap_or_else(|_| Err(io::Error::other("stdout reader panicked")));
+        let stderr = stderr
+            .join()
+            .unwrap_or_else(|_| Err(io::Error::other("stderr reader panicked")));
+        Ok(std::process::Output {
+            status: status?,
+            stdout: stdout?,
+            stderr: stderr?,
+        })
+    }
+}
+
+/// Synthetic saved input is evaluated only between chunks and ADDON_LOADED.
+/// Pre-load snapshots use a separate data-only VM, never the addon VM.
+pub struct SavedVm {
+    sim: Sim,
+    input: std::cell::RefCell<Vec<String>>,
+    loaded: std::cell::Cell<bool>,
+}
+impl SavedVm {
+    pub fn new() -> Self {
+        Self {
+            sim: Sim::new().unwrap(),
+            input: Default::default(),
+            loaded: Default::default(),
+        }
+    }
+    pub fn eval(&self, input: &str) -> selu_sim::SimResult<()> {
+        if self.loaded.get() {
+            self.sim.eval(input)
+        } else {
+            self.input.borrow_mut().push(input.into());
+            Ok(())
+        }
+    }
+    pub fn load_addon(&self, addon: &str, files: &[(String, String)]) -> selu_sim::SimResult<()> {
+        assert!(!self.loaded.replace(true), "use a fresh VM for each login");
+        self.sim.load_addon_with_restore(addon, files, |sim| {
+            for input in self.input.borrow().iter() {
+                sim.eval(input)?;
+            }
+            Ok(())
+        })
+    }
+    pub fn logout_saved(
+        &self,
+        names: &[&str],
+    ) -> selu_sim::SimResult<selu_sim::saved::SavedSnapshot> {
+        if self.loaded.get() {
+            self.sim.logout_saved(names)
+        } else {
+            let data = Sim::new()?;
+            for input in self.input.borrow().iter() {
+                data.eval(input)?;
+            }
+            data.logout_saved(names)
+        }
+    }
+}
+impl std::ops::Deref for SavedVm {
+    type Target = Sim;
+    fn deref(&self) -> &Self::Target {
+        &self.sim
+    }
+}
+
 pub fn manifest() -> Manifest {
     selu_manifest::load_manifest(
         &Path::new(env!("CARGO_MANIFEST_DIR"))

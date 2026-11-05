@@ -11,17 +11,191 @@ fn source(defaults: &str, version: u32, migrations: &str) -> String {
         on PLAYER_LOGIN() {{ print(DB.status); attach(); }}"#
     )
 }
-fn vm(input: &str) -> Sim {
-    let sim = Sim::new().unwrap();
+fn vm(input: &str) -> common::SavedVm {
+    let sim = common::SavedVm::new();
     sim.eval("__selu_saved_names.DB=true; __selu_saved_names.OldDB=true")
         .unwrap();
     sim.eval(input).unwrap();
     sim
 }
-fn load(sim: &Sim, source: &str) {
+fn load(sim: &common::SavedVm, source: &str) {
     sim.load_addon("Addon", &[("main.lua".into(), common::compile(source))])
         .unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+}
+
+#[test]
+fn client_order_future_current_and_corrupt_logout_preserve_restored_root() {
+    let migrations = (1..10)
+        .map(|v| format!("migrate DB {v} -> {} (old:{{count:number}}) {{}}", v + 1))
+        .collect::<String>();
+    let src = source("{count:0}", 10, &migrations);
+    for (input, status) in [
+        (
+            "DB={dbVersion=11,count=73,extension={['0']=false,[0]='kept'}}; root=DB",
+            "newer",
+        ),
+        (
+            "DB={dbVersion=10,count=73,extension={['0']=false,[0]='kept'}}; root=DB",
+            "ready",
+        ),
+        (
+            "DB={dbVersion=10,count='corrupt',extension={['0']=false,[0]='kept'}}; root=DB",
+            "corrupt",
+        ),
+    ] {
+        let sim = vm(input);
+        let before = sim.logout_saved(&["DB", "OldDB"]).unwrap();
+        let before_bytes = serde_json::to_vec(&before.0).unwrap();
+        load(&sim, &src);
+        sim.eval("assert(DB==root)").unwrap();
+        assert!(sim.prints().iter().any(|s| s == status));
+        assert_eq!(
+            sim.prints().iter().filter(|s| *s == "writer").count(),
+            if status == "ready" { 2 } else { 0 }
+        );
+        let after = sim.logout_saved(&["DB", "OldDB"]).unwrap();
+        assert_eq!(serde_json::to_vec(&after.0).unwrap(), before_bytes);
+    }
+}
+
+#[test]
+fn adoption_waits_for_own_event_and_publishes_the_saved_root() {
+    for input in [
+        "",
+        "DB={dbVersion=1,count=7}",
+        "OldDB={dbVersion=1,count=7}",
+    ] {
+        let sim = Sim::new().unwrap();
+        sim.eval("__selu_saved_names.DB=true; __selu_saved_names.OldDB=true")
+            .unwrap();
+        let src = "saved global DB using dbVersion legacy OldDB = {count:0}; function attach() { DB.whenReady(data => { data.count+=1; print(\"writer\"); }); } attach(); on PLAYER_LOGIN() { print(DB.status); }";
+        sim.load_addon_with_restore(
+            "Addon",
+            &[("main.lua".into(), common::compile(src))],
+            |sim| {
+                sim.eval("assert(DB==nil and OldDB==nil)")?;
+                sim.fire(
+                    "ADDON_LOADED",
+                    vec![selu_sim::SimValue::String(
+                        sim.lua().create_string("OtherAddon")?,
+                    )],
+                )?;
+                sim.eval("assert(DB==nil and OldDB==nil)")?;
+                assert!(sim.prints().is_empty());
+                sim.eval(input)?;
+                sim.eval("root=DB or OldDB or false")?;
+                sim.fire(
+                    "ADDON_LOADED",
+                    vec![selu_sim::SimValue::String(
+                        sim.lua().create_string("OtherAddon")?,
+                    )],
+                )?;
+                sim.eval("assert((DB or OldDB or false)==root)")?;
+                assert!(sim.prints().is_empty());
+                Ok(())
+            },
+        )
+        .unwrap();
+        sim.eval("assert(OldDB==nil and DB.dbVersion==1); if root then assert(DB==root and root.count==8) else assert(DB.count==1) end").unwrap();
+        sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+        sim.fire(
+            "ADDON_LOADED",
+            vec![selu_sim::SimValue::String(
+                sim.lua().create_string("Addon").unwrap(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(sim.prints(), ["writer", "ready"]);
+    }
+}
+
+#[test]
+fn saved_repair_requires_a_closed_shape_and_kind_guard() {
+    for historical in [
+        "SavedRepair<unknown>",
+        "SavedRepair<number>",
+        "SavedRepair<() => number>",
+        "SavedRepair<Map<string,unknown>>",
+    ] {
+        let src = source(
+            "{count:0}",
+            2,
+            &format!("migrate DB 1 -> 2 (old:{{value:{historical}}}) {{}}"),
+        );
+        assert!(
+            common::codes(&src).iter().any(|c| c == "SELU0901"),
+            "{historical}"
+        );
+    }
+    for statement in [
+        "print(value.count);",
+        "const narrowed:{count:number}=value;",
+    ] {
+        let src = source(
+            "{count:0}",
+            2,
+            &format!(
+                "migrate DB 1 -> 2 (old:{{value:SavedRepair<{{count:number}}>}}) {{ const value=old.value; {statement} }}"
+            ),
+        );
+        assert!(
+            !common::codes(&src).is_empty(),
+            "unguarded repair input accepted: {statement}"
+        );
+    }
+}
+
+#[test]
+fn toolkit_migration_five_repairs_only_declared_wrong_kinds() {
+    let src = r#"
+        type Character = { ownedValue?:string; restoreValue?:string };
+        type Characters = Map<string, Character>;
+        type Cooldown = { characters?:SavedRepair<Characters> };
+        type Historical = { cooldownText?:SavedRepair<Cooldown> };
+        saved global DB version 5 using dbVersion = {
+            cooldownText:{ characters:new Map<string,Character>() }
+        };
+        migrate DB 1 -> 2 (old:Historical) {}
+        migrate DB 2 -> 3 (old:Historical) {}
+        migrate DB 3 -> 4 (old:Historical) {}
+        migrate DB 4 -> 5 (old:Historical) {
+            const container = old.cooldownText;
+            if (typeof container != "table") { old.cooldownText = {}; }
+            const settings = old.cooldownText;
+            if (typeof settings == "table") {
+                const characters = settings.characters;
+                if (typeof characters != "table") {
+                    settings.characters = new Map<string,Character>();
+                }
+            }
+        }
+        on PLAYER_LOGIN() { print(DB.status); }
+    "#;
+    for value in [
+        "nil",
+        "false",
+        "42",
+        "'broken'",
+        "{}",
+        "{characters=false}",
+        "{characters=42}",
+        "{characters='broken'}",
+        "{characters={Alice={ownedValue='1',restoreValue='0'}}}",
+    ] {
+        let sim = vm(&format!(
+            "DB={{dbVersion=4,cooldownText={value},extension={{keep=false}}}}; root=DB; cooldown=DB.cooldownText; characters=type(cooldown)=='table' and cooldown.characters; extension=DB.extension"
+        ));
+        load(&sim, src);
+        sim.eval("assert(DB==root and DB.dbVersion==5 and DB.extension==extension and extension.keep==false); assert(type(DB.cooldownText)=='table' and type(DB.cooldownText.characters)=='table'); if type(cooldown)=='table' then assert(DB.cooldownText==cooldown) end; if type(characters)=='table' then assert(DB.cooldownText.characters==characters and characters.Alice.restoreValue=='0') end").unwrap();
+        assert_eq!(sim.prints(), ["ready"]);
+    }
+    // A malformed table element is outside this union; migration 5 never repairs it.
+    let sim = vm("DB={dbVersion=4,cooldownText={characters={Alice=false}}}; root=DB");
+    let before = sim.logout_saved(&["DB"]).unwrap();
+    load(&sim, src);
+    assert_eq!(sim.logout_saved(&["DB"]).unwrap(), before);
+    assert!(sim.prints().iter().any(|s| s == "corrupt"));
 }
 
 fn assert_alias_refused(defaults: &str) {
@@ -186,17 +360,15 @@ fn diagnostics_use_existing_warning_runtime_without_persistent_attachment() {
     }
 }
 
-#[test]
-fn shared_map_validation_visits_are_bounded_including_strict_pass() {
-    let mut ty = "number".to_string();
-    for _ in 0..6 {
-        ty = format!("Map<string,{ty}>");
-    }
-    let src = source(&format!("{{items:new {ty}()}}"), 1, "");
+fn shared_map_validation_visits(lua: String) -> (common::SavedVm, Vec<String>, usize) {
     let sim = vm(r#"
         node=1;
         for i=1,6 do node={a=node,b=node,c=node,d=node,e=node,f=node,g=node,h=node} end;
         DB={dbVersion=1,items=node}; root=DB; top=node;
+    "#);
+    // Install instrumentation before generated chunks capture pairs. Saved input
+    // remains staged in SavedVm until after all chunks have executed.
+    let counter = r#"
         visits=0; counting=true;
         local original=pairs;
         pairs=function(t)
@@ -210,24 +382,62 @@ fn shared_map_validation_visits_are_bounded_including_strict_pass() {
                 return next_key,value;
             end,state,key;
         end
-    "#);
-    load(&sim, &src);
+    "#;
+    sim.load_addon(
+        "Addon",
+        &[
+            ("counter.lua".into(), counter.into()),
+            ("main.lua".into(), lua),
+        ],
+    )
+    .unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     sim.eval("counting=false; print(visits)").unwrap();
     let messages = sim.prints();
     let visits = messages.last().unwrap().parse::<usize>().unwrap();
+    (sim, messages, visits)
+}
+
+#[test]
+fn shared_map_validation_visits_are_bounded_including_strict_pass() {
+    let mut ty = "number".to_string();
+    for _ in 0..6 {
+        ty = format!("Map<string,{ty}>");
+    }
+    let src = source(&format!("{{items:new {ty}()}}"), 1, "");
+    let lua = common::compile(&src);
+    let (sim, messages, visits) = shared_map_validation_visits(lua.clone());
     // 50 unique input entries: two root keys and six maps of eight edges.
     // Eight traversals cover both validation passes, clones, commit and defaults.
     let visit_bound = 8 * (2 + 6 * 8);
     println!("shared six-level graph: {visits} iterator visits; bound {visit_bound}");
     assert!(
-        visits <= visit_bound,
-        "{visits} visits exceeds {visit_bound}: {messages:?}"
+        visits > 0 && visits <= visit_bound,
+        "{visits} visits outside 1..={visit_bound}: {messages:?}"
     );
     assert_eq!(
         &messages[..messages.len() - 1],
         ["writer", "ready", "writer"]
     );
     sim.eval("assert(DB==root and DB.items==top and DB.dbVersion==1); local cursor=top; for i=1,6 do assert(cursor.a==cursor.b and cursor.a==cursor.c and cursor.a==cursor.d and cursor.a==cursor.e and cursor.a==cursor.f and cursor.a==cursor.g and cursor.a==cursor.h); cursor=cursor.a end; assert(cursor==1)").unwrap();
+
+    // The same measured workload must fail the bound if successful-validation
+    // memoisation is removed. The counter's safety cap bounds the mutation run.
+    let memo_guard = "if __selu_modes and __selu_modes[__selu_missing] then return true end";
+    assert_eq!(lua.matches(memo_guard).count(), 1);
+    let mutated = lua.replacen(memo_guard, "if false then return true end", 1);
+    let (_, messages, visits) = shared_map_validation_visits(mutated);
+    println!("memo disabled: {visits} iterator visits; bound {visit_bound}");
+    assert!(
+        visits > visit_bound,
+        "mutation did not fail the bound: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|s| s.contains("10000 visit safety cap")),
+        "mutation did not hit its safety cap: {messages:?}"
+    );
 }
 
 #[test]

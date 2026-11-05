@@ -42,6 +42,17 @@ a separately designed data transfer; builds reject such history changes.
 
 ## Loading and migrations
 
+With the default TOC load order, WoW executes all addon files, restores that
+addon's SavedVariables, then fires `ADDON_LOADED` with the addon name. See
+[Warcraft Wiki: Saved variables, The loading process](https://warcraft.wiki.gg/wiki/Saved_variables#The_loading_process)
+and [ADDON_LOADED](https://warcraft.wiki.gg/wiki/ADDON_LOADED).
+The [AddOn loading process](https://warcraft.wiki.gg/wiki/AddOn_loading_process)
+also documents the optional `LoadSavedVariablesFirst` override; Selu does not
+require that override. Generated loaders read saved globals only on their own
+addon's event and ignore events naming other addons. In mapped-version mode,
+the source result stays `loading` until then: no saved-global assignment or
+ready callback runs during chunk execution.
+
 Declarations and migrations are file-scoped; write each migration after its
 saved declaration. Keep exactly one adjacent migration for every version step
 from 1 to the current positive integer version. A migration receives an untyped
@@ -89,7 +100,11 @@ module bindings. The loader's runtime addon name is used only to filter events.
 
 `load_addon` fires ADDON_LOADED after its files. `logout_saved(names)` fires
 PLAYER_LOGOUT and captures plain Lua data into a VM-independent SavedSnapshot;
-`login_saved` restores it into a fresh VM before loading files. Cycles and
+`login_saved` executes the files in a fresh VM, restores the snapshot, then
+fires ADDON_LOADED. Synthetic graph tests use `load_addon_with_restore` at
+the same boundary; pre-seeding registered saved globals before chunk loading
+is rejected. `selu test` scenario fixtures and Session reloads follow that
+order too. Cycles and
 nonserializable values fail explicitly. For multiple characters, SavedSessions
 holds one account snapshot and a map of character snapshots. Pass a character
 identity to `Sim::login_character` and `logout_character`, plus account and
@@ -148,6 +163,37 @@ Declared fields are the only fields application code may access; extra fields
 remain opaque and survive serialization, including numeric versus string keys.
 Existing array/map elements are validated without receiving defaults. Dense
 arrays reject holes, while numeric maps preserve sparse keys.
+
+Historical container repairs are explicit: `SavedRepair<T>` is the closed union
+of a declared table shape `T`, `string`, `number`, and `boolean`. Add `?` for
+absence. `T` must itself be a finite, closed serializable record, array or map;
+functions, open types and recursive shapes are rejected. A `typeof` check on a
+local input must select the table arm before table operations are allowed.
+For example, toolkit migration 5 repairs non-table cooldown containers:
+
+```selu
+type Characters = Map<string, { ownedValue?: string; restoreValue?: string }>;
+type Cooldown = { characters?: SavedRepair<Characters> };
+// Historical reader for 4 -> 5:
+// old: { cooldownText?: SavedRepair<Cooldown> }
+const container = old.cooldownText;
+if (typeof container != "table") { old.cooldownText = {}; }
+const settings = old.cooldownText;
+if (typeof settings == "table") {
+    const characters = settings.characters;
+    if (typeof characters != "table") {
+        settings.characters = new Map<string, { ownedValue?: string; restoreValue?: string }>();
+    }
+}
+```
+
+Only declared fields admit these scalar alternatives. A table with malformed
+character records still fails validation: migration 5 repairs the containers,
+not those records. Historical input and next-version output validation remain
+mandatory, and the final current schema is strictly validated before publication.
+This is safer than validating only the final schema, which would hand unchecked
+values to typed migration parameters and permit invalid intermediate commits.
+The reader, including its repair union, is recorded in `selu.saved.toml`.
 
 The optional second migration parameter is a typed snapshot of the root at
 entry to this login's migration chain. Each step gets its own copy of this

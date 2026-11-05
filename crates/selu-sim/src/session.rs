@@ -503,8 +503,8 @@ impl Session {
         lock(&self.sim.state).commands.clone()
     }
 
-    /// Seed only declared saved globals before any addon loads. Values are data,
-    /// never executable chunks, and are restored by the ordinary loader.
+    /// Stage declared saved fixtures off-VM before any addon loads. This does
+    /// not seed globals: the ordinary loader restores them after the chunks.
     pub fn seed_saved(
         &mut self,
         dir: &Path,
@@ -992,7 +992,48 @@ impl Vm {
             .named_registry_value(&format!("selu:addon:{addon}"))
     }
     pub fn load_addon(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
+        self.load_addon_with_restore(addon, files, |_| Ok(()))
+    }
+
+    /// Execute chunks, restore synthetic SavedVariables, then fire ADDON_LOADED.
+    /// Callers must never put saved globals in the VM before loading chunks.
+    pub fn load_addon_with_restore(
+        &self,
+        addon: &str,
+        files: &[(String, String)],
+        restore: impl FnOnce(&Self) -> SimResult<()>,
+    ) -> SimResult<()> {
+        let names: Table = self.lua.globals().raw_get("__selu_saved_names")?;
+        let hydrated = match self
+            .lua
+            .named_registry_value::<Option<Table>>("selu:saved-hydrated")?
+        {
+            Some(table) => table,
+            None => {
+                let table = self.lua.create_table()?;
+                self.lua
+                    .set_named_registry_value("selu:saved-hydrated", table.clone())?;
+                table
+            }
+        };
+        for pair in names.pairs::<String, bool>() {
+            let (name, _) = pair?;
+            if !hydrated
+                .raw_get::<Option<bool>>(name.as_str())?
+                .unwrap_or(false)
+                && !self.lua.globals().raw_get::<Value>(name.as_str())?.is_nil()
+            {
+                return Err(runtime(format!(
+                    "saved global `{name}` was seeded before addon chunks; restore it with load_addon_with_restore"
+                )));
+            }
+        }
         self.load_chunks(addon, files)?;
+        restore(self)?;
+        for pair in names.pairs::<String, bool>() {
+            let (name, _) = pair?;
+            hydrated.raw_set(name, true)?;
+        }
         self.fire(
             "ADDON_LOADED",
             vec![

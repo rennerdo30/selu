@@ -105,6 +105,9 @@ pub enum Type {
     Null,
     /// `T?`: a `T` or `null`.
     Optional(Box<Type>),
+    /// Closed historical repair input: T | string | number | boolean.
+    /// T must be a closed table shape; table members require a typeof guard.
+    SavedRepair(Box<Type>),
     Secret(Box<Type>),
     /// `T[]`: a 0-based array without holes, a Lua sequence.
     Array(Box<Type>),
@@ -289,6 +292,10 @@ impl Type {
             (Type::Null, Type::Optional(_)) => true,
             (Type::Optional(a), Type::Optional(b)) => a.assignable_seen(b, seen),
             (t, Type::Optional(inner)) => t.assignable_seen(inner, seen),
+            (Type::SavedRepair(a), Type::SavedRepair(b)) => a.assignable_seen(b, seen),
+            (Type::SavedRepair(_), _) => false,
+            (Type::Number | Type::String | Type::Boolean, Type::SavedRepair(_)) => true,
+            (source, Type::SavedRepair(table)) => source.assignable_seen(table, seen),
             // Arrays and tables are mutable, so their element types must
             // match exactly (`number[]` is not a `number?[]`).
             (Type::Array(a), Type::Array(b)) | (Type::Set(a), Type::Set(b)) => {
@@ -448,6 +455,7 @@ impl fmt::Display for Type {
             Type::Boolean => write!(f, "boolean"),
             Type::Null => write!(f, "null"),
             Type::Optional(t) => write!(f, "{t}?"),
+            Type::SavedRepair(t) => write!(f, "SavedRepair<{t}>"),
             Type::Secret(t) => write!(f, "Secret<{t}>"),
             Type::Array(t) => write!(f, "{t}[]"),
             Type::Tuple(ts) => {
@@ -585,7 +593,7 @@ pub fn is_void(t: &TypeExpr) -> bool {
 fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>) -> Type {
     let want = match name {
         "Error" | "unknown" | "number" | "string" | "boolean" | "null" => 0,
-        "Set" | "Secret" => 1,
+        "Set" | "Secret" | "SavedRepair" => 1,
         "Map" | "WeakMap" => 2,
         _ => {
             out.push(
@@ -619,6 +627,26 @@ fn named(name: &str, mut args: Vec<Type>, span: &Span, out: &mut Vec<Diagnostic>
         "boolean" => Type::Boolean,
         "null" => Type::Null,
         "Secret" => Type::secret(*next()),
+        "SavedRepair" => {
+            let table = next();
+            if !crate::saved::closed_schema(&table, 0)
+                || !matches!(
+                    crate::shape_of(&table),
+                    Type::Object(_) | Type::Array(_) | Type::Map(..)
+                )
+            {
+                out.push(
+                    Diagnostic::error(
+                        "SELU0901",
+                        "SavedRepair requires a closed serializable table shape",
+                    )
+                    .with_span(span.clone()),
+                );
+                Type::Error
+            } else {
+                Type::SavedRepair(table)
+            }
+        }
         "Set" => Type::Set(next()),
         "Map" => Type::Map(next(), next()),
         _ => Type::WeakMap(next(), next()),

@@ -1,3 +1,4 @@
+use common::BoundedCommand;
 use selu_sim::Sim;
 
 #[test]
@@ -15,7 +16,7 @@ fn saved_sessions_restore_false_nested_values_and_fire_loaded() {
     "#
         .into(),
     )];
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.load_addon("Saved", &files).unwrap();
     assert_eq!(sim.prints(), vec!["loaded"]);
     sim.eval("SavedDB = { enabled = false, nested = { count = 7 }, [1] = 'first' }")
@@ -53,7 +54,7 @@ fn build(dir: &Path) -> std::process::Output {
         .arg(dir)
         .arg("--manifest-dir")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"))
-        .output()
+        .bounded_output()
         .unwrap()
 }
 fn files(dir: &Path) -> Vec<(String, String)> {
@@ -76,7 +77,7 @@ fn defaults_sessions_migrations_and_live_imports() {
     );
     std::fs::write(dir.join("src/state.selu"),"export saved settings = { enabled: true, nested: { count: 3 } }; on PLAYER_LOGIN() { settings.enabled = false; settings.nested.count = 7; }").unwrap();
     success(&dir);
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.load_addon("Saved", &files(&dir)).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), vec!["false", "7"]);
@@ -151,7 +152,7 @@ fn failed_migration_rolls_back_and_retries_and_newer_data_is_untouched() {
     );
     success(&dir);
     let key = selu_lower::saved::global_name("Saved", "main", "s");
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval(&format!("{key} = {{ x = 7, __selu_version = 1 }}"))
         .unwrap();
     sim.load_addon("Saved", &files(&dir)).unwrap();
@@ -179,7 +180,7 @@ fn failed_migration_rolls_back_and_retries_and_newer_data_is_untouched() {
         1,
         "failed step must be attempted again at the second login"
     );
-    let newer = Sim::new().unwrap();
+    let newer = common::SavedVm::new();
     newer
         .eval(&format!("{key} = {{ x = false, __selu_version = 9 }}"))
         .unwrap();
@@ -199,7 +200,7 @@ fn runtime_globals_are_captured_and_forward_reads_capture_the_saved_local() {
         "const type = 1; const pairs = 1; const ipairs = 1; const rawget = 1; const pcall = 1; const error = 1; const string = 1; const CreateFrame = 1; function read(): number { return s.x; } saved s = { x: 7 }; on PLAYER_LOGIN() { print(read()); }",
     );
     success(&dir);
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.load_addon("Saved", &files(&dir)).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), vec!["7"]);
@@ -211,7 +212,7 @@ fn per_character_defaults_arrays_maps_and_addon_names_are_isolated() {
     );
     success(&dir);
     let key = selu_lower::saved::global_name("Saved", "main", "s");
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval(&format!(
         "{key} = {{ enabled = false, inner = {{ x = 9 }} }}"
     ))
@@ -256,7 +257,7 @@ fn review_generated_names_and_runtime_size() {
             );
             let dir = project(&src);
             success(&dir);
-            let sim = Sim::new().unwrap();
+            let sim = common::SavedVm::new();
             let key = selu_lower::saved::global_name("Saved", "main", saved);
             if !initial.is_empty() {
                 sim.eval(&format!("{key} = {initial}")).unwrap();
@@ -274,7 +275,7 @@ fn review_generated_names_and_runtime_size() {
     success(&dir);
     let fs = files(&dir);
     assert_eq!(fs[0].1.matches(" = ...").count(), 1);
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.load_addon("Saved", &fs).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), vec!["44"]);
@@ -284,7 +285,7 @@ fn review_adoption_and_readable_names() {
     let dir =
         project("saved global MyAddonDB = { x: 1 }; on PLAYER_LOGIN() { print(MyAddonDB.x); }");
     success(&dir);
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval("MyAddonDB = { x = 99 }").unwrap();
     sim.load_addon("Saved", &files(&dir)).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
@@ -302,7 +303,7 @@ fn review_adoption_and_readable_names() {
             .unwrap()
             .contains("## SavedVariables: Saved_settings\n")
     );
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.load_addon("Saved", &files(&default)).unwrap();
     assert_ne!(
         sim.logout_saved(&["Saved_settings"]).unwrap().0["Saved_settings"],
@@ -346,14 +347,14 @@ fn review_invalid_metadata_isolation_and_retry_warning() {
         "42",
         "false",
     ] {
-        let sim = Sim::new().unwrap();
+        let sim = common::SavedVm::new();
         sim.eval(&format!("{key} = {initial}")).unwrap();
         sim.load_addon("Saved", &fs).unwrap();
         sim.fire("PLAYER_LOGIN", vec![]).unwrap();
         assert_eq!(sim.prints(), vec!["7"], "{initial}");
         sim.eval(&format!("local before = {initial}; local after = {key}; if type(before) == 'table' then assert(after.x == 99); if before.__selu_version ~= before.__selu_version then assert(after.__selu_version ~= after.__selu_version) else assert(after.__selu_version == before.__selu_version) end else assert(after == before) end")).unwrap();
     }
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval(&format!("{key} = {{ x = 99 }}")).unwrap();
     let mut observed = fs.clone();
     observed.push(("inspect.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent', function() for _,v in ipairs(ns.__selu_wow.buffer) do if v.level == 'warn' then print(v.level) end end end)".into()));
@@ -421,7 +422,7 @@ fn review_newer_warnings_adopted_character_and_moving_modules() {
     assert!(toc.contains("## SavedVariablesPerCharacter: LegacyCharacter\n"));
     let mut fs = files(&dir);
     fs.push(("verify.lua".into(),"local _, ns = ...; local f=CreateFrame('Frame'); f:RegisterEvent('PLAYER_LOGIN'); f:SetScript('OnEvent',function() assert(#ns.__selu_wow.buffer == 2); assert(ns.__selu_wow.buffer[2].level == 'warn'); assert(ns.__selu_wow.buffer[2].message == 'Saved_s: saved data is newer than this addon'); assert(ns.__selu_saved == nil); print(LegacyCharacter.x) end)".into()));
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval("Saved_s = { x = 99, __selu_version = 3 }; LegacyCharacter = { x = 99 }")
         .unwrap();
     sim.load_addon("Saved", &fs).unwrap();
@@ -430,7 +431,7 @@ fn review_newer_warnings_adopted_character_and_moving_modules() {
     let dir = project("import { s } from \"./first\"; on PLAYER_LOGIN() { print(s.x); }");
     std::fs::write(dir.join("src/first.selu"), "export saved s = { x: 7 };").unwrap();
     success(&dir);
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.load_addon("Saved", &files(&dir)).unwrap();
     sim.eval("Saved_s.x = 99").unwrap();
     let before = sim.logout_saved(&["Saved_s"]).unwrap();
@@ -477,7 +478,7 @@ fn classes_saved_instance_fields_methods_and_preludes() {
     let source = "saved settings = { value: 7 }; class Reader { value = settings.value; read(): number { return settings.value; } } on PLAYER_LOGIN() { const reader = new Reader(); print(reader.value); print(reader.read()); }";
     let lua = common::compile(source);
     assert!(lua.contains("local __selu_setmetatable = setmetatable\nlocal __selu_saved__G = _G"));
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval("Addon_settings = { value = 42 }").unwrap();
     sim.load_addon("Standalone", &[("main.lua".into(), lua)])
         .unwrap();
@@ -493,7 +494,7 @@ fn classes_saved_instance_fields_methods_and_preludes() {
     .unwrap();
     std::fs::write(dir.join("src/model.selu"),"import { settings } from \"./state\"; export class Reader { value = settings.value; read(): number { return settings.value; } }").unwrap();
     success(&dir);
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval("Saved_settings = { value = 42 }").unwrap();
     sim.load_addon("Saved", &files(&dir)).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
@@ -560,7 +561,7 @@ fn classes_saved_writes_reject_instances_and_accept_plain_copies() {
     let src = "class Point { x = 1; } saved s = { point: { x: 0 }, items: [{ x: 0 }], points: new Map<string, { x: number }>() }; on PLAYER_LOGIN() { const p = new Point(); s.point = { x: p.x }; s.items.push({ x: p.x }); s.points.set(\"key\", { x: p.x }); print(s.point.x); print(s.items.length); print(s.points.count()); }";
     let dir = project(src);
     success(&dir);
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.load_addon("Saved", &files(&dir)).unwrap();
     sim.fire("PLAYER_LOGIN", vec![]).unwrap();
     assert_eq!(sim.prints(), vec!["1", "2", "1"]);
@@ -623,7 +624,7 @@ fn adoption_mapped_version_refuses_future_and_preserves_identity() {
             "collision",
         ),
     ] {
-        let sim = Sim::new().unwrap();
+        let sim = common::SavedVm::new();
         sim.eval(
             "__selu_saved_names.RennerToolkitDB = true; __selu_saved_names.RennersAddonsDB = true",
         )
@@ -649,7 +650,7 @@ fn adoption_ten_versions_context_retry_and_roundtrip() {
     success(&dir);
     let built = files(&dir);
     for version in 1..=11 {
-        let sim = Sim::new().unwrap();
+        let sim = common::SavedVm::new();
         sim.eval(
             "__selu_saved_names.RennerToolkitDB = true; __selu_saved_names.RennersAddonsDB = true",
         )
@@ -671,7 +672,7 @@ fn adoption_ten_versions_context_retry_and_roundtrip() {
         .iter()
         .map(|(n, s)| (n.clone(), s.replace("__selu_t2 + 1", "__selu_t2 + 2")))
         .collect::<Vec<_>>();
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval("__selu_saved_names.RennersAddonsDB=true; RennerToolkitDB={dbVersion=1,count=20,enabled=false}").unwrap();
     sim.load_addon("Saved", &mutation).unwrap();
     assert!(sim.eval("assert(RennerToolkitDB.count == 29)").is_err());
@@ -696,7 +697,7 @@ fn adoption_nested_validation_and_failed_step_recovery() {
         "DB={dbVersion=0}",
         "DB={dbVersion=3,count=0,enabled=false,history={x='bad'}}",
     ] {
-        let sim = Sim::new().unwrap();
+        let sim = common::SavedVm::new();
         sim.eval("__selu_saved_names.DB=true; __selu_saved_names.OldDB=true")
             .unwrap();
         sim.eval(input).unwrap();
@@ -706,7 +707,7 @@ fn adoption_nested_validation_and_failed_step_recovery() {
         assert_adoption_status(&sim, "corrupt");
         assert_eq!(sim.logout_saved(&["DB", "OldDB"]).unwrap(), before);
     }
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval("__selu_saved_names.DB=true; OldDB={dbVersion=1,count=4,enabled=false,history={}}; root=OldDB; nested=root.history").unwrap();
     let failing = built
         .iter()
@@ -764,7 +765,7 @@ fn adoption_defaults_callbacks_arrays_and_aliases() {
         ),
         ("DB={dbVersion=2,count=0}", "newer", 0),
     ] {
-        let sim = Sim::new().unwrap();
+        let sim = common::SavedVm::new();
         sim.eval("__selu_saved_names.DB=true; __selu_saved_names.OldDB=true")
             .unwrap();
         sim.eval(input).unwrap();
@@ -790,7 +791,7 @@ fn adoption_defaults_callbacks_arrays_and_aliases() {
             )
         })
         .collect::<Vec<_>>();
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval("__selu_saved_names.OldDB=true; DB={dbVersion=2,count=0}")
         .unwrap();
     assert!(sim.load_addon("Saved", &mutation).is_err());
@@ -839,7 +840,7 @@ fn adoption_default_pollution_repair_uses_original_snapshot() {
     success(&dir);
     let built = files(&dir);
     for version in 1..4 {
-        let sim = Sim::new().unwrap();
+        let sim = common::SavedVm::new();
         sim.eval(&format!("DB={{dbVersion={version},debuffFlash={{threshold=9,enabled=false}},auraFlash={{threshold=5,enabled=true}}, extension={{[0]='zero',[9]='sparse'}}}}; root=DB; aura=DB.auraFlash; extension=DB.extension")).unwrap();
         sim.load_addon("Saved", &built).unwrap();
         sim.eval("assert(DB==root and DB.dbVersion==4 and DB.auraFlash==aura and DB.auraFlash.threshold==9 and DB.auraFlash.enabled==false and DB.debuffFlash==nil and DB.extension==extension and extension[0]=='zero' and extension[9]=='sparse')").unwrap();
@@ -870,7 +871,7 @@ fn adoption_failure_at_each_step_keeps_last_success() {
                 )
             })
             .collect::<Vec<_>>();
-        let sim = Sim::new().unwrap();
+        let sim = common::SavedVm::new();
         sim.eval("__selu_saved_names.DB=true; OldDB={dbVersion=1,count=0}; root=OldDB")
             .unwrap();
         sim.load_addon("Saved", &mutation).unwrap();
@@ -940,7 +941,7 @@ fn adoption_persisted_context_v4_retry_and_lua_master_rollback() {
             )
         })
         .collect::<Vec<_>>();
-    let seed = Sim::new().unwrap();
+    let seed = common::SavedVm::new();
     seed.eval("__selu_saved_names.RennerToolkitDB=true; __selu_saved_names.RennersAddonsDB=true")
         .unwrap();
     seed.eval(include_str!("fixtures/toolkit_saved_oracle.lua"))
@@ -950,7 +951,7 @@ fn adoption_persisted_context_v4_retry_and_lua_master_rollback() {
         .logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
         .unwrap();
     let mut mutation = mutation;
-    mutation.insert(0, ("capture.lua".into(), "root=RennerToolkitDB".into()));
+    mutation.insert(0, ("capture.lua".into(), "local addon=...; local f=CreateFrame('Frame'); f:RegisterEvent('ADDON_LOADED'); f:SetScript('OnEvent',function(_,_,name) if name==addon then root=RennerToolkitDB end end)".into()));
     let sim = Sim::login_saved("Saved", &mutation, &input).unwrap();
     sim.eval("assert(RennerToolkitDB==root and root.dbVersion==3 and root.debuffFlash.threshold==9 and root.__selu_saved_adoption_context.original.debuffFlash.threshold==9)").unwrap();
     let snapshot = sim
@@ -990,6 +991,71 @@ fn adoption_persisted_context_v4_retry_and_lua_master_rollback() {
 }
 
 #[test]
+fn adoption_current_toolkit_v10_is_unchanged_after_logout() {
+    // A synthetic save produced by the pinned real toolkit loader/defaults.
+    let seed = Sim::new().unwrap();
+    seed.eval("__selu_saved_names.RennerToolkitDB=true; __selu_saved_names.RennersAddonsDB=true")
+        .unwrap();
+    seed.eval(include_str!("fixtures/toolkit_saved_oracle.lua"))
+        .unwrap();
+    seed.eval("__selu_test_lua_master_load(); RennerToolkitDB.auraFlash.threshold=9; RennerToolkitDB.auraFlash.enabled=false; RennerToolkitDB.cooldownText.characters.Alice={ownedValue='1',restoreValue='0'}").unwrap();
+    let before = seed
+        .logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
+        .unwrap();
+    let mut source = String::from(
+        "saved global RennerToolkitDB version 10 using dbVersion legacy RennersAddonsDB = {auraFlash:{threshold:3,enabled:true},cooldownText:{enabled:true,characters:new Map<string,{ownedValue?:string;restoreValue?:string}>()}};",
+    );
+    for v in 1..10 {
+        source.push_str(&format!(
+            "migrate RennerToolkitDB {v} -> {} (old:{{}}) {{}}",
+            v + 1
+        ));
+    }
+    source.push_str("on PLAYER_LOGIN() { print(RennerToolkitDB.status); }");
+    let dir = project(&source);
+    success(&dir);
+    let sim = common::SavedVm::new();
+    sim.eval("__selu_saved_names.RennerToolkitDB=true; __selu_saved_names.RennersAddonsDB=true")
+        .unwrap();
+    sim.eval(include_str!("fixtures/toolkit_saved_oracle.lua"))
+        .unwrap();
+    sim.eval("__selu_test_lua_master_load(); RennerToolkitDB.auraFlash.threshold=9; RennerToolkitDB.auraFlash.enabled=false; RennerToolkitDB.cooldownText.characters.Alice={ownedValue='1',restoreValue='0'}; root=RennerToolkitDB; aura=root.auraFlash; cooldown=root.cooldownText; characters=cooldown.characters").unwrap();
+    sim.load_addon("Saved", &files(&dir)).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    sim.eval("assert(RennerToolkitDB==root and root.auraFlash==aura and root.cooldownText==cooldown and cooldown.characters==characters and characters.Alice.restoreValue=='0')").unwrap();
+    assert_eq!(sim.prints(), ["ready"]);
+    assert_eq!(
+        serde_json::to_vec(
+            &sim.logout_saved(&["RennerToolkitDB", "RennersAddonsDB"])
+                .unwrap()
+                .0
+        )
+        .unwrap(),
+        serde_json::to_vec(&before.0).unwrap()
+    );
+}
+
+#[test]
+fn adoption_repair_union_history_expands_named_table_shapes() {
+    let source = "type Entry={ownedValue?:string}; type Characters=Map<string,Entry>; saved global DB version 2 using dbVersion={count:0}; migrate DB 1 -> 2 (old:{characters?:SavedRepair<Characters>}) {}";
+    let dir = project(source);
+    success(&dir);
+    let before = std::fs::read(dir.join("selu.saved.toml")).unwrap();
+    std::fs::write(
+        dir.join("src/main.selu"),
+        source.replace("ownedValue?:string", "ownedValue?:number"),
+    )
+    .unwrap();
+    let out = build(&dir);
+    assert!(
+        !out.status.success(),
+        "historical repair arm changed without rejection"
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SELU0902"));
+    assert_eq!(std::fs::read(dir.join("selu.saved.toml")).unwrap(), before);
+}
+
+#[test]
 fn adoption_deferred_inputs_are_general_nested_and_transactional() {
     let source = r#"
         type Historical={ input:{ inner?:{choice:number} }; result:number; flag?:boolean };
@@ -1016,7 +1082,7 @@ fn adoption_deferred_inputs_are_general_nested_and_transactional() {
             )
         })
         .collect::<Vec<_>>();
-    let sim = Sim::new().unwrap();
+    let sim = common::SavedVm::new();
     sim.eval("DB={dbVersion=1,input={inner={choice=7}},result=1,flag=false}; root=DB; input=root.input; inner=input.inner").unwrap();
     sim.load_addon("Saved", &failing).unwrap();
     sim.eval("assert(DB==root and DB.dbVersion==2 and DB.input==input and input.inner==inner and inner.choice==7 and DB.result==1 and DB.flag==false)").unwrap();
@@ -1044,7 +1110,7 @@ fn adoption_deferred_inputs_are_general_nested_and_transactional() {
         "{format=1,original={},removals=false}",
         "{format=1,original={dbVersion=false},removals={}}",
     ] {
-        let sim = Sim::new().unwrap();
+        let sim = common::SavedVm::new();
         sim.eval(&format!(
             "DB={{dbVersion=3,input={{}},result=1,__selu_saved_adoption_context={bad}}}"
         ))
