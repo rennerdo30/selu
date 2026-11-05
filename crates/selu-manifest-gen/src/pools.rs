@@ -6,54 +6,36 @@ use sha2::{Digest, Sha256};
 
 pub fn extend(m: &mut Manifest, sources: &[(String, String)]) -> crate::Result<()> {
     let Some((path, text)) = sources.iter().find(|(p, _)| p.ends_with("/Pools.lua")) else {
+        reviewed_file(m, sources, "Pools.lua", &[])?;
         return Ok(());
     };
-    // Unknown source revisions cannot inherit a reviewed positive contract.
-    let digest = Sha256::digest(text.replace("\r\n", "\n").as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    if ![
-        "5bfed7b01b3ce92b20cab4ebb17aba18a3c9a1974edc8fa49ca4dd91ca119636",
-        "5f3f69be957f18677cf3c9e1ca9d9781d21103597b514cd93fab8fb084f1d888",
-    ]
-    .contains(&digest.as_str())
-    {
-        return Err(
-            "pool source changed: review sourced overlay before extracting this pin".into(),
-        );
-    }
-    let helper = sources
-        .iter()
-        .find(|(p, _)| p.ends_with("/SecureTypes.lua"))
-        .ok_or("missing reviewed pool helper")?;
-    let hash = Sha256::digest(helper.1.replace("\r\n", "\n").as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    if ![
-        "d1f3ba51e0c888dbf366a438fb28348e54db891d8b75734d97c71950be8a2ad6",
-        "e6bf67be9c027a4f74412a1ec90e071c95b2526a7c5bbece5bcb7c133351c291",
-    ]
-    .contains(&hash.as_str())
-    {
-        return Err("pool helper changed: review sourced overlay before extraction".into());
-    }
-    let helper = sources
-        .iter()
-        .find(|(p, _)| p.ends_with("/ProxyUtil.lua"))
-        .ok_or("missing reviewed pool helper")?;
-    let hash = Sha256::digest(helper.1.replace("\r\n", "\n").as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    if ![
-        "14ffb5161841240b9bce0cb934b1e53c8c174c1c9d0c631a79d72993c5205fb7",
-        "2acfbfa324592457b7118bb2c782667d2faa7ef963051e08a6f3da79b60de76d",
-    ]
-    .contains(&hash.as_str())
-    {
-        return Err("pool helper changed: review sourced overlay before extraction".into());
+    // An unreviewed release keeps W2's conservative analysis and all other APIs.
+    for (file, digests) in [
+        (
+            "Pools.lua",
+            &[
+                "5bfed7b01b3ce92b20cab4ebb17aba18a3c9a1974edc8fa49ca4dd91ca119636",
+                "5f3f69be957f18677cf3c9e1ca9d9781d21103597b514cd93fab8fb084f1d888",
+            ][..],
+        ),
+        (
+            "SecureTypes.lua",
+            &[
+                "d1f3ba51e0c888dbf366a438fb28348e54db891d8b75734d97c71950be8a2ad6",
+                "e6bf67be9c027a4f74412a1ec90e071c95b2526a7c5bbece5bcb7c133351c291",
+            ][..],
+        ),
+        (
+            "ProxyUtil.lua",
+            &[
+                "14ffb5161841240b9bce0cb934b1e53c8c174c1c9d0c631a79d72993c5205fb7",
+                "2acfbfa324592457b7118bb2c782667d2faa7ef963051e08a6f3da79b60de76d",
+            ][..],
+        ),
+    ] {
+        if !reviewed_file(m, sources, file, digests)? {
+            return Ok(());
+        }
     }
     let commit = m.source.as_ref().map(|s| s.commit.as_str()).unwrap_or("");
     let sites = text
@@ -424,4 +406,143 @@ fn is_frame(m: &Manifest, name: &str, seen: &mut std::collections::BTreeSet<Stri
                 .and_then(|v| v.as_str())
                 .is_some_and(|base| is_frame(m, base, seen))
     })
+}
+
+/// The updater uses the same rendering for newly extracted and retained builds.
+pub fn warning_summary(m: &Manifest) -> String {
+    m.source
+        .as_ref()
+        .map(|s| {
+            s.warnings
+                .iter()
+                .map(|w| format!("WARNING: {w}\n"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn public_pool_factory(name: &str) -> bool {
+    let Some(kind) = name.strip_prefix("Create") else {
+        return false;
+    };
+    let kind = kind
+        .strip_prefix("Unsecured")
+        .or_else(|| kind.strip_prefix("Secure"))
+        .unwrap_or(kind);
+    [
+        "Frame",
+        "Texture",
+        "FontString",
+        "MaskTexture",
+        "Object",
+        "Actor",
+    ]
+    .iter()
+    .any(|base| kind == format!("{base}Pool") || kind == format!("{base}PoolCollection"))
+}
+
+fn reviewed_file(
+    m: &mut Manifest,
+    sources: &[(String, String)],
+    file: &str,
+    reviewed: &[&str],
+) -> crate::Result<bool> {
+    let text = sources
+        .iter()
+        .find(|(path, _)| path.ends_with(&format!("/{file}")))
+        .map(|(_, text)| text);
+    let digest = text.map(|text| {
+        Sha256::digest(text.replace("\r\n", "\n").as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    });
+    if digest
+        .as_ref()
+        .is_some_and(|hash| reviewed.contains(&hash.as_str()))
+    {
+        return Ok(true);
+    }
+    let reason = if text.is_some() {
+        "changed since the reviewed versions"
+    } else {
+        "is missing from this release"
+    };
+    let warning = format!(
+        "pool contracts withheld for {}: {file} {reason}; review and add its digest",
+        m.target_string()
+    );
+    // Fresh extraction has no W3 declarations yet. Also remove a previously
+    // applied overlay if a caller is reusing a manifest; never retain stale proof.
+    let constructors: std::collections::BTreeSet<_> = m
+        .functions
+        .iter()
+        .filter(|f| {
+            public_pool_factory(&f.name)
+                || (f.name.starts_with("Create")
+                    && f.name.contains("Pool")
+                    && f.provenance
+                        .as_ref()
+                        .is_some_and(|s| s.file.ends_with("/Pools.lua")))
+        })
+        .map(|f| f.name.clone())
+        .collect();
+    let pool_types: std::collections::BTreeSet<_> = m
+        .widgets
+        .iter()
+        .filter(|w| {
+            w.attributes.contains_key("SeluPoolEvidence")
+                || w.name
+                    .strip_prefix("SourceObject_")
+                    .is_some_and(|name| constructors.contains(name))
+        })
+        .map(|w| w.name.clone())
+        .collect();
+    for f in &mut m.functions {
+        if constructors.contains(&f.name)
+            || f.signature.as_ref().is_some_and(|d| {
+                d.returns
+                    .iter()
+                    .any(|r| r.ty.as_ref().is_some_and(|ty| pool_types.contains(ty)))
+            })
+        {
+            f.signature = None;
+        }
+    }
+    m.widgets.retain(|w| !pool_types.contains(&w.name));
+    let source = m
+        .source
+        .as_mut()
+        .ok_or("pool withholding requires build provenance")?;
+    if !source.warnings.contains(&warning) {
+        source.warnings.push(warning);
+    }
+    Ok(false)
+}
+
+#[cfg(test)]
+mod withholding_tests {
+    use super::*;
+    #[test]
+    fn changed_and_missing_helpers_withhold_without_errors() {
+        for file in ["SecureTypes.lua", "ProxyUtil.lua"] {
+            let mut m:Manifest=serde_json::from_value(json!({"flavour":"wow","build":{"major":12,"minor":1,"patch":5,"build":1},"interface":120105,"functions":[{"name":"CreateFramePool","evidence":"source","source":{"file":"Other/ObjectPool.lua","kind":"defined"},"signature":{"name":"CreateFramePool","type":"Function","returns":[{"name":"pool","type":"SourceObject_CreateFramePool"}]}}],"widgets":[{"name":"SourceObject_CreateFramePool","type":"ScriptObject","methods":[{"name":"Acquire","type":"Function"}]}],"source":{"commit":"fixture","version":"12.1.5","interfaceSource":"fixture"}})).unwrap();
+            let sources = vec![(
+                format!("Interface/AddOns/Blizzard_SharedXMLBase/{file}"),
+                "changed helper".into(),
+            )];
+            assert!(!reviewed_file(&mut m, &sources, file, &[]).unwrap());
+            assert!(m.function("CreateFramePool").unwrap().signature.is_none());
+            assert!(
+                !m.widgets
+                    .iter()
+                    .any(|w| w.name == "SourceObject_CreateFramePool")
+            );
+            assert!(warning_summary(&m).contains(&format!(
+                "WARNING: pool contracts withheld for wow@12.1.5.1: {file} changed"
+            )));
+            assert!(!reviewed_file(&mut m, &[], file, &[]).unwrap());
+            assert!(warning_summary(&m).contains("is missing from this release"));
+        }
+    }
 }

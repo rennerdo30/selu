@@ -429,6 +429,13 @@ fn update(args: &[String]) -> Result<()> {
         }
     }
     println!("{} builds: appended {growth} bytes", pending.len());
+    // Keep limitations visible even on an idempotent update with no pending builds.
+    for target in store.builds() {
+        print!(
+            "{}",
+            selu_manifest_gen::pools::warning_summary(&store.load(target)?)
+        );
+    }
     for &(branch, product) in CLIENTS {
         if !refs
             .lines()

@@ -290,6 +290,20 @@ fn sourced_pool_coverage_at_every_retained_build() {
     let store = selu_manifest::store::Store::open(&directory).unwrap();
     for target in store.builds() {
         let m = load_build(&directory, target).unwrap();
+        if m.source.as_ref().is_some_and(|source| {
+            source
+                .warnings
+                .iter()
+                .any(|w| w.starts_with(&format!("pool contracts withheld for {target}:")))
+        }) {
+            assert!(
+                !m.widgets
+                    .iter()
+                    .any(|w| w.attributes.contains_key("SeluPoolEvidence")),
+                "{target}: stale pool overlay"
+            );
+            continue;
+        }
         for prefix in ["Create", "CreateSecure", "CreateUnsecured"] {
             for kind in [
                 "Frame",
