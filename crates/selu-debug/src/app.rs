@@ -2192,22 +2192,64 @@ impl Studio {
                         })
                     });
                     if let Ok(texture) = cached {
-                        let uv = r.visual.uv;
+                        let mut uv = r.visual.uv;
+                        let dimensions = texture.size();
+                        for axis in 0..2 {
+                            if r.visual.tile[axis] {
+                                uv[axis * 2 + 1] = uv[axis * 2]
+                                    + if axis == 0 {
+                                        r.rect.map(|q| q.width as f32).unwrap_or(rect.width())
+                                    } else {
+                                        r.rect.map(|q| q.height as f32).unwrap_or(rect.height())
+                                    } / dimensions[axis].max(1) as f32;
+                            }
+                        }
                         let c = r.visual.tint;
-                        painter.image(
-                            texture.id(),
-                            rect,
-                            ERect::from_min_max(Pos2::new(uv[0], uv[2]), Pos2::new(uv[1], uv[3])),
-                            fade(
-                                r,
-                                Color32::from_rgba_unmultiplied(
-                                    (c[0] * 255.0) as u8,
-                                    (c[1] * 255.0) as u8,
-                                    (c[2] * 255.0) as u8,
-                                    (c[3] * 255.0) as u8,
-                                ),
-                            ),
+                        let xs = texture_axis(
+                            uv[0],
+                            uv[1],
+                            if r.visual.tile[0] && r.visual.wrap_modes[0] == "CLAMP" {
+                                "REPEAT"
+                            } else {
+                                &r.visual.wrap_modes[0]
+                            },
                         );
+                        let ys = texture_axis(
+                            uv[2],
+                            uv[3],
+                            if r.visual.tile[1] && r.visual.wrap_modes[1] == "CLAMP" {
+                                "REPEAT"
+                            } else {
+                                &r.visual.wrap_modes[1]
+                            },
+                        );
+                        for &(x0, x1, u0, u1) in &xs {
+                            for &(y0, y1, v0, v1) in &ys {
+                                painter.image(
+                                    texture.id(),
+                                    ERect::from_min_max(
+                                        Pos2::new(
+                                            rect.left() + x0 * rect.width(),
+                                            rect.top() + y0 * rect.height(),
+                                        ),
+                                        Pos2::new(
+                                            rect.left() + x1 * rect.width(),
+                                            rect.top() + y1 * rect.height(),
+                                        ),
+                                    ),
+                                    ERect::from_min_max(Pos2::new(u0, v0), Pos2::new(u1, v1)),
+                                    fade(
+                                        r,
+                                        Color32::from_rgba_unmultiplied(
+                                            (c[0] * 255.0) as u8,
+                                            (c[1] * 255.0) as u8,
+                                            (c[2] * 255.0) as u8,
+                                            (c[3] * 255.0) as u8,
+                                        ),
+                                    ),
+                                );
+                            }
+                        }
                         continue;
                     }
                     painter.rect_filled(rect, 0.0, fade(r, Color32::from_rgb(60, 70, 95)));
@@ -2898,5 +2940,67 @@ mod tests {
             created_at: None,
         };
         assert_eq!(region_label(&r), "FontString #3 \"Hello\"");
+    }
+}
+
+/// Split at sampler boundaries so each axis can clamp, repeat or mirror independently.
+fn texture_axis(start: f32, end: f32, mode: &str) -> Vec<(f32, f32, f32, f32)> {
+    if !start.is_finite() || !end.is_finite() {
+        return vec![];
+    }
+    let mut cuts = vec![0.0, 1.0];
+    if start != end {
+        let low = start.min(end);
+        let high = start.max(end);
+        // Bound geometry for adversarial UVs.
+        for boundary in (low.floor() as i32).max(-256)..=(high.ceil() as i32).min(256) {
+            if mode == "CLAMP" && boundary != 0 && boundary != 1 {
+                continue;
+            }
+            let t = (boundary as f32 - start) / (end - start);
+            if t > 0.0 && t < 1.0 {
+                cuts.push(t);
+            }
+        }
+    }
+    cuts.sort_by(f32::total_cmp);
+    cuts.windows(2)
+        .map(|pair| {
+            let a = start + (end - start) * pair[0];
+            let b = start + (end - start) * pair[1];
+            let cell = ((a + b) / 2.0).floor();
+            let map = |v: f32| match mode {
+                "REPEAT" => v - cell,
+                "MIRROR" => {
+                    if cell.rem_euclid(2.0) == 0.0 {
+                        v - cell
+                    } else {
+                        1.0 - (v - cell)
+                    }
+                }
+                _ => v.clamp(0.0, 1.0),
+            };
+            (pair[0], pair[1], map(a), map(b))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod sim4_texture_tests {
+    use super::texture_axis;
+    #[test]
+    fn sampler_boundaries_preserve_repeat_mirror_and_clamp() {
+        assert_eq!(
+            texture_axis(0.0, 2.0, "REPEAT"),
+            vec![(0.0, 0.5, 0.0, 1.0), (0.5, 1.0, 0.0, 1.0)]
+        );
+        assert_eq!(
+            texture_axis(0.0, 2.0, "MIRROR"),
+            vec![(0.0, 0.5, 0.0, 1.0), (0.5, 1.0, 1.0, 0.0)]
+        );
+        assert_eq!(
+            texture_axis(-1.0, 1.0, "CLAMP"),
+            vec![(0.0, 0.5, 0.0, 0.0), (0.5, 1.0, 0.0, 1.0)]
+        );
     }
 }

@@ -1,0 +1,61 @@
+use selu_sim::Sim;
+#[test]
+fn colour_getters_and_inherited_font() {
+    let sim = Sim::new().unwrap();
+    sim.eval(
+        r#"local f=CreateFont('SIM4Font'); f:SetTextColor(.38,.22,.06,.75)
+ local t=UIParent:CreateFontString();t:SetFontObject(f)
+ local r,g,b,a=t:GetTextColor(); assert(r==.38 and g==.22 and b==.06 and a==.75)
+ t:SetShadowColor(.1,.2,.3,.5); r,g,b,a=t:GetShadowColor();assert(math.abs(r-.1)<1e-6 and a==.5)
+ t:SetVertexColor(.2,.3,.4,.5);r,g,b,a=t:GetVertexColor();assert(math.abs(b-.4)<1e-6 and a==.5)
+ t:SetAlpha(.25);assert(t:GetAlpha()==.25)"#,
+    )
+    .unwrap();
+}
+#[test]
+fn keyboard_and_wheel_state() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"local f=CreateFrame('Button');f:EnableKeyboard(true);assert(f:IsKeyboardEnabled());f:SetPropagateKeyboardInput(true);assert(f:GetPropagateKeyboardInput());f:EnableKeyboard(false);assert(not f:IsKeyboardEnabled());f:EnableMouseWheel(true);assert(f:IsMouseWheelEnabled());f:EnableMouseWheel(false);assert(not f:IsMouseWheelEnabled())"#).unwrap();
+}
+#[test]
+fn slider_configuration() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"local s=CreateFrame('Slider');s:SetMinMaxValues(0,10);s:SetValue(20);assert(s:GetValue()==10);s:SetMinMaxValues(0,5);assert(s:GetValue()==5);s:SetOrientation('HORIZONTAL');assert(s:GetOrientation()=='HORIZONTAL');s:SetValueStep(2);assert(s:GetValueStep()==2);s:SetObeyStepOnDrag(true);assert(s:GetObeyStepOnDrag())"#).unwrap();
+}
+#[test]
+fn thumb_and_tiling_state() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"local s=CreateFrame('Slider');s:SetSize(100,20);s:SetPoint('CENTER');s:SetOrientation('HORIZONTAL');s:SetThumbTexture('Interface/Buttons/WHITE8X8');assert(s:GetThumbTexture():GetObjectType()=='Texture');local t=UIParent:CreateTexture();t:SetTexture('missing','MIRROR','REPEAT');t:SetHorizTile(true);t:SetVertTile(true);assert(t:GetHorizTile() and t:GetVertTile())"#).unwrap();
+    let snapshot = sim.snapshot().unwrap();
+    let texture = snapshot.regions.last().unwrap();
+    assert_eq!(texture.visual.tile, [true, true]);
+    assert_eq!(texture.visual.wrap_modes, ["MIRROR", "REPEAT"]);
+}
+#[test]
+fn slider_drag_changes_value_as_user() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"s=CreateFrame('Slider');s:SetSize(100,20);s:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',0,0);s:SetOrientation('HORIZONTAL');s:SetMinMaxValues(0,10);s:SetValueStep(2);s:SetObeyStepOnDrag(true);s:SetScript('OnValueChanged',function(_,v,user) lastUser=user end)"#).unwrap();
+    sim.drag((10., 10.), (75., 10.)).unwrap();
+    sim.eval("assert(s:GetValue()==8 and lastUser==true)")
+        .unwrap();
+    sim.eval("s:Disable()").unwrap();
+    sim.drag((10., 10.), (20., 10.)).unwrap();
+    sim.eval("assert(s:GetValue()==8)").unwrap();
+}
+#[test]
+fn wheel_policy_and_keyboard_disable() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"s=CreateFrame('Slider');s:SetSize(100,20);s:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',0,0);s:SetMinMaxValues(0,10);s:EnableMouseWheel(true);s:SetScript('OnMouseWheel',function(self,d) self:SetValue(self:GetValue()+d,true) end);s:EnableKeyboard(true);s:SetScript('OnKeyDown',function() keys=(keys or 0)+1 end)"#).unwrap();
+    sim.wheel(10., 10., 1.).unwrap();
+    sim.key("A", true).unwrap();
+    sim.eval("assert(s:GetValue()==1 and keys==1);s:Disable()")
+        .unwrap();
+    sim.wheel(10., 10., 1.).unwrap();
+    sim.key("A", true).unwrap();
+    sim.eval("assert(s:GetValue()==1 and keys==1)").unwrap();
+}
+#[test]
+fn vertical_thumb_minimum_is_at_top() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"local s=CreateFrame('Slider');s:SetSize(20,100);s:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',0,0);local t=s:CreateTexture();t:SetSize(20,20);s:SetThumbTexture(t);s:SetMinMaxValues(0,10);s:SetValue(0);assert(t:GetBottom()==80);s:SetValue(10);assert(t:GetBottom()==0)"#).unwrap();
+}

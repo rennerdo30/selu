@@ -191,6 +191,37 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
     for i in 0..a.regions.len() {
         visit(i, a, &mut marks, ctx);
     }
+    for i in 0..a.regions.len() {
+        let r = &a.regions[i];
+        if let (Some(index), Some(q)) = (r.thumb, r.rect) {
+            let fraction = if r.max > r.min {
+                (r.value - r.min) / (r.max - r.min)
+            } else {
+                0.0
+            };
+            let horizontal = r.orientation == "HORIZONTAL";
+            let scale = r.effective_scale;
+            let thumb = &mut a.regions[index];
+            let width = thumb.width * scale;
+            let height = thumb.height * scale;
+            thumb.rect = Some(Rect {
+                left: q.left
+                    + if horizontal {
+                        fraction * (q.width - width)
+                    } else {
+                        (q.width - width) / 2.0
+                    },
+                bottom: q.bottom
+                    + if horizontal {
+                        (q.height - height) / 2.0
+                    } else {
+                        (1.0 - fraction) * (q.height - height)
+                    },
+                width,
+                height,
+            });
+        }
+    }
     a.dirty = false;
     a.full_layout = false;
     for (i, r) in a.regions.iter().enumerate() {

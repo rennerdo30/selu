@@ -134,6 +134,42 @@ impl crate::session::Vm {
                         a.full_layout = true;
                     }
                 }
+                if eligible(self, i) {
+                    let value = {
+                        let arena = a.borrow();
+                        let r = &arena.regions[i];
+                        r.rect.filter(|_| r.kind == "Slider").map(|q| {
+                            let horizontal = r.orientation == "HORIZONTAL";
+                            let thumb = r.thumb.map(|t| &arena.regions[t]);
+                            let extent = thumb
+                                .map(|t| if horizontal { t.width } else { t.height })
+                                .unwrap_or(0.0)
+                                * r.effective_scale;
+                            let length = if horizontal { q.width } else { q.height };
+                            let position = if horizontal {
+                                to.0 - q.left
+                            } else {
+                                q.bottom + q.height - to.1
+                            };
+                            let fraction = if length > extent {
+                                ((position - extent / 2.0) / (length - extent)).clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            };
+                            let value = r.min + fraction * (r.max - r.min);
+                            if r.obey_step && r.step > 0.0 {
+                                ((value - r.min) / r.step + 0.5).floor() * r.step + r.min
+                            } else {
+                                value
+                            }
+                        })
+                    };
+                    if let Some(value) = value {
+                        let t = a.borrow().regions[i].table.clone();
+                        let set: Function = t.get("SetValue")?;
+                        set.call::<()>((t, value, true))?;
+                    }
+                }
                 invoke(self, i, "OnDragStop", vec![button])?;
             } else {
                 a.borrow_mut().cursor = to;
@@ -142,11 +178,53 @@ impl crate::session::Vm {
             Ok(())
         })
     }
+    /// Deliver wheel motion; scripts own the policy for changing slider values.
+    pub fn wheel(&self, x: f64, y: f64, delta: f64) -> SimResult<()> {
+        dispatch(self.lua(), self.ctx(), || {
+            if let Some(i) = hit(self, x, y) {
+                let enabled = store(self.lua()).borrow().regions[i].wheel;
+                if enabled {
+                    invoke(self, i, "OnMouseWheel", vec![Value::Number(delta)])?;
+                }
+            }
+            Ok(())
+        })
+    }
+    /// Keyboard frames receive input from top to bottom until propagation stops.
+    pub fn key(&self, key: &str, down: bool) -> SimResult<()> {
+        dispatch(self.lua(), self.ctx(), || {
+            let a = store(self.lua());
+            let mut targets = a
+                .borrow()
+                .regions
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.visible && r.enabled && r.keyboard)
+                .map(|(i, r)| (r.strata, r.level, i))
+                .collect::<Vec<_>>();
+            targets.sort();
+            for (_, _, i) in targets.into_iter().rev() {
+                invoke(
+                    self,
+                    i,
+                    if down { "OnKeyDown" } else { "OnKeyUp" },
+                    vec![Value::String(self.lua().create_string(key)?)],
+                )?;
+                if !a.borrow().regions[i].propagate_keyboard {
+                    break;
+                }
+            }
+            Ok(())
+        })
+    }
     pub fn press_enter(&self) -> SimResult<()> {
         dispatch(self.lua(), self.ctx(), || {
             let a = store(self.lua());
             let a = a.borrow();
-            let t = a.focus.map(|i| a.regions[i].table.clone());
+            let t = a
+                .focus
+                .filter(|&i| a.regions[i].enabled && a.regions[i].keyboard && a.regions[i].visible)
+                .map(|i| a.regions[i].table.clone());
             drop(a);
             if let Some(t) = t {
                 callback(self.ctx(), t, "OnEnterPressed", vec![]);
@@ -158,7 +236,10 @@ impl crate::session::Vm {
         dispatch(self.lua(), self.ctx(), || {
             let a = store(self.lua());
             let mut a = a.borrow_mut();
-            if let Some(i) = a.focus {
+            if let Some(i) = a
+                .focus
+                .filter(|&i| a.regions[i].enabled && a.regions[i].keyboard && a.regions[i].visible)
+            {
                 let r = &mut a.regions[i];
                 r.text = Some(format!("{}{text}", r.text.as_deref().unwrap_or("")));
                 r.text_value = Value::Nil;

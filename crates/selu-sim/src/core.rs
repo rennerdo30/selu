@@ -136,6 +136,10 @@ pub struct VisualStyle {
     pub ellipsis: bool,
     #[serde(default)]
     pub spacing: f64,
+    #[serde(default)]
+    pub tile: [bool; 2],
+    #[serde(default)]
+    pub wrap_modes: [String; 2],
     pub uv: [f32; 4],
     pub tint: [f32; 4],
     pub blend: String,
@@ -163,6 +167,8 @@ impl Default for VisualStyle {
             non_space_wrap: true,
             ellipsis: true,
             spacing: 0.0,
+            tile: [false; 2],
+            wrap_modes: ["CLAMP".into(), "CLAMP".into()],
             uv: [0.0, 1.0, 0.0, 1.0],
             tint: [1.0; 4],
             blend: "BLEND".into(),
