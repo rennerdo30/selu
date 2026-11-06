@@ -101,3 +101,54 @@ const broken: number = \"text\";
     );
     assert!(err.contains("selu-studio was not found"), "{err}");
 }
+
+#[test]
+fn build_copies_the_media_the_addon_uses() {
+    let dir = hello_project("assets");
+    let main = dir.join("src/main.selu");
+    let mut text = std::fs::read_to_string(&main).unwrap();
+    text.push_str(
+        r#"
+export const logo = "Interface\\AddOns\\Hello\\Media\\Logo";
+export const missing = "Interface\\AddOns\\Hello\\Sounds\\Ping.ogg";
+"#,
+    );
+    std::fs::write(&main, text).unwrap();
+    std::fs::create_dir_all(dir.join("Media/Sub")).unwrap();
+    std::fs::write(dir.join("Media/Logo.tga"), b"tga").unwrap();
+    std::fs::write(dir.join("Media/Sub/Glow.blp"), b"blp").unwrap();
+    std::fs::create_dir_all(dir.join("Unused")).unwrap();
+    // An explicit asset outside the project keeps its own name.
+    let shared = dir.with_extension("shared-fonts");
+    let _ = std::fs::remove_dir_all(&shared);
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("Font.ttf"), b"ttf").unwrap();
+    let toml = std::fs::read_to_string(dir.join("selu.toml")).unwrap();
+    let rel = format!("../{}", shared.file_name().unwrap().to_str().unwrap());
+    std::fs::write(
+        dir.join("selu.toml"),
+        format!("{toml}\n[build]\nassets = [\"{rel}\"]\n"),
+    )
+    .unwrap();
+    let manifests = repo().join("manifests");
+    let (code, err) = selu(&[
+        "build",
+        dir.to_str().unwrap(),
+        "--manifest-dir",
+        manifests.to_str().unwrap(),
+    ]);
+    let out = dir.join("dist/Hello");
+    let copied = (
+        out.join("Media/Logo.tga").is_file(),
+        out.join("Media/Sub/Glow.blp").is_file(),
+        out.join(shared.file_name().unwrap())
+            .join("Font.ttf")
+            .is_file(),
+        out.join("Unused").exists(),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&shared);
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(copied, (true, true, true, false), "{err}");
+    assert!(err.contains("SELU0504") && err.contains("Sounds"), "{err}");
+}
