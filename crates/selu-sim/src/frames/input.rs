@@ -64,10 +64,10 @@ impl crate::session::Vm {
             drop(a);
             if old != target {
                 if let Some(t) = old_table {
-                    callback(self.ctx(), t, "OnLeave", vec![]);
+                    callback(self.ctx(), t, "OnLeave", vec![Value::Boolean(true)]);
                 }
                 if let Some(t) = new_table {
-                    callback(self.ctx(), t, "OnEnter", vec![]);
+                    callback(self.ctx(), t, "OnEnter", vec![Value::Boolean(true)]);
                 }
             }
             Ok(target.map(|i| RegionId {
@@ -170,5 +170,29 @@ impl crate::session::Vm {
             }
             Ok(())
         })
+    }
+}
+#[cfg(test)]
+mod sf_tests {
+    #[test]
+    fn hover_callbacks_receive_native_motion_boolean() {
+        let sim = crate::session::Vm::new().unwrap();
+        sim.eval(
+            r#"
+            local f = CreateFrame("Frame")
+            f:SetSize(100, 100)
+            f:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 0, 0)
+            f:EnableMouse(true)
+            f:SetScript("OnEnter", function(self, motion) print("enter", type(motion), motion) end)
+            f:SetScript("OnLeave", function(self, motion) print("leave", type(motion), motion) end)
+        "#,
+        )
+        .unwrap();
+        sim.hover(50.0, 50.0).unwrap();
+        sim.hover(200.0, 200.0).unwrap();
+        assert_eq!(
+            sim.prints(),
+            vec!["enter\tboolean\ttrue", "leave\tboolean\ttrue"]
+        );
     }
 }

@@ -1184,9 +1184,11 @@ impl Ctx<'_> {
         let api_object = match &object.kind {
             ExprKind::Member {
                 object: receiver, ..
-            } if object
-                .dotted_name()
-                .is_some_and(|n| self.manifest.function(&n).is_some()) =>
+            } if object.dotted_name().is_some_and(|n| {
+                self.manifest.function(&n).is_some()
+                    || (self.lookup(n.split('.').next().unwrap_or("")).is_none()
+                        && api::qualified_global(self.manifest, &n).is_some())
+            }) =>
             {
                 receiver
             }
@@ -1521,6 +1523,11 @@ impl Ctx<'_> {
         callee_type: &Type,
     ) -> Type {
         let arg_types = self.function_arguments(args, callee_type);
+        let specialized =
+            self.table_signature(callee_type, arg_types.first(), arg_types.get(1), args.len());
+        let specialized = self.opaque_signature(&specialized, &arg_types);
+        let callee_type = &specialized;
+        self.types.set(callee.id, specialized.clone());
         if self.api_check_call(e, args, &arg_types, callee_type)
             && let Type::Function { ret, .. } = callee_type
         {

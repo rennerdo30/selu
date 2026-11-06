@@ -24,6 +24,22 @@ const CONTRACTS: &[(u32, &str)] = &[
         5,
         "9c47aa2b30292afb33a54168ad54d8bcad8908ef3c6287e68eacb3bf58d661c6",
     ),
+    (
+        6,
+        "7401a317d8a4cfe87273b452029fe74ba4a1bce636c20003477c82f665758cf8",
+    ),
+    (
+        7,
+        "8be8a86335ffdbf4c30f6b99a6665a710a132b0cd3da2d00352f719aadd2722f",
+    ),
+    (
+        8,
+        "8ed1136d5e4f71f4c0cd857ceda5c69493c4215e6b6e7970169721e843d4223d",
+    ),
+    (
+        9,
+        "d73944069bb36d1bb63f74c0152275d872ac5238a66fb030249d0f036b723a2d",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

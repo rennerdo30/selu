@@ -496,7 +496,10 @@ impl Ctx<'_> {
                                 .filter_map(|t| match matches(t) {
                                     Some(b) => (b == yes).then(|| t.clone()),
                                     None if yes
-                                        && matches!(shape_of(t), Type::Unknown | Type::Untyped) =>
+                                        && matches!(
+                                            shape_of(t),
+                                            Type::Unknown | Type::Untyped | Type::Opaque(_)
+                                        ) =>
                                     {
                                         Some(match tag.as_str() {
                                             "nil" => Type::Null,
@@ -561,7 +564,7 @@ impl Ctx<'_> {
                 } else {
                     let ty = if category == tag {
                         non_null
-                    } else if shape == Type::Unknown || shape.is_open() {
+                    } else if matches!(shape, Type::Unknown | Type::Opaque(_)) || shape.is_open() {
                         match tag.as_str() {
                             "string" => Type::String,
                             "number" => Type::Number,

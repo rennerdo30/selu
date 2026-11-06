@@ -459,7 +459,8 @@ impl crate::Ctx<'_> {
                 || dynamic && api.0.is_some()
                 || *unspecified_callback)
                 && can_defer
-                && !api_semantics.widget_protected;
+                && !api_semantics.widget_protected
+                && !api_semantics.pure_callback;
             if dynamic || api_semantics.dynamic_protected {
                 api_semantics.accepts_secrets = false;
             }
@@ -481,7 +482,7 @@ pub(crate) fn plain_results(ret: crate::Type) -> crate::Type {
     }
 }
 
-fn forget_plain(ty: crate::Type) -> crate::Type {
+pub(crate) fn forget_plain(ty: crate::Type) -> crate::Type {
     use crate::Type;
     match ty {
         Type::Widget(n, mut bases) => {
@@ -508,10 +509,20 @@ fn forget_plain(ty: crate::Type) -> crate::Type {
             rest,
         } => {
             api_semantics.frame_factory = false;
+            api_semantics.animation_factory = false;
+            api_semantics.date_factory = false;
+            for callback in api_semantics.script_callbacks.values_mut() {
+                *callback = callback.uncertain_callback();
+            }
+            api_semantics.opaque_inputs.clear();
+            api_semantics.typed_return_tail = None;
+            api_semantics.pure_callback = false;
+            api_semantics.table_operation = None;
             api_semantics.pool_factory = false;
             api_semantics.plain_result = false;
-            api_semantics.dynamic_protected |=
-                (api.0.is_some() || unspecified_callback) && !api_semantics.widget_protected;
+            api_semantics.dynamic_protected |= (api.0.is_some() || unspecified_callback)
+                && !api_semantics.widget_protected
+                && !api_semantics.pure_callback;
             api_semantics.accepts_secrets = false;
             Type::Function {
                 multiple_results,

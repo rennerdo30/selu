@@ -385,14 +385,14 @@ fn unspecified_script_callbacks_accept_functions_and_null() {
     for flavour in ["wow", "wowf"] {
         assert_eq!(
             codes(
-                r#"const f = CreateFrame("Frame"); f.SetScript("OnShow", (self) => {}); function shown(self: number, flag: boolean): number { return self; } f.SetScript("OnShow", shown); f.SetScript("OnShow", null);"#,
+                r#"const f = CreateFrame("Frame"); f.SetScript("UnreviewedScript", (self) => {}); function shown(self: number, flag: boolean): number { return self; } f.SetScript("UnreviewedScript", shown); f.SetScript("UnreviewedScript", null);"#,
                 flavour
             ),
             Vec::<String>::new()
         );
         assert_eq!(
             codes(
-                r#"const f = CreateFrame("Frame"); f.SetScript("OnShow", 42);"#,
+                r#"const f = CreateFrame("Frame"); f.SetScript("UnreviewedScript", 42);"#,
                 flavour
             ),
             vec!["SELU0481"]

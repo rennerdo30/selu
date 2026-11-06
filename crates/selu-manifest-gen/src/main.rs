@@ -172,6 +172,7 @@ fn generate(args: &[String]) -> Result<()> {
         git(repo, &["show", &format!("{commit}:{schema_path}")])?,
     ));
     selu_manifest_gen::pools::extend(&mut m, &pool_sources)?;
+    selu_manifest_gen::native::extend(&mut m, &pool_sources);
     if m.interface == 0 {
         return Err("interface requires a sourced overlay".into());
     }

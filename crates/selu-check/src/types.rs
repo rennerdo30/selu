@@ -23,8 +23,16 @@ impl PartialEq for ApiOrigin {
 #[derive(Debug, Clone, Default)]
 pub struct ApiSemantics {
     pub untyped_return_tail: bool,
+    pub typed_return_tail: Option<Box<Type>>,
     pub frame_factory: bool,
+    pub animation_factory: bool,
+    pub date_factory: bool,
     pub pool_factory: bool,
+    pub script_callbacks: BTreeMap<String, Type>,
+    pub opaque_inputs: BTreeMap<usize, Type>,
+    pub native_callback: bool,
+    pub pure_callback: bool,
+    pub table_operation: Option<String>,
     pub secret_results: Vec<bool>,
     pub protected: bool,
     pub widget_protected: bool,
@@ -95,6 +103,9 @@ pub enum Type {
     NumberLiteral(String),
     BooleanLiteral(bool),
     Unknown,
+    /// An unsourced native payload. Its slot identity authorizes round trips,
+    /// not concrete reads; only runtime narrowing establishes a scalar type.
+    Opaque(String),
     Named(String, NamedShape),
     /// Nominal identity, base identities, and the checked instance member shape.
     Class(String, Vec<String>, BTreeMap<String, Type>),
@@ -147,6 +158,69 @@ pub enum Type {
 }
 
 impl Type {
+    /// An uncertain registration may invoke the callback with arbitrary values.
+    /// Keep the boundary, while discarding receiver/scalar/arity promises.
+    pub(crate) fn uncertain_callback(&self) -> Type {
+        let mut result = self.clone();
+        if let Type::Function {
+            params,
+            required,
+            rest,
+            ..
+        } = &mut result
+        {
+            let opaque = Type::optional(Type::Opaque("UnprovenScriptArgument".into()));
+            for parameter in params {
+                *parameter = opaque.clone();
+            }
+            *required = 0;
+            *rest = Some(Box::new(opaque));
+        }
+        result
+    }
+
+    fn has_script_boundaries(&self) -> bool {
+        matches!(self, Type::Function { api_semantics, .. } if !api_semantics.script_callbacks.is_empty())
+    }
+
+    pub(crate) fn contains_opaque(&self) -> bool {
+        fn visit(t: &Type, seen: &mut std::collections::HashSet<String>) -> bool {
+            match t {
+                Type::Opaque(_) => true,
+                Type::Named(_, shape) if seen.insert(shape.key.clone()) => {
+                    shape.get().is_some_and(|t| visit(&t, seen))
+                }
+                Type::Optional(t)
+                | Type::Secret(t)
+                | Type::SavedRepair(t)
+                | Type::Array(t)
+                | Type::Set(t) => visit(t, seen),
+                Type::Union(ts)
+                | Type::Tuple(ts)
+                | Type::ApiIterator(ts)
+                | Type::ApiOpaque(_, ts) => ts.iter().any(|t| visit(t, seen)),
+                Type::Object(fs) | Type::Class(_, _, fs) => fs.values().any(|t| visit(t, seen)),
+                Type::Map(k, v) | Type::WeakMap(k, v) => visit(k, seen) || visit(v, seen),
+                Type::Function {
+                    params,
+                    ret,
+                    rest,
+                    api_semantics,
+                    ..
+                } => {
+                    params.iter().any(|t| visit(t, seen))
+                        || visit(ret, seen)
+                        || rest.as_deref().is_some_and(|t| visit(t, seen))
+                        || api_semantics
+                            .script_callbacks
+                            .values()
+                            .any(|t| visit(t, seen))
+                }
+                _ => false,
+            }
+        }
+        visit(self, &mut Default::default())
+    }
     /// Runtime alternatives, resolving nested aliases and optional wrappers.
     pub(crate) fn members(&self) -> Vec<Type> {
         match crate::shape_of(self) {
@@ -161,9 +235,13 @@ impl Type {
         }
     }
     pub(crate) fn union(ts: Vec<Type>) -> Type {
-        let mut members = Vec::new();
+        let mut members: Vec<Type> = Vec::new();
         for t in ts.into_iter().flat_map(|t| t.members()) {
-            if !members.contains(&t) {
+            if let Some(index) = members.iter().position(|existing| existing == &t) {
+                if members[index].has_script_boundaries() || t.has_script_boundaries() {
+                    members[index] = Type::join(&members[index], &t).unwrap_or_else(|| t.clone());
+                }
+            } else {
                 members.push(t);
             }
         }
@@ -266,6 +344,11 @@ impl Type {
         to: &Type,
         seen: &mut std::collections::HashSet<(String, String)>,
     ) -> bool {
+        // An advisory/untyped boundary must not erase a checked opaque slot,
+        // including one carried inside an inferred object or collection.
+        if matches!(crate::shape_of(to), Type::Unknown | Type::Untyped) && self.contains_opaque() {
+            return false;
+        }
         if matches!(self, Type::Function { .. })
             && matches!(
                 to,
@@ -300,6 +383,13 @@ impl Type {
             return result;
         }
         if let Type::Named(_, t) = to {
+            if t.key.starts_with("@selu_closed:")
+                && let (Type::Object(actual), Some(Type::Object(fields))) =
+                    (crate::shape_of(self), t.get())
+                && actual.keys().any(|key| !fields.contains_key(key))
+            {
+                return false;
+            }
             let key = (
                 crate::aliases::identity_key(self),
                 format!("target:{}", t.key),
@@ -362,6 +452,10 @@ impl Type {
             (source, Type::Union(ts)) => ts
                 .iter()
                 .any(|t| source.assignable_seen(t, &mut seen.clone())),
+            (Type::Opaque(a), Type::Opaque(b)) => a == b,
+            // Native payload inputs accept ordinary values, but different
+            // opaque slots are not interchangeable without runtime evidence.
+            (Type::Opaque(_), _) => false,
             (Type::SavedRepair(a), Type::SavedRepair(b)) => a.assignable_seen(b, seen),
             (Type::SavedRepair(_), _) => false,
             (Type::Number | Type::String | Type::Boolean, Type::SavedRepair(_)) => true,
@@ -409,6 +503,32 @@ impl Type {
                     ..
                 },
             ) => {
+                if matches!(to, Type::Function { api_semantics, .. } if api_semantics.native_callback)
+                {
+                    return self.result_convention_matches(to)
+                        && (*required <= *to_required
+                            || params
+                                .iter()
+                                .take(*required)
+                                .skip(*to_required)
+                                .all(|p| Type::Null.assignable_seen(p, seen)))
+                        && params.iter().enumerate().all(|(i, p)| {
+                            to_params
+                                .get(i)
+                                .or(to_rest.as_deref())
+                                .is_none_or(|value| value.assignable_seen(p, seen))
+                        })
+                        && rest.as_deref().is_none_or(|p| {
+                            to_params
+                                .iter()
+                                .skip(params.len())
+                                .all(|value| value.assignable_seen(p, seen))
+                                && to_rest
+                                    .as_deref()
+                                    .is_none_or(|value| value.assignable_seen(p, seen))
+                        })
+                        && (ret.assignable_seen(to_ret, seen) || **to_ret == Type::Void);
+                }
                 self.result_convention_matches(to)
                     && required <= to_required
                     && (rest.is_some() || (to_rest.is_none() && params.len() >= to_params.len()))
@@ -434,6 +554,13 @@ impl Type {
     /// The narrowest type both `a` and `b` fit in, if there is one.
     pub fn join(a: &Type, b: &Type) -> Option<Type> {
         if a.is_open() || b.is_open() {
+            if a.contains_opaque()
+                || b.contains_opaque()
+                || a.has_script_boundaries()
+                || b.has_script_boundaries()
+            {
+                return Some(Type::union(vec![a.clone(), b.clone()]));
+            }
             if !matches!(crate::shape_of(a), Type::Error)
                 && !matches!(crate::shape_of(b), Type::Error)
                 && (crate::restrictions::secret_inner(a).is_some()
@@ -487,7 +614,35 @@ impl Type {
                 result.accepts_secrets = left.accepts_secrets && right.accepts_secrets;
                 result.plain_result = left.plain_result && right.plain_result;
                 result.frame_factory = left.frame_factory && right.frame_factory;
+                result.animation_factory = left.animation_factory && right.animation_factory;
+                result.date_factory = left.date_factory && right.date_factory;
                 result.pool_factory = left.pool_factory && right.pool_factory;
+                result.native_callback = left.native_callback && right.native_callback;
+                result.pure_callback = left.pure_callback && right.pure_callback;
+                if left.table_operation != right.table_operation {
+                    result.table_operation = None;
+                }
+                if left.typed_return_tail != right.typed_return_tail {
+                    result.typed_return_tail = None;
+                }
+                result.script_callbacks = left
+                    .script_callbacks
+                    .iter()
+                    .chain(right.script_callbacks.iter())
+                    .map(|(name, callback)| {
+                        let bound = if left.script_callbacks.get(name)
+                            == right.script_callbacks.get(name)
+                        {
+                            callback.clone()
+                        } else {
+                            callback.uncertain_callback()
+                        };
+                        (name.clone(), bound)
+                    })
+                    .collect();
+                result
+                    .opaque_inputs
+                    .retain(|index, ty| right.opaque_inputs.get(index) == Some(ty));
                 let count = left.secret_results.len().max(right.secret_results.len());
                 result.secret_results = (0..count)
                     .map(|i| {
@@ -523,6 +678,7 @@ impl fmt::Display for Type {
             }
             Type::ApiIterator(_) => write!(f, "API iterator"),
             Type::Unknown => write!(f, "unknown"),
+            Type::Opaque(slot) => write!(f, "opaque<{slot}>"),
             Type::Named(n, _) => write!(f, "{n}"),
             Type::Number => write!(f, "number"),
             Type::String => write!(f, "string"),

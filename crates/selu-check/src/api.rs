@@ -41,17 +41,59 @@ fn map(m: &Manifest, d: &Declaration, depth: usize) -> Type {
                 .collect(),
         );
     }
+    if let Some(types) = d
+        .attributes
+        .get("SeluScalarUnion")
+        .and_then(|v| v.as_array())
+    {
+        let t = Type::ApiOpaque(
+            d.name.clone(),
+            types
+                .iter()
+                .filter_map(|t| t.as_str().and_then(primitive))
+                .collect(),
+        );
+        return if flag(d, "Nilable") {
+            Type::optional(t)
+        } else {
+            t
+        };
+    }
     let name = d.ty.as_deref().unwrap_or("");
-    let t = primitive(name).unwrap_or_else(|| match name {
-        "Function" | "function" => signature(m, d, depth + 1),
-        "table" => d
-            .attributes
-            .get("InnerType")
-            .and_then(|v| v.as_str())
-            .map(|n| Type::Array(Box::new(named(m, n, depth + 1))))
-            .unwrap_or(Type::Untyped),
-        n => named(m, n, depth + 1),
-    });
+    let t = d
+        .attributes
+        .get("SeluOpaque")
+        .and_then(|v| v.as_str())
+        .map(|slot| Type::Opaque(slot.into()))
+        .or_else(|| primitive(name))
+        .unwrap_or_else(|| match name {
+            "Function" | "function" => signature(m, d, depth + 1),
+            "table" if d.attributes.contains_key("KeyType") => Type::Map(
+                Box::new(named(
+                    m,
+                    d.attributes
+                        .get("KeyType")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                    depth + 1,
+                )),
+                Box::new(named(
+                    m,
+                    d.attributes
+                        .get("InnerType")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                    depth + 1,
+                )),
+            ),
+            "table" => d
+                .attributes
+                .get("InnerType")
+                .and_then(|v| v.as_str())
+                .map(|n| Type::Array(Box::new(named(m, n, depth + 1))))
+                .unwrap_or(Type::Untyped),
+            n => named(m, n, depth + 1),
+        });
     if flag(d, "Nilable") {
         Type::optional(t)
     } else {
@@ -101,6 +143,14 @@ fn primitive(name: &str) -> Option<Type> {
         _ => return None,
     })
 }
+// XML widget names are literal global keys, even when they contain dots.
+// Only explicitly typed scalar entries authorize namespace-property lookup.
+pub(crate) fn qualified_global(m: &Manifest, name: &str) -> Option<Type> {
+    let global = m.globals.iter().find(|g| g.name == name)?;
+    let ty = primitive(global.ty.as_deref()?)?;
+    matches!(ty, Type::Number | Type::String | Type::Boolean).then_some(ty)
+}
+
 pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     if let Some(t) = primitive(n) {
         return t;
@@ -115,6 +165,20 @@ pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
         return Type::Number;
     }
     if let Some(d) = m.tables.iter().find(|t| t.name == n) {
+        if let Some(types) = d.attributes.get("SeluUnion").and_then(|v| v.as_array()) {
+            return Type::union(
+                types
+                    .iter()
+                    .map(|t| named(m, t.as_str().unwrap_or(""), depth + 1))
+                    .collect(),
+            );
+        }
+        if d.ty.as_deref() == Some("table") {
+            return map(m, d, depth + 1);
+        }
+        if d.attributes.contains_key("SeluScalarUnion") {
+            return map(m, d, depth + 1);
+        }
         if !d.arguments.is_empty() || d.ty.as_deref() == Some("CallbackType") {
             let mut t = signature(m, d, depth + 1);
             if d.returns.is_empty()
@@ -127,12 +191,18 @@ pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
         if !matches!(d.ty.as_deref(), Some("Structure" | "Constants")) {
             return Type::ApiOpaque(n.into(), Vec::new());
         }
-        return Type::Object(
+        let object = Type::Object(
             d.fields
                 .iter()
                 .map(|f| (f.name.clone(), map(m, f, depth + 1)))
                 .collect(),
         );
+        if flag(d, "SeluClosed") {
+            let shape = crate::types::NamedShape::new(format!("@selu_closed:{n}"));
+            shape.set(object);
+            return Type::Named(n.into(), shape);
+        }
+        return object;
     }
     if let Some((_, members)) = SCALAR_UNIONS.iter().find(|(name, _)| *name == n) {
         return Type::ApiOpaque(n.into(), members.to_vec());
@@ -141,6 +211,20 @@ pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     // not reject valid engine values based on a guessed nominal identity.
     Type::Untyped
 }
+fn argument_type(m: &Manifest, owner: &Declaration, argument: &Declaration, depth: usize) -> Type {
+    let mapped = map(m, argument, depth);
+    if owner.ty.as_deref() == Some("CallbackType") && mapped == Type::Untyped {
+        let opaque = Type::Opaque(format!("{}.{}", owner.name, argument.name));
+        if flag(argument, "Nilable") {
+            Type::optional(opaque)
+        } else {
+            opaque
+        }
+    } else {
+        mapped
+    }
+}
+
 pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
     let secret = crate::restrictions::secret_results(m, d);
     let mut returns: Vec<Type> = d
@@ -160,7 +244,63 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         multiple_results: d.ty.as_deref() != Some("CallbackType"),
         unspecified_callback: false,
         api_semantics: crate::types::ApiSemantics {
+            opaque_inputs: d
+                .arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| {
+                    let slot = argument.attributes.get("SeluOpaqueInput")?.as_str()?;
+                    let value = Type::Opaque(slot.into());
+                    Some((
+                        index,
+                        if flag(argument, "Nilable") {
+                            Type::optional(value)
+                        } else {
+                            value
+                        },
+                    ))
+                })
+                .collect(),
             untyped_return_tail: flag(d, "SeluUntypedReturnTail"),
+            typed_return_tail: d
+                .attributes
+                .get("SeluReturnTail")
+                .and_then(|v| v.as_str())
+                .map(|name| Box::new(Type::optional(named(m, name, depth + 1)))),
+            script_callbacks: d
+                .attributes
+                .get("SeluScriptCallbacks")
+                .and_then(|v| v.as_object())
+                .map(|scripts| {
+                    scripts
+                        .iter()
+                        .filter_map(|(name, value)| {
+                            let declaration: Declaration =
+                                serde_json::from_value(value.clone()).ok()?;
+                            let mut callback = signature(m, &declaration, depth + 1);
+                            if let Type::Function { ret, .. } = &mut callback {
+                                **ret = Type::Void;
+                            }
+                            Some((name.clone(), callback))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            animation_factory: d.name == "CreateAnimation"
+                && d.returns
+                    .first()
+                    .is_some_and(|r| r.ty.as_deref() == Some("SimpleAnim")),
+            date_factory: d.name == "date"
+                && d.returns
+                    .first()
+                    .is_some_and(|r| r.ty.as_deref() == Some("LuaDateResult")),
+            native_callback: d.ty.as_deref() == Some("CallbackType"),
+            pure_callback: flag(d, "SeluPureCallback"),
+            table_operation: d
+                .attributes
+                .get("SeluTableOperation")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
             frame_factory: false,
             pool_factory: flag(d, "SeluPoolFactory"),
             secret_results: crate::restrictions::secret_results(m, d),
@@ -190,20 +330,22 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
             .rposition(|a| {
                 a.name != "..."
                     && (flag(a, "Required")
-                        || (!flag(a, "Nilable") && !a.attributes.contains_key("Default")))
+                        || (!flag(a, "Optional")
+                            && !flag(a, "Nilable")
+                            && !a.attributes.contains_key("Default")))
             })
             .map_or(0, |i| i + 1),
         params: d
             .arguments
             .iter()
             .filter(|a| a.name != "...")
-            .map(|a| map(m, a, depth + 1))
+            .map(|a| argument_type(m, d, a, depth + 1))
             .collect(),
         rest: d
             .arguments
             .iter()
             .find(|a| a.name == "...")
-            .map(|a| Box::new(map(m, a, depth + 1))),
+            .map(|a| Box::new(argument_type(m, d, a, depth + 1))),
         ret: Box::new(Type::Tuple(returns)),
     }
 }
@@ -329,6 +471,12 @@ impl Ctx<'_> {
                     .unwrap_or(Type::Untyped),
             );
         }
+        if let Some(root) = object.dotted_name()
+            && self.lookup(root.split('.').next().unwrap_or("")).is_none()
+            && let Some(ty) = qualified_global(self.manifest, &format!("{root}.{name}"))
+        {
+            return Some(ty);
+        }
         let Type::Widget(widget, _) = t else {
             return None;
         };
@@ -363,6 +511,13 @@ impl Ctx<'_> {
                 .unwrap_or((m, d));
             let mut ty = signature(m, d, 0);
             if let Type::Function { api_semantics, .. } = &mut ty {
+                for callback in api_semantics.script_callbacks.values_mut() {
+                    if let Type::Function { params, .. } = callback
+                        && let Some(receiver) = params.first_mut()
+                    {
+                        *receiver = t.clone();
+                    }
+                }
                 api_semantics.widget_protected = api_semantics.protected;
                 let receiver = if self.types.is_method_call(object.id) {
                     match &object.kind {
@@ -465,6 +620,9 @@ impl Ctx<'_> {
         let ty = signature_for(self.manifest, &full, &d);
         self.types.set(callee.id, ty.clone());
         let ts = self.function_arguments(args, &ty);
+        let ty = self.table_signature(&ty, ts.first(), ts.get(1), args.len());
+        let ty = self.opaque_signature(&ty, &ts);
+        self.types.set(callee.id, ty.clone());
         self.api_check_call(e, args, &ts, &ty);
         let Type::Function { ret, .. } = &ty else {
             unreachable!()
@@ -472,6 +630,45 @@ impl Ctx<'_> {
         Some(self.api_result(e, args, &ty, (**ret).clone()))
     }
     pub(crate) fn api_result(&mut self, e: &Expr, args: &[Expr], ty: &Type, ret: Type) -> Type {
+        if matches!(ty, Type::Function { api_semantics, .. } if api_semantics.animation_factory)
+            && let Some(ExprKind::Str(kind)) = args.first().map(|e| &e.kind)
+            && let Some(declaration) = self.manifest.widgets.iter().find(|w| {
+                w.attributes
+                    .get("SeluAnimationType")
+                    .and_then(|v| v.as_str())
+                    == Some(kind)
+            })
+        {
+            let specialized = widget(self.manifest, &declaration.name);
+            if let Type::Tuple(mut values) = ret {
+                if let Some(first) = values.first_mut() {
+                    *first = preserve_result_policy(first, specialized);
+                }
+                return Type::Tuple(values);
+            }
+            return preserve_result_policy(&ret, specialized);
+        }
+        if matches!(ty, Type::Function { api_semantics, .. } if api_semantics.date_factory)
+            && (args.is_empty()
+                || matches!(
+                    args.first().map(|e| &e.kind),
+                    Some(ExprKind::Str(_) | ExprKind::Null)
+                ))
+            && self
+                .manifest
+                .tables
+                .iter()
+                .any(|t| t.name == "LuaDateResult")
+        {
+            return Type::Tuple(vec![
+                if matches!(args.first().map(|e| &e.kind), Some(ExprKind::Str(format)) if matches!(format.as_str(), "*t" | "!*t"))
+                {
+                    named(self.manifest, "LuaDateTable", 0)
+                } else {
+                    Type::String
+                },
+            ]);
+        }
         if matches!(ty, Type::Function {api_semantics,..} if api_semantics.plain_result) {
             return crate::restrictions::plain_results(ret);
         }
@@ -544,6 +741,133 @@ impl Ctx<'_> {
         }
     }
 
+    pub(crate) fn table_signature(
+        &self,
+        ty: &Type,
+        first: Option<&Type>,
+        second: Option<&Type>,
+        count: usize,
+    ) -> Type {
+        let mut result = ty.clone();
+        let Some(Type::Array(element)) = first.map(crate::shape_of) else {
+            return result;
+        };
+        let Type::Function {
+            params,
+            required,
+            ret,
+            api_semantics,
+            ..
+        } = &mut result
+        else {
+            return result;
+        };
+        let Some(operation) = api_semantics.table_operation.as_deref() else {
+            return result;
+        };
+        // Array contents are mutable even when the array binding is const.
+        // Reuse the same identity/protection boundary as indexed reads.
+        let element = Box::new(crate::restrictions::forget_plain(*element));
+        let array = Type::Array(element.clone());
+        match operation {
+            "insert" => {
+                *params = if count == 3 {
+                    vec![array, Type::Number, (*element).clone()]
+                } else {
+                    vec![array, (*element).clone()]
+                };
+                *required = params.len();
+                api_semantics.overloads.clear();
+            }
+            "remove" | "unpack" => {
+                params[0] = array;
+                let value = Type::optional((*element).clone());
+                **ret = Type::Tuple(vec![value.clone()]);
+                if operation == "unpack" {
+                    api_semantics.untyped_return_tail = false;
+                    api_semantics.typed_return_tail = Some(Box::new(value));
+                }
+            }
+            "concat" => {
+                if element.assignable_to(&named(self.manifest, "LuaStringNumber", 0)) {
+                    params[0] = array;
+                }
+            }
+            "sort" => {
+                params[0] = if (count == 1 || second.is_some_and(Type::is_optional))
+                    && !element.assignable_to(&Type::Number)
+                    && !element.assignable_to(&Type::String)
+                    && !element.is_open()
+                {
+                    Type::union(vec![
+                        Type::Array(Box::new(Type::Number)),
+                        Type::Array(Box::new(Type::String)),
+                    ])
+                } else {
+                    array
+                };
+                let callback = Type::Function {
+                    multiple_results: false,
+                    unspecified_callback: false,
+                    api: Default::default(),
+                    api_semantics: crate::types::ApiSemantics {
+                        native_callback: true,
+                        ..Default::default()
+                    },
+                    params: vec![(*element).clone(), (*element).clone()],
+                    required: 2,
+                    rest: None,
+                    ret: Box::new(Type::Boolean),
+                };
+                params[1] = Type::optional(callback);
+            }
+            _ => {}
+        }
+        result
+    }
+
+    pub(crate) fn script_signature(&self, args: &[Expr], ty: &Type) -> Type {
+        let mut result = ty.clone();
+        if let Type::Function {
+            params,
+            api_semantics,
+            ..
+        } = &mut result
+            && let Some(ExprKind::Str(name)) = args.first().map(|e| &e.kind)
+            && let Some(callback) = api_semantics.script_callbacks.get(name)
+            && let Some(parameter) = params.get_mut(1)
+        {
+            *parameter = if parameter.non_null() != *parameter {
+                Type::optional(callback.clone())
+            } else {
+                callback.clone()
+            };
+        }
+        result
+    }
+
+    /// A proven native round trip admits only the matching opaque slot. Ordinary
+    /// arguments still use the original input signature; this never widens it.
+    pub(crate) fn opaque_signature(&self, ty: &Type, arguments: &[Type]) -> Type {
+        let mut result = ty.clone();
+        if let Type::Function {
+            params,
+            api_semantics,
+            ..
+        } = &mut result
+        {
+            for (index, slot) in &api_semantics.opaque_inputs {
+                if arguments.get(*index).is_some_and(|argument| {
+                    argument.contains_opaque() && argument.assignable_to(slot)
+                }) && let Some(parameter) = params.get_mut(*index)
+                {
+                    *parameter = slot.clone();
+                }
+            }
+        }
+        result
+    }
+
     pub(crate) fn api_check_call(
         &mut self,
         e: &Expr,
@@ -551,6 +875,8 @@ impl Ctx<'_> {
         ts: &[Type],
         ty: &Type,
     ) -> bool {
+        let specialized = self.script_signature(args, ty);
+        let ty = &specialized;
         let candidates = std::iter::once(ty).chain(match ty {
             Type::Function { api_semantics, .. } => api_semantics.overloads.iter(),
             _ => [].iter(),
@@ -619,14 +945,18 @@ impl Ctx<'_> {
                     .get(i)
                     .map(String::as_str)
                     .unwrap_or("...");
-                let diagnostic = self.api_diagnostic(
-                    "SELU0481",
-                    format!(
-                        "parameter `{parameter}` of `{}` on {} expects {p}, got {t}",
-                        origin.name, origin.target
-                    ),
-                    &arg.span,
+                let message = format!(
+                    "parameter `{parameter}` of `{}` on {} expects {p}, got {t}",
+                    origin.name, origin.target
                 );
+                // A known opaque boundary is a hard checking rule even when
+                // incomplete ordinary API signatures are advisory.
+                let diagnostic = if p.contains_opaque() || t.contains_opaque() {
+                    err("SELU0481", message, &arg.span)
+                        .with_help("ignore the payload, pass it to its matching native slot, or narrow it with typeof")
+                } else {
+                    self.api_diagnostic("SELU0481", message, &arg.span)
+                };
                 let diagnostic = if let Some(fix) = result_wrapper_fix(t, &p.non_null()) {
                     diagnostic.with_fix(fix)
                 } else {
@@ -706,7 +1036,23 @@ pub(crate) fn mismatch_help(
     crate::classes::mismatch_help(d, have, want)
 }
 
+fn preserve_result_policy(original: &Type, replacement: Type) -> Type {
+    match original {
+        Type::Secret(inner) => Type::secret(preserve_result_policy(inner, replacement)),
+        Type::Optional(inner) => Type::optional(preserve_result_policy(inner, replacement)),
+        _ => replacement,
+    }
+}
+
 fn api_argument_assignable(have: &Type, want: &Type, function: &Type) -> bool {
+    if let Type::Function { api_semantics, .. } = function
+        && api_semantics.table_operation.as_deref() == Some("insert")
+    {
+        if !api_semantics.accepts_secrets && crate::restrictions::secret_inner(have).is_some() {
+            return false;
+        }
+        return have.assignable_to(want);
+    }
     if matches!(function,Type::Function {api_semantics,..} if api_semantics.accepts_secrets)
         && let Some(inner) = crate::restrictions::secret_inner(have)
     {

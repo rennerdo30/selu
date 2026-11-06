@@ -1,3 +1,4 @@
+pub mod native;
 pub use selu_manifest::store::EXTRACTION_VERSION;
 pub mod coverage;
 pub mod factory;
@@ -456,6 +457,8 @@ pub struct Overlay {
     #[serde(default)]
     pub widgets: Vec<WidgetOverlay>,
     #[serde(default)]
+    pub tables: Vec<WidgetOverlay>,
+    #[serde(default)]
     pub globals: Vec<GlobalOverlay>,
     #[serde(default)]
     pub methods: Vec<MethodOverlay>,
@@ -543,6 +546,13 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
         evidence(f.evidence, &f.live_probe)?;
         m.functions.retain(|v| v.name != f.entry.name);
         m.functions.push(f.entry);
+    }
+    for mut table in overlay.tables {
+        table.entry.evidence = Some(table.evidence);
+        note(&table.note)?;
+        evidence(table.evidence, &table.live_probe)?;
+        m.tables.retain(|d| d.name != table.entry.name);
+        m.tables.push(table.entry);
     }
     for mut w in overlay.widgets {
         w.entry.evidence = Some(w.evidence);
