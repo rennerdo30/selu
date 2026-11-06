@@ -150,6 +150,10 @@ pub fn battlenet_exe() -> Option<PathBuf> {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
+    pub wtf_override: String,
+    #[serde(default)]
+    pub saved_choices: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
     pub disable_client_assets: bool,
     #[serde(default)]
     pub client_install: Option<PathBuf>,

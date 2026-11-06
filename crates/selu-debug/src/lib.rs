@@ -27,6 +27,10 @@ pub enum Arg {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
+    SeedSaved {
+        dir: PathBuf,
+        values: std::collections::BTreeMap<String, selu_sim::saved::SavedValue>,
+    },
     LoadAddon {
         dir: PathBuf,
     },
@@ -172,6 +176,10 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
         }
         let before = session.generation();
         let result: Result<Option<Update>, String> = match command {
+            Command::SeedSaved { dir, values } => session
+                .seed_saved(&dir, &values)
+                .map(|_| None)
+                .map_err(|e| e.to_string()),
             Command::LoadAddon { dir } => session
                 .load_addon_dir(&dir)
                 .map(|_| None)

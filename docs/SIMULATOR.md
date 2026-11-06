@@ -530,3 +530,19 @@ Nameplate frames are simulator frames with `namePlateUnitToken`; no Blizzard
 nameplate template is loaded here. Vignette positions return a vector with
 `x`, `y`, `GetXY` and zero facing on the configured map only. Bag setups model
 item IDs per slot, not inventory metadata or item stack counts.
+
+### Import SavedVariables in Studio
+
+In Scenario > Saved variables, set the WTF folder override if needed, then Scan
+accounts, choose account and realm/character, and Load. The default is the
+configured install's product folder (`_retail_`, `_forever_`, etc.) plus `WTF`.
+Build the project first so its TOC is available. Studio remembers the selection
+per project in its own settings. Load restarts and seeds the declared values
+before addon loading; Clear restarts with empty saved data.
+
+Imports are read-only data parsing, never Lua execution. Only TOC SavedVariables
+and SavedVariablesPerCharacter names are imported. Skipped names, missing files
+and names, and file:line parse errors appear below the controls. A malformed file
+is skipped as a whole. Config.wtf and CVars are outside this feature. Logout and
+reload never write to the game install. Non-finite numbers are parsed but refused
+by the existing session saved-data validator.
