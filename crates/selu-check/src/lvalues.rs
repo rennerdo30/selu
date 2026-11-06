@@ -55,7 +55,12 @@ impl Ctx<'_> {
             ExprKind::Index { object, .. } => {
                 let read = self.expr_inner(target);
                 let receiver = self.types.get(object.id).cloned().unwrap_or(Type::Error);
-                if receiver.members().len() > 1 {
+                let members = receiver.members();
+                if members.len() > 1
+                    && members
+                        .iter()
+                        .all(|t| matches!(crate::shape_of(t), Type::Array(_)))
+                {
                     self.out.push(err(
                         "SELU0355",
                         "writing through a union of arrays is not supported",
