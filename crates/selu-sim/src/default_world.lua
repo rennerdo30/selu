@@ -1,5 +1,9 @@
 -- Synthetic startup data only. Never reads a player account or SavedVariables.
 local version,build,interface=...
+if rawget(_G,'GENERAL')==nil then GENERAL='General' end
+if rawget(_G,'COMBAT_LOG')==nil then COMBAT_LOG='Combat Log' end
+if rawget(_G,'VOICE')==nil then VOICE='Voice' end
+if rawget(_G,'CHAT_NAME_TEMPLATE')==nil then CHAT_NAME_TEMPLATE='Chat %d' end
 -- Synthetic enUS labels for the fixed raid/group tags consumed by
 -- ChatFrameConstants.lua. Installed localized GlobalStrings are unavailable.
 for index=1,8 do

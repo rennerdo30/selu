@@ -2791,7 +2791,9 @@ impl Studio {
             0.0,
             Color32::from_rgb(28, 32, 40),
         );
-        let visible = |r: &RegionSnapshot| r.visible || self.show_hidden;
+        // Mask regions are inputs to texture compositing, never artwork.
+        let visible =
+            |r: &RegionSnapshot| r.widget != "MaskTexture" && (r.visible || self.show_hidden);
         let fade = |r: &RegionSnapshot, c: Color32| {
             let a = r.alpha.clamp(0.0, 1.0) as f32 * if r.visible { 1.0 } else { 0.3 };
             c.gamma_multiply(a)

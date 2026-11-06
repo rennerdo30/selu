@@ -263,7 +263,8 @@ create=function(n,parent,layer)
     parent=lookup(a.parent) or parent
     local name=expand(a.name,parent)
     local f
-    if n.tag=='Texture' or string.match(n.tag,'Texture$') then f=parent:CreateTexture(name,layer)
+    if n.tag=='MaskTexture' then f=parent:CreateMaskTexture(name,layer)
+    elseif n.tag=='Texture' or string.match(n.tag,'Texture$') then f=parent:CreateTexture(name,layer)
     elseif n.tag=='FontString' or n.tag=='ButtonText' then f=parent:CreateFontString(name,layer)
     elseif n.tag=='Font' then f=CreateFont(name)
     else f=native(nativeKind(n.tag),name,parent) end

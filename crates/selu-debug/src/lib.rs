@@ -332,7 +332,11 @@ fn finish_default_ui_startup(
     let Some(report) = session.default_ui_report() else {
         return;
     };
-    session.advance_time(1.0 / 60.0);
+    // Blizzard layout frames propagate dirty child sizes to their parents on
+    // OnUpdate. Let the initial preview settle through four bounded frames.
+    for _ in 0..4 {
+        session.advance_time(1.0 / 60.0);
+    }
     let errors = session.default_ui_startup_errors();
     let summary = format!(
         "Default UI startup completed: {} addons, {} load errors, {} startup errors, {:.2}s total",
@@ -344,6 +348,7 @@ fn finish_default_ui_startup(
             .unwrap_or(report.elapsed.as_secs_f64())
     );
     eprintln!("{summary}");
+    selu_sim::profile::report();
     for error in &errors {
         eprintln!("{error}");
     }

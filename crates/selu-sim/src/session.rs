@@ -1415,7 +1415,15 @@ impl Vm {
         let seq = lock(&self.ctx.trace).count();
         self.ctx.record(TraceKind::Event, event, rendered);
         let result = dispatch(&self.lua, &self.ctx, || self.fire_now(event, &args));
-        if lock(&self.ctx.trace).enabled {
+        // Startup layout transactions have no committed geometry yet. Keep
+        // event records, but do not clone the whole growing UI into history
+        // for every Blizzard ADDON_LOADED event.
+        if lock(&self.ctx.trace).enabled
+            && crate::frames::arena::store(&self.lua)
+                .borrow()
+                .layout_batches
+                == 0
+        {
             let snapshot = self.snapshot()?;
             let mut state = lock(&self.state);
             if state.marks.len() == 128 {
@@ -1512,6 +1520,26 @@ impl std::ops::Deref for Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_ui_keeps_event_trace_without_partial_frame_snapshots() {
+        let mut session = Session::new(SessionConfig {
+            trace: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/default-ui");
+        session.load_default_ui(&source, |_| {}).unwrap();
+        session.login().unwrap();
+        assert!(lock(&session.sim.state).marks.is_empty());
+        assert!(
+            session
+                .trace_since(0)
+                .iter()
+                .any(|record| record.target == "ADDON_LOADED")
+        );
+        session.fire("AFTER_STARTUP", vec![]).unwrap();
+        assert_eq!(lock(&session.sim.state).marks.len(), 1);
+    }
     #[test]
     fn blizzard_chunk_errors_are_captured_and_loading_continues() {
         let mut s = Session::new(SessionConfig::default()).unwrap();

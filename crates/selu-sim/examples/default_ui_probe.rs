@@ -196,7 +196,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("NOTE {n}");
     }
     session.login()?;
-    session.advance_time(1.0 / 60.0);
+    for _ in 0..4 {
+        session.advance_time(1.0 / 60.0);
+    }
     let snapshot_start = std::time::Instant::now();
     let snapshot = session.snapshot()?;
     println!(
@@ -211,6 +213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "MainActionBar",
         "MainMenuBar",
         "MicroMenuContainer",
+        "MicroMenu",
         "BagsBar",
         "ChatFrame1",
         "DefaultUiAnchorButton",

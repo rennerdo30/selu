@@ -136,16 +136,14 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
                     r.font_path = path;
                     r.font_size = size;
                     r.font_flags = flags;
-                    a.full_layout = true;
-                    a.dirty_regions.clear();
+                    a.dirty_regions.insert(index);
                     a.dirty = true;
                 }
             }
             break;
         }
         if r.visual != original_style {
-            a.full_layout = true;
-            a.dirty_regions.clear();
+            a.dirty_regions.insert(index);
             a.dirty = true;
         }
     }
@@ -361,12 +359,11 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
         }
         Some((pos - f * size, size))
     }
-    let metric = a
-        .fonts
-        .layout(r.display_text().unwrap_or(""), &r.text_style(), None, None);
     let intrinsic = r.kind == "FontString" || (r.kind == "EditBox" && r.multi_line);
     let width = if intrinsic && r.width == 0.0 {
-        metric.width
+        a.fonts
+            .layout(r.display_text().unwrap_or(""), &r.text_style(), None, None)
+            .width
     } else {
         r.width
     };

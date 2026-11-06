@@ -49,9 +49,7 @@ pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
         let store = crate::frames::arena::store(lua);
         let mut a = store.borrow_mut();
         a.dirty = true;
-        a.full_layout = true;
         a.styles_dirty = true;
-        a.dirty_regions.clear();
         Ok(())
     })?;
     constructor.call((
@@ -332,6 +330,15 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
                 "Frame" | "Button" | "Texture" | "FontString" | "EditBox" | "ScrollFrame"
             ) =>
         {
+            // Blizzard uses missing globals to detect not-yet-loaded frames.
+            // A manifest-shaped placeholder here poisons those checks and
+            // leaves early anchors pointing at a different arena region.
+            if lua
+                .named_registry_value::<Option<bool>>("selu.default_ui_strings")?
+                .unwrap_or(false)
+            {
+                return Ok(None);
+            }
             let create: mlua::Function = globals.raw_get("CreateFrame")?;
             Value::Table(create.call((ty.strip_prefix("widget:").unwrap_or(ty), key))?)
         }
