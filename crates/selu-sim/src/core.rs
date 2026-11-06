@@ -640,9 +640,7 @@ fn render_boundary_error(lua: &Lua, error: mlua::Value) -> mlua::Result<String> 
         return Ok(text.to_string_lossy());
     }
     let fallback = error.type_name().to_string();
-    let mut text = lua
-        .globals()
-        .get::<mlua::Function>("tostring")
+    let mut text = crate::host_lua::builtin(lua, "tostring")
         .and_then(|format| format.call::<mlua::Value>(error))
         .ok()
         .and_then(|v| {
@@ -700,9 +698,9 @@ pub(crate) fn call_lua<R: mlua::FromLuaMulti>(
                     Ok(mlua::Value::String(lua.create_string(message)?))
                 }
             })?;
-            let factory: mlua::Function = lua
-                .load(
-                    r#"
+            let factory: mlua::Function = crate::host_lua::load(
+                lua,
+                r#"
 local xpcall, error, unpack, select = xpcall, error, unpack, select
 return function(render)
  return function(fn, ...)
@@ -712,9 +710,9 @@ return function(render)
  end
 end
 "#,
-                )
-                .set_name("=selu host boundary")
-                .eval()?;
+            )
+            .set_name("=selu host boundary")
+            .eval()?;
             let function: mlua::Function = factory.call(render)?;
             lua.set_named_registry_value(KEY, function.clone())?;
             function

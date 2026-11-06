@@ -290,7 +290,11 @@ pub fn create(
                 })?,
             )?;
         }
-        let enumerate:Function=lua.load("return function(regions,count) return function(self) local children=__selu_child_regions(self,regions); if count then return #children end; return unpack(children) end end").eval()?;
+        let enumerate = crate::host_lua::factory(
+            lua,
+            "selu.helper.enumerate",
+            "return function(regions,count) return function(self) local children=__selu_child_regions(self,regions); if count then return #children end; return unpack(children) end end",
+        )?;
         for (name, regions, count) in [
             ("GetChildren", false, false),
             ("GetRegions", true, false),
@@ -345,7 +349,8 @@ pub fn create(
         lua.globals().set(name, t.clone())?;
     }
     if kind == "GameTooltip" {
-        let initialize: Function = lua.load(include_str!("tooltip.lua")).eval()?;
+        let initialize =
+            crate::host_lua::factory(lua, "selu.helper.tooltip", include_str!("tooltip.lua"))?;
         initialize.call::<()>(t.clone())?;
     }
     Ok(t)
@@ -375,7 +380,11 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         };
     }
     if method == "CreateAnimationGroup" {
-        let constructor: Function = lua.load(include_str!("animations.lua")).eval()?;
+        let constructor = crate::host_lua::factory(
+            lua,
+            "selu.helper.animations",
+            include_str!("animations.lua"),
+        )?;
         let context = ctx.clone();
         let note = lua.create_function(move |_, name: String| {
             context.not_simulated(&name);

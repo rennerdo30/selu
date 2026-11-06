@@ -485,7 +485,7 @@ impl Session {
             .manifest
             .as_ref()
             .map(|m| (&m.build, m.interface));
-        let chunk = self.sim.lua.load(include_str!("default_world.lua"));
+        let chunk = crate::host_lua::load(&self.sim.lua, include_str!("default_world.lua"));
         if let Some((b, interface)) = build {
             chunk.call::<()>((
                 format!("{}.{}.{}", b.major, b.minor, b.patch),
@@ -495,10 +495,7 @@ impl Session {
         } else {
             chunk.call::<()>(())?;
         }
-        self.sim
-            .lua
-            .load(include_str!("default_curves.lua"))
-            .exec()?;
+        crate::host_lua::load(&self.sim.lua, include_str!("default_curves.lua")).exec()?;
         let source_root = source.canonicalize().map_err(|e| runtime(e.to_string()))?;
         let mut source_notes = Vec::new();
         let storage = if let (Some(install), Some(target)) =
@@ -578,7 +575,13 @@ impl Session {
                 let result = dispatch(&self.sim.lua, &self.sim.ctx, || {
                     core::call_lua::<()>(
                         &self.sim.lua,
-                        self.sim.lua.load(&source).set_name(&name).into_function()?,
+                        if name == "@selu/xml-runtime" {
+                            crate::host_lua::load(&self.sim.lua, &source)
+                                .set_name(&name)
+                                .into_function()?
+                        } else {
+                            self.sim.lua.load(&source).set_name(&name).into_function()?
+                        },
                         (toc.name.as_str(), ns.clone()),
                     )
                 });
@@ -1176,6 +1179,7 @@ pub struct Vm {
 impl Vm {
     pub fn new() -> SimResult<Vm> {
         let lua = Lua::new();
+        crate::host_lua::install(&lua)?;
         let ctx = Ctx::new();
         core::install_hooks(&lua, &ctx);
         regions::install(&lua)?;
@@ -1261,6 +1265,7 @@ impl Vm {
         crate::world::install(&lua)?;
         crate::world::install_restrictions(&lua, &ctx)?;
         crate::trace::install(&lua, &ctx)?;
+        crate::host_lua::seal(&lua)?;
 
         Ok(Vm {
             lua,

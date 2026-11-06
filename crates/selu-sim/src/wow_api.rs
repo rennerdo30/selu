@@ -1,6 +1,7 @@
 use mlua::Lua;
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
-    lua.load(
+    crate::host_lua::load(
+        lua,
         r##"
 SlashCmdList = {}
 function GetLocale() return "enUS" end

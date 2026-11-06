@@ -23,6 +23,7 @@ use std::collections::HashSet;
 pub mod core;
 pub mod fonts;
 pub mod frames;
+mod host_lua;
 pub mod loader;
 mod native_defaults;
 mod native_stdlib;

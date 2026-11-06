@@ -53,7 +53,7 @@ pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
             Ok(())
         })?,
     )?;
-    lua.load(include_str!("timers.lua")).exec()?;
+    crate::host_lua::load(lua, include_str!("timers.lua")).exec()?;
     // Timers retain private upvalues; addons must not be able to decrement
     // the host's synchronous callback nesting counter.
     lua.globals()
@@ -123,6 +123,27 @@ fn advance_bounded(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn simulator_helpers_survive_replaced_builtin_globals() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval(r#"
+            local frame=CreateFrame('Frame'); frame:RegisterEvent('PLAYER_LOGIN')
+            frame:SetScript('OnEvent',function() EventSurvived=true end)
+            local after,create=C_Timer.After,CreateFrame
+            table={}; string={}; math={}; coroutine={}
+            pairs=nil; ipairs=nil; type=nil; tostring=nil; tonumber=nil
+            unpack=nil; select=nil; pcall=nil; xpcall=nil; error=nil; assert=nil
+            rawget=nil; rawset=nil; getmetatable=nil; setmetatable=nil; GetTime=nil
+            after(0.01,function() TimerSurvived=true end)
+            local late=create('Button'); late:SetScript('OnUpdate',function() UpdateSurvived=true end)
+        "#).unwrap();
+        sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+        sim.advance_time(0.05);
+        for name in ["TimerSurvived", "EventSurvived", "UpdateSurvived"] {
+            assert!(sim.lua().globals().get::<bool>(name).unwrap(), "{name}");
+        }
+        assert!(sim.logs().is_empty(), "{:?}", sim.logs());
+    }
     use crate::Sim;
     #[test]
     fn review_partitioned_after() {

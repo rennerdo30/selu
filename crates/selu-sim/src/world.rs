@@ -274,7 +274,7 @@ pub(crate) fn install(lua: &Lua) -> SimResult<()> {
                 .is_some_and(|v| !matches!(v, Value::Nil)))
         })?,
     )?;
-    lua.load(r#"
+    crate::host_lua::load(lua,r#"
 __selu_world_units = {}; __selu_world_money = 0; __selu_world_bags = {}
 local units = __selu_world_units
 __selu_vignettes = {}; __selu_plates = {}; __selu_zone = {zone='',subzone='',map=0}

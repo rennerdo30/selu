@@ -75,20 +75,23 @@ pub(crate) fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
             Ok(())
         })?,
     )?;
-    lua.load(
+    crate::host_lua::load(
+        lua,
         r#"
-local resume = coroutine.resume
-coroutine.resume = function(thread, ...)
- local parent = coroutine.running()
+local coroutine = _G.coroutine
+local resume, running, create = coroutine.resume, coroutine.running, coroutine.create
+local function resumeWrapped(thread, ...)
+ local parent = running()
  __selu_hook_thread(thread)
  local function restore(...) __selu_hook_thread(parent); return ... end
  return restore(resume(thread, ...))
 end
+coroutine.resume = resumeWrapped
 coroutine.wrap = function(fn)
- local thread = coroutine.create(fn)
+ local thread = create(fn)
  return function(...)
   local function result(ok, ...) if not ok then error((...), 2) end; return ... end
-  return result(coroutine.resume(thread, ...))
+  return result(resumeWrapped(thread, ...))
  end
 end
 "#,

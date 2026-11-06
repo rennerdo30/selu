@@ -3,7 +3,10 @@ use mlua::{Lua, Table, Value};
 
 /// Single construction boundary for SIM2's visual font model.
 pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
-    let constructor:mlua::Function=lua.load(r#"
+    let constructor: mlua::Function = crate::host_lua::factory(
+        lua,
+        "selu.helper.font",
+        r#"
         return function(name,size,color,offset,invalidate)
             local f={_font={"Fonts/FRIZQT__.TTF",size,""},_name=name}
             local defaults={TextColor=color,ShadowColor={0,0,0,1},ShadowOffset={offset,-offset},JustifyH={"LEFT"},JustifyV={"MIDDLE"},Spacing={0}}
@@ -31,7 +34,8 @@ pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
             end
             return f
         end
-    "#).eval()?;
+    "#,
+    )?;
     let native = crate::fonts::native_style(name);
     let (size, color) = native.unwrap_or((12.0, [1.0; 4]));
     let color = lua.create_sequence_from(color)?;
@@ -315,7 +319,8 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
 }
 
 pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
-    lua.load(
+    crate::host_lua::load(
+        lua,
         r#"
         format = string.format
         function strtrim(text, chars)
@@ -340,7 +345,7 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
     .exec()?;
     // Client contract: Blizzard_SharedXMLBase/Color.lua. Runtime objects only;
     // public typing remains owned by the manifest.
-    lua.load(r#"
+    crate::host_lua::load(lua,r#"
         function CreateColor(r,g,b,a)
             local c={r=r,g=g,b=b,a=a or 1}
             function c:GetRGB() return self.r,self.g,self.b end
@@ -416,7 +421,7 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
     lua.globals()
         .set("StaticPopupDialogs", lua.create_table()?)?;
     lua.globals().set("__selu_popups", lua.create_table()?)?;
-    lua.load(r#"
+    crate::host_lua::load(lua,r#"
         tinsert = table.insert
         tremove = table.remove
         function wipe(t) for k in pairs(t) do t[k]=nil end; return t end
@@ -438,7 +443,8 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
 pub fn configure_screen(lua: &Lua, size: (f64, f64)) -> SimResult<()> {
     lua.globals().raw_set("__selu_screen_width", size.0)?;
     lua.globals().raw_set("__selu_screen_height", size.1)?;
-    lua.load(
+    crate::host_lua::load(
+        lua,
         r#"
         function GetPhysicalScreenSize() return __selu_screen_width, __selu_screen_height end
         function GetScreenWidth() return __selu_screen_width / UIParent:GetEffectiveScale() end
