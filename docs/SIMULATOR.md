@@ -351,7 +351,8 @@ nil. The former no-op tests now probe an actual known unmodelled method,
 Tooltip ownership is stateful. The native Minimap global has an explicitly
 sourced widget shape from Blizzard's
 [Minimap.xml](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_Minimap/Mainline/Minimap.xml);
-map imagery is not simulated. Hook callbacks retain registry keys rather than
+it is 198x198 at the top right, where the default UI puts it, so minimap
+buttons show on screen. Map imagery is not simulated. Hook callbacks retain registry keys rather than
 auxiliary-stack function references, preserving error routing and flush order.
 
 SIM1 also seeds a deterministic simulated player from the session character
