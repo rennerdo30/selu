@@ -12,11 +12,13 @@ for _,name in ipairs({'GetBuildInfo','Mixin','CreateFromMixins','CopyTable','Get
     'UnitRace','UnitGUID','UnitIsUnit','UnitIsPlayer','UnitPlayerControlled','UnitIsConnected','UnitIsVisible','UnitSex',
     'UnitFactionGroup','HasFullControl','GetUnitName','GetSpecialization','UnitInParty','UnitInRaid','UnitPowerType',
     'GetPowerDisplayMod','GetZoneText','GetRealZoneText','GetSubZoneText','IsLoggedIn','IsPlayerInWorld',
-    'securecall','securecallfunction','secureexecuterange','UnitHealthPercent','UnitPowerPercent',
+    'securecall','securecallfunction','secureexecuterange','CreateSecureDelegate','UnitHealthPercent','UnitPowerPercent',
     'GetChatWindowInfo','GetChatWindowSavedPosition','GetChatWindowSavedDimensions'}) do remember(_G,name,name) end
 for namespace,keys in pairs({C_UnitAuras={'GetAuraSlots','GetAuraDataByIndex','GetAuraDataBySlot','GetAuraDataByAuraInstanceID','GetPlayerAuraBySpellID','GetUnitAuras'},
     C_CVar={'GetCVar','GetCVarBool','GetCVarNumber','SetCVar','AreCVarsLoaded','GetCVarDefault'},
-    C_EditMode={'GetLayouts'}}) do
+    C_EditMode={'GetLayouts'},
+    C_GameRules={'GetActiveGameMode','IsStandard','IsWoWHack','IsPlunderstorm'},
+    C_InputInterfaceStyle={'GetCurrentStyle'}}) do
     for _,key in ipairs(keys) do remember(rawget(_G,namespace),key,namespace..'.'..key) end
 end
 -- Native helpers for Blizzard's own Lua, not declarations available to Selu.
@@ -25,6 +27,8 @@ function Mixin(object,...)
     return object
 end
 function CreateFromMixins(...) return Mixin({},...) end
+function wipe(value) for key in pairs(value) do value[key]=nil end; return value end
+_G.table.wipe=wipe
 function CopyTable(source)
     local seen={}
     local function copy(value)
@@ -92,6 +96,19 @@ function GetChatWindowSavedDimensions() return nil end
 C_EditMode=C_EditMode or {}
 function C_EditMode.GetLayouts() return {activeLayout=1,layouts={}} end
 function securecallfunction(fn,...) return __selu_secure_invoke(fn,...) end
+-- FrameScriptDocumentation.lua: delegates preserve argument/return values
+-- and execute in a protected context. Native taint itself remains unmodeled.
+function CreateSecureDelegate(fn,options)
+    assert(type(fn)=='function','secure delegate requires a function')
+    return function(...) return __selu_secure_invoke(fn,...) end
+end
+C_GameRules=C_GameRules or {}
+function C_GameRules.GetActiveGameMode() return Enum.GameMode.WoWHack end
+function C_GameRules.IsStandard() return false end
+function C_GameRules.IsWoWHack() return true end
+function C_GameRules.IsPlunderstorm() return false end
+C_InputInterfaceStyle=C_InputInterfaceStyle or {}
+function C_InputInterfaceStyle.GetCurrentStyle() return Enum.InputDeviceInterfaceType.Mkb end
 function securecall(fn,...)
     if type(fn)=='string' then fn=_G[fn] end
     return __selu_secure_invoke(fn,...)
@@ -142,6 +159,24 @@ end
 function UnitPowerPercent(unit,powerType,unmodified,curve)
     return percent(UnitPower(unit,powerType) or 0,UnitPowerMax(unit,powerType) or 0,curve)
 end
+-- Native numeric extensions documented by LuaMathExtensionsDocumentation.lua.
+function math.clamp(value,minimum,maximum) return math.max(minimum,math.min(maximum,value)) end
+function math.saturate(value) return math.clamp(value,0,1) end
+function math.normalize(value,minimum,maximum) return (value-minimum)/(maximum-minimum) end
+function math.lerp(first,last,amount) return first+(last-first)*amount end
+function math.round(value,places)
+    local factor=10^(places or 0)
+    local scaled=value*factor
+    return (scaled<0 and math.ceil(scaled-.5) or math.floor(scaled+.5))/factor
+end
+for _,name in ipairs({'clamp','saturate','normalize','lerp','round'}) do _G.math[name]=math[name] end
+C_ColorUtil=C_ColorUtil or {}
+function C_ColorUtil.GenerateTextColorCode(color)
+    local function byte(value) return math.floor(math.saturate(value)*255+.5) end
+    return string.format('ff%02x%02x%02x',byte(color.r),byte(color.g),byte(color.b))
+end
+function C_ColorUtil.WrapTextInColorCode(text,code) return '|c'..code..text..'|r' end
+function C_ColorUtil.WrapTextInColor(text,color) return C_ColorUtil.WrapTextInColorCode(text,C_ColorUtil.GenerateTextColorCode(color)) end
 for _,entry in ipairs(originals) do entry[1][entry[2]]=entry[3] end
 if not rawget(_G,'WorldFrame') then
     local world=CreateFrame('Frame','WorldFrame',UIParent)

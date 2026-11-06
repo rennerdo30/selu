@@ -442,6 +442,7 @@ impl Session {
             .lua
             .set_app_data(crate::native_defaults::CallCounts::default());
         crate::native_stdlib::install(&self.sim.lua)?;
+        crate::client_ui::install(&self.sim.lua, &self.sim.ctx)?;
         let mut events: HashSet<String> = self
             .config
             .manifest
@@ -622,6 +623,7 @@ impl Session {
             }
         }
         drop(gc_pause);
+        crate::profile::report_hooks("Blizzard sources complete");
         report.elapsed = start.elapsed();
         for line in lock(&self.sim.logs).iter().skip(log_start) {
             if line.starts_with("error:") || line.starts_with("callback error") {

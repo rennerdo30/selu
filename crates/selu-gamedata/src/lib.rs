@@ -22,6 +22,7 @@ pub struct Storage {
     cache: PathBuf,
     names: HashMap<String, u32>,
     name_hashes: HashMap<u64, Option<u32>>,
+    atlas_cache: std::sync::OnceLock<std::result::Result<db2::AtlasIndex, String>>,
 }
 fn key(value: &str) -> Result<[u8; 16]> {
     Ok(hex::decode(value)?
@@ -90,6 +91,7 @@ impl Storage {
             data,
             names,
             name_hashes,
+            atlas_cache: std::sync::OnceLock::new(),
         })
     }
     pub fn entry_count(&self) -> usize {

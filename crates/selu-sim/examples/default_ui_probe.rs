@@ -1,5 +1,68 @@
 //! Bounded local-source startup probe. Never opens WTF or launches a client.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|s| s == "--ui-data") {
+        let storage = selu_gamedata::Storage::open(
+            std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),
+            "wowf",
+            None,
+        )?;
+        for (name, id) in [("GlobalColor", 4328468), ("GlobalStrings", 1394440)] {
+            let bytes = storage.read(id)?;
+            let u32_at = |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            println!(
+                "{name}: flags={:08X} layout={:08X} records={} fields={} storage={} common={} pallet={}",
+                u32_at(172),
+                u32_at(156),
+                u32_at(136),
+                u32_at(140),
+                u32_at(188),
+                u32_at(192),
+                u32_at(196)
+            );
+            println!(
+                "section rows={} ids={} relation={} offset_ids={} copies={}",
+                u32_at(216),
+                u32_at(228),
+                u32_at(232),
+                u32_at(236),
+                u32_at(240)
+            );
+            for field in 0..u32_at(140) as usize {
+                let at = 244 + u32_at(140) as usize * 4 + field * 24;
+                println!("storage {field}: {:?}", &bytes[at..at + 24]);
+            }
+            match selu_gamedata::db2::Table::parse(&bytes) {
+                Ok(table) => {
+                    println!(
+                        "first row: {:?}",
+                        (0..10)
+                            .map_while(|column| table.value(0, column).ok())
+                            .collect::<Vec<_>>()
+                    );
+                    for row in (0..table.count())
+                        .filter(|row| {
+                            table.text(*row, 0).is_ok_and(|name| {
+                                name == "NORMAL_FONT_COLOR"
+                                    || name == "HIGHLIGHT_FONT_COLOR"
+                                    || name == "CHAT_MSG_SAY"
+                            })
+                        })
+                        .take(4)
+                    {
+                        println!(
+                            "{} {:?}",
+                            table.text(row, 0)?,
+                            (1..10)
+                                .map_while(|column| table.value(row, column).ok())
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                }
+                Err(error) => println!("{name} parse: {error}"),
+            }
+        }
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "--atlas") {
         let storage = selu_gamedata::Storage::open(
             std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),
@@ -7,6 +70,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None,
         )?;
         println!("client build {}", storage.build.version);
+        println!(
+            "action bar atlas: {:?}",
+            storage.atlas("UI-HUD-ActionBar-Frame")?
+        );
         for (name, id) in [
             ("UiTextureAtlas", 897470),
             ("UiTextureAtlasMember", 897532),

@@ -18,6 +18,31 @@ mod enabled {
         static DATA: RefCell<Data> = RefCell::new(Data {
             active: std::env::var_os("SELU_SIM_PROFILE").is_some(), ..Data::default()
         });
+        static HOOKS: std::cell::Cell<(u64,u64)> = const { std::cell::Cell::new((0,0)) };
+    }
+    pub fn instruction_hook(quantum: u32) {
+        if !DATA.with(|data| data.borrow().active) {
+            return;
+        }
+        HOOKS.with(|hooks| {
+            let (precise, coarse) = hooks.get();
+            hooks.set(if quantum == 1 {
+                (precise + 1, coarse)
+            } else {
+                (precise, coarse + 1)
+            });
+        });
+    }
+    pub fn report_hooks(label: &str) {
+        if DATA.with(|data| data.borrow().active) {
+            HOOKS.with(|hooks| {
+                eprintln!(
+                    "PROFILE_HOOKS {label}: precise={} coarse={}",
+                    hooks.get().0,
+                    hooks.get().1
+                )
+            });
+        }
     }
     pub struct Span(Option<(Instant, &'static str)>);
     impl Span {
@@ -59,6 +84,7 @@ mod enabled {
         });
     }
     pub fn report() {
+        report_hooks("total");
         DATA.with(|data| {
             let data = data.borrow();
             if !data.active {
@@ -94,6 +120,10 @@ impl Span {
 pub fn count(_: &'static str) {}
 #[cfg(not(debug_assertions))]
 pub fn report() {}
+#[cfg(not(debug_assertions))]
+pub fn instruction_hook(_: u32) {}
+#[cfg(not(debug_assertions))]
+pub fn report_hooks(_: &str) {}
 
 /// A bounded diagnostic A/B arm, never enabled by the product settings.
 pub(crate) struct GcPause<'a>(Option<&'a mlua::Lua>);

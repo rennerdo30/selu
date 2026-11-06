@@ -538,6 +538,7 @@ impl Drop for BlizzardBootstrapBudget<'_> {
 /// around a runaway loop catches it, but its caller's next instruction
 /// fails again, so `while true do pcall(f) end` can't keep running either.
 fn budget_instruction(lua: &Lua, budget: &Shared<Budget>, quantum: u32) -> mlua::Result<VmState> {
+    crate::profile::instruction_hook(quantum);
     let mut b = lock(budget);
     b.used = b.used.saturating_add(u64::from(quantum));
     if b.exhausted || b.used > b.limit.saturating_mul(u64::from(HOOK_INTERVAL)) {
@@ -750,6 +751,7 @@ pub(crate) fn call_lua<R: mlua::FromLuaMulti>(
         Some(function) => function,
         None => {
             let render = lua.create_function(|lua, error: mlua::Value| {
+                let _profile = crate::profile::Span::new("errors.render_and_notify");
                 if let mlua::Value::Error(ref cause) = error
                     && boundary_was_reported(cause)
                 {

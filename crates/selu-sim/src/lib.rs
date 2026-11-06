@@ -20,6 +20,7 @@ use std::collections::HashSet;
 // Module ownership for round 8 (docs/WORK-PACKAGES.md): `core` is S0's
 // contract; `frames` and `regions` belong to S1; `session`, `loader`,
 // `world`, `trace` and `snapshot` to S2. This file is S0's wiring.
+mod client_ui;
 pub mod core;
 pub mod fonts;
 pub mod frames;

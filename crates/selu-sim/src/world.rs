@@ -25,6 +25,7 @@ pub struct Unit {
 /// Deliver the original value before the host boundary renders it. The default
 /// simulator sink is already represented by existing failure logging.
 pub(crate) fn notify_native_error(lua: &Lua, error: Value) -> SimResult<bool> {
+    let _profile = crate::profile::Span::new("errors.notify_handler");
     if !lua
         .globals()
         .raw_get::<bool>("__selu_sim_custom_error_handler")?

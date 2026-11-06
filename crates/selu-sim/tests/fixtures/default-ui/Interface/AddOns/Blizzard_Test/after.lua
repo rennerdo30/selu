@@ -19,6 +19,8 @@ layouts:SetScript('OnEvent',function(_,_,info) assert(info.activeLayout==1 and #
 assert(C_EventUtils.IsEventValid('VARIABLES_LOADED'))
 assert(bit.band(7,3)==3 and bit.lshift(1,4)==16)
 assert(GetCurrentEnvironment()==_G)
+local delegate=CreateSecureDelegate(function(value) return value,nil,9 end)
+local first,middle,last=delegate(7); assert(first==7 and middle==nil and last==9)
 local chatName,_,_,_,_,_,chatShown=GetChatWindowInfo(1)
 assert(chatName=='General' and chatShown)
 assert(GetChatWindowSavedPosition(1)==nil and GetChatWindowSavedDimensions(1)==nil)
