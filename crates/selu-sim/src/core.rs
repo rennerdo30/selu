@@ -147,6 +147,10 @@ pub struct VisualStyle {
     pub text_insets: [f64; 4],
     #[serde(default)]
     pub text_scroll: (f64, f64),
+    #[serde(default)]
+    pub edit_selection: Vec<[f64; 4]>,
+    #[serde(default)]
+    pub edit_caret: Option<[f64; 4]>,
 }
 fn default_true() -> bool {
     true
@@ -174,6 +178,8 @@ impl Default for VisualStyle {
             blend: "BLEND".into(),
             text_insets: [0.0; 4],
             text_scroll: (0.0, 0.0),
+            edit_selection: vec![],
+            edit_caret: None,
         }
     }
 }
@@ -365,9 +371,8 @@ pub const BUDGET_ERROR: &str = "script ran too long";
 // Install context and dispatch (decision 16).
 // ---------------------------------------------------------------------------
 
-/// A callback that layout (or another host-side change) caused and that must
-/// run outside the call that discovered it: `OnSizeChanged`, `OnShow` from a
-/// parent being shown, ...
+/// A callback retained until arena borrows are released. Layout size scripts
+/// stay deferred; visibility and other API scripts finish before return.
 pub type Pending = Box<dyn FnOnce(&Lua) -> mlua::Result<()>>;
 
 /// The shared state every module gets at install time. Cheap to clone (all
@@ -390,6 +395,7 @@ pub struct Ctx {
     pub trace: Shared<Trace>,
     pub(crate) budget: Shared<Budget>,
     pub(crate) pending: Shared<VecDeque<Pending>>,
+    pub(crate) scripts: Shared<VecDeque<Pending>>,
     /// Nesting depth of [`dispatch`]; only the outermost resets and flushes.
     pub(crate) depth: Shared<u32>,
 }
@@ -414,6 +420,7 @@ impl Ctx {
                 exhausted: false,
             }),
             pending: shared(VecDeque::new()),
+            scripts: shared(VecDeque::new()),
             depth: shared(0),
         }
     }
@@ -805,18 +812,41 @@ pub(crate) fn script_callback<R>(
 /// Run queued callbacks until the queue is empty. Callbacks share the outer dispatch instruction and callback budgets;
 /// callbacks a callback queues run in the same flush.
 pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
+    let _ = flush_scripts(lua, ctx);
+    let _ = flush_queue(lua, ctx, &ctx.pending);
+    let _ = flush_scripts(lua, ctx);
+}
+/// API transitions wait only until arena borrows are released. They do not
+/// drain deferred host work or reset the outer dispatch's shared budgets.
+pub(crate) fn check_budget(ctx: &Ctx) -> mlua::Result<()> {
+    let b = lock(&ctx.budget);
+    if b.exhausted {
+        Err(mlua::Error::runtime(b.failure.unwrap_or(BUDGET_ERROR)))
+    } else {
+        Ok(())
+    }
+}
+pub(crate) fn flush_scripts(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    flush_queue(lua, ctx, &ctx.scripts)
+}
+fn flush_queue(lua: &Lua, ctx: &Ctx, queue: &Shared<VecDeque<Pending>>) -> mlua::Result<()> {
+    let mut error = None;
     loop {
-        let Some(next) = lock(&ctx.pending).pop_front() else {
+        let Some(next) = lock(queue).pop_front() else {
             break;
         };
         let stop = {
             let mut b = lock(&ctx.budget);
             b.pending_tasks += 1;
-            b.exhausted || b.pending_tasks > 10_000
+            if b.pending_tasks > 10_000 {
+                b.exhausted = true;
+                b.failure = Some("dispatch callback/task budget exhausted");
+            }
+            b.exhausted
         };
         if stop {
             ctx.runtime_failure("flush", "dispatch callback/instruction budget exhausted");
-            lock(&ctx.pending).clear();
+            lock(queue).clear();
             ctx.log("error: dispatch callback/instruction budget exhausted");
             ctx.record(
                 TraceKind::Error,
@@ -832,8 +862,12 @@ pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
             }
             ctx.log(format!("error: {text}"));
             ctx.record(TraceKind::Error, "flush", vec![text]);
+            if error.is_none() {
+                error = Some(e);
+            }
         }
     }
+    error.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]

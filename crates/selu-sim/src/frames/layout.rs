@@ -248,6 +248,16 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
             );
         }
     }
+    let auto_focus = a
+        .regions
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(i, r)| r.kind == "EditBox" && r.auto_focus && r.visible && !before[*i].0)
+        .map(|(i, _)| i);
+    if let Some(i) = auto_focus {
+        focus(a, ctx, Some(i));
+    }
     if a.focus.is_some_and(|i| !a.regions[i].visible) {
         focus(a, ctx, None);
     }

@@ -191,7 +191,8 @@ fn nonstring_addon_field_reads_nil() {
 fn titlebar_drag_moves_parent_marked_by_startmoving() {
     let sim = Sim::new().unwrap();
     sim.eval(r#"
-local p=CreateFrame('Frame','Panel');p:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',10,20);p:SetSize(100,100)
+-- Native movement requires SetMovable (SimpleFrameAPIDocumentation.lua).
+local p=CreateFrame('Frame','Panel');p:SetMovable(true);p:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',10,20);p:SetSize(100,100)
 local bar=CreateFrame('Button',nil,p);bar:SetAllPoints(p);bar:RegisterForDrag('LeftButton')
 bar:SetScript('OnDragStart',function(self) self:GetParent():StartMoving() end)
 bar:SetScript('OnDragStop',function(self) self:GetParent():StopMovingOrSizing() end)

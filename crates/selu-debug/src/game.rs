@@ -189,78 +189,7 @@ impl Settings {
     }
 }
 
-/// Install folders from the registry (read-only `reg query`).
-fn registry_roots() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let queries: [&[&str]; 2] = [
-        &[
-            "query",
-            r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-            "/s",
-            "/f",
-            "World of Warcraft",
-            "/d",
-        ],
-        &[
-            "query",
-            r"HKLM\SOFTWARE\WOW6432Node\Blizzard Entertainment\World of Warcraft",
-            "/s",
-        ],
-    ];
-    for args in queries {
-        let Ok(output) = std::process::Command::new("reg").args(args).output() else {
-            continue;
-        };
-        let text = String::from_utf8_lossy(&output.stdout);
-        for line in text.lines() {
-            let line = line.trim();
-            for key in ["InstallLocation", "InstallPath", "GamePath"] {
-                if let Some(rest) = line.strip_prefix(key)
-                    && let Some(value) = rest.trim().strip_prefix("REG_SZ")
-                {
-                    let mut p = PathBuf::from(value.trim().trim_end_matches(['\\', '/']));
-                    // InstallPath points at a client folder (`..\_retail_`).
-                    if p.file_name()
-                        .is_some_and(|n| n.to_string_lossy().starts_with('_'))
-                        && let Some(parent) = p.parent()
-                    {
-                        p = parent.to_path_buf();
-                    }
-                    if !p.as_os_str().is_empty() {
-                        out.push(p);
-                    }
-                }
-            }
-        }
-    }
-    out
-}
-
-/// Usual install folders on every drive.
-fn common_roots() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for letter in b'C'..=b'Z' {
-        let drive = format!("{}:\\", letter as char);
-        if !Path::new(&drive).exists() {
-            continue;
-        }
-        for rel in [
-            r"World of Warcraft",
-            r"Program Files (x86)\World of Warcraft",
-            r"Program Files\World of Warcraft",
-            r"Games\World of Warcraft",
-            r"Games\Battle.net\World of Warcraft",
-            r"Blizzard\World of Warcraft",
-            r"Battle.net\World of Warcraft",
-        ] {
-            let p = Path::new(&drive).join(rel);
-            if p.is_dir() {
-                out.push(p);
-            }
-        }
-    }
-    out
-}
+use selu_gamedata::discovery::{common_roots, registry_roots};
 
 /// The clients inside one install folder.
 pub fn clients_in(root: &Path, settings: &Settings) -> Vec<Client> {

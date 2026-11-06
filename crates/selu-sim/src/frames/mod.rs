@@ -79,6 +79,16 @@ impl RegionModel for LuaTableModel {
                         } else {
                             r.visual.uv
                         },
+                        edit_caret: if a.focus == Some(i) && r.kind == "EditBox" {
+                            Some(edit_rect(&a, r, r.cursor_position, r.cursor_position))
+                        } else {
+                            None
+                        },
+                        edit_selection: if r.kind == "EditBox" && r.selection.0 != r.selection.1 {
+                            vec![edit_rect(&a, r, r.selection.0, r.selection.1)]
+                        } else {
+                            vec![]
+                        },
                         font: r.font_path.clone(),
                         size: r.font_size * r.effective_scale,
                         flags: r.font_flags.clone(),
@@ -376,4 +386,27 @@ mod fidelity_tests {
         assert_eq!(label.visual.size, 18.0);
         assert_eq!(label.visual.color, [1.0, 0.0, 0.0, 1.0]);
     }
+}
+
+fn edit_rect(a: &arena::Arena, r: &arena::Region, start: usize, end: usize) -> [f64; 4] {
+    let text = r.display_text().unwrap_or("");
+    let boundary = |p: usize| {
+        let mut p = p.min(text.len());
+        while !text.is_char_boundary(p) {
+            p -= 1;
+        }
+        p
+    };
+    let mut style = r.text_style();
+    style.max_lines = 0;
+    style.wrap = false;
+    let measure = |p| {
+        a.fonts
+            .layout(&text[..boundary(p)], &style, None, None)
+            .width
+    };
+    let x = measure(start);
+    let right = measure(end);
+    let height = a.fonts.layout("M", &style, None, None).height;
+    [x, 0.0, (right - x).max(1.0), height]
 }

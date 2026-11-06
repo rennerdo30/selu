@@ -35,6 +35,22 @@ impl TextPainter<'_> {
             )
             .gamma_multiply(opacity)
         };
+        let edit_area = |q: [f64; 4]| {
+            Rect::from_min_size(
+                rect.left_top() + Vec2::new(q[0] as f32, q[1] as f32) * scale,
+                Vec2::new(q[2] as f32, q[3] as f32) * scale,
+            )
+        };
+        for q in &region.visual.edit_selection {
+            painter.rect_filled(
+                edit_area(*q),
+                0.0,
+                Color32::from_rgba_unmultiplied(70, 110, 210, 140),
+            );
+        }
+        if let Some(q) = region.visual.edit_caret {
+            painter.rect_filled(edit_area(q), 0.0, tint(region.visual.color));
+        }
         let mut masks = HashMap::new();
         for mask in &layout.masks {
             let mut hash = std::collections::hash_map::DefaultHasher::new();

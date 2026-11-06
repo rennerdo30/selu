@@ -201,3 +201,5 @@ fn config_path(k: &str) -> PathBuf {
     PathBuf::from("config").join(&k[..2]).join(&k[2..4]).join(k)
 }
 pub mod db2;
+
+pub mod discovery;

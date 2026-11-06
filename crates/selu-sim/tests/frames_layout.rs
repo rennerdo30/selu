@@ -44,7 +44,7 @@ fn stretch_cycle_fields_and_focus() {
     sim.eval("assert(Editor:GetText()=='hello')").unwrap();
 }
 #[test]
-fn callbacks_are_deferred_and_parent_visibility_propagates() {
+fn callbacks_are_synchronous_and_parent_visibility_propagates() {
     let sim = Sim::new().unwrap();
     sim.eval(
         r#"
@@ -54,7 +54,8 @@ fn callbacks_are_deferred_and_parent_visibility_propagates() {
  "#,
     )
     .unwrap();
-    assert_eq!(sim.prints(), ["after", "hide"]);
+    // SIM5 owner contract: inherited OnHide finishes before Hide returns.
+    assert_eq!(sim.prints(), ["hide", "after"]);
 }
 #[test]
 fn unanchored_size_change_is_deferred() {

@@ -28,9 +28,10 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
     ) {
         return;
     }
+    let deferred = name == "OnSizeChanged";
     let name = name.to_owned();
     let ctx2 = ctx.clone();
-    ctx.queue(Box::new(move |lua| {
+    let pending: crate::core::Pending = Box::new(move |lua| {
         if let Some(f) = t
             .raw_get::<Table>("__scripts")?
             .raw_get::<Option<Function>>(name.clone())?
@@ -41,7 +42,12 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
             crate::core::script_callback(lua, &ctx2, || crate::core::call_lua::<()>(lua, f, call))?;
         }
         Ok(())
-    }));
+    });
+    if deferred {
+        ctx.queue(pending);
+    } else {
+        ctx.scripts.lock().unwrap().push_back(pending);
+    }
 }
 pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
     lua.set_app_data(ctx.clone());
@@ -165,6 +171,13 @@ pub fn create(
         step: 0.0,
         obey_step: false,
         orientation: "VERTICAL".into(),
+        movable: false,
+        clamped: false,
+        drag_buttons: vec![],
+        motion_disabled: false,
+        auto_focus: true,
+        cursor_position: 0,
+        selection: (0, 0),
         moving: false,
         checked: false,
         value: 0.0,
@@ -203,7 +216,10 @@ pub fn create(
             m.set(
                 method.clone(),
                 lua.create_function(move |lua, args: MultiValue| {
-                    call(lua, &context, &method, args)
+                    let result = call(lua, &context, &method, args);
+                    crate::core::flush_scripts(lua, &context)?;
+                    crate::core::check_budget(&context)?;
+                    result
                 })?,
             )?;
         }
@@ -251,9 +267,13 @@ pub fn create(
     if let Some(name) = name {
         lua.globals().set(name, t.clone())?;
     }
+    if kind == "GameTooltip" {
+        let initialize: Function = lua.load(include_str!("tooltip.lua")).eval()?;
+        initialize.call::<()>(t.clone())?;
+    }
     Ok(t)
 }
-const METHODS: &str = "SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
+const METHODS: &str = "IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText GetTextSelection GetAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     if !ctx
         .stale_sources
@@ -541,9 +561,12 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             .max(0.0);
         out!(range);
     }
-    if matches!(method, "GetStringWidth" | "GetStringHeight" | "IsTruncated") {
+    if matches!(
+        method,
+        "GetUnboundedStringWidth" | "GetStringWidth" | "GetStringHeight" | "IsTruncated"
+    ) {
         let r = &a.regions[i];
-        let width = if method == "GetStringWidth" {
+        let width = if matches!(method, "GetStringWidth" | "GetUnboundedStringWidth") {
             None
         } else {
             r.rect
@@ -555,14 +578,16 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         } else {
             None
         };
-        let shaped = a.fonts.layout(
-            r.display_text().unwrap_or(""),
-            &r.text_style(),
-            width,
-            height,
-        );
+        let mut style = r.text_style();
+        if method == "GetUnboundedStringWidth" {
+            style.max_lines = 0;
+            style.ellipsis = false;
+        }
+        let shaped = a
+            .fonts
+            .layout(r.display_text().unwrap_or(""), &style, width, height);
         match method {
-            "GetStringWidth" => out!(shaped.width),
+            "GetStringWidth" | "GetUnboundedStringWidth" => out!(shaped.width),
             "GetStringHeight" => out!(shaped.height),
             _ => out!(shaped.truncated),
         }
@@ -801,6 +826,8 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "SetChecked" => r.checked = boolean(v.first()),
         "GetChecked" => out!(r.checked),
         "SetText" => {
+            r.cursor_position = 0;
+            r.selection = (0, 0);
             r.text_value = v.first().cloned().unwrap_or(Value::Nil);
             r.text = if matches!(v.first(), None | Some(Value::Nil | Value::LightUserData(_))) {
                 None
@@ -1032,10 +1059,41 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             r.value = r.value.clamp(r.min, r.max);
         }
         "GetMinMaxValues" => out!((r.min, r.max)),
-        "StartMoving" => {
+        "SetMovable" => r.movable = boolean(v.first()),
+        "IsMovable" => out!(r.movable),
+        "SetClampedToScreen" => r.clamped = boolean(v.first()),
+        "IsClampedToScreen" => out!(r.clamped),
+        "RegisterForDrag" => r.drag_buttons = v.iter().filter_map(|v| string(Some(v))).collect(),
+        "SetMotionScriptsWhileDisabled" => r.motion_disabled = boolean(v.first()),
+        "SetAutoFocus" => r.auto_focus = boolean(v.first()),
+        "GetAutoFocus" => out!(r.auto_focus),
+        "SetCursorPosition" => {
+            let text = r.text.as_deref().unwrap_or("");
+            let mut pos = (n.max(0.0) as usize).min(text.len());
+            while !text.is_char_boundary(pos) {
+                pos -= 1;
+            }
+            r.cursor_position = pos;
+            r.selection = (pos, pos);
+        }
+        "GetCursorPosition" => out!(r.cursor_position),
+        "HighlightText" => {
+            let len = r.text.as_deref().unwrap_or("").len();
+            let start = (n.max(0.0) as usize).min(len);
+            let end = number(v.get(1), -1.0);
+            let end = if end < 0.0 {
+                len
+            } else {
+                (end as usize).min(len)
+            };
+            r.selection = (start.min(end), start.max(end));
+        }
+        "GetTextSelection" => out!(r.selection),
+        "StartMoving" if r.movable => {
             r.moving = true;
             a.moving = Some(i);
         }
+        "StartMoving" => {}
         "StopMovingOrSizing" => {
             r.moving = false;
             if a.moving == Some(i) {
@@ -1050,14 +1108,6 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         }
         "HasFocus" => out!(a.focus == Some(i)),
         _ => ctx.not_simulated(&format!("{}:{method}", r.kind)),
-    }
-    let direct_visibility = matches!(method, "Show" | "Hide" | "SetShown");
-    if direct_visibility {
-        let parent_visible = a.regions[i]
-            .parent
-            .map(|p| a.regions[p].visible)
-            .unwrap_or(true);
-        a.regions[i].visible = a.regions[i].shown && parent_visible;
     }
     if (method == "SetAtlas" && boolean(v.get(1)))
         || !matches!(
@@ -1078,18 +1128,6 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     }
     let new = a.regions[i].clone();
     drop(a);
-    if direct_visibility
-        && old.visible != new.visible
-        && let Some(f) = t
-            .raw_get::<Table>("__scripts")?
-            .raw_get::<Option<Function>>(if new.visible { "OnShow" } else { "OnHide" })?
-    {
-        let result = crate::core::script_callback(lua, ctx, || {
-            crate::core::call_lua::<()>(lua, f, t.clone())
-        });
-        crate::core::flush(lua, ctx);
-        result?;
-    }
     if new.rect.is_none() && (old.width, old.height) != (new.width, new.height) {
         callback(
             ctx,
@@ -1124,6 +1162,25 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         if changed {
             callback(ctx, t.clone(), name, vec![Value::Number(value)]);
         }
+    }
+    if old.enabled != new.enabled {
+        callback(
+            ctx,
+            t.clone(),
+            if new.enabled { "OnEnable" } else { "OnDisable" },
+            vec![],
+        );
+    }
+    if method == "SetMinMaxValues" && (old.min, old.max) != (new.min, new.max) {
+        callback(
+            ctx,
+            t.clone(),
+            "OnMinMaxChanged",
+            vec![Value::Number(new.min), Value::Number(new.max)],
+        );
+    }
+    if method == "SetText" && new.kind == "EditBox" {
+        callback(ctx, t.clone(), "OnTextSet", vec![]);
     }
     if old.text != new.text {
         callback(ctx, t.clone(), "OnTextChanged", vec![Value::Boolean(false)]);

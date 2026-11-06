@@ -134,6 +134,8 @@ impl Report {
 /// What a run needs from the CLI.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
+    pub client_install: Option<PathBuf>,
+    pub no_client_assets: bool,
     pub manifest_dir: Option<PathBuf>,
     pub project_dir: PathBuf,
     pub target: Option<String>,
@@ -183,6 +185,8 @@ mod tests {
         std::fs::write(root.join("tests/boot.test.selu"), "").unwrap();
         let found = discover(&root).unwrap();
         let err = run(&RunOptions {
+            client_install: None,
+            no_client_assets: true,
             manifest_dir: None,
             project_dir: root.clone(),
             target: None,
@@ -261,3 +265,5 @@ mod sb_tests {
         assert_eq!(report.strict_exit_code(), 0);
     }
 }
+
+mod client_assets;

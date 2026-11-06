@@ -27,7 +27,7 @@ fn eligible(sim: &Sim, i: usize) -> bool {
     let r = &a.regions[i];
     r.visible && r.enabled && r.mouse && a.capture == Some(i)
 }
-fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
+fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool) -> Option<usize> {
     let a = store(sim.lua());
     let mut a = a.borrow_mut();
     layout::resolve(&mut a, sim.ctx());
@@ -39,7 +39,7 @@ fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
                 x >= q.left && x < q.left + q.width && y >= q.bottom && y < q.bottom + q.height
             }) && r.visible
                 && r.mouse
-                && r.enabled
+                && (r.enabled || (motion && r.motion_disabled))
                 && r.rect.is_some_and(|q| {
                     x >= q.left
                         && x <= q.left + q.width
@@ -50,10 +50,13 @@ fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
         .max_by_key(|(i, r)| (r.strata, r.level, r.layer, *i))
         .map(|(i, _)| i)
 }
+fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
+    hit_motion(sim, x, y, false)
+}
 impl crate::session::Vm {
     pub fn hover(&self, x: f64, y: f64) -> SimResult<Option<RegionId>> {
         dispatch(self.lua(), self.ctx(), || {
-            let target = hit(self, x, y);
+            let target = hit_motion(self, x, y, true);
             let a = store(self.lua());
             let mut a = a.borrow_mut();
             let old = a.hover;
@@ -119,16 +122,39 @@ impl crate::session::Vm {
             a.borrow_mut().capture = target;
             let button = Value::String(self.lua().create_string("LeftButton")?);
             if let Some(i) = target {
-                invoke(self, i, "OnDragStart", vec![button.clone()])?;
+                let registered = a.borrow().regions[i]
+                    .drag_buttons
+                    .iter()
+                    .any(|b| b == "LeftButton");
+                if registered {
+                    invoke(self, i, "OnDragStart", vec![button.clone()])?;
+                }
                 {
                     let mut a = a.borrow_mut();
                     a.cursor = to;
                     if let Some(moving) = a.moving {
+                        let screen = a.regions[0].rect;
                         let r = &mut a.regions[moving];
+                        let mut dx = to.0 - from.0;
+                        let mut dy = to.1 - from.1;
+                        if r.clamped
+                            && let (Some(q), Some(screen)) = (r.rect, screen)
+                        {
+                            dx = dx.clamp(
+                                screen.left - q.left,
+                                (screen.left + screen.width - q.left - q.width)
+                                    .max(screen.left - q.left),
+                            );
+                            dy = dy.clamp(
+                                screen.bottom - q.bottom,
+                                (screen.bottom + screen.height - q.bottom - q.height)
+                                    .max(screen.bottom - q.bottom),
+                            );
+                        }
                         let scale = r.effective_scale;
                         for point in &mut r.points {
-                            point.x += (to.0 - from.0) / scale;
-                            point.y += (to.1 - from.1) / scale;
+                            point.x += dx / scale;
+                            point.y += dy / scale;
                         }
                         a.dirty = true;
                         a.full_layout = true;
@@ -170,7 +196,9 @@ impl crate::session::Vm {
                         set.call::<()>((t, value, true))?;
                     }
                 }
-                invoke(self, i, "OnDragStop", vec![button])?;
+                if registered {
+                    invoke(self, i, "OnDragStop", vec![button])?;
+                }
             } else {
                 a.borrow_mut().cursor = to;
             }
@@ -241,7 +269,24 @@ impl crate::session::Vm {
                 .filter(|&i| a.regions[i].enabled && a.regions[i].keyboard && a.regions[i].visible)
             {
                 let r = &mut a.regions[i];
-                r.text = Some(format!("{}{text}", r.text.as_deref().unwrap_or("")));
+                let mut current = r.text.clone().unwrap_or_default();
+                let (mut start, mut end) = r.selection;
+                if start == end {
+                    start = r.cursor_position;
+                    end = start;
+                }
+                start = start.min(current.len());
+                end = end.min(current.len());
+                while !current.is_char_boundary(start) {
+                    start -= 1;
+                }
+                while !current.is_char_boundary(end) {
+                    end -= 1;
+                }
+                current.replace_range(start..end, text);
+                r.cursor_position = start + text.len();
+                r.selection = (r.cursor_position, r.cursor_position);
+                r.text = Some(current);
                 r.text_value = Value::Nil;
                 let t = r.table.clone();
                 a.dirty = true;
