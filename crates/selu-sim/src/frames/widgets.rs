@@ -81,11 +81,12 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
         "CreateFrame",
         lua.create_function(
             move |lua,
-                  (kind, name, parent, templates): (
+                  (kind, name, parent, templates, frame_id): (
                 Option<String>,
                 Option<String>,
                 Option<Table>,
                 Option<String>,
+                Option<i32>,
             )| {
                 let mut kind = kind.unwrap_or_else(|| "Frame".into());
                 let mut templates = templates;
@@ -101,6 +102,9 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
                     kind = base;
                 }
                 let t = create(lua, &ctx, &kind, name, parent)?;
+                if let Some(frame_id) = frame_id {
+                    store(lua).borrow_mut().regions[id(&t)?].id = frame_id;
+                }
                 crate::regions::templates(lua, &t, templates.as_deref())?;
                 if templates.as_deref().is_some_and(|s| s.contains("Secure")) {
                     ctx.not_simulated("secure templates");
@@ -287,6 +291,14 @@ pub fn create(
             "GetStatusBarColor",
             "GetNormalTexture",
             "GetAtlas",
+            "GetScaledRect",
+            "SetNormalAtlas",
+            "SetPushedAtlas",
+            "SetHighlightAtlas",
+            "SetDisabledAtlas",
+            "SetUnit",
+            "GetUnit",
+            "SetGUIDMatch",
             "SetClampRectInsets",
             "SetAllowOverlappedModels",
             "SetIndentedWordWrap",
@@ -405,6 +417,55 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         ($x:expr) => {
             return $x.into_lua_multi(lua)
         };
+    }
+    if matches!(
+        method,
+        "SetNormalAtlas" | "SetPushedAtlas" | "SetHighlightAtlas" | "SetDisabledAtlas"
+    ) {
+        let slot = method.replace("Atlas", "Texture");
+        if matches!(v.first(), None | Some(Value::Nil)) {
+            return call(
+                lua,
+                ctx,
+                &slot,
+                MultiValue::from_vec(vec![Value::Table(t.clone()), Value::Nil]),
+            );
+        }
+        let key = format!("__selu_{}", &slot[3..]);
+        let child = if let Some(child) = t.raw_get::<Option<Table>>(key)? {
+            child
+        } else {
+            create(lua, ctx, "Texture", None, Some(t.clone()))?
+        };
+        call(
+            lua,
+            ctx,
+            "SetAtlas",
+            MultiValue::from_vec(vec![
+                Value::Table(child.clone()),
+                v.first().cloned().unwrap_or(Value::Nil),
+            ]),
+        )?;
+        call(
+            lua,
+            ctx,
+            "SetAllPoints",
+            MultiValue::from_vec(vec![Value::Table(child.clone()), Value::Table(t.clone())]),
+        )?;
+        return call(
+            lua,
+            ctx,
+            &slot,
+            MultiValue::from_vec(vec![Value::Table(t.clone()), Value::Table(child)]),
+        );
+    }
+    if method == "SetUnit" {
+        t.raw_set("__selu_unit", v.first().cloned().unwrap_or(Value::Nil))?;
+        ctx.not_simulated("native unit-bound widget data");
+        out!(());
+    }
+    if method == "GetUnit" {
+        out!(t.raw_get::<Value>("__selu_unit")?);
     }
     if method == "IsOwned" {
         out!(!t.raw_get::<Value>("__tooltip_owner")?.is_nil());
@@ -1433,11 +1494,13 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 r.points.push(point);
             }
         }
-        "GetRect" | "GetLeft" | "GetRight" | "GetTop" | "GetBottom" | "GetCenter" => {
+        "GetRect" | "GetScaledRect" | "GetLeft" | "GetRight" | "GetTop" | "GetBottom"
+        | "GetCenter" => {
             if let Some(q) = r.rect {
                 let z = r.effective_scale;
                 match method {
                     "GetRect" => out!((q.left / z, q.bottom / z, q.width / z, q.height / z)),
+                    "GetScaledRect" => out!((q.left, q.bottom, q.width, q.height)),
                     "GetLeft" => out!(q.left / z),
                     "GetRight" => out!((q.left + q.width) / z),
                     "GetTop" => out!((q.bottom + q.height) / z),

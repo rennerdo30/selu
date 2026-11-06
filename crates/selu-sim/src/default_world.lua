@@ -82,6 +82,9 @@ function UnitPowerBarTimerInfo() return nil end
 C_ActionBar=C_ActionBar or {}
 function C_ActionBar.GetActionBarPage() return 1 end
 function GetActionBarPage() return 1 end
+function GetNetStats() return 0,0,0,0 end
+function GetNumLanguages() return 1 end
+function GetLanguageByIndex(index) if index==1 then return 'Common',7 end end
 Kiosk=Kiosk or {}
 function Kiosk.IsEnabled() return false end
 function UnitGUID(unit) if unit=='player' then return 'Player-1-00000001' end end

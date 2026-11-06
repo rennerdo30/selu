@@ -1552,7 +1552,13 @@ mod tests {
             .unwrap();
         assert_eq!(report.addons_loaded, 1);
         assert_eq!(progress, ["Blizzard_Test"]);
-        assert_eq!(report.errors.len(), 3);
+        assert_eq!(report.errors.len(), 4);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.contains("explicit Blizzard error handler failure"))
+        );
         assert!(
             report
                 .errors

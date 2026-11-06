@@ -81,7 +81,27 @@ pub(crate) fn read_client(
         "@selu/xml-runtime".into(),
         include_str!("xml_runtime.lua").into(),
     ));
-    for node in doc.root_element().children().filter(|n| n.is_element()) {
+    fn declarations<'a, 'input>(
+        parent: roxmltree::Node<'a, 'input>,
+        out: &mut Vec<roxmltree::Node<'a, 'input>>,
+    ) {
+        for node in parent.children().filter(|node| node.is_element()) {
+            if node.tag_name().name() == "ScopedModifier" {
+                declarations(node, out);
+            } else {
+                out.push(node);
+            }
+        }
+    }
+    let mut nodes = Vec::new();
+    declarations(doc.root_element(), &mut nodes);
+    if doc
+        .descendants()
+        .any(|node| node.has_tag_name("ScopedModifier"))
+    {
+        diagnostic("not simulated: XML ScopedModifier forbidden-object policy".into());
+    }
+    for node in nodes {
         if matches!(node.tag_name().name(), "Include" | "Script") {
             if let Some(file) = node.attribute("file") {
                 let child = path.parent().unwrap().join(file.replace('\\', "/"));
@@ -170,6 +190,8 @@ const SUPPORTED: &[&str] = &[
     "NormalFont",
     "HighlightFont",
     "DisabledFont",
+    "Mixins",
+    "Mixin",
 ];
 
 #[cfg(test)]
@@ -210,6 +232,8 @@ mod tests {
         </Ui>"#,
         );
         sim.eval("assert(Root:GetID()==17 and Root:GetWidth()==80); assert(Root.value==7); assert(Root:Answer()==42); assert(Root.Button==RootButton); assert(Root.buttons[1]==RootButton); assert(RootButton:GetParent()==Root); local f=CreateFrame('Frame','FromLua',nil,'Nested'); assert(f.Button==FromLuaButton)").unwrap();
+        sim.eval("local f=CreateFrame('Frame',nil,Root,'Nested',23); assert(f:GetID()==23)")
+            .unwrap();
         sim.eval("assert(Root.Selection and Root.Selection:GetParent()==Root); assert(#Root.selections==1 and Root.selections[1]==Root.Selection)").unwrap();
     }
     #[test]
@@ -248,6 +272,16 @@ mod tests {
             r#"<Ui><Frame name="Root"><Frames><Frame parentKey="Group"><Frames><Frame parentKey="Reference"/><Frame parentKey="Child"><Anchors><Anchor point="TOP" relativeKey="$parent.Reference" relativePoint="BOTTOM" x="3" y="4"/></Anchors></Frame></Frames></Frame></Frames></Frame></Ui>"#,
         );
         sim.eval("local p,r,rp,x,y=Root.Group.Child:GetPoint(); assert(r==Root.Group.Reference and p=='TOP' and rp=='BOTTOM' and x==3 and y==4)").unwrap();
+    }
+    #[test]
+    fn scoped_modifiers_preserve_inner_template_declarations() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("NestedMixin={value=42}").unwrap();
+        run(
+            &sim,
+            r#"<Ui><ScopedModifier useForbiddenObjectTable="true"><Frame name="ScopedBase" virtual="true"><Size x="80" y="20"/><Mixins><Mixin key="NestedMixin" source="secure"/></Mixins></Frame></ScopedModifier><Frame name="Root" inherits="ScopedBase"/></Ui>"#,
+        );
+        sim.eval("assert(Root:GetWidth()==80 and Root:GetHeight()==20 and Root.value==42); assert(ScopedBase==nil)").unwrap();
     }
     #[test]
     fn script_inherit_positions_the_inherited_handler() {
@@ -292,6 +326,7 @@ mod tests {
             r#"<Ui><Button name="Root"><Size x="80" y="30"/><Anchors><Anchor point="CENTER"/></Anchors><NormalTexture parentKey="Art" file="Interface/Buttons/WHITE8X8"/><HighlightTexture parentKey="Highlight" file="Interface/Buttons/WHITE8X8"/></Button></Ui>"#,
         );
         sim.eval("assert(Root:GetNormalTexture()==Root.Art); assert(Root:GetHighlightTexture()==Root.Highlight); assert(not Root.Highlight:IsShown()); Root:SetNormalTexture('Interface/Buttons/WHITE8X8'); assert(Root:GetNormalTexture()==Root.Art and Root.Art:IsShown()); Root:SetNormalTexture(nil); assert(Root:GetNormalTexture()==nil and not Root.Art:IsShown())").unwrap();
+        sim.eval("Root:SetNormalAtlas('ui-hud-micromenu-character-Up'); assert(Root:GetNormalTexture():GetAtlas()=='ui-hud-micromenu-character-Up')").unwrap();
     }
     #[test]
     fn utf8_and_multiline_scripts_survive_encoding() {

@@ -575,3 +575,52 @@ Nameplate frames are simulator frames with `namePlateUnitToken`; no Blizzard
 nameplate template is loaded here. Vignette positions return a vector with
 `x`, `y`, `GetXY` and zero facing on the configured map only. Bag setups model
 item IDs per slot, not inventory metadata or item stack counts.
+
+## Default UI startup (stage 1, opt-in)
+
+The Default UI setting remains **off by default until visual acceptance**.
+An explicitly enabled session loads Blizzard's external Lua/XML before the
+user addon. Local CASC files take precedence over the configured read-only
+source checkout; missing locally installed files fall back with notes. The
+tested source is Forever 1.60.1.70790, matching the installed wowf client.
+Neither source nor game folders are modified. SavedVariables are not read.
+
+XML parsing uses `roxmltree` (MIT OR Apache-2.0). Virtual/intrinsic templates,
+multiple inheritance, mixins, parent keys/arrays, `$parent`, relative keys,
+script inheritance, scroll children and button texture/text regions are
+simulator input mechanisms; none introduces untyped Lua into Selu programs.
+`inherit="append"` appends the inherited handler after the local handler,
+as required by FloatingChatFrame.xml's chat-frame initialization. Intrinsic
+postcall OnLoad handlers run after the instance's normal OnLoad and regions.
+
+The client atlas index decodes UiTextureAtlas (897470), UiTextureAtlasMember
+(897532) and UiTextureAtlasElement (1989276), joining member ElementID to
+element names. The decoded index is cached on the immutable Storage build
+snapshot. Supported WDC5 layout hashes are checked; unknown compression or
+layouts fail closed. Table layouts follow the primary
+[WoWDBDefs definitions](https://github.com/wowdev/WoWDBDefs/tree/master/definitions).
+GlobalColor (4328468) supplies the native color palette. GlobalStrings
+(1394440) was absent locally; selected HUD labels and fixed chat tags use
+visible synthetic text. These are not client-localization fidelity claims.
+Numeric GameMode/GameRule enums and primitive Constants are sourced from the
+Forever client export at BlizzardInterfaceResources commit
+`d1ee569878094270c0ad8d8b00de0762158fd578` (Resources/LuaEnum.lua).
+
+Simulator Lua helpers capture private builtin/library snapshots when the VM
+is created. Addons retain the real mutable global environment. Blizzard
+startup errors are captured and later chunks continue. Missing native
+implementations retain manifest-shaped defaults and once-only notes; explicit
+empty-world models respect no-result APIs such as UnitPowerBarTimerInfo,
+whose documented MayReturnNothing behavior terminates timer enumeration.
+
+`SELU_SIM_PROFILE=1` enables exclusive phase timings in development builds.
+Source construction and initial addon/login phases batch layout; trace event
+records remain available, while partial startup frame snapshots are omitted.
+Normal event snapshot history resumes after startup. Blizzard source execution
+uses bounded count-hook quanta; user addon instruction accounting remains
+precise, including coroutine resumes. Four bounded simulated frames settle
+Blizzard's initial dirty layout propagation before Studio's first preview.
+The worker reports loading progress, captured errors, top missing natives and
+elapsed time. The current visual/performance receipt is maintained separately
+under `E:/AgentData/reports/default-ui/`; passing focused tests does not imply
+complete HUD or native rendering fidelity.

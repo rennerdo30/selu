@@ -228,6 +228,13 @@ apply=function(f,n,seen)
                 for i=1,#keys-1 do owner[keys[i]]=owner[keys[i]] or {}; owner=owner[keys[i]] end
                 if #keys>0 then owner[keys[#keys]]=value end
             end
+        elseif c.tag=='Mixins' then
+            for _,entry in ipairs(c.children) do
+                local mix=lookup(entry.a.key)
+                if type(mix)=='table' then for key,value in pairs(mix) do f[key]=value end
+                else note('mixin '..tostring(entry.a.key)) end
+                if entry.a.source=='secure' or entry.a.targetPartition or entry.a.inboundPartition then note('secure mixin partitions') end
+            end
         elseif c.tag=='Scripts' then for _,s in ipairs(c.children) do script(f,s,n.a.intrinsic=='true' and n.a.name) end
         elseif c.tag=='Animations' then
             for _,group in ipairs(c.children) do
@@ -280,6 +287,11 @@ function __selu_xml_apply(f,s)
 end
 function __selu_xml_intrinsic(kind) if intrinsic[kind] then return nativeKind(kind) end end
 function __selu_xml_declare(n)
+    if n.tag=='ScopedModifier' then
+        note('ScopedModifier forbidden-object policy')
+        for _,child in ipairs(n.children) do __selu_xml_declare(child) end
+        return
+    end
     if n.tag=='FontFamily' then
         for _,member in ipairs(n.children) do
             if member.a.alphabet=='roman' and member.children[1] then

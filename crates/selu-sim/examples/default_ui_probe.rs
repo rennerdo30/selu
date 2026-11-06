@@ -195,7 +195,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for n in report.notes {
         println!("NOTE {n}");
     }
+    if std::env::var_os("SELU_SIM_PROFILE_PCALL").is_some() {
+        session.eval("__probe_original_pcall=pcall; local original=pcall; pcall=function(...) local function finish(ok,...) if not ok then print('CAUGHT '..tostring((...))) end; return ok,... end; return finish(original(...)) end")?;
+    }
     session.login()?;
+    if std::env::var_os("SELU_SIM_PROFILE_PCALL").is_some() {
+        session.eval("pcall=__probe_original_pcall; __probe_original_pcall=nil")?;
+    }
     for _ in 0..4 {
         session.advance_time(1.0 / 60.0);
     }
@@ -230,6 +236,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             println!("HUD {name}: absent");
         }
+    }
+    for line in session
+        .prints()
+        .iter()
+        .filter(|line| line.contains("CAUGHT"))
+    {
+        println!("{line}");
     }
     selu_sim::profile::report();
     Ok(())

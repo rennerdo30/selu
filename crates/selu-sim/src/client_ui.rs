@@ -3,6 +3,26 @@ use mlua::{Lua, Table, Value};
 pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
     let globals = lua.globals();
     lua.set_named_registry_value("selu.default_ui_strings", true)?;
+    let logging = globals
+        .raw_get::<Option<Table>>("C_Log")?
+        .unwrap_or(lua.create_table()?);
+    let context = ctx.clone();
+    logging.raw_set(
+        "LogErrorMessage",
+        lua.create_function(move |lua, message: String| {
+            // Explicit calls to Blizzard's installed error handler (assertsafe,
+            // CallErrorHandler) must reach the captured list too. Boundaries
+            // already own their original error and must not record it twice.
+            if !lua
+                .named_registry_value::<Option<bool>>("selu.notifying_native_error")?
+                .unwrap_or(false)
+            {
+                context.log(format!("error: {message}"));
+            }
+            Ok(())
+        })?,
+    )?;
+    globals.raw_set("C_Log", logging)?;
     // Native enum fields absent from generated API docs. Observed Forever
     // client export: Ketho/BlizzardInterfaceResources, commit
     // d1ee569878094270c0ad8d8b00de0762158fd578, Resources/LuaEnum.lua.

@@ -359,6 +359,11 @@ pub fn configure_ui_size(lua: &Lua, size: (f64, f64)) -> mlua::Result<()> {
 mod fidelity_tests {
     use crate::Sim;
     #[test]
+    fn scaled_rect_provides_physical_extents_for_blizzard_layout_frames() {
+        let sim = Sim::new().unwrap();
+        sim.eval("local f=CreateFrame('Frame'); f:SetSize(30,20); f:SetScale(2); f:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',10,15); local l,b,w,h=f:GetScaledRect(); assert(l==20 and b==30 and w==60 and h==40); local x,y,a,z=f:GetRect(); assert(x==10 and y==15 and a==30 and z==20); local unpositioned=CreateFrame('Frame'); assert(unpositioned:GetScaledRect()==nil)").unwrap();
+    }
+    #[test]
     fn scroll_offsets_and_nested_clip_reach_snapshot() {
         let sim = Sim::new().unwrap();
         sim.eval(
