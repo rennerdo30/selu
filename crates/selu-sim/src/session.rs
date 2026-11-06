@@ -400,6 +400,10 @@ impl Session {
     pub fn default_ui_report(&self) -> Option<&loader::DefaultUiReport> {
         self.default_ui_report.as_ref()
     }
+    /// Manifest native stand-ins ranked by calls in this default UI session.
+    pub fn missing_natives(&self) -> Vec<(String, u64)> {
+        crate::native_defaults::counts(&self.sim.lua)
+    }
     pub fn default_ui_startup_errors(&self) -> Vec<String> {
         lock(&self.sim.logs)
             .iter()
@@ -419,6 +423,9 @@ impl Session {
         let start = std::time::Instant::now();
         let log_start = lock(&self.sim.logs).len();
         lock(&self.sim.state).tolerant_ui = true;
+        self.sim
+            .lua
+            .set_app_data(crate::native_defaults::CallCounts::default());
         crate::native_stdlib::install(&self.sim.lua)?;
         let mut events: HashSet<String> = self
             .config

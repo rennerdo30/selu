@@ -4,6 +4,30 @@ use mlua::{Lua, MultiValue, Value};
 use selu_manifest::Declaration;
 use std::{collections::HashMap, sync::Arc};
 pub(crate) type Schemas = Arc<HashMap<String, Declaration>>;
+#[derive(Default)]
+pub(crate) struct CallCounts(std::cell::RefCell<HashMap<String, u64>>);
+pub(crate) fn record(lua: &Lua, name: &str) {
+    if let Some(counts) = lua.app_data_ref::<CallCounts>() {
+        let mut counts = counts.0.borrow_mut();
+        let count = counts.entry(name.to_owned()).or_default();
+        *count = count.saturating_add(1);
+    }
+}
+pub(crate) fn counts(lua: &Lua) -> Vec<(String, u64)> {
+    let mut result: Vec<_> = lua
+        .app_data_ref::<CallCounts>()
+        .map(|counts| {
+            counts
+                .0
+                .borrow()
+                .iter()
+                .map(|(name, count)| (name.clone(), *count))
+                .collect()
+        })
+        .unwrap_or_default();
+    result.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    result
+}
 
 pub(crate) fn value(
     lua: &Lua,

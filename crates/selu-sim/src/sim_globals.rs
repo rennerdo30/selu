@@ -208,6 +208,7 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
         let context = ctx.clone();
         let full_name = entry.name.clone();
         let native = lua.create_function(move |lua, _: mlua::MultiValue| {
+            crate::native_defaults::record(lua, &full_name);
             context.not_simulated(&full_name);
             crate::native_defaults::values(lua, &returns, &schemas, &context, 0)
         })?;

@@ -334,9 +334,13 @@ fn finish_default_ui_startup(
     for error in &errors {
         eprintln!("{error}");
     }
-    let _ = outbox.send(Update::Logs {
-        lines: vec![summary],
-    });
+    let mut lines = vec![summary];
+    for (name, count) in session.missing_natives().into_iter().take(15) {
+        let line = format!("Missing native: {name} ({count} calls)");
+        eprintln!("{line}");
+        lines.push(line);
+    }
+    let _ = outbox.send(Update::Logs { lines });
 }
 
 #[cfg(test)]

@@ -1,11 +1,8 @@
 //! Reading an addon folder through its `.toc` (docs/SIMULATOR.md decisions 5
 //! and 18). Owner: package S2.
 //!
-//! Groundwork (S0): `<Folder>.toc` only, `## Key: Value` metadata, comment
-//! and blank lines, and `.lua` files in order. XML files are an explicit
-//! "not supported yet" error (decision 18). S2 adds flavour `.toc` files
-//! (`Name_Mainline.toc`, ...), `## Dependencies`, `## LoadOnDemand`, and
-//! `## SavedVariables` loading and writing.
+//! Reads flavour-specific TOCs, dependency and load directives, Lua chunks
+//! and XML templates. External Blizzard sources prefer configured local CASC.
 
 use std::path::{Path, PathBuf};
 
@@ -23,11 +20,17 @@ pub(crate) fn read_ui_text(
             return Err("UI input is outside Interface".into());
         }
         match storage.read_path(&name) {
-            Ok(bytes) => return String::from_utf8(bytes).map_err(|e| e.to_string()),
+            Ok(bytes) => {
+                return String::from_utf8(bytes)
+                    .map(|text| text.trim_start_matches('\u{feff}').to_owned())
+                    .map_err(|e| e.to_string());
+            }
             Err(e) => diagnostic(format!("CASC UI fallback: {name}: {e}")),
         }
     }
-    std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
+    std::fs::read_to_string(path)
+        .map(|text| text.trim_start_matches('\u{feff}').to_owned())
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[derive(Debug, Default, Clone)]
