@@ -116,7 +116,8 @@ fn main() -> ExitCode {
             dir => addons.push(PathBuf::from(dir)),
         }
     }
-    if addons.is_empty() {
+    // A project that has not built yet opens without an addon folder.
+    if addons.is_empty() && (headless || project.is_none()) {
         eprintln!("selu-studio: no addon folder given\n{USAGE}");
         return ExitCode::from(2);
     }
@@ -142,7 +143,7 @@ fn main() -> ExitCode {
         }
         None => None,
     };
-    if manifest.is_none() && manifest_dir.is_some() {
+    if manifest.is_none() && manifest_dir.is_some() && !addons.is_empty() {
         let result = selu_manifest::resolution::discover(
             manifest_dir.as_deref(),
             &addons[0],

@@ -34,8 +34,37 @@ pub struct Options {
 
 /// What the Open Project dialog shows.
 enum OpenStatus {
-    Building(PathBuf),
     Failed(String),
+}
+
+/// The built addon folder in `dist/`: the one named like the project's addon,
+/// else the first folder with a `.toc` (per-target layouts end in `-product`).
+fn built_addon(project: &Path) -> Option<PathBuf> {
+    let name = std::fs::read_to_string(project.join("selu.toml"))
+        .ok()
+        .and_then(|t| toml::from_str::<toml::Value>(&t).ok())
+        .and_then(|v| v.get("addon")?.get("name")?.as_str().map(String::from));
+    let mut found: Vec<PathBuf> = std::fs::read_dir(project.join("dist"))
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| !n.starts_with('.'))
+                && std::fs::read_dir(p).is_ok_and(|mut d| {
+                    d.any(|e| e.is_ok_and(|e| e.path().extension().is_some_and(|x| x == "toc")))
+                })
+        })
+        .collect();
+    found.sort();
+    if let Some(name) = &name
+        && let Some(exact) = found
+            .iter()
+            .find(|p| p.file_name().is_some_and(|n| n == name.as_str()))
+    {
+        return Some(exact.clone());
+    }
+    found.into_iter().next()
 }
 
 /// The project folder for a picked folder: the folder itself, its `selu`
@@ -140,7 +169,8 @@ pub struct Studio {
     glyphs: crate::text_render::GlyphCache,
     game_settings: crate::game::Settings,
     /// File > Open Project in progress: the background build's answer.
-    opening: Option<std::sync::mpsc::Receiver<(PathBuf, Result<(), String>)>>,
+    /// The next successful build loads the newly opened project.
+    load_after_build: bool,
     open_status: Option<OpenStatus>,
     game_clients: Vec<crate::game::Client>,
     game_scanned: bool,
@@ -226,7 +256,7 @@ impl Studio {
             build: None,
             build_failed: false,
             game_settings: crate::game::Settings::load(),
-            opening: None,
+            load_after_build: false,
             open_status: None,
             game_clients: Vec::new(),
             game_scanned: false,
@@ -265,6 +295,12 @@ impl Studio {
             editor: crate::editor::Editor::new(opts_project, opts_selu, opts_target, ctx),
             confirm_close: false,
         };
+        // Started with a project that has not built yet (`selu debug` after a
+        // failed build): open it anyway, build here, load once it builds.
+        if studio.auto_rebuild && studio.opts.addons.is_empty() {
+            studio.load_after_build = true;
+            studio.rebuild();
+        }
         // For screenshots in checks: open Run in Game's version picker.
         if std::env::var_os("SELU_STUDIO_OPEN_PICKER").is_some() {
             studio.run_in_game();
@@ -460,7 +496,9 @@ impl Studio {
                 BuildMsg::Done(ok) => {
                     self.build = None;
                     self.build_failed = !ok;
-                    if ok {
+                    if ok && std::mem::take(&mut self.load_after_build) {
+                        self.load_built_project();
+                    } else if ok {
                         self.act(Command::Reload);
                         if let Some((flavour, client)) = self.pending_deploy.take() {
                             self.deploy(&flavour, &client, false);
@@ -1347,8 +1385,9 @@ impl Studio {
         }
     }
 
-    /// Open another project: Studio restarts through `selu debug <dir>`, which
-    /// builds the project and passes the addon folder, as on the command line.
+    /// Open another project in this window: the editor switches at once, a
+    /// fresh simulator session starts, and the project builds in the
+    /// background. Build errors show in Problems; the project stays open.
     fn open_project(&mut self, picked: PathBuf, ctx: &egui::Context) {
         let Some(dir) = find_project(&picked) else {
             let message = format!(
@@ -1359,6 +1398,12 @@ impl Studio {
             self.open_status = Some(OpenStatus::Failed(message));
             return;
         };
+        if self.editor.any_dirty() {
+            self.open_status = Some(OpenStatus::Failed(
+                "Save your changes first (File > Save All), then open the other project.".into(),
+            ));
+            return;
+        }
         let selu = self.opts.selu.clone().unwrap_or_else(|| {
             // Studio started directly: use the selu next to selu-studio, else PATH.
             std::env::current_exe()
@@ -1370,78 +1415,92 @@ impl Studio {
                 .filter(|p| p.is_file())
                 .unwrap_or_else(|| PathBuf::from("selu"))
         });
-        if self.opening.is_some() {
-            self.line(LineKind::Log, "a project is already being opened");
-            return;
+        // The project's own targets and lock decide what to build and load.
+        self.opts.project = Some(dir.clone());
+        self.opts.selu = Some(selu);
+        self.opts.target = None;
+        self.opts.manifest = None;
+        self.opts.addons.clear();
+        self.editor =
+            crate::editor::Editor::new(Some(dir.clone()), self.opts.selu.clone(), None, ctx);
+        self.sources_stamp = sources_stamp(&dir);
+        self.auto_rebuild = true;
+        self.side = Side::Explorer;
+        self.tab = Tab::Problems;
+        self.selected = None;
+        self.pending_deploy = None;
+        // A build of the previous project may still run; its result is ignored.
+        self.build = None;
+        self.restart_session();
+        let recent = &mut self.game_settings.recent_projects;
+        recent.retain(|p| p != &dir);
+        recent.insert(0, dir.clone());
+        recent.truncate(10);
+        if let Err(e) = self.game_settings.save() {
+            self.line(LineKind::Error, format!("cannot save recent projects: {e}"));
         }
-        self.line(
-            LineKind::Build,
-            format!("opening {} (building)...", dir.display()),
-        );
-        self.open_status = Some(OpenStatus::Building(dir.clone()));
-        // Build first, off the UI thread: if it fails, this window stays open
-        // with the errors instead of closing into nothing.
-        let (tx, rx) = std::sync::mpsc::channel();
-        let ctx = ctx.clone();
-        let target = dir.clone();
-        std::thread::spawn(move || {
-            let result = std::process::Command::new(&selu)
-                .arg("build")
-                .arg(&target)
-                .output()
-                .map_err(|e| format!("cannot start {}: {e}", selu.display()))
-                .and_then(|out| {
-                    if out.status.success() {
-                        Ok(())
-                    } else {
-                        let mut text = String::from_utf8_lossy(&out.stderr).into_owned();
-                        text.push_str(&String::from_utf8_lossy(&out.stdout));
-                        Err(format!(
-                            "{} does not build:\n{}",
-                            target.display(),
-                            text.trim_end()
-                        ))
-                    }
-                })
-                .and_then(|()| {
-                    std::process::Command::new(&selu)
-                        .arg("debug")
-                        .arg(&target)
-                        .spawn()
-                        .map(|_| ())
-                        .map_err(|e| format!("cannot start {} debug: {e}", selu.display()))
-                });
-            let _ = tx.send((target, result));
-            ctx.request_repaint();
-        });
-        self.opening = Some(rx);
+        self.line(LineKind::Build, format!("opened {}", dir.display()));
+        self.load_after_build = true;
+        self.rebuild();
     }
 
-    /// Finish Open Project once the background build has answered.
-    fn poll_opening(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.opening else { return };
-        let Ok((dir, result)) = rx.try_recv() else {
-            return;
-        };
-        self.opening = None;
-        match result {
-            Ok(()) => {
-                let recent = &mut self.game_settings.recent_projects;
-                recent.retain(|p| p != &dir);
-                recent.insert(0, dir);
-                recent.truncate(10);
-                if let Err(e) = self.game_settings.save() {
-                    self.line(LineKind::Error, format!("cannot save recent projects: {e}"));
-                }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            Err(e) => {
-                for line in e.lines() {
-                    self.line(LineKind::Error, line.to_string());
-                }
-                self.open_status = Some(OpenStatus::Failed(e));
+    /// A fresh simulator session for the current options: client assets,
+    /// the built addon folders (if any), login and a first snapshot.
+    fn restart_session(&mut self) {
+        let mut assets = selu_sim::assets::Resolver::default();
+        if let Some(root) = &self.opts.client_install {
+            let target = self
+                .opts
+                .manifest
+                .as_ref()
+                .map(selu_manifest::Manifest::target_string)
+                .or_else(|| self.opts.target.clone());
+            if let Some(target) = target {
+                let _ = assets.open_client(root, target.split('@').next().unwrap_or_default());
             }
         }
+        for root in &self.opts.addons {
+            assets.add_addon(root.clone());
+        }
+        self.assets = assets;
+        self.textures.clear();
+        self.worker = Worker::spawn(SessionConfig {
+            client_install: self.opts.client_install.clone(),
+            manifest: self.opts.manifest.clone(),
+            target: self.opts.target.clone(),
+            trace: true,
+            ..SessionConfig::default()
+        });
+        self.in_flight = 0;
+        self.snapshot = None;
+        for dir in self.opts.addons.clone() {
+            self.send(Command::LoadAddon { dir });
+        }
+        self.send(Command::Login);
+        self.send(Command::Snapshot);
+    }
+
+    /// After the first successful build of a newly opened project: load the
+    /// built addon (and its checked manifest) into a fresh session.
+    fn load_built_project(&mut self) {
+        let Some(project) = self.opts.project.clone() else {
+            return;
+        };
+        let Some(addon) = built_addon(&project) else {
+            self.line(
+                LineKind::Error,
+                format!(
+                    "built, but no addon folder found in {}",
+                    project.join("dist").display()
+                ),
+            );
+            return;
+        };
+        let snapshot = selu_manifest::resolution::compiled_manifest_path(&addon);
+        self.opts.manifest = selu_manifest::resolution::load_checked_manifest(&snapshot, None).ok();
+        self.opts.addons = vec![addon.clone()];
+        self.line(LineKind::Build, format!("loading {}", addon.display()));
+        self.restart_session();
     }
 
     /// The Open Project dialog: shown while the project builds, and on failure.
@@ -1453,20 +1512,6 @@ impl Studio {
         egui::Modal::new(egui::Id::unique("open-project")).show(ctx, |ui| {
             ui.set_width(520.0);
             match status {
-                OpenStatus::Building(dir) => {
-                    ui.label(egui::RichText::new("Opening project").size(16.0).strong());
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(format!("Building {} ...", dir.display()));
-                    });
-                    ui.label(
-                        egui::RichText::new(
-                            "Studio restarts with the project when the build succeeds.",
-                        )
-                        .color(palette::MUTED),
-                    );
-                }
                 OpenStatus::Failed(message) => {
                     ui.label(
                         egui::RichText::new("Cannot open project")
@@ -1492,7 +1537,6 @@ impl Studio {
     }
 
     fn global_shortcuts(&mut self, ctx: &egui::Context) {
-        self.poll_opening(ctx);
         self.editor.shortcuts(ctx);
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Comma)) {
             self.open_settings();

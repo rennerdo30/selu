@@ -56,8 +56,10 @@ So round 8 starts from compiling, tested code, not from prose:
    The GUI dependencies live only in `selu-debug`. `selu` stays a lean
    compiler binary; `selu debug` builds the addon, then starts
    `selu-studio` (found next to the `selu` executable, or on the path)
-   with the built folder and target. If it isn't installed, the error says
-   how to get it. This keeps rule two for everyone who only compiles.
+   with the built folder and target. A failed build still opens the
+   project: Studio shows the errors and loads the addon once it builds
+   (File > Open Project works the same way, in place). If Studio isn't
+   installed, the error says how to get it. This keeps rule two for everyone who only compiles.
 3. **Frames are Rust data.** The region model moves from Lua tables to a Rust
    arena: each frame, texture and font string is a Rust struct in a
    `Vec<Region>` with a generational id, and the Lua side holds a light

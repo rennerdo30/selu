@@ -373,14 +373,20 @@ fn test(
 
 /// `selu debug` (docs/SIMULATOR.md decision 2): build, then start
 /// `selu-studio` with the built addon folder. Studio is a separate binary so
-/// the compiler doesn't carry GUI dependencies.
+/// the compiler doesn't carry GUI dependencies. A failed build still opens
+/// the project: Studio shows the errors and loads the addon once it builds.
 fn debug(
     project_dir: &Path,
     target: Option<&str>,
     manifest_dir: Option<&Path>,
 ) -> Result<(), ExitCode> {
-    build(project_dir, target, manifest_dir)?;
-    let addon = built_addon(project_dir, target)?;
+    let addon = match build(project_dir, target, manifest_dir) {
+        Ok(()) => Some(built_addon(project_dir, target)?),
+        Err(_) => {
+            eprintln!("selu debug: the build failed; opening the project in Studio anyway");
+            None
+        }
+    };
     let studio = find_studio().ok_or_else(|| {
         eprintln!(
             "selu debug: selu-studio was not found next to selu or on the PATH; \
@@ -389,8 +395,10 @@ fn debug(
         ExitCode::FAILURE
     })?;
     let mut cmd = std::process::Command::new(&studio);
-    cmd.arg("--manifest")
-        .arg(selu_manifest::resolution::compiled_manifest_path(&addon));
+    if let Some(addon) = &addon {
+        cmd.arg("--manifest")
+            .arg(selu_manifest::resolution::compiled_manifest_path(addon));
+    }
     if let Some(dir) = manifest_dir {
         cmd.arg("--manifest-dir").arg(dir);
     }
@@ -402,7 +410,9 @@ fn debug(
     if let Ok(selu) = std::env::current_exe() {
         cmd.arg("--selu").arg(selu);
     }
-    cmd.arg(&addon);
+    if let Some(addon) = &addon {
+        cmd.arg(addon);
+    }
     let status = cmd.status().map_err(|e| {
         eprintln!("selu debug: cannot start {}: {e}", studio.display());
         ExitCode::FAILURE

@@ -69,3 +69,35 @@ fn selu_debug_builds_then_hands_over_to_studio() {
     assert_eq!(out.status.code(), Some(1), "{err}");
     assert!(err.contains("selu-studio was not found"), "{err}");
 }
+
+#[test]
+fn selu_debug_opens_a_project_that_does_not_build() {
+    let dir = hello_project("debug-broken");
+    let main = dir.join("src/main.selu");
+    let mut text = std::fs::read_to_string(&main).unwrap();
+    text.push_str(
+        "
+const broken: number = \"text\";
+",
+    );
+    std::fs::write(&main, text).unwrap();
+    let manifests = repo().join("manifests");
+    let out = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .args([
+            "debug",
+            dir.to_str().unwrap(),
+            "--manifest-dir",
+            manifests.to_str().unwrap(),
+        ])
+        .env("SELU_STUDIO", dir.join("no-such-studio.exe"))
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&dir);
+    // The build fails, yet selu debug still goes on to start Studio.
+    assert!(
+        err.contains("opening the project in Studio anyway"),
+        "{err}"
+    );
+    assert!(err.contains("selu-studio was not found"), "{err}");
+}
