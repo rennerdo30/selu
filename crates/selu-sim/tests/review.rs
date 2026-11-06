@@ -33,6 +33,7 @@ fn unit() -> Unit {
         max_power: 100,
         auras: vec![],
         combat: false,
+        ..Default::default()
     }
 }
 #[test]

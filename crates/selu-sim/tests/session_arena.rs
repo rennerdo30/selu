@@ -56,6 +56,7 @@ fn toc_world_migration_trace_and_real_arena_survive_reload() {
             max_power: 100,
             auras: vec![],
             combat: false,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -121,6 +122,7 @@ fn combat_world_and_lockdown_share_state_across_reload() {
             max_power: 100,
             auras: vec![],
             combat: true,
+            ..Default::default()
         },
     )
     .unwrap();

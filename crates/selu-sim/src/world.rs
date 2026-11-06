@@ -1,8 +1,17 @@
-//! Session-local world data. Event payloads follow the target manifests.
+//! Session-local world data. Sources: read-only E:/Development/wow-ui-source,
+//! forever build 1.60.1.70790, Interface/AddOns/Blizzard_APIDocumentationGenerated:
+//! UnitDocumentation.lua (unit events/APIs), CurrencyInfoDocumentation.lua (money),
+//! ContainerDocumentation.lua (bags), MapDocumentation.lua (zone events/map).
 use crate::{SimResult, session::Vm, value_string};
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, ObjectLike, Table, Value};
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Unit {
+    pub classification: String,
+    pub creature_type: String,
+    pub reaction: u8,
+    pub dead: bool,
+    pub guid: String,
     pub name: String,
     pub class: String,
     pub level: u32,
@@ -125,10 +134,10 @@ impl Vm {
         let next = self.lua.create_table()?;
         let identity_changed = old
             .as_ref()
-            .map(|old| old.raw_get::<String>("name"))
+            .map(|old| old.raw_get::<String>("guid"))
             .transpose()?
             .as_deref()
-            != Some(unit.name.as_str());
+            != Some(unit.guid.as_str());
         let old_auras = old
             .as_ref()
             .map(|old| {
@@ -138,6 +147,11 @@ impl Vm {
             })
             .transpose()?;
         let aura_changed = old_auras.as_ref() != Some(&unit.auras);
+        next.set("classification", unit.classification)?;
+        next.set("creature_type", unit.creature_type)?;
+        next.set("reaction", unit.reaction)?;
+        next.set("dead", unit.dead)?;
+        next.set("guid", unit.guid)?;
         next.set("name", unit.name)?;
         next.set("class", unit.class)?;
         next.set("level", unit.level)?;
@@ -148,6 +162,9 @@ impl Vm {
         next.set("combat", unit.combat)?;
         next.set("auras", self.lua.create_sequence_from(unit.auras)?)?;
         let changes = [
+            ("classification", "UNIT_CLASSIFICATION_CHANGED"),
+            ("reaction", "UNIT_FACTION"),
+            ("dead", "UNIT_FLAGS"),
             ("name", "UNIT_NAME_UPDATE"),
             ("level", "UNIT_LEVEL"),
             ("health", "UNIT_HEALTH"),
@@ -155,6 +172,9 @@ impl Vm {
             ("power", "UNIT_POWER_UPDATE"),
             ("max_power", "UNIT_MAXPOWER"),
         ];
+        if token.starts_with("nameplate") && identity_changed && old.is_some() {
+            self.clear_unit(token)?;
+        }
         units.set(token, next.clone())?;
         if token == "player" {
             self.set_combat(unit.combat)?;
@@ -172,6 +192,14 @@ impl Vm {
                 self.fire(event, args)?;
             }
         }
+        if (old.is_none() || identity_changed) && token.starts_with("nameplate") {
+            let f: mlua::Function = self.lua.globals().get("__selu_add_plate")?;
+            f.call::<()>(token)?;
+            self.fire(
+                "NAME_PLATE_UNIT_ADDED",
+                vec![Value::String(self.lua.create_string(token)?)],
+            )?;
+        }
         if identity_changed {
             match token {
                 "target" => {
@@ -179,6 +207,9 @@ impl Vm {
                 }
                 "focus" => {
                     self.fire("PLAYER_FOCUS_CHANGED", vec![])?;
+                }
+                "mouseover" => {
+                    self.fire("UPDATE_MOUSEOVER_UNIT", vec![])?;
                 }
                 "pet" => {
                     self.fire(
@@ -216,7 +247,10 @@ impl Vm {
     }
 }
 fn valid_token(t: &str) -> bool {
-    matches!(t, "player" | "target" | "focus" | "pet")
+    matches!(t, "player" | "target" | "focus" | "pet" | "mouseover")
+        || t.strip_prefix("nameplate")
+            .and_then(|s| s.parse::<u8>().ok())
+            .is_some_and(|n| n > 0)
         || t.strip_prefix("party")
             .and_then(|s| s.parse::<u8>().ok())
             .is_some_and(|n| (1..=4).contains(&n))
@@ -240,6 +274,27 @@ pub(crate) fn install(lua: &Lua) -> SimResult<()> {
     lua.load(r#"
 __selu_world_units = {}; __selu_world_money = 0; __selu_world_bags = {}
 local units = __selu_world_units
+__selu_vignettes = {}; __selu_plates = {}; __selu_zone = {zone='',subzone='',map=0}
+function __selu_add_plate(u) local f=CreateFrame('Frame'); f.namePlateUnitToken=u; __selu_plates[u]=f end
+C_NamePlate = {}
+function C_NamePlate.GetNamePlateForUnit(u) return __selu_plates[u] end
+function C_NamePlate.GetNamePlates() local r={} for _,f in pairs(__selu_plates) do r[#r+1]=f end return r end
+C_VignetteInfo = {}
+function C_VignetteInfo.GetVignettes() local r={} for g in pairs(__selu_vignettes) do r[#r+1]=g end table.sort(r); return r end
+function C_VignetteInfo.GetVignetteInfo(g) return __selu_vignettes[g] end
+function C_VignetteInfo.GetVignettePosition(g,m) local v=__selu_vignettes[g]; if v and v.map==m then return {x=v.x,y=v.y,GetXY=function(p)return p.x,p.y end},0 end end
+function GetZoneText() return __selu_zone.zone end
+function GetRealZoneText() return __selu_zone.zone end
+function GetSubZoneText() return __selu_zone.subzone end
+C_Map = {GetBestMapForUnit=function() return __selu_zone.map end}
+function UnitClassification(u) return units[u] and units[u].classification or 'normal' end
+function UnitCreatureType(u) return units[u] and units[u].creature_type end
+function UnitReaction(u,other) return units[u] and units[u].reaction end
+function UnitCanAttack(a,b) return units[b] ~= nil and units[b].reaction <= 3 end
+function UnitIsEnemy(a,b) return UnitCanAttack(a,b) end
+function UnitIsDead(u) return units[u] and units[u].dead or false end
+function UnitIsDeadOrGhost(u) return UnitIsDead(u) end
+function UnitGUID(u) return units[u] and units[u].guid end
 function UnitExists(u) return units[u] ~= nil end
 function UnitName(u) return units[u] and units[u].name end
 local classes={WARRIOR={'Warrior',1},PALADIN={'Paladin',2},HUNTER={'Hunter',3},ROGUE={'Rogue',4},PRIEST={'Priest',5},DEATHKNIGHT={'Death Knight',6},SHAMAN={'Shaman',7},MAGE={'Mage',8},WARLOCK={'Warlock',9},MONK={'Monk',10},DRUID={'Druid',11},DEMONHUNTER={'Demon Hunter',12},EVOKER={'Evoker',13}}
@@ -291,4 +346,326 @@ function tostring(value)
  return native_tostring(value)
 end
 "#).exec()
+}
+
+impl Default for Unit {
+    fn default() -> Self {
+        Self {
+            name: "Rare creature".into(),
+            class: "WARRIOR".into(),
+            level: 60,
+            health: 100,
+            max_health: 100,
+            power: 0,
+            max_power: 0,
+            auras: vec![],
+            combat: false,
+            classification: "normal".into(),
+            creature_type: "Beast".into(),
+            reaction: 3,
+            dead: false,
+            guid: "Creature-0-0-0-0-1-1".into(),
+        }
+    }
+}
+
+/// Shapes sourced from read-only wow-ui-source forever 1.60.1.70790,
+/// Interface/AddOns/Blizzard_APIDocumentationGenerated/VignetteInfoDocumentation.lua.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Vignette {
+    pub guid: String,
+    pub object_guid: String,
+    pub name: String,
+    pub map: u32,
+    pub x: f64,
+    pub y: f64,
+}
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Scenario {
+    pub units: std::collections::BTreeMap<String, Unit>,
+    pub vignettes: Vec<Vignette>,
+    pub combat: bool,
+    pub money: u64,
+    #[serde(with = "bag_keys")]
+    pub bags: std::collections::BTreeMap<i32, Vec<u32>>,
+    pub zone: String,
+    pub subzone: String,
+    pub map: u32,
+}
+impl Scenario {
+    pub fn load(path: &std::path::Path) -> Result<Self, String> {
+        toml::from_str(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())
+    }
+    pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        let data = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, data).map_err(|e| e.to_string())
+    }
+    pub fn apply(&self, vm: &Vm) -> SimResult<()> {
+        // Validate before mutation, including values which TOML permits but the game does not.
+        for (token, u) in &self.units {
+            if !valid_token(token)
+                || !["normal", "elite", "rare", "rareelite", "worldboss", "minus"]
+                    .contains(&u.classification.as_str())
+                || !(1..=8).contains(&u.reaction)
+                || u.health > u.max_health
+            {
+                return Err(mlua::Error::runtime("invalid scenario unit"));
+            }
+        }
+        for v in &self.vignettes {
+            if !v.x.is_finite()
+                || !v.y.is_finite()
+                || !(0.0..=1.0).contains(&v.x)
+                || !(0.0..=1.0).contains(&v.y)
+            {
+                return Err(mlua::Error::runtime("invalid vignette position"));
+            }
+        }
+        let units: Table = vm.lua.globals().get("__selu_world_units")?;
+        let tokens = units
+            .clone()
+            .pairs::<String, Table>()
+            .map(|p| p.map(|p| p.0))
+            .collect::<mlua::Result<Vec<_>>>()?;
+        for t in tokens {
+            if !self.units.contains_key(&t) {
+                vm.clear_unit(&t)?;
+            }
+        }
+        for (t, u) in &self.units {
+            vm.set_unit(t, u.clone())?;
+        }
+        vm.set_combat(self.combat)?;
+        if vm.lua.globals().get::<u64>("__selu_world_money")? != self.money {
+            vm.set_money(self.money)?;
+        }
+        let bags: Table = vm.lua.globals().get("__selu_world_bags")?;
+        let old = bags
+            .clone()
+            .pairs::<i32, Table>()
+            .map(|p| p.map(|p| p.0))
+            .collect::<mlua::Result<Vec<_>>>()?;
+        for b in old {
+            if !self.bags.contains_key(&b) {
+                vm.set_bag(b, &[])?;
+            }
+        }
+        for (b, items) in &self.bags {
+            let prior: Option<Table> = bags.get(*b)?;
+            let prior = prior
+                .map(|t| t.sequence_values::<u32>().collect::<mlua::Result<Vec<_>>>())
+                .transpose()?
+                .unwrap_or_default();
+            if prior != *items {
+                vm.set_bag(*b, items)?;
+            }
+        }
+        let zone: Table = vm.lua.globals().get("__selu_zone")?;
+        let map_changed = zone.get::<u32>("map")? != self.map;
+        let zone_changed = zone.get::<String>("zone")? != self.zone;
+        let sub_changed = zone.get::<String>("subzone")? != self.subzone;
+        zone.set("zone", self.zone.clone())?;
+        zone.set("subzone", self.subzone.clone())?;
+        zone.set("map", self.map)?;
+        // MapDocumentation.lua: ZONE_CHANGED*, no payload.
+        if map_changed {
+            vm.fire("ZONE_CHANGED_NEW_AREA", vec![])?;
+        }
+        if zone_changed {
+            vm.fire("ZONE_CHANGED", vec![])?;
+        }
+        if sub_changed {
+            vm.fire("ZONE_CHANGED_INDOORS", vec![])?;
+        }
+        let list: Table = vm.lua.globals().get("__selu_vignettes")?;
+        let old = list
+            .clone()
+            .pairs::<String, Table>()
+            .map(|p| p.map(|p| p.0))
+            .collect::<mlua::Result<Vec<_>>>()?;
+        for g in old {
+            if !self.vignettes.iter().any(|v| v.guid == g) {
+                list.set(g.clone(), Value::Nil)?;
+                vm.fire(
+                    "VIGNETTE_MINIMAP_UPDATED",
+                    vec![
+                        Value::String(vm.lua.create_string(g)?),
+                        Value::Boolean(false),
+                    ],
+                )?;
+                vm.fire("VIGNETTES_UPDATED", vec![])?;
+            }
+        }
+        for v in &self.vignettes {
+            let next = vm.lua.create_table()?;
+            for (k, value) in [
+                ("vignetteGUID", &v.guid),
+                ("objectGUID", &v.object_guid),
+                ("name", &v.name),
+            ] {
+                next.set(k, value.clone())?;
+            }
+            for k in ["isDead", "zoneInfiniteAOI", "isUnique", "inFogOfWar"] {
+                next.set(k, false)?;
+            }
+            for k in ["onWorldMap", "onMinimap", "hasTooltip"] {
+                next.set(k, true)?;
+            }
+            next.set("atlasName", "VignetteKill")?;
+            for k in ["vignetteID", "type", "rewardQuestID"] {
+                next.set(k, 0)?;
+            }
+            next.set("map", v.map)?;
+            next.set("x", v.x)?;
+            next.set("y", v.y)?;
+            let prior: Option<Table> = list.get(v.guid.clone())?;
+            let changed = prior
+                .map(|t| -> SimResult<bool> {
+                    for pair in next.clone().pairs::<String, Value>() {
+                        let (k, val) = pair?;
+                        if t.get::<Value>(k)? != val {
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
+                })
+                .transpose()?
+                .unwrap_or(true);
+            if changed {
+                list.set(v.guid.clone(), next)?;
+                vm.fire(
+                    "VIGNETTE_MINIMAP_UPDATED",
+                    vec![
+                        Value::String(vm.lua.create_string(&v.guid)?),
+                        Value::Boolean(true),
+                    ],
+                )?;
+                vm.fire("VIGNETTES_UPDATED", vec![])?;
+            }
+        }
+        Ok(())
+    }
+}
+impl Vm {
+    pub fn clear_unit(&self, token: &str) -> SimResult<()> {
+        let units: Table = self.lua.globals().get("__selu_world_units")?;
+        if units.get::<Option<Table>>(token)?.is_none() {
+            return Ok(());
+        }
+        // NamePlateManagerDocumentation.lua: payload is unitToken.
+        if token.starts_with("nameplate") {
+            self.fire(
+                "NAME_PLATE_UNIT_REMOVED",
+                vec![Value::String(self.lua.create_string(token)?)],
+            )?;
+            let plates: Table = self.lua.globals().get("__selu_plates")?;
+            if let Some(p) = plates.get::<Option<Table>>(token)? {
+                p.call_method::<()>("Hide", ())?;
+            }
+            plates.set(token, Value::Nil)?;
+        }
+        units.set(token, Value::Nil)?;
+        let event = match token {
+            "target" => Some("PLAYER_TARGET_CHANGED"),
+            "focus" => Some("PLAYER_FOCUS_CHANGED"),
+            "mouseover" => Some("UPDATE_MOUSEOVER_UNIT"),
+            _ => None,
+        };
+        if let Some(e) = event {
+            self.fire(e, vec![])?;
+        }
+        Ok(())
+    }
+}
+
+impl Scenario {
+    pub fn capture(vm: &Vm) -> SimResult<Self> {
+        let globals = vm.lua.globals();
+        let units: Table = globals.get("__selu_world_units")?;
+        let mut result = Self::default();
+        for pair in units.pairs::<String, Table>() {
+            let (t, u) = pair?;
+            result.units.insert(
+                t,
+                Unit {
+                    name: u.get("name")?,
+                    class: u.get("class")?,
+                    level: u.get("level")?,
+                    health: u.get("health")?,
+                    max_health: u.get("max_health")?,
+                    power: u.get("power")?,
+                    max_power: u.get("max_power")?,
+                    auras: u
+                        .get::<Table>("auras")?
+                        .sequence_values()
+                        .collect::<mlua::Result<_>>()?,
+                    combat: u.get("combat")?,
+                    classification: u
+                        .get::<Option<String>>("classification")?
+                        .unwrap_or_else(|| "normal".into()),
+                    creature_type: u
+                        .get::<Option<String>>("creature_type")?
+                        .unwrap_or_else(|| "Humanoid".into()),
+                    reaction: u.get::<Option<u8>>("reaction")?.unwrap_or(5),
+                    dead: u.get::<Option<bool>>("dead")?.unwrap_or(false),
+                    guid: u.get::<Option<String>>("guid")?.unwrap_or_default(),
+                },
+            );
+        }
+        result.combat = globals.get("__selu_sim_combat")?;
+        result.money = globals.get("__selu_world_money")?;
+        let bags: Table = globals.get("__selu_world_bags")?;
+        for pair in bags.pairs::<i32, Table>() {
+            let (b, t) = pair?;
+            result
+                .bags
+                .insert(b, t.sequence_values().collect::<mlua::Result<_>>()?);
+        }
+        let zone: Table = globals.get("__selu_zone")?;
+        result.zone = zone.get("zone")?;
+        result.subzone = zone.get("subzone")?;
+        result.map = zone.get("map")?;
+        let list: Table = globals.get("__selu_vignettes")?;
+        for pair in list.pairs::<String, Table>() {
+            let (guid, v) = pair?;
+            result.vignettes.push(Vignette {
+                guid,
+                object_guid: v.get("objectGUID")?,
+                name: v.get("name")?,
+                map: v.get("map")?,
+                x: v.get("x")?,
+                y: v.get("y")?,
+            });
+        }
+        result.vignettes.sort_by(|a, b| a.guid.cmp(&b.guid));
+        Ok(result)
+    }
+}
+
+// TOML table keys are strings; retain numeric bag IDs in the runtime model.
+mod bag_keys {
+    use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
+    pub fn serialize<S: serde::Serializer>(
+        bags: &BTreeMap<i32, Vec<u32>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        bags.iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect::<BTreeMap<_, _>>()
+            .serialize(serializer)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<i32, Vec<u32>>, D::Error> {
+        BTreeMap::<String, Vec<u32>>::deserialize(deserializer)?
+            .into_iter()
+            .map(|(k, v)| Ok((k.parse().map_err(serde::de::Error::custom)?, v)))
+            .collect()
+    }
 }

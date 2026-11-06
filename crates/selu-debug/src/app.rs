@@ -169,6 +169,7 @@ enum Tab {
 enum Side {
     Explorer,
     Frames,
+    Scenario,
 }
 
 /// Messages from the background build.
@@ -238,6 +239,13 @@ pub struct Studio {
     /// session has settled, then close (for checks without a person).
     auto_shot: Option<(PathBuf, u32)>,
     editor: crate::editor::Editor,
+    scenario: selu_sim::world::Scenario,
+    scenario_token: String,
+    scenario_unit: selu_sim::world::Unit,
+    scenario_name: String,
+    scenario_bag: String,
+    scenario_bag_id: i32,
+    scenario_status: String,
     side: Side,
     side_open: bool,
     panel_open: bool,
@@ -320,7 +328,16 @@ impl Studio {
             show_hidden: false,
             shots: channel(),
             auto_shot: std::env::var_os("SELU_STUDIO_SCREENSHOT").map(|p| (PathBuf::from(p), 20)),
-            side: if opts_project.is_some() {
+            scenario: Default::default(),
+            scenario_token: "target".into(),
+            scenario_unit: Default::default(),
+            scenario_name: "rare-test".into(),
+            scenario_bag: String::new(),
+            scenario_bag_id: 0,
+            scenario_status: String::new(),
+            side: if std::env::var_os("SELU_STUDIO_SCENARIO").is_some() {
+                Side::Scenario
+            } else if opts_project.is_some() {
                 Side::Explorer
             } else {
                 Side::Frames
@@ -414,6 +431,7 @@ impl Studio {
                         self.trace.push_back(r);
                     }
                 }
+                Update::Scenario { state } => self.scenario = state,
                 Update::Snapshot { snapshot } => self.snapshot = Some(*snapshot),
                 Update::Error { message } => self.line(LineKind::Error, message),
                 Update::Generation { generation } => {
@@ -793,6 +811,7 @@ impl eframe::App for Studio {
                         .inner_margin(egui::Margin::symmetric(8, 10)),
                 )
                 .show(ui, |ui| match self.side {
+                    Side::Scenario => self.scenario_ui(ui),
                     Side::Explorer => self.editor.ui_explorer(ui),
                     Side::Frames => {
                         ui.horizontal(|ui| caption(ui, "Frames"));
@@ -2144,12 +2163,250 @@ impl Studio {
         );
     }
 
+    fn scenario_ui(&mut self, ui: &mut egui::Ui) {
+        caption(ui, "Scenario");
+        let mut apply = false;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.label("Quick actions");
+            if ui.button("Target a rare elite").clicked() {
+                let mut u = selu_sim::world::Unit::default();
+                u.classification = "rareelite".into();
+                self.scenario_unit = u.clone();
+                self.scenario.units.insert("target".into(), u);
+                apply = true;
+            }
+            if ui.button("Rare spawns nearby").clicked() {
+                let mut u = selu_sim::world::Unit::default();
+                u.classification = "rare".into();
+                self.scenario.units.insert("nameplate1".into(), u.clone());
+                self.scenario
+                    .vignettes
+                    .retain(|v| v.guid != "Vignette-scenario-1");
+                self.scenario.vignettes.push(selu_sim::world::Vignette {
+                    guid: "Vignette-scenario-1".into(),
+                    object_guid: u.guid,
+                    name: u.name,
+                    map: self.scenario.map,
+                    x: 0.5,
+                    y: 0.5,
+                });
+                apply = true;
+            }
+            if ui
+                .button(if self.scenario.combat {
+                    "Leave combat"
+                } else {
+                    "Enter combat"
+                })
+                .clicked()
+            {
+                self.scenario.combat = !self.scenario.combat;
+                apply = true;
+            }
+            if ui.button("Target dies").clicked() {
+                if let Some(u) = self.scenario.units.get_mut("target") {
+                    u.dead = true;
+                    u.health = 0;
+                    apply = true;
+                }
+            }
+            ui.separator();
+            ui.label("Units");
+            egui::ComboBox::from_id_salt("scenario-token")
+                .selected_text(&self.scenario_token)
+                .show_ui(ui, |ui| {
+                    for t in [
+                        "player",
+                        "target",
+                        "focus",
+                        "mouseover",
+                        "nameplate1",
+                        "nameplate2",
+                        "party1",
+                        "party2",
+                        "party3",
+                        "party4",
+                    ] {
+                        if ui
+                            .selectable_value(&mut self.scenario_token, t.into(), t)
+                            .changed()
+                        {
+                            self.scenario_unit =
+                                self.scenario.units.get(t).cloned().unwrap_or_default();
+                        }
+                    }
+                });
+            ui.label("Token (nameplateN supported)");
+            ui.text_edit_singleline(&mut self.scenario_token);
+            let u = &mut self.scenario_unit;
+            ui.label("Name");
+            ui.text_edit_singleline(&mut u.name);
+            ui.label("GUID");
+            ui.text_edit_singleline(&mut u.guid);
+            ui.horizontal(|ui| {
+                ui.label("Level");
+                ui.add(egui::DragValue::new(&mut u.level));
+            });
+            egui::ComboBox::from_id_salt("classification")
+                .selected_text(&u.classification)
+                .show_ui(ui, |ui| {
+                    for c in ["normal", "elite", "rare", "rareelite", "worldboss", "minus"] {
+                        ui.selectable_value(&mut u.classification, c.into(), c);
+                    }
+                });
+            ui.label("Creature type");
+            ui.text_edit_singleline(&mut u.creature_type);
+            ui.horizontal(|ui| {
+                ui.label("Reaction");
+                ui.add(egui::DragValue::new(&mut u.reaction).range(1..=8));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Health / max");
+                ui.add(egui::DragValue::new(&mut u.health));
+                ui.add(egui::DragValue::new(&mut u.max_health));
+            });
+            ui.checkbox(&mut u.dead, "Dead");
+            ui.horizontal(|ui| {
+                if ui.button("Add / update unit").clicked() {
+                    self.scenario
+                        .units
+                        .insert(self.scenario_token.clone(), self.scenario_unit.clone());
+                    apply = true;
+                }
+                if ui.button("Clear").clicked() {
+                    self.scenario.units.remove(&self.scenario_token);
+                    apply = true;
+                }
+            });
+            ui.separator();
+            ui.label("Vignettes");
+            let mut remove = None;
+            for (i, v) in self.scenario.vignettes.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(&v.name);
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                self.scenario.vignettes.remove(i);
+                apply = true;
+            }
+            if ui.button("Add rare here").clicked() {
+                let mut n = 1;
+                while self
+                    .scenario
+                    .vignettes
+                    .iter()
+                    .any(|v| v.guid == format!("Vignette-manual-{n}"))
+                {
+                    n += 1;
+                }
+                self.scenario.vignettes.push(selu_sim::world::Vignette {
+                    guid: format!("Vignette-manual-{n}"),
+                    object_guid: self.scenario_unit.guid.clone(),
+                    name: self.scenario_unit.name.clone(),
+                    map: self.scenario.map,
+                    x: 0.5,
+                    y: 0.5,
+                });
+                apply = true;
+            }
+            ui.separator();
+            apply |= ui
+                .checkbox(&mut self.scenario.combat, "In combat")
+                .changed();
+            ui.horizontal(|ui| {
+                ui.label("Money (copper)");
+                apply |= ui
+                    .add(egui::DragValue::new(&mut self.scenario.money))
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Bag ID");
+                ui.add(egui::DragValue::new(&mut self.scenario_bag_id).range(0..=4));
+            });
+            ui.label("Item IDs (comma separated)");
+            ui.text_edit_singleline(&mut self.scenario_bag);
+            if ui.button("Set bag").clicked() {
+                match self
+                    .scenario_bag
+                    .split(',')
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| s.trim().parse::<u32>())
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(items) => {
+                        self.scenario.bags.insert(self.scenario_bag_id, items);
+                        apply = true;
+                    }
+                    Err(e) => {
+                        ui.label(e.to_string());
+                    }
+                }
+            }
+            ui.label("Zone / subzone");
+            apply |= ui.text_edit_singleline(&mut self.scenario.zone).changed();
+            apply |= ui
+                .text_edit_singleline(&mut self.scenario.subzone)
+                .changed();
+            ui.horizontal(|ui| {
+                ui.label("Map ID");
+                apply |= ui
+                    .add(egui::DragValue::new(&mut self.scenario.map))
+                    .changed();
+            });
+            ui.separator();
+            ui.label("Saved scenario");
+            ui.text_edit_singleline(&mut self.scenario_name);
+            let valid = !self.scenario_name.is_empty()
+                && self
+                    .scenario_name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if let Some(root) = self.editor.project_dir() {
+                let path = root
+                    .join("scenarios")
+                    .join(format!("{}.toml", self.scenario_name));
+                ui.add_enabled_ui(valid, |ui| {
+                    if ui.button("Save scenario").clicked() {
+                        self.scenario_status = match self.scenario.save(&path) {
+                            Ok(()) => format!("Saved {}", path.display()),
+                            Err(e) => e,
+                        };
+                    }
+                    if ui.button("Load scenario").clicked() {
+                        match selu_sim::world::Scenario::load(&path) {
+                            Ok(state) => {
+                                self.scenario = state;
+                                apply = true;
+                            }
+                            Err(e) => {
+                                self.scenario_status = e;
+                            }
+                        }
+                    }
+                });
+            } else {
+                ui.label("Open a project to save scenarios.");
+            }
+            ui.label(&self.scenario_status);
+        });
+        if apply {
+            self.act(Command::Scenario {
+                state: self.scenario.clone(),
+            });
+        }
+    }
+
     fn activity_bar(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.vertical_centered(|ui| {
             for (side, icon, tip) in [
                 (Side::Explorer, icon::FILES, "Explorer (Ctrl+Shift+E)"),
                 (Side::Frames, icon::FRAMES, "Frames"),
+                (Side::Scenario, icon::GAME, "Scenario"),
             ] {
                 let active = self.side_open && self.side == side;
                 let (rect, resp) = ui.allocate_exact_size(egui::vec2(46.0, 42.0), Sense::click());

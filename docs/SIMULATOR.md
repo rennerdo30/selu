@@ -506,3 +506,27 @@ Blizzard_SharedXML/Backdrop.lua:125-153. Timing evidence is the owner's SIM5
 client contract plus these source consumers; signatures alone do not prove native
 scheduling. The implementation receipt lists per-script evidence and limits at
 E:/AgentData/reports/selu-SIM5-report.md.
+
+## Scenario panel
+
+Studio's Scenario sidebar edits the same session-local unit tables read by the
+simulator APIs. Quick actions create synthetic rare units, a nameplate frame,
+and a vignette at normalized map position (0.5, 0.5). These are synthetic data,
+not discoveries from a game client. Reaction runs from 1 (hated) to 8 (exalted).
+The editor's fields apply with Add / update unit; clear removes the token.
+
+Save/load uses `scenarios/<name>.toml` beneath the open project. The file contains
+units, vignettes, combat, copper, bag item IDs and zone/subzone/map. Loading is a
+replacement of that world setup, emitting transitions for the differences.
+From a test script, call `sim.loadScenario("scenarios/rare-test.toml")` with a
+path relative to the test runner's working directory (or an absolute path).
+No language/checker declarations or Lua project interop are introduced.
+
+Scenario API/event signatures are sourced from the read-only `wow-ui-source`
+forever 1.60.1.70790 generated Unit, VignetteInfo, NamePlate, NamePlateManager,
+Container, CurrencyInfo and Map documentation. The docs establish payload
+shapes; native event ordering and default UI visual fidelity remain unverified.
+Nameplate frames are simulator frames with `namePlateUnitToken`; no Blizzard
+nameplate template is loaded here. Vignette positions return a vector with
+`x`, `y`, `GetXY` and zero facing on the configured map only. Bag setups model
+item IDs per slot, not inventory metadata or item stack counts.
