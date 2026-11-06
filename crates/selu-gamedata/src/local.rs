@@ -80,7 +80,7 @@ impl CascIndex {
             if !n.is_multiple_of(18) {
                 return Err("partial index entry".into());
             }
-            for e in entries.chunks_exact(18) {
+            for e in entries.as_chunks::<18>().0 {
                 let raw = be(e, 9, 5)?;
                 map.insert(
                     e[..9].to_vec(),
@@ -120,8 +120,8 @@ impl EncodingFile {
                 let n = page[p] as usize;
                 let c = slice(page, p + 6, 16)?.try_into()?;
                 let mut keys = Vec::new();
-                for k in slice(page, p + 22, n * 16)?.chunks_exact(16) {
-                    keys.push(k.try_into()?);
+                for k in slice(page, p + 22, n * 16)?.as_chunks::<16>().0 {
+                    keys.push(*k);
                 }
                 out.insert(c, EncodingEntry { ekeys: keys });
                 p += 22 + n * 16;

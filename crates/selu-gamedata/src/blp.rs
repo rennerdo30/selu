@@ -54,7 +54,9 @@ pub fn decode(bytes: &[u8]) -> Result<image::RgbaImage, String> {
             for c in data
                 .get(..n * 4)
                 .ok_or("truncated BLP pixels")?
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
             {
                 rgba.extend_from_slice(&[c[2], c[1], c[0], c[3]]);
             }
