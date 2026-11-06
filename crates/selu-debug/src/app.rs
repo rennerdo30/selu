@@ -67,6 +67,44 @@ fn built_addon(project: &Path) -> Option<PathBuf> {
     found.into_iter().next()
 }
 
+/// One play-loop step: the new last tick, and the game seconds to advance.
+/// Nothing advances while a reply is in flight; that time is counted once
+/// the reply is back (at most half a second per step).
+fn clock_step(
+    last: Option<f64>,
+    now: f64,
+    in_flight: usize,
+    speed: f64,
+) -> (Option<f64>, Option<f64>) {
+    match last {
+        Some(last) if in_flight == 0 => {
+            let dt = ((now - last) * speed).clamp(0.0, 0.5);
+            (Some(now), (dt > 0.0).then_some(dt))
+        }
+        Some(last) => (Some(last), None),
+        None => (Some(now), None),
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::clock_step;
+
+    #[test]
+    fn game_time_follows_wall_time() {
+        // 60 frames a second for 10 seconds; every other frame waits on a reply.
+        let (mut last, mut game) = (None, 0.0);
+        for frame in 0..600 {
+            let now = f64::from(frame) / 60.0;
+            let in_flight = usize::from(frame % 2 == 1);
+            let (l, dt) = clock_step(last, now, in_flight, 1.0);
+            last = l;
+            game += dt.unwrap_or(0.0);
+        }
+        assert!((game - 599.0 / 60.0).abs() < 0.05, "game time {game}");
+    }
+}
+
 /// The project folder for a picked folder: the folder itself, its `selu`
 /// subfolder, or its only direct subfolder that contains `selu.toml`.
 fn find_project(picked: &std::path::Path) -> Option<PathBuf> {
@@ -578,16 +616,13 @@ impl Studio {
         }
         let now = ctx.input(|i| i.time);
         if self.playing {
-            if let Some(last) = self.last_tick
-                && self.in_flight == 0
-            {
-                let dt = ((now - last) * self.speed).clamp(0.0, 0.5);
-                if dt > 0.0 {
-                    self.act(Command::AdvanceTime { seconds: dt });
-                }
-            }
-            if self.in_flight == 0 || self.last_tick.is_none() {
-                self.last_tick = Some(now);
+            // Game time follows wall time. The tick moves forward when an
+            // advance is sent, so time that passed while a reply was in flight
+            // is counted once on the next advance, not again on every frame.
+            let (last, dt) = clock_step(self.last_tick, now, self.in_flight, self.speed);
+            self.last_tick = last;
+            if let Some(seconds) = dt {
+                self.act(Command::AdvanceTime { seconds });
             }
             ctx.request_repaint_after(Duration::from_millis(16));
         } else {
