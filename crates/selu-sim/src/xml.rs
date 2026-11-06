@@ -131,6 +131,7 @@ pub(crate) fn read_client(
 }
 
 const SUPPORTED: &[&str] = &[
+    "Binding",
     "Frame",
     "Button",
     "CheckButton",
@@ -204,6 +205,45 @@ mod tests {
             sim.eval(&format!("__selu_xml_declare({})", encode(n, 0).unwrap()))
                 .unwrap();
         }
+    }
+    #[test]
+    fn inherited_edit_box_flags_and_binding_bodies_use_native_input() {
+        let sim = crate::Sim::new().unwrap();
+        crate::bindings::install(sim.lua()).unwrap();
+        run(
+            &sim,
+            r#"<Ui><EditBox name="SearchBase" virtual="true" autoFocus="false" multiLine="true"/><EditBox name="Search" inherits="SearchBase"/><Binding name="TEST" runOnUp="true">states=(states or '')..keystate;</Binding></Ui>"#,
+        );
+        sim.eval("assert(not Search:IsAutoFocus());SetBinding('X','TEST')")
+            .unwrap();
+        sim.key("X", true).unwrap();
+        sim.key("X", false).unwrap();
+        sim.eval("assert(states=='downup')").unwrap();
+    }
+    #[test]
+    fn forward_sibling_relative_keys_resolve_after_tree_construction() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="Holder"><Size x="100" y="100"/><Anchors><Anchor point="BOTTOMLEFT"/></Anchors><Layers><Layer><Texture parentKey="Art"><Size x="10" y="10"/><Anchors><Anchor point="CENTER" relativeKey="$parent.Later"/></Anchors></Texture></Layer></Layers><Frames><Frame parentKey="Later"><Size x="30" y="30"/><Anchors><Anchor point="BOTTOMLEFT" x="20" y="25"/></Anchors></Frame></Frames></Frame></Ui>"#,
+        );
+        sim.eval("local _,relative=Holder.Art:GetPoint(); assert(relative==Holder.Later);assert(Holder.Art:GetLeft()==30 and Holder.Art:GetBottom()==35)").unwrap();
+    }
+    #[test]
+    fn inherited_parent_precedes_parent_keys_arrays_and_anchors() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui>
+            <Frame name="HiddenHolder" hidden="true"><Size x="100" y="80"/><Anchors><Anchor point="BOTTOMLEFT" x="30" y="40"/></Anchors></Frame>
+            <Frame name="OtherHolder"><Size x="100" y="80"/><Anchors><Anchor point="BOTTOMLEFT" x="300" y="40"/></Anchors></Frame>
+            <Frame name="ParentBase" virtual="true" parent="HiddenHolder" parentArray="frames"><Size x="10" y="10"/><Anchors><Anchor point="BOTTOMLEFT" x="2" y="3"/></Anchors></Frame>
+            <Frame name="ParentDerived" virtual="true" inherits="ParentBase" parentKey="Child"/>
+            <Frame name="Owned" inherits="ParentDerived"/>
+            <Frame name="Override" inherits="ParentDerived" parent="OtherHolder"/>
+        </Ui>"#,
+        );
+        sim.eval("assert(Owned:GetParent()==HiddenHolder);assert(HiddenHolder.Child==Owned and HiddenHolder.frames[1]==Owned);assert(not Owned:IsVisible());assert(Owned:GetLeft()==32);assert(Override:GetParent()==OtherHolder and OtherHolder.frames[1]==Override and OtherHolder.Child==Override);assert(Override:IsVisible())").unwrap();
     }
     #[test]
     fn nested_intrinsic_types_apply_before_instance_fields() {

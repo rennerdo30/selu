@@ -195,11 +195,13 @@ fn live_font_inheritance_reflows_spacing_and_preserves_style_overrides() {
 }
 
 #[test]
-fn native_templates_work_without_inventing_untyped_globals() {
+fn font_templates_require_source_objects_or_manifest_declarations() {
     let sim = Sim::new().unwrap();
     sim.eval(r#"
         assert(rawget(_G,'GameFontHighlightSmall')==nil)
-        local t=UIParent:CreateFontString(nil,'OVERLAY','GameFontHighlightSmall')
+        assert(not pcall(function() UIParent:CreateFontString(nil,'OVERLAY','GameFontHighlightSmall') end))
+        local font=CreateFont('FixtureSmall');font:SetFont('fallback',10)
+        local t=UIParent:CreateFontString(nil,'OVERLAY','FixtureSmall')
         t:SetText('ready');t:SetPoint('TOPLEFT')
         assert(t:GetText()=='ready' and t:GetStringWidth()>0 and select(2,t:GetFont())==10)
         assert(rawget(_G,'GameFontHighlightSmall')==nil)

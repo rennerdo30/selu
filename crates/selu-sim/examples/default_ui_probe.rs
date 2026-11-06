@@ -272,10 +272,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..4 {
         session.advance_time(1.0 / 60.0);
     }
-    session.eval("__probe_meta(\"FILTER\",ChatFrameUtil.ProcessMessageEventFilters(DEFAULT_CHAT_FRAME,\"CHAT_MSG_SYSTEM\",\"System filter probe\")); __probe_meta(\"REGISTERED\",DEFAULT_CHAT_FRAME:IsEventRegistered(\"CHAT_MSG_SYSTEM\"))")?;
-    session.eval("__probe_meta(\"PRINTJOIN\",string.join(\"|\",\"alpha\",\"beta\")); DEFAULT_CHAT_FRAME:AddMessage(\"Direct chat probe\"); getprinthandler()(\"Handler chat probe\")")?;
-    session.eval("local c=DEFAULT_CHAT_FRAME; print('Simulator addon print probe'); __probe_meta('CHAT',c and c:GetNumMessages(),c and c.visibleLines and #c.visibleLines,c and c.isLayoutDirty,c and c.isDisplayDirty,c and c:GetWidth(),c and c:GetHeight()); if c then for i=1,math.min(c:GetNumMessages(),4) do __probe_meta('MESSAGE',c:GetMessageInfo(i)) end; for i,line in ipairs(c.visibleLines or {}) do if i<4 then __probe_meta('LINE',line:GetText(),line:IsShown(),line:GetAlpha(),line:GetRect()) end end end")?;
     session.advance_time(1.0 / 60.0);
+    for error in session.default_ui_startup_errors() {
+        println!("STARTUP {error}");
+    }
+    session.eval("local f=ObjectiveTrackerFrame; __probe_meta('TRACKER',f:IsShown(),f.isCollapsed,f.needsSorting,f.isDirty,EditModeManagerFrame:IsEditModeActive(),#f.modules); for _,m in ipairs(f.modules) do __probe_meta('MODULE',m:GetName(),m:GetContentsHeight()) end")?;
     let snapshot_start = std::time::Instant::now();
     let snapshot = session.snapshot()?;
     println!(
@@ -302,6 +303,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 && (r.texture.is_some() || r.text.as_ref().is_some_and(|text| !text.is_empty())))
             .count()
     );
+    {
+        let arena = selu_sim::frames::arena::store(session.lua());
+        let arena = arena.borrow();
+        for r in unplaced.iter().filter(|r| {
+            r.visible && (r.texture.is_some() || r.text.as_ref().is_some_and(|s| !s.is_empty()))
+        }) {
+            let native = &arena.regions[r.id.index as usize];
+            let mut parent = native.parent;
+            let mut lineage = Vec::new();
+            for _ in 0..6 {
+                let Some(index) = parent else { break };
+                let p = &arena.regions[index];
+                lineage.push(format!(
+                    "{}:{}:{:?}",
+                    index,
+                    p.name.as_deref().unwrap_or(&p.kind),
+                    p.rect
+                ));
+                parent = p.parent;
+            }
+            println!(
+                "PAINT-UNPLACED {} {:?} text={:?} texture={:?} anchors={:?} source={:?} parents={}",
+                r.id.index,
+                r.name,
+                r.text,
+                r.texture,
+                native
+                    .points
+                    .iter()
+                    .map(|p| (&p.point, p.relative, &p.anchor, p.x, p.y))
+                    .collect::<Vec<_>>(),
+                native.created_at,
+                lineage.join(" / ")
+            );
+        }
+    }
+    for r in snapshot
+        .regions
+        .iter()
+        .filter(|r| r.visible && r.rect.is_some() && r.texture.is_some())
+    {
+        let q = r.rect.unwrap();
+        if q.left > 1450.0 && q.bottom > 700.0 && q.bottom < 850.0 && q.width > 250.0 {
+            println!(
+                "GOLD-CANDIDATE {} {:?} {:?} {:?} parent={:?}",
+                r.id.index,
+                r.name,
+                r.texture,
+                r.rect,
+                r.parent
+                    .and_then(|id| snapshot.regions.get(id.index as usize))
+                    .map(|r| (&r.name, &r.widget))
+            );
+        }
+    }
     for r in unplaced
         .iter()
         .filter(|r| r.visible && r.name.is_some())
@@ -361,6 +417,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|line| line.contains("CAUGHT") || line.contains("HUDMETA"))
     {
         println!("{line}");
+    }
+    {
+        let arena = selu_sim::frames::arena::store(session.lua());
+        let a = arena.borrow();
+        for (index, r) in a.regions.iter().enumerate().filter(|(_, r)| {
+            r.visible
+                && r.rect.is_some_and(|q| {
+                    q.left > 1450. && q.bottom > 700. && q.bottom < 850. && q.width > 250.
+                })
+                && r.texture.is_some()
+        }) {
+            let mut at = Some(index);
+            let mut lineage = Vec::new();
+            for _ in 0..12 {
+                let Some(i) = at else { break };
+                let r = &a.regions[i];
+                lineage.push(format!("{}:{}", i, r.name.as_deref().unwrap_or(&r.kind)));
+                at = r.parent;
+            }
+            println!(
+                "GOLD-LINEAGE {} {:?} {}",
+                index,
+                r.texture,
+                lineage.join(" / ")
+            );
+        }
     }
     selu_sim::profile::report();
     Ok(())

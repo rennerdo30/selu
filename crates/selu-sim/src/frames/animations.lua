@@ -2,6 +2,7 @@
 return function(target, note, translate)
     local g={animations={},scripts={},looping="NONE",state="stopped",elapsed=0}
     local driver=CreateFrame("Frame")
+    driver:Hide()
     local function fire(name,...) if g.scripts[name] then g.scripts[name](g,...) end end
     function g:SetScript(name,f) self.scripts[name]=f end
     function g:GetScript(name) return self.scripts[name] end
@@ -46,10 +47,10 @@ return function(target, note, translate)
             self.elapsed=0;self.reverse=false;originals={}
             for _,a in ipairs(self.animations) do originals[a.target]=a.target:GetAlpha() end
         end
-        self.state="playing";fire("OnPlay")
+        self.state="playing";driver:Show();fire("OnPlay")
     end
-    function g:Pause() if self.state=="playing" then self.state="paused" end end
-    function g:Stop() self.state="stopped";self.elapsed=0;restore() end
+    function g:Pause() if self.state=="playing" then self.state="paused";driver:Hide() end end
+    function g:Stop() self.state="stopped";driver:Hide();self.elapsed=0;restore() end
     driver:SetScript("OnUpdate",function(_,dt)
         if g.state~="playing" then return end
         local duration=g:GetDuration()
@@ -76,7 +77,7 @@ return function(target, note, translate)
             end end
             start=start+orders[order]
         end
-        if finished then g.state="stopped";restore();fire("OnFinished",true) end
+        if finished then g.state="stopped";driver:Hide();restore();fire("OnFinished",true) end
     end)
     return g
 end

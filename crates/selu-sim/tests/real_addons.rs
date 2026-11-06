@@ -60,13 +60,14 @@ fn manifest_shapes_are_not_functions() {
         {"name":"NativeTable", "type":"table", "evidence":"verified"},
         {"name":"NativeFrame", "type":"Frame", "evidence":"verified"}
     ]);
+    value["widgets"] = serde_json::json!([{"name":"Font","evidence":"verified"}]);
     let manifest = serde_json::from_value(value).unwrap();
     let session = Session::new(SessionConfig {
         manifest: Some(manifest),
         ..Default::default()
     })
     .unwrap();
-    session.eval("assert(type(GameFontNormal)=='table' and GameFontNormal.GetFont); assert(type(NativeTable)=='table'); assert(NativeFrame:GetObjectType()=='Frame')").unwrap();
+    session.eval("assert(type(GameFontNormal)=='table' and GameFontNormal.GetFont); assert(type(NativeTable)=='table'); assert(NativeFrame:GetObjectType()=='Frame'); local text=UIParent:CreateFontString(nil,'OVERLAY','GameFontNormal');assert(text:GetFontObject()==GameFontNormal)").unwrap();
 }
 #[test]
 fn screen_scale_and_unknown_addon_fields() {

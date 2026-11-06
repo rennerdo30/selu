@@ -42,8 +42,7 @@ pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
         end
     "#,
     )?;
-    let native = crate::fonts::native_style(name);
-    let (size, color) = native.unwrap_or((12.0, [1.0; 4]));
+    let (size, color) = (12.0, [1.0; 4]);
     let color = lua.create_sequence_from(color)?;
     let invalidate = lua.create_function(|lua, ()| {
         let store = crate::frames::arena::store(lua);
@@ -52,13 +51,7 @@ pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
         a.styles_dirty = true;
         Ok(())
     })?;
-    constructor.call((
-        name,
-        size,
-        color,
-        if native.is_some() { 1.0 } else { 0.0 },
-        invalidate,
-    ))
+    constructor.call((name, size, color, 0.0, invalidate))
 }
 
 fn json_value(lua: &Lua, value: &serde_json::Value) -> SimResult<Value> {
@@ -243,7 +236,9 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
         )
     {
         if let Some(ty) = ty {
-            let shape = if manifest.widgets.iter().any(|w| w.name == ty) {
+            let shape = if ty.eq_ignore_ascii_case("font") {
+                "Font".into()
+            } else if manifest.widgets.iter().any(|w| w.name == ty) {
                 format!("widget:{ty}")
             } else if manifest.tables.iter().any(|t| t.name == ty) {
                 "table".into()
@@ -284,7 +279,7 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
         .iter()
         .any(|prefix| key.starts_with(prefix))
         && lua
-            .named_registry_value::<Option<bool>>("selu.default_ui_strings")?
+            .named_registry_value::<Option<bool>>("selu.synthetic_strings")?
             .unwrap_or(false)
     {
         ctx.not_simulated(&format!("localized client string: {key}"));
@@ -293,11 +288,6 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
         return Ok(Some(value));
     }
     let shapes: Table = globals.raw_get("__selu_global_shapes")?;
-    // Native Minimap exists in Blizzard_Minimap/Minimap.xml even when an
-    // extraction revision has no typed global record for it.
-    if key == "Minimap" {
-        shapes.raw_set(key, "widget:Minimap")?;
-    }
     let Some(shape) = shapes.raw_get::<Option<String>>(key)? else {
         return Ok(None);
     };
@@ -341,16 +331,6 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
             }
             let create: mlua::Function = globals.raw_get("CreateFrame")?;
             let frame: Table = create.call((ty.strip_prefix("widget:").unwrap_or(ty), key))?;
-            if key == "Minimap" {
-                // Where the default UI puts it (Blizzard_Minimap/Mainline/Minimap.xml:
-                // 198x198 in the top-right cluster), so frames anchored to the
-                // minimap, such as minimap buttons, have a place on screen.
-                lua.load(
-                    "local f = ...; f:SetSize(198, 198); \
-                     f:SetPoint('TOPRIGHT', UIParent, 'TOPRIGHT', -29, -46)",
-                )
-                .call::<()>(frame.clone())?;
-            }
             Value::Table(frame)
         }
         _ => return Ok(None),
@@ -552,17 +532,8 @@ mod sg_tests {
 #[cfg(test)]
 mod minimap_tests {
     #[test]
-    fn minimap_stand_in_has_a_place_on_screen() {
+    fn undeclared_ui_objects_are_not_synthesized_by_name() {
         let session = crate::Session::new(Default::default()).unwrap();
-        session
-            .eval(
-                "local b = CreateFrame('Button', nil, Minimap); b:SetSize(31, 31); \
-                 b:SetPoint('CENTER', Minimap, 'BOTTOMLEFT'); \
-                 local l, bottom, w, h = Minimap:GetRect(); \
-                 assert(w == 198 and h == 198, tostring(w)); \
-                 assert(l + w == UIParent:GetWidth() - 29, tostring(l)); \
-                 assert(b:GetLeft() ~= nil)",
-            )
-            .unwrap();
+        session.eval("assert(Minimap == nil); local f=CreateFrame('Minimap','SourceMap'); f:SetSize(198,198); f:SetPoint('CENTER'); assert(f:GetRect() ~= nil)").unwrap();
     }
 }

@@ -50,6 +50,16 @@ pub enum Command {
     AdvanceTime {
         seconds: f64,
     },
+    MouseButton {
+        x: f64,
+        y: f64,
+        button: String,
+        down: bool,
+    },
+    Key {
+        key: String,
+        down: bool,
+    },
     /// Run Lua in the session (Studio's console).
     Eval {
         code: String,
@@ -276,6 +286,18 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
                         snapshot: Box::new(s),
                     })
                 })
+                .map_err(|e| e.to_string()),
+            Command::MouseButton { x, y, button, down } => {
+                let result = if down {
+                    session.mouse_down(x, y, &button)
+                } else {
+                    session.mouse_up(x, y, &button)
+                };
+                result.map(|_| None).map_err(|e| e.to_string())
+            }
+            Command::Key { key, down } => session
+                .key(&key, down)
+                .map(|_| None)
                 .map_err(|e| e.to_string()),
             Command::Shutdown => unreachable!(),
         };

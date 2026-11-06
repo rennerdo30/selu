@@ -299,8 +299,8 @@ The committed visual fixture is `crates/selu-sim/tests/fixtures/rendering`.
 
 ### Default UI startup (SL-23)
 
-Studio's Game Installs settings include Default UI (enabled when the source is
-available for a wowf target) and a source checkout path. The initial source is
+Studio's Game Installs settings include Default UI (off by default) and a
+source checkout path. The initial source is
 `E:/Development/wow-ui-source`; it is read-only. Library sessions remain opt-in
 through `Session::load_default_ui`. With a configured client, TOC lists, TOCs,
 Lua and XML bytes prefer local CASC; unavailable entries fall back to the source
@@ -393,11 +393,10 @@ for its absent `RA_kitOriginalScale` field. Missing widget members now use only
 known method signatures; unknown addon fields, including uppercase names, stay
 nil. The former no-op tests now probe an actual known unmodelled method,
 `SetMovable`; global fallback tests assert nil and retain log-once assertions.
-Tooltip ownership is stateful. The native Minimap global has an explicitly
-sourced widget shape from Blizzard's
-[Minimap.xml](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_Minimap/Mainline/Minimap.xml);
-it is 198x198 at the top right, where the default UI puts it, so minimap
-buttons show on screen. Map imagery is not simulated. Hook callbacks retain registry keys rather than
+Tooltip ownership is stateful. UI objects and their positioning now come from
+Blizzard XML; the simulator no longer seeds a named Minimap position.
+The intrinsic Minimap widget draws an engine map placeholder.
+Hook callbacks retain registry keys rather than
 auxiliary-stack function references, preserving error routing and flush order.
 
 SIM1 also seeds a deterministic simulated player from the session character
@@ -585,6 +584,21 @@ user addon. Local CASC files take precedence over the configured read-only
 source checkout; missing locally installed files fall back with notes. The
 tested source is Forever 1.60.1.70790, matching the installed wowf client.
 Neither source nor game folders are modified. SavedVariables are not read.
+
+The simulator implements native state, widget behavior, events and layout.
+It must not name a Blizzard frame/template/button to show, hide, anchor,
+label or restyle it. Blizzard code owns those decisions. Missing textures use
+one generic look. UIParent and WorldFrame are engine roots, not recreated
+Blizzard UI. Test selectors and read-only diagnostics may inspect named frames.
+GlobalStrings is tried from CASC DB2 1394440/path and Lua exports in CASC or
+the source checkout before synthetic labels are enabled. Neither is installed
+in the tested build; the receipt explicitly records that fallback. Font
+profiles and backdrop mixins are read from Blizzard XML/Lua, not named Rust
+substitutions. Legacy native Frame backdrop storage remains available to all
+frame types; a template name no longer installs it. Without source/manifest declarations, unknown templates fail.
+Keyboard binding bodies also come from addon Bindings XML. The engine stores
+key-to-action state (Escape defaults to TOGGLEGAMEMENU), dispatches it after
+keyboard propagation, and never implements a panel's close logic itself.
 
 XML parsing uses `roxmltree` (MIT OR Apache-2.0). Virtual/intrinsic templates,
 multiple inheritance, mixins, parent keys/arrays, `$parent`, relative keys,

@@ -13,10 +13,13 @@ mod enabled {
         stack: Vec<Duration>,
         totals: BTreeMap<&'static str, (Duration, u64)>,
         counts: BTreeMap<&'static str, u64>,
+        calls: bool,
+        sites: BTreeMap<usize, (String, u64)>,
     }
     thread_local! {
         static DATA: RefCell<Data> = RefCell::new(Data {
-            active: std::env::var_os("SELU_SIM_PROFILE").is_some(), ..Data::default()
+            active: std::env::var_os("SELU_SIM_PROFILE").is_some(),
+            calls: std::env::var_os("SELU_SIM_PROFILE_CALLS").is_some(), ..Data::default()
         });
         static HOOKS: std::cell::Cell<(u64,u64)> = const { std::cell::Cell::new((0,0)) };
     }
@@ -31,6 +34,33 @@ mod enabled {
             } else {
                 (precise, coarse + 1)
             });
+        });
+    }
+    pub fn secure_call(function: &mlua::Function, rawget: bool) {
+        DATA.with(|data| {
+            let mut data = data.borrow_mut();
+            if !data.active || !data.calls {
+                return;
+            }
+            let site = data
+                .sites
+                .entry(function.to_pointer() as usize)
+                .or_insert_with(|| {
+                    let info = function.info();
+                    (
+                        if rawget {
+                            "builtin rawget".into()
+                        } else {
+                            format!(
+                                "{}:{}",
+                                info.short_src.unwrap_or_default(),
+                                info.line_defined.unwrap_or_default()
+                            )
+                        },
+                        0,
+                    )
+                });
+            site.1 += 1;
         });
     }
     pub fn report_hooks(label: &str) {
@@ -103,6 +133,17 @@ mod enabled {
             for (name, count) in &data.counts {
                 eprintln!("PROFILE_COUNT {name}: {count}");
             }
+            if data.calls {
+                let mut grouped = BTreeMap::<&str, u64>::new();
+                for (name, count) in data.sites.values() {
+                    *grouped.entry(name).or_default() += count;
+                }
+                let mut sites = grouped.into_iter().collect::<Vec<_>>();
+                sites.sort_by_key(|site| std::cmp::Reverse(site.1));
+                for (name, count) in sites.into_iter().take(25) {
+                    eprintln!("PROFILE_SECURE_CALL {count}: {name}");
+                }
+            }
         });
     }
 }
@@ -122,6 +163,8 @@ pub fn count(_: &'static str) {}
 pub fn report() {}
 #[cfg(not(debug_assertions))]
 pub fn instruction_hook(_: u32) {}
+#[cfg(not(debug_assertions))]
+pub fn secure_call(_: &mlua::Function, _: bool) {}
 #[cfg(not(debug_assertions))]
 pub fn report_hooks(_: &str) {}
 

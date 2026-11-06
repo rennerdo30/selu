@@ -754,6 +754,57 @@ fn render_boundary_error(lua: &Lua, error: mlua::Value) -> mlua::Result<String> 
     Ok(text)
 }
 
+fn boundary_renderer(lua: &Lua) -> mlua::Result<mlua::Function> {
+    const KEY: &str = "selu.boundary_renderer";
+    if let Some(function) = lua.named_registry_value::<Option<mlua::Function>>(KEY)? {
+        return Ok(function);
+    }
+    let render = lua.create_function(|lua, error: mlua::Value| {
+        let _profile = crate::profile::Span::new("errors.render_and_notify");
+        if let mlua::Value::Error(ref cause) = error
+            && boundary_was_reported(cause)
+        {
+            return Ok(error);
+        }
+        let notified = crate::world::notify_native_error(lua, error.clone())?;
+        let message = render_boundary_error(lua, error)?;
+        if notified {
+            lua.app_data_ref::<Ctx>()
+                .unwrap()
+                .runtime_failure("native boundary", message.clone());
+            Ok(mlua::Value::Error(Box::new(mlua::Error::external(
+                NativeBoundaryFailure(message),
+            ))))
+        } else {
+            Ok(mlua::Value::String(lua.create_string(message)?))
+        }
+    })?;
+    lua.set_named_registry_value(KEY, render.clone())?;
+    Ok(render)
+}
+
+/// Iterate native ranges without a Lua wrapper or a fresh closure per item.
+/// Callback budgets and original error custody use the ordinary host boundary.
+pub(crate) fn install_secure_range(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("SELU_SIM_PROFILE").is_some() {
+        eprintln!(
+            "SELU_SIM_PROFILE protected range: native iteration; per-callback accounting active"
+        );
+    }
+    let ctx = ctx.clone();
+    lua.globals().raw_set("secureexecuterange",lua.create_function(move |lua,(values,callback,extra):(mlua::Table,mlua::Function,mlua::MultiValue)| {
+        for item in values.pairs::<mlua::Value,mlua::Value>() {
+            let (key,value)=item?;
+            let mut args=extra.clone();args.push_front(value);args.push_front(key);
+            if let Err(error)=script_callback(lua,&ctx,||call_lua::<()>(lua,callback.clone(),args)) {
+                ctx.log(format!("error: {error}"));check_budget(&ctx)?;
+            }
+        }
+        Ok(())
+    })?)
+}
+
 /// Protect Lua calls *before* mlua stringifies non-string error objects.
 /// The handler is only at the host boundary: addon pcall/coroutine code
 /// continues to receive the original error value unchanged.
@@ -763,64 +814,24 @@ pub(crate) fn call_lua<R: mlua::FromLuaMulti>(
     args: impl mlua::IntoLuaMulti,
 ) -> mlua::Result<R> {
     let _profile = crate::profile::Span::new("lua.execute_and_boundary");
-    const KEY: &str = "selu.host_boundary";
-    let protected = match lua.named_registry_value::<Option<mlua::Function>>(KEY)? {
-        Some(function) => function,
-        None => {
-            let render = lua.create_function(|lua, error: mlua::Value| {
-                let _profile = crate::profile::Span::new("errors.render_and_notify");
-                if let mlua::Value::Error(ref cause) = error
-                    && boundary_was_reported(cause)
-                {
-                    return Ok(error);
-                }
-                let notified = crate::world::notify_native_error(lua, error.clone())?;
-                let message = render_boundary_error(lua, error)?;
-                if notified {
-                    lua.app_data_ref::<Ctx>()
-                        .unwrap()
-                        .runtime_failure("native boundary", message.clone());
-                    Ok(mlua::Value::Error(Box::new(mlua::Error::external(
-                        NativeBoundaryFailure(message),
-                    ))))
-                } else {
-                    Ok(mlua::Value::String(lua.create_string(message)?))
-                }
-            })?;
-            let factory: mlua::Function = crate::host_lua::load(
-                lua,
-                r#"
-local xpcall, error, unpack, select = xpcall, error, unpack, select
-return function(render)
- local function result(ok, ...) if not ok then error((...),0) end; return ... end
- return function(fn, ...)
-  local count = select('#', ...)
-  if count == 0 then return result(xpcall(fn,render)) end
-  if count == 1 then
-   local a = ...; return result(xpcall(function() return fn(a) end,render))
-  end
-  if count == 2 then
-   local a,b = ...; return result(xpcall(function() return fn(a,b) end,render))
-  end
-  if count == 3 then
-   local a,b,c = ...; return result(xpcall(function() return fn(a,b,c) end,render))
-  end
-  local args = {...}
-  return result(xpcall(function() return fn(unpack(args,1,count)) end,render))
- end
-end
-"#,
-            )
-            .set_name("=selu host boundary")
-            .eval()?;
-            let function: mlua::Function = factory.call(render)?;
-            lua.set_named_registry_value(KEY, function.clone())?;
-            function
-        }
-    };
+    crate::profile::secure_call(&function, false);
     let mut args = args.into_lua_multi(lua)?;
     args.push_front(mlua::Value::Function(function));
-    protected.call(args)
+    args.push_front(mlua::Value::Function(boundary_renderer(lua)?));
+    // SAFETY: exec_raw supplies a protected stack containing only these
+    // arguments. lua_pcall catches the callback before mlua can stringify
+    // its error object. The error handler remains below the callee. No Rust
+    // value needing Drop lives across lua_error; exec_raw owns restoration.
+    unsafe {
+        lua.exec_raw(args, |state| {
+            let nargs = mlua::ffi::lua_gettop(state) - 2;
+            let status = mlua::ffi::lua_pcall(state, nargs, mlua::ffi::LUA_MULTRET, 1);
+            if status != 0 {
+                mlua::ffi::lua_error(state);
+            }
+            mlua::ffi::lua_remove(state, 1);
+        })
+    }
 }
 
 /// Run one host-initiated call (an event, a timer advance, a script call, an

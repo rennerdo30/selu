@@ -104,7 +104,7 @@ pub(crate) fn factory(lua: &Lua, key: &str, source: &str) -> mlua::Result<Functi
     if let Some(function) = lua.named_registry_value::<Option<Function>>(key)? {
         return Ok(function);
     }
-    let function: Function = load(lua, source).eval()?;
+    let function: Function = load(lua, source).set_name(format!("={key}")).eval()?;
     lua.set_named_registry_value(key, function.clone())?;
     Ok(function)
 }

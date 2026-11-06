@@ -165,3 +165,103 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
     }
     Ok(())
 }
+
+/// Prefer this client's strings; only permit synthetic labels if neither the
+/// client payload nor a source export exists. No account files are inspected.
+pub(crate) fn load_strings(
+    lua: &Lua,
+    ctx: &crate::Ctx,
+    source: &std::path::Path,
+) -> mlua::Result<()> {
+    let storage = crate::frames::arena::store(lua)
+        .borrow()
+        .fonts
+        .assets
+        .client_storage();
+    let source = source.canonicalize().map_err(mlua::Error::external)?;
+    let mut found = false;
+    let mut count = 0;
+    if let Some(storage) = storage.as_deref() {
+        let bytes = storage
+            .read(1394440)
+            .or_else(|_| storage.read_path("DBFilesClient/GlobalStrings.db2"));
+        match bytes {
+            Ok(bytes) => {
+                found = true;
+                match selu_gamedata::db2::Table::parse(&bytes) {
+                    Ok(table) => {
+                        for row in 0..table.count() {
+                            let (Ok(key), Ok(text)) = (table.text(row, 0), table.text(row, 1))
+                            else {
+                                continue;
+                            };
+                            if !key.is_empty() {
+                                lua.globals().raw_set(key, text)?;
+                                count += 1;
+                            }
+                        }
+                    }
+                    Err(error) => ctx.not_simulated(&format!("GlobalStrings DB2 decode: {error}")),
+                }
+            }
+            Err(error) => ctx.log(format!("GlobalStrings DB2 unavailable: {error}")),
+        }
+    }
+    let mut paths = vec![
+        "Interface/GlobalStrings.lua".to_owned(),
+        "Interface/FrameXML/GlobalStrings.lua".into(),
+        "Interface/AddOns/Blizzard_GlobalStrings/GlobalStrings.lua".into(),
+        "Interface/AddOns/Blizzard_GlobalStrings/Blizzard_GlobalStrings.lua".into(),
+    ];
+    let export = source.join("Interface/AddOns/Blizzard_GlobalStrings");
+    if let Ok(entries) = std::fs::read_dir(export) {
+        for entry in entries.flatten() {
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "lua")
+            {
+                paths.push(format!(
+                    "Interface/AddOns/Blizzard_GlobalStrings/{}",
+                    entry.file_name().to_string_lossy()
+                ));
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    for path in paths {
+        let bytes = storage
+            .as_deref()
+            .and_then(|storage| storage.read_path(&path).ok())
+            .or_else(|| {
+                source
+                    .join(&path)
+                    .canonicalize()
+                    .ok()
+                    .filter(|path| path.starts_with(&source))
+                    .and_then(|path| std::fs::read(path).ok())
+            });
+        if let Some(bytes) = bytes {
+            found = true;
+            let text = String::from_utf8(bytes).map_err(mlua::Error::external)?;
+            crate::core::call_lua::<()>(
+                lua,
+                lua.load(text.trim_start_matches('\u{feff}'))
+                    .set_name(&path)
+                    .into_function()?,
+                (),
+            )?;
+            ctx.log(format!("GlobalStrings source: {path}"));
+        }
+    }
+    if !found {
+        ctx.not_simulated("GlobalStrings absent from local CASC and source export; synthetic localized labels enabled");
+    } else {
+        ctx.log(format!(
+            "GlobalStrings: {count} DB2 strings loaded; synthetic labels disabled"
+        ));
+    }
+    lua.set_named_registry_value("selu.synthetic_strings", !found)?;
+    lua.globals().raw_set("__selu_synthetic_strings", !found)
+}

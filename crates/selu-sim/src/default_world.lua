@@ -1,5 +1,6 @@
 -- Synthetic startup data only. Never reads a player account or SavedVariables.
 local version,build,interface=...
+if __selu_synthetic_strings then
 if rawget(_G,'GENERAL')==nil then GENERAL='General' end
 if rawget(_G,'COMBAT_LOG')==nil then COMBAT_LOG='Combat Log' end
 if rawget(_G,'VOICE')==nil then VOICE='Voice' end
@@ -13,6 +14,7 @@ for index=1,8 do
         local key='GROUP'..index..'_CHAT_TAG'..alias
         if rawget(_G,key)==nil then _G[key]='Group '..index..' alias '..alias end
     end
+end
 end
 -- Scenario/world implementations take precedence over bootstrap stand-ins.
 local standins=rawget(_G,'__selu_native_standins') or {}
@@ -55,6 +57,34 @@ function CopyTable(source)
     end
     return copy(source)
 end
+-- Native callback containers used by secure aura/event code (SharedXMLBase/
+-- Event.lua and AuraContainer.lua). Empty-world aura subscriptions retain
+-- callbacks but have no aura updates to emit.
+C_FunctionContainers={CreateCallback=function(callback) return {callback=callback} end}
+C_UnitAurasPrivate={}
+local privateAuraCallbacks={}
+for _,key in ipairs({'SetPrivateAuraAnchorAddedCallback','SetPrivateAuraAnchorRemovedCallback',
+    'SetPrivateWarningTextFrame','SetPrivateRaidBossMessageCallback','AnchorPrivateAura'}) do
+    C_UnitAurasPrivate[key]=function(...) privateAuraCallbacks[key]={...} end
+end
+local privateAuraUpdates={}
+function C_UnitAurasPrivate.AddPrivateAuraUpdateCallback(unit,callback)
+    privateAuraUpdates[unit]=privateAuraUpdates[unit] or {};privateAuraUpdates[unit][callback]=true
+end
+function C_UnitAurasPrivate.RemovePrivateAuraUpdateCallback(unit,callback)
+    if privateAuraUpdates[unit] then privateAuraUpdates[unit][callback]=nil end
+end
+for _,key in ipairs({'GetPrivateAuraAnchors','GetAllPrivateAuraInstanceIDs','GetAllPrivateAuras'}) do C_UnitAurasPrivate[key]=function() return {} end end
+function C_UnitAurasPrivate.GetAuraDataByAuraInstanceIDPrivate() return nil end
+function C_UnitAurasPrivate.GetPrivateAuraCasterGUID() return nil end
+function C_UnitAurasPrivate.IsPrivateAuraFilteredOutByInstanceID() return true end
+-- Scenario API's empty-world values. The outdoor baseline has no stages.
+C_Scenario=C_Scenario or {}
+function C_Scenario.ShouldShowCriteria() return false end
+function C_Scenario.IsInScenario() return false end
+function C_Scenario.GetInfo() return nil,0,0,0,false,false,false,0,0,0 end
+function C_Scenario.GetStepInfo() return nil,nil,0,nil,nil,nil,nil,0,{},0 end
+function C_Scenario.GetProvingGroundsInfo() return 0,0,0,0 end
 -- FrameScriptDocumentation.lua: preserve cycles and shared references.
 -- Native taint propagation remains outside the simulator's fake world.
 function securecopy(value,options)
@@ -111,10 +141,21 @@ function GetNumLanguages() return 1 end
 function GetLanguageByIndex(index) if index==1 then return 'Common',7 end end
 Kiosk=Kiosk or {}
 function Kiosk.IsEnabled() return false end
+C_AdventureJournal=C_AdventureJournal or {}
+function C_AdventureJournal.CanBeShown() return false end
 function UnitGUID(unit) if unit=='player' then return 'Player-1-00000001' end end
 function UnitIsUnit(a,b) return a==b and UnitExists(a) end
 function UnitIsPlayer(unit) return unit=='player' end
 function UnitPlayerControlled(unit) return UnitIsPlayer(unit) end
+function UnitIsHumanPlayer(unit) return UnitIsPlayer(unit) end
+-- The simulator has no 3D portrait renderer; expose that in the snapshot.
+function SetPortraitTexture(texture,unit)
+    local _,class=UnitClass(unit)
+    local atlas=class and GetClassAtlas and GetClassAtlas(class)
+    if atlas and C_Texture.GetAtlasInfo(atlas) then texture:SetAtlas(atlas,false,false,true)
+    else texture:SetTexture('Interface/Icons/INV_Misc_QuestionMark') end
+end
+
 function UnitIsConnected(unit) return UnitExists(unit) end
 function UnitIsVisible(unit) return UnitExists(unit) end
 function UnitSex(unit) return unit=='player' and 2 or 0 end
@@ -161,9 +202,9 @@ function CreateSecureDelegate(fn,options)
     return function(...) return __selu_secure_invoke(fn,...) end
 end
 C_GameRules=C_GameRules or {}
-function C_GameRules.GetActiveGameMode() return Enum.GameMode.WoWHack end
-function C_GameRules.IsStandard() return false end
-function C_GameRules.IsWoWHack() return true end
+function C_GameRules.GetActiveGameMode() return Enum.GameMode.Standard end
+function C_GameRules.IsStandard() return true end
+function C_GameRules.IsWoWHack() return false end
 function C_GameRules.IsPlunderstorm() return false end
 C_InputInterfaceStyle=C_InputInterfaceStyle or {}
 function C_InputInterfaceStyle.GetCurrentStyle() return Enum.InputDeviceInterfaceType.Mkb end

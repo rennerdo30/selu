@@ -457,6 +457,8 @@ impl Session {
             .set_app_data(crate::native_defaults::CallCounts::default());
         crate::native_stdlib::install(&self.sim.lua)?;
         crate::client_ui::install(&self.sim.lua, &self.sim.ctx)?;
+        crate::bindings::install(&self.sim.lua)?;
+        crate::client_ui::load_strings(&self.sim.lua, &self.sim.ctx, source)?;
         let mut events: HashSet<String> = self
             .config
             .manifest
@@ -512,6 +514,7 @@ impl Session {
                 },
             )?,
         )?;
+        core::install_secure_range(&self.sim.lua, &self.sim.ctx)?;
         let build = self
             .config
             .manifest
@@ -1578,6 +1581,35 @@ impl std::ops::Deref for Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn protected_ranges_preserve_errors_arguments_and_budget_cleanup() {
+        let mut session = Session::new(SessionConfig::default()).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/default-ui");
+        session.load_default_ui(&source, |_| {}).unwrap();
+        session
+            .eval(
+                r#"
+            local errorValue={};local errors=0;local count=0
+            seterrorhandler(function(value) assert(value==errorValue); errors=errors+1 end)
+            secureexecuterange({11,22,33},function(key,value,...)
+                assert(select('#',...)==3);local a,b,c=...;assert(a=='tag' and b==nil and c==7)
+                count=count+1;if value==22 then error(errorValue) end
+            end,'tag',nil,7)
+            assert(count==3 and errors==1)
+            seterrorhandler(function() end)
+        "#,
+            )
+            .unwrap();
+        session.ctx().set_budget(1);
+        assert!(
+            session
+                .eval("secureexecuterange({1},function() while true do end end)")
+                .is_err()
+        );
+        session
+            .eval("secureexecuterange({1},function() recovered=true end);assert(recovered)")
+            .unwrap();
+    }
     #[test]
     fn default_ui_native_helpers_preserve_unique_font_names() {
         let mut session = Session::new(SessionConfig::default()).unwrap();

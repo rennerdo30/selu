@@ -75,11 +75,14 @@ function __selu_sim_step()
  end
  if now >= frame * frameTime then
   frame = frame + 1
-  local frames = {}
-  for i, f in ipairs(__selu_sim_frames) do frames[i] = f end
-  for _, f in ipairs(frames) do
+  local limit=__selu_update_limit()
+  local cursor
+  while true do
+   local f,index=__selu_next_update(cursor,limit)
+   if not f then break end
+   cursor=index
    local fn = f.__scripts.OnUpdate
-   if visible(f) and fn then
+   if fn then
     __selu_sim_counts.updates = __selu_sim_counts.updates + 1
     safe('OnUpdate',fn,f,frameTime)
    end
@@ -89,7 +92,6 @@ end
 
 function __selu_sim_pending()
  for _, t in ipairs(queue) do if not t.handle.cancelled then return true end end
- for _, f in ipairs(__selu_sim_frames) do if visible(f) and f.__scripts.OnUpdate then return true end end
- return false
+ return __selu_next_update(nil,__selu_update_limit())~=nil
 end
 function __selu_sim_set_time(now) frame=math.floor(now/frameTime)+1 end

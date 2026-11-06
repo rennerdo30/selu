@@ -333,3 +333,38 @@ fn indexed_events_observe_registration_changes_and_reload() {
     s.reload().unwrap();
     assert_eq!(s.fire("INDEX", vec![]).unwrap(), 0);
 }
+
+#[test]
+fn live_update_index_preserves_same_frame_mutations_and_creation_cutoff() {
+    let s = selu_sim::Session::new(selu_sim::SessionConfig::default()).unwrap();
+    s.eval("order='';a=CreateFrame('Frame');b=CreateFrame('Frame');c=CreateFrame('Frame');c:SetScript('OnUpdate',function() error('removed callback') end);a:SetScript('OnUpdate',function(self)self:SetScript('OnUpdate',nil);b:SetScript('OnUpdate',function() order=order..'b' end);c:SetScript('OnUpdate',nil);local d=CreateFrame('Frame');d:SetScript('OnUpdate',function() order=order..'d' end)end)").unwrap();
+    s.advance_time(1.0 / 60.0);
+    s.eval("assert(order=='b')").unwrap();
+    s.advance_time(1.0 / 60.0);
+    s.eval("assert(order=='bbd')").unwrap();
+}
+#[test]
+fn button_texture_defaults_and_pressed_state_preserve_explicit_points() {
+    let s = selu_sim::Session::new(selu_sim::SessionConfig::default()).unwrap();
+    s.eval("b=CreateFrame('Button');b:SetSize(100,40);b:SetPoint('BOTTOMLEFT');n=b:CreateTexture();n:SetColorTexture(1,0,0);b:SetNormalTexture(n);p=b:CreateTexture();p:SetColorTexture(0,0,1);b:SetPushedTexture(p);assert(n:GetWidth()==100 and n:GetHeight()==40);e=b:CreateTexture();e:SetSize(10,8);e:SetPoint('LEFT',b,'LEFT',3,0);b:SetHighlightTexture(e);assert(e:GetPoint()=='LEFT')").unwrap();
+    s.mouse_down(30., 20., "LeftButton").unwrap();
+    s.eval("assert(b:GetButtonState()=='PUSHED' and p:IsVisible() and not n:IsShown())")
+        .unwrap();
+    s.mouse_up(30., 20., "LeftButton").unwrap();
+    s.eval("assert(b:GetButtonState()=='NORMAL' and not p:IsShown() and n:IsVisible())")
+        .unwrap();
+}
+
+#[test]
+fn unfocused_edit_boxes_do_not_consume_keyboard_input() {
+    let s = selu_sim::Session::new(Default::default()).unwrap();
+    s.eval("keys=0;f=CreateFrame('Frame');f:EnableKeyboard(true);f:SetScript('OnKeyDown',function()keys=keys+1 end);e=CreateFrame('EditBox');e:SetAutoFocus(false);e:SetScript('OnKeyDown',function()error('unfocused edit box')end)").unwrap();
+    s.key("ESCAPE", true).unwrap();
+    s.eval("assert(keys==1)").unwrap();
+}
+
+#[test]
+fn silent_attribute_assignment_updates_state_without_invoking_scripts() {
+    let s = selu_sim::Session::new(Default::default()).unwrap();
+    s.eval("f=CreateFrame('Frame');calls=0;f:SetScript('OnAttributeChanged',function()calls=calls+1 end);f:SetAttributeNoHandler('area','left');assert(f:GetAttribute('area')=='left' and calls==0);f:SetAttribute('area','right');assert(calls==1)").unwrap();
+}

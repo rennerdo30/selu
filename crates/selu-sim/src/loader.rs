@@ -115,7 +115,14 @@ pub(crate) fn default_ui_order_client(
             Err(e) => report.errors.push(e),
         }
     }
-    names.sort_by_key(|name| all[name].get("LoadFirst") != Some("1"));
+    // Secure-environment libraries are loaded in the client's secure pass
+    // before global LoadFirst consumers instantiate their intrinsic widgets.
+    names.sort_by_key(|name| {
+        (
+            all[name].get("UseSecureEnvironment") != Some("1"),
+            all[name].get("LoadFirst") != Some("1"),
+        )
+    });
     fn visit(
         name: &str,
         all: &std::collections::BTreeMap<String, Toc>,
@@ -374,6 +381,15 @@ fn read_toc_target_client(
         };
         for file in &mut toc.files {
             *file = file.replace("[Family]", family).replace("[Game]", folder);
+        }
+    }
+    // Bindings XML is an implicit addon file, selected by client flavour.
+    for binding in [format!("Bindings_{suffix}.xml"), "Bindings.xml".into()] {
+        if dir.join(&binding).is_file() {
+            if !toc.files.contains(&binding) {
+                toc.files.push(binding);
+            }
+            break;
         }
     }
     Ok(toc)

@@ -123,11 +123,24 @@ fn string(v: Option<&Value>) -> Option<String> {
 fn boolean(v: Option<&Value>) -> bool {
     !matches!(v, None | Some(Value::Nil) | Some(Value::Boolean(false)))
 }
-fn sync_button_textures(lua: &Lua, ctx: &Ctx, button: &Table) -> mlua::Result<()> {
-    let enabled = store(lua).borrow().regions[id(button)?].enabled;
+pub(crate) fn sync_button_textures(lua: &Lua, ctx: &Ctx, button: &Table) -> mlua::Result<()> {
+    let arena = store(lua);
+    let (enabled, pressed) = {
+        let arena = arena.borrow();
+        let r = &arena.regions[id(button)?];
+        (
+            r.enabled && r.button_state != "DISABLED",
+            r.button_state == "PUSHED",
+        )
+    };
+    let pushed = button.raw_get::<Option<Table>>("__selu_PushedTexture")?;
     let disabled = button.raw_get::<Option<Table>>("__selu_DisabledTexture")?;
     for (key, shown) in [
-        ("__selu_NormalTexture", enabled || disabled.is_none()),
+        (
+            "__selu_NormalTexture",
+            (enabled || disabled.is_none()) && (!pressed || pushed.is_none()),
+        ),
+        ("__selu_PushedTexture", enabled && pressed),
         ("__selu_DisabledTexture", !enabled),
     ] {
         if let Some(texture) = button.raw_get::<Option<Table>>(key)? {
@@ -187,6 +200,26 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
 pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
     lua.set_app_data(ctx.clone());
     lua.set_app_data(Rc::new(RefCell::new(Arena::default())) as Store);
+    lua.globals().raw_set(
+        "__selu_index_update",
+        lua.create_function(|lua, frame: Table| {
+            let index = id(&frame)?;
+            let active = matches!(
+                frame
+                    .raw_get::<Table>("__scripts")?
+                    .raw_get::<Value>("OnUpdate")?,
+                Value::Function(_)
+            );
+            let a = store(lua);
+            let mut a = a.borrow_mut();
+            if active {
+                a.update_subscribers.insert(index);
+            } else {
+                a.update_subscribers.remove(&index);
+            }
+            Ok(())
+        })?,
+    )?;
     lua.globals().raw_set(
         "__selu_child_regions",
         lua.create_function(|lua, (parent, regions): (Table, bool)| {
@@ -351,6 +384,8 @@ pub fn create(
         level_explicit: false,
         mouse: matches!(kind, "Button" | "CheckButton" | "EditBox" | "Slider"),
         enabled: true,
+        button_state: "NORMAL",
+        button_state_locked: false,
         keyboard: kind == "EditBox",
         propagate_keyboard: false,
         wheel: false,
@@ -410,9 +445,17 @@ pub fn create(
             m
         } else {
             let m = lua.create_table()?;
+            if !is_region(kind) {
+                let legacy = lua.named_registry_value::<Table>("selu.legacy_frame_methods")?;
+                for method in legacy.pairs::<String, Function>() {
+                    let (name, function) = method?;
+                    m.raw_set(name, function)?;
+                }
+            }
             for method in METHODS.split_whitespace().chain([
                 "GetAttribute",
                 "SetAttribute",
+                "SetAttributeNoHandler",
                 "SetStatusBarTexture",
                 "GetStatusBarTexture",
                 "SetStatusBarColor",
@@ -428,6 +471,9 @@ pub fn create(
                 "GetUnit",
                 "SetGUIDMatch",
                 "SetClampRectInsets",
+                "GetClampRectInsets",
+                "SetIconScale",
+                "GetIconScale",
                 "SetAllowOverlappedModels",
                 "SetIndentedWordWrap",
                 "IsOwned",
@@ -542,7 +588,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText ClearText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent IsEventRegistered UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
+const METHODS: &str = "SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText ClearText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript GetWindow SetWindow GetButtonState SetButtonState HasScript RegisterEvent IsEventRegistered UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     let _profile = crate::profile::Span::new("frames.methods");
     if !ctx
@@ -623,6 +669,92 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 .raw_get::<Option<bool>>(event)?
                 .unwrap_or(false)
         );
+    }
+    if method == "SetClampRectInsets" {
+        t.raw_set(
+            "__selu_clamp_insets",
+            lua.create_sequence_from(v.iter().cloned())?,
+        )?;
+        out!(());
+    }
+    if method == "GetClampRectInsets" {
+        let insets = t.raw_get::<Option<Table>>("__selu_clamp_insets")?;
+        let mut result = Vec::with_capacity(4);
+        for index in 1..=4 {
+            result.push(Value::Number(
+                insets
+                    .as_ref()
+                    .map(|t| t.raw_get::<Option<f64>>(index))
+                    .transpose()?
+                    .flatten()
+                    .unwrap_or(0.0),
+            ));
+        }
+        return Ok(MultiValue::from_vec(result));
+    }
+    if method == "SetIconScale" {
+        t.raw_set(
+            "__selu_icon_scale",
+            v.first().cloned().unwrap_or(Value::Nil),
+        )?;
+        out!(());
+    }
+    if method == "GetIconScale" {
+        out!(
+            t.raw_get::<Option<f64>>("__selu_icon_scale")?
+                .unwrap_or(1.0)
+        );
+    }
+    if method == "SetWindow" {
+        t.raw_set("__selu_window", v.first().cloned().unwrap_or(Value::Nil))?;
+        out!(());
+    }
+    if method == "GetWindow" {
+        let mut current = Some(i);
+        for _ in 0..128 {
+            let Some(index) = current else { break };
+            let a = a.borrow();
+            let r = &a.regions[index];
+            if let Some(window) = r.table.raw_get::<Option<Table>>("__selu_window")? {
+                out!(window);
+            }
+            current = r.parent;
+        }
+        let key = "selu.main_window";
+        let window = match lua.named_registry_value::<Option<Table>>(key)? {
+            Some(window) => window,
+            None => {
+                let window = lua.create_table()?;
+                lua.set_named_registry_value(key, window.clone())?;
+                window
+            }
+        };
+        out!(window);
+    }
+    if matches!(method, "GetButtonState" | "SetButtonState") {
+        if method == "GetButtonState" {
+            let a = a.borrow();
+            let r = &a.regions[i];
+            out!(if r.enabled {
+                r.button_state
+            } else {
+                "DISABLED"
+            });
+        }
+        let state = string(v.first()).unwrap_or_default();
+        let state = match state.as_str() {
+            "NORMAL" => "NORMAL",
+            "PUSHED" => "PUSHED",
+            "DISABLED" => "DISABLED",
+            _ => return Err(mlua::Error::runtime("invalid button state")),
+        };
+        {
+            let mut a = a.borrow_mut();
+            a.regions[i].button_state = state;
+            a.regions[i].button_state_locked = boolean(v.get(1));
+        }
+        sync_button_textures(lua, ctx, t)?;
+        out!(());
     }
     if method == "IsOwned" {
         out!(!t.raw_get::<Value>("__tooltip_owner")?.is_nil());
@@ -785,7 +917,33 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             out!(previous);
         }
         let child = match v.first() {
-            Some(Value::Table(child)) => Some(child.clone()),
+            Some(Value::Table(child)) => {
+                let (unanchored, sized) = {
+                    let arena = a.borrow();
+                    let r = &arena.regions[id(child)?];
+                    (r.points.is_empty(), r.width > 0.0 || r.height > 0.0)
+                };
+                if unanchored {
+                    call(
+                        lua,
+                        ctx,
+                        if sized { "SetPoint" } else { "SetAllPoints" },
+                        if sized {
+                            MultiValue::from_vec(vec![
+                                Value::Table(child.clone()),
+                                Value::String(lua.create_string("CENTER")?),
+                                Value::Table(t.clone()),
+                            ])
+                        } else {
+                            MultiValue::from_vec(vec![
+                                Value::Table(child.clone()),
+                                Value::Table(t.clone()),
+                            ])
+                        },
+                    )?;
+                }
+                Some(child.clone())
+            }
             Some(Value::String(_) | Value::Integer(_) | Value::Number(_)) => {
                 let child = if let Some(child) = previous.clone() {
                     child
@@ -852,7 +1010,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         })?;
         out!(constructor.call::<Table>((t.clone(), note, translate))?);
     }
-    if matches!(method, "GetAttribute" | "SetAttribute") {
+    if matches!(
+        method,
+        "GetAttribute" | "SetAttribute" | "SetAttributeNoHandler"
+    ) {
         let attributes = t
             .raw_get::<Option<Table>>("__attributes")?
             .unwrap_or(lua.create_table()?);
@@ -865,9 +1026,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         let value = v.get(1).cloned().unwrap_or(Value::Nil);
         attributes.raw_set(name.as_str(), value.clone())?;
         t.raw_set("__attributes", attributes)?;
-        if matches!(old, Value::LightUserData(_))
-            || matches!(value, Value::LightUserData(_))
-            || old != value
+        if method != "SetAttributeNoHandler"
+            && (matches!(old, Value::LightUserData(_))
+                || matches!(value, Value::LightUserData(_))
+                || old != value)
         {
             callback(
                 ctx,
@@ -976,7 +1138,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                     .raw_set(name.as_str(), true)?;
                 a.borrow_mut()
                     .event_subscribers
-                    .entry(name)
+                    .entry(name.clone())
                     .or_default()
                     .insert(i);
             }
@@ -992,6 +1154,15 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 for indices in a.borrow_mut().event_subscribers.values_mut() {
                     indices.remove(&i);
                 }
+            }
+        }
+        if name == "OnUpdate" && matches!(method, "SetScript" | "HookScript") {
+            let active = matches!(scripts.raw_get::<Value>("OnUpdate")?, Value::Function(_));
+            let mut a = a.borrow_mut();
+            if active {
+                a.update_subscribers.insert(i);
+            } else {
+                a.update_subscribers.remove(&i);
             }
         }
         out!(());

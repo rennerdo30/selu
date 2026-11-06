@@ -1,11 +1,41 @@
 //! Small stateful region model shared by frames, textures and font strings.
 use mlua::{Function, Lua, Table};
 
-pub(crate) fn install(_lua: &Lua) -> mlua::Result<()> {
-    Ok(())
+pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
+    // Legacy Frame API storage is generic. Modern XML/Lua mixins may override
+    // it; no template name selects an implementation here.
+    let methods: Table = crate::host_lua::load(
+        lua,
+        r#"
+local methods={}
+function methods:SetBackdrop(info)
+    self.__backdrop=info;self.__backdropColor=info and {1,1,1,1} or nil
+end
+function methods:GetBackdrop()
+    local seen={}
+    local function copy(value)
+        if type(value)~='table' then return value end
+        if seen[value] then return seen[value] end
+        local result={};seen[value]=result
+        for key,child in pairs(value) do result[key]=copy(child) end
+        return result
+    end
+    return copy(self.__backdrop)
+end
+function methods:SetBackdropColor(r,g,b,a)
+    if self.__backdrop then self.__backdropColor={r,g,b,a or 1} end
+end
+function methods:GetBackdropColor()
+    if self.__backdropColor then return unpack(self.__backdropColor) end
+end
+return methods
+"#,
+    )
+    .eval()?;
+    lua.set_named_registry_value("selu.legacy_frame_methods", methods)
 }
 
-/// Only backdrop storage is modeled; no textures, borders or XML scripts.
+/// Template behavior is supplied by XML declarations.
 pub(crate) fn templates(lua: &Lua, frame: &Table, templates: Option<&str>) -> mlua::Result<()> {
     if let (Some(names), Some(apply)) = (
         templates,
@@ -14,44 +44,16 @@ pub(crate) fn templates(lua: &Lua, frame: &Table, templates: Option<&str>) -> ml
     ) {
         apply.call::<()>((frame.clone(), names))?;
     }
-    if templates.is_some_and(|s| s.split(',').any(|t| t.trim() == "BackdropTemplate")) {
-        let install: Function = crate::host_lua::factory(
-            lua,
-            "selu.helper.backdrop",
-            r#"
-return function(frame)
-  function frame:SetBackdrop(info)
-    self.__backdrop = info
-    self.__backdropColor = info and {1, 1, 1, 1} or nil
-  end
-  function frame:GetBackdrop()
-    if not self.__backdrop then return nil end
-    local seen = {}
-    local function copy(value)
-      if type(value) ~= 'table' then return value end
-      if seen[value] then return seen[value] end
-      local result = {}; seen[value] = result
-      for key, child in pairs(value) do result[key] = copy(child) end
-      return result
-    end
-    return copy(self.__backdrop)
-  end
-  function frame:SetBackdropColor(r, g, b, a)
-    if self.__backdrop then self.__backdropColor = {r, g, b, a or 1} end
-  end
-  function frame:GetBackdropColor()
-    if self.__backdropColor then return unpack(self.__backdropColor) end
-  end
-end
-"#,
-        )?;
-        install.call::<()>(frame.clone())?;
-    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_backdrop_state_is_a_widget_capability_without_named_templates() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("local f=CreateFrame('Frame');f:SetBackdrop({bgFile='sample'});f:SetBackdropColor(.2,.3,.4);assert(f:GetBackdrop().bgFile=='sample');local r,g,b,a=f:GetBackdropColor();assert(r==.2 and g==.3 and b==.4 and a==1)").unwrap();
+    }
     #[test]
     fn startup_batch_publishes_final_geometry_and_visibility() {
         let sim = crate::Sim::new().unwrap();

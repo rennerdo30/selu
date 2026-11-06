@@ -59,3 +59,28 @@ fn vertical_thumb_minimum_is_at_top() {
     let sim = Sim::new().unwrap();
     sim.eval(r#"local s=CreateFrame('Slider');s:SetSize(20,100);s:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',0,0);local t=s:CreateTexture();t:SetSize(20,20);s:SetThumbTexture(t);s:SetMinMaxValues(0,10);s:SetValue(0);assert(t:GetBottom()==80);s:SetValue(10);assert(t:GetBottom()==0)"#).unwrap();
 }
+
+#[test]
+fn idle_and_paused_animation_groups_do_not_receive_ticks() {
+    let sim = Sim::new().unwrap();
+    sim.eval("f=CreateFrame('Frame');g=f:CreateAnimationGroup();a=g:CreateAnimation('Alpha');a:SetDuration(1);a:SetFromAlpha(0);a:SetToAlpha(1);before=__selu_sim_counts.updates").unwrap();
+    sim.advance_time(1.0 / 60.0);
+    sim.eval("assert(__selu_sim_counts.updates==before);g:Play()")
+        .unwrap();
+    sim.advance_time(1.0 / 60.0);
+    sim.eval(
+        "assert(__selu_sim_counts.updates==before+1);g:Pause();before=__selu_sim_counts.updates",
+    )
+    .unwrap();
+    sim.advance_time(1.0 / 60.0);
+    sim.eval("assert(__selu_sim_counts.updates==before);g:Play()")
+        .unwrap();
+    sim.advance_time(1.0 / 60.0);
+    sim.eval(
+        "assert(__selu_sim_counts.updates==before+1);g:Stop();before=__selu_sim_counts.updates",
+    )
+    .unwrap();
+    sim.advance_time(1.0 / 60.0);
+    sim.eval("assert(__selu_sim_counts.updates==before)")
+        .unwrap();
+}

@@ -18,6 +18,35 @@ use crate::{Shared, SimResult};
 use mlua::{Function, Lua};
 
 pub(crate) fn install(lua: &Lua, logs: Shared<Vec<String>>) -> SimResult<()> {
+    lua.globals().raw_set(
+        "__selu_update_limit",
+        lua.create_function(|lua, ()| Ok(crate::frames::arena::store(lua).borrow().regions.len()))?,
+    )?;
+    lua.globals().raw_set(
+        "__selu_next_update",
+        lua.create_function(|lua, (cursor, limit): (Option<usize>, usize)| {
+            let store = crate::frames::arena::store(lua);
+            let a = store.borrow();
+            let start = cursor.map_or(0, |i| i + 1);
+            let next = a
+                .update_subscribers
+                .range(start..limit)
+                .copied()
+                .find(|&i| {
+                    let mut at = Some(i);
+                    for _ in 0..128 {
+                        let Some(index) = at else { return true };
+                        let r = &a.regions[index];
+                        if !r.shown {
+                            return false;
+                        }
+                        at = r.parent;
+                    }
+                    false
+                });
+            Ok((next.map(|i| a.regions[i].table.get()), next))
+        })?,
+    )?;
     lua.globals().set(
         "__selu_sim_error",
         lua.create_function(move |lua, (error, original): (String, mlua::Value)| {

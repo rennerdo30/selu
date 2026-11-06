@@ -1,6 +1,7 @@
 -- This registry is private to the simulator VM. Blizzard sources stay external.
 if rawget(_G,'__selu_xml_declare') then return end
 local templates, intrinsic, warned = {}, {}, {}
+local inheritedParents={}
 local function note(s)
     if not warned[s] then warned[s]=true; print('not simulated: XML '..s) end
 end
@@ -39,6 +40,20 @@ local function relativeKey(frame,path)
     return object
 end
 local apply, create
+local constructionDepth, deferredAnchors=0,{}
+local function anchorPoint(frame,value,x,y,defer)
+    local point=value.point or 'CENTER'
+    local relative=value.relativeKey and relativeKey(frame,value.relativeKey) or lookup(expand(value.relativeTo,frame:GetParent()))
+    if deferredAnchors[frame] then deferredAnchors[frame][point]=nil end
+    if (value.relativeKey or value.relativeTo) and not relative then
+        if defer then
+            deferredAnchors[frame]=deferredAnchors[frame] or {}
+            deferredAnchors[frame][point]={value,x,y}
+        else note('unresolved anchor '..(value.relativeKey or value.relativeTo)) end
+        return
+    end
+    frame:SetPoint(point,relative or frame:GetParent(),value.relativePoint or point,x,y)
+end
 local function invoke(fn,...)
     if __selu_secure_invoke then return __selu_secure_invoke(fn,...) end
     return fn(...)
@@ -50,6 +65,19 @@ local function nativeKind(kind)
         seen[kind]=true; kind=intrinsic[kind]
     end
     return kind
+end
+local function parentAttribute(node,seen)
+    if inheritedParents[node]~=nil then return inheritedParents[node] or nil end
+    assert(not seen[node],'XML template inheritance cycle')
+    seen[node]=true
+    local parent
+    if intrinsic[node.tag] then parent=parentAttribute(templates[node.tag],seen) end
+    for _,name in ipairs(names(node.a.inherits)) do
+        if templates[name] then parent=parentAttribute(templates[name],seen) or parent end
+    end
+    parent=node.a.parent or parent
+    seen[node]=nil;inheritedParents[node]=parent or false
+    return parent
 end
 local function inherit(f,s,seen)
     for _,name in ipairs(names(s)) do
@@ -102,6 +130,7 @@ local function script(f,n,intrinsicOwner)
                 if slot.normal then invoke(slot.normal,...) end
                 for _,handler in ipairs(slot.postcall) do invoke(handler,...) end
             end
+            if n.tag=='OnUpdate' then __selu_index_update(f) end
         end
         if not slot.owners[intrinsicOwner] then
             slot.owners[intrinsicOwner]=true
@@ -195,6 +224,9 @@ apply=function(f,n,seen)
     if a.alpha then f:SetAlpha(tonumber(a.alpha)) end
     if a.scale then f:SetScale(tonumber(a.scale)) end
     if a.enableMouse then f:EnableMouse(a.enableMouse=='true') end
+    if a.enableKeyboard then f:EnableKeyboard(a.enableKeyboard=='true') end
+    if a.autoFocus then f:SetAutoFocus(a.autoFocus=='true') end
+    if a.multiLine then f:SetMultiLine(a.multiLine=='true') end
     if a.id then f:SetID(tonumber(a.id)) end
     if a.orientation then f:SetOrientation(a.orientation) end
     if a.drawLayer then f:SetDrawLayer(a.drawLayer,tonumber(a.subLevel) or 0) end
@@ -217,9 +249,7 @@ apply=function(f,n,seen)
                 for _,offset in ipairs(anchor.children) do
                     local d=dimension(offset).a; x=tonumber(d.x) or 0; y=tonumber(d.y) or 0
                 end
-                local relative=v.relativeKey and relativeKey(f,v.relativeKey) or lookup(expand(v.relativeTo,f:GetParent()))
-                if v.relativeKey and not relative then note('relativeKey '..v.relativeKey) end
-                f:SetPoint(v.point or 'CENTER',relative or f:GetParent(),v.relativePoint or v.point or 'CENTER',x,y)
+                anchorPoint(f,v,x,y,true)
             end
         elseif c.tag=='KeyValues' then
             for _,kv in ipairs(c.children) do
@@ -272,6 +302,7 @@ apply=function(f,n,seen)
     end
 end
 local function construct(f,prepare)
+    constructionDepth=constructionDepth+1
     local plan={}
     rawset(f,'__selu_xml_constructing',true)
     local ok,err=pcall(function()
@@ -284,13 +315,22 @@ local function construct(f,prepare)
         end
         for _,text in ipairs(plan.text or {}) do f:SetText(lookup(text) or text) end
     end)
+    constructionDepth=constructionDepth-1
+    if constructionDepth==0 then
+        local pending=deferredAnchors;deferredAnchors={}
+        if ok then
+            for frame,points in pairs(pending) do
+                for _,point in pairs(points) do anchorPoint(frame,point[1],point[2],point[3],false) end
+            end
+        end
+    end
     rawset(f,'__selu_xml_constructing',nil)
     if not ok then error(err,0) end
 end
 local native=CreateFrame
 create=function(n,parent,layer)
     local a=n.a
-    parent=lookup(a.parent) or parent
+    parent=lookup(expand(parentAttribute(n,{}),parent)) or parent
     local name=expand(a.name,parent)
     local f
     if n.tag=='MaskTexture' then f=parent:CreateMaskTexture(name,layer)
@@ -310,6 +350,13 @@ function __selu_xml_apply(f,s)
 end
 function __selu_xml_intrinsic(kind) if intrinsic[kind] then return nativeKind(kind) end end
 function __selu_xml_declare(n)
+    if n.tag=='Binding' then
+        local actions=__selu_binding_actions
+        if actions then
+            actions[n.a.name]={runOnUp=n.a.runOnUp=='true',handler=assert(loadstring('return function(keystate)\n'..n.text..'\nend','@XML/Binding'))()}
+        end
+        return
+    end
     if n.tag=='ScopedModifier' then
         note('ScopedModifier forbidden-object policy')
         for _,child in ipairs(n.children) do __selu_xml_declare(child) end
@@ -327,6 +374,7 @@ function __selu_xml_declare(n)
     if n.tag=='Font' then create(n,nil); return end
     if n.a.virtual=='true' or n.a.intrinsic=='true' then
         templates[n.a.name]=n
+        inheritedParents={}
         if n.a.intrinsic=='true' then intrinsic[n.a.name]=n.tag end
     else create(n,nil) end
 end

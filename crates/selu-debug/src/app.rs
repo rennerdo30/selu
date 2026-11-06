@@ -268,25 +268,6 @@ pub struct Studio {
     confirm_close: bool,
 }
 
-fn micro_menu_fallback_label(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "CharacterMicroButton" => "Char",
-        "ProfessionMicroButton" => "Prof",
-        "PlayerSpellsMicroButton" => "Spells",
-        "AchievementMicroButton" => "Ach",
-        "LegacyMicroButton" => "Legacy",
-        "QuestLogMicroButton" => "Quest",
-        "HousingMicroButton" => "Home",
-        "GuildMicroButton" => "Guild",
-        "LFDMicroButton" => "Group",
-        "CollectionsMicroButton" => "Pets",
-        "EJMicroButton" => "Guide",
-        "StoreMicroButton" => "Shop",
-        "MainMenuMicroButton" => "Menu",
-        "HelpMicroButton" => "Help",
-        _ => return None,
-    })
-}
 impl Studio {
     pub fn new(opts: Options, ctx: &egui::Context) -> Studio {
         let mut assets = selu_sim::assets::Resolver::default();
@@ -3028,7 +3009,6 @@ impl Studio {
         }
         let mut ordered: Vec<_> = snap.regions.iter().skip(1).filter(|r| visible(r)).collect();
         ordered.sort_by_key(|r| (r.strata, r.level, r.layer, r.id.index));
-        let mut micro_fallback_drawn = std::collections::HashSet::new();
         for r in &ordered {
             let painter = painter.with_clip_rect(
                 r.clip
@@ -3040,6 +3020,22 @@ impl Studio {
             let Some(rect) = r.rect.as_ref().map(to_screen) else {
                 continue;
             };
+            if r.widget == "Minimap" {
+                let center = rect.center();
+                let radius = rect.width().min(rect.height()) / 2.0;
+                painter.circle_filled(center, radius, fade(r, Color32::from_rgb(68, 88, 69)));
+                for offset in [-0.5f32, 0.0, 0.5] {
+                    let y = offset * radius;
+                    let extent = (radius * radius - y * y).sqrt();
+                    painter.line_segment(
+                        [
+                            center + Vec2::new(-extent, y),
+                            center + Vec2::new(extent, y),
+                        ],
+                        Stroke::new(1.0, fade(r, Color32::from_rgb(84, 103, 81))),
+                    );
+                }
+            }
             match (&r.texture, r.widget.as_str()) {
                 (Some(TextureFill::Gradient { vertical, min, max }), _) => {
                     let color = |c: &[f32; 4]| {
@@ -3166,49 +3162,11 @@ impl Studio {
                         }
                         continue;
                     }
-                    let mut ancestor = r.parent;
-                    let mut micro = None;
-                    for _ in 0..16 {
-                        let Some(parent) =
-                            ancestor.and_then(|id| snap.regions.get(id.index as usize))
-                        else {
-                            break;
-                        };
-                        if let Some(label) =
-                            parent.name.as_deref().and_then(micro_menu_fallback_label)
-                        {
-                            micro = Some((parent, label));
-                            break;
-                        }
-                        ancestor = parent.parent;
-                    }
-                    if let Some((parent, label)) = micro {
-                        if !micro_fallback_drawn.insert(parent.id.index) {
-                            continue;
-                        }
-                        let rect = parent.rect.as_ref().map(to_screen).unwrap_or(rect);
-                        painter.rect_filled(rect, 2.0, fade(r, Color32::from_rgb(38, 43, 52)));
-                        painter.rect_stroke(
-                            rect.shrink(0.5),
-                            2.0,
-                            Stroke::new(1.0, Color32::from_rgb(126, 111, 70)),
-                            egui::StrokeKind::Inside,
-                        );
-                        painter.with_clip_rect(rect).text(
-                            rect.center(),
-                            Align2::CENTER_CENTER,
-                            label,
-                            FontId::proportional((rect.width() / 3.0).clamp(5.0, 11.0)),
-                            fade(r, Color32::from_rgb(225, 216, 185)),
-                        );
-                        continue;
-                    }
                     painter.rect_filled(rect, 0.0, fade(r, Color32::from_rgb(60, 70, 95)));
-                    let tail = name.rsplit(['\\', '/']).next().unwrap_or(name);
                     painter.with_clip_rect(rect.intersect(area)).text(
                         rect.center(),
                         Align2::CENTER_CENTER,
-                        format!("Unavailable: {}", short(tail, 20)),
+                        "Missing texture",
                         FontId::proportional(10.0),
                         fade(r, Color32::LIGHT_GRAY),
                     );
@@ -3296,6 +3254,34 @@ impl Studio {
         }
         if response.clicked() {
             self.selected = response.interact_pointer_pos().and_then(hit);
+        }
+        if response.hovered() && ui.input(|i| i.pointer.primary_pressed()) {
+            response.request_focus();
+            if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+                self.act(Command::MouseButton {
+                    x: ((p.x - origin.x) / scale) as f64,
+                    y: (uh - (p.y - origin.y) / scale) as f64,
+                    button: "LeftButton".into(),
+                    down: true,
+                });
+            }
+        }
+        if response.has_focus()
+            && ui.input(|i| i.pointer.primary_released())
+            && let Some(p) = ui.input(|i| i.pointer.interact_pos())
+        {
+            self.act(Command::MouseButton {
+                x: ((p.x - origin.x) / scale) as f64,
+                y: (uh - (p.y - origin.y) / scale) as f64,
+                button: "LeftButton".into(),
+                down: false,
+            });
+        }
+        if response.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+            self.act(Command::Key {
+                key: "ESCAPE".into(),
+                down: true,
+            });
         }
     }
 

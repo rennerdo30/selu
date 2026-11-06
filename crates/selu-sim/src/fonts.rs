@@ -12,17 +12,29 @@ pub struct FontBook {
     pub assets: crate::assets::Resolver,
     faces: RefCell<HashMap<String, FontArc>>,
     layouts: RefCell<HashMap<String, crate::text::TextLayout>>,
+    asset_presence: RefCell<HashMap<String, bool>>,
 }
 impl FontBook {
     pub fn open_client(&mut self, root: &std::path::Path, product: &str) -> Result<(), String> {
         self.assets.open_client(root, product)?;
         self.faces.get_mut().clear();
         self.layouts.get_mut().clear();
+        self.asset_presence.get_mut().clear();
         Ok(())
     }
 
     pub fn asset(&self, name: &str) -> bool {
-        matches!(self.assets.lookup(name), crate::assets::Lookup::Found(_))
+        let key = name.replace('\\', "/").to_ascii_lowercase();
+        if let Some(found) = self.asset_presence.borrow().get(&key) {
+            return *found;
+        }
+        let found = matches!(self.assets.lookup(name), crate::assets::Lookup::Found(_));
+        let mut cache = self.asset_presence.borrow_mut();
+        if cache.len() >= 4096 {
+            cache.clear();
+        }
+        cache.insert(key, found);
+        found
     }
     pub fn face(&self, name: &str) -> FontArc {
         if let Some(face) = self.faces.borrow().get(name) {
@@ -84,47 +96,9 @@ pub fn template(lua: &mlua::Lua, name: &str) -> mlua::Result<mlua::Table> {
     {
         return lua.globals().get(name);
     }
-    if native_style(name).is_none() {
-        return Err(mlua::Error::runtime(format!(
-            "unknown font template: {name}"
-        )));
-    }
-    let registry = match lua.named_registry_value::<Option<Table>>("selu:font-templates")? {
-        Some(t) => t,
-        None => {
-            let t = lua.create_table()?;
-            lua.set_named_registry_value("selu:font-templates", t.clone())?;
-            t
-        }
-    };
-    if let Some(t) = registry.raw_get::<Option<Table>>(name)? {
-        return Ok(t);
-    }
-    let font = create_font(lua, name)?;
-    registry.raw_set(name, font.clone())?;
-    Ok(font)
-}
-/// Visual profiles from Blizzard_Fonts_Shared/Shared/FontStyles.xml and
-/// Fonts.xml (Roman GameFont Normal/Highlight shadow faces). These describe
-/// native templates; they do not introduce compiler declarations or globals.
-pub(crate) fn native_style(name: &str) -> Option<(f64, [f64; 4])> {
-    let (size, highlight) = match name {
-        "GameFontNormal" => (12.0, false),
-        "GameFontNormalSmall" => (10.0, false),
-        "GameFontNormalLarge" => (16.0, false),
-        "GameFontHighlight" => (12.0, true),
-        "GameFontHighlightSmall" => (10.0, true),
-        "GameFontHighlightLarge" => (16.0, true),
-        _ => return None,
-    };
-    Some((
-        size,
-        if highlight {
-            [1.0; 4]
-        } else {
-            [1.0, 0.82, 0.0, 1.0]
-        },
-    ))
+    Err(mlua::Error::runtime(format!(
+        "unknown font template: {name}"
+    )))
 }
 /// Called before addon chunks, including on reload and load-on-demand.
 pub fn register_addon_root(lua: &mlua::Lua, dir: &Path) -> mlua::Result<()> {
@@ -132,10 +106,15 @@ pub fn register_addon_root(lua: &mlua::Lua, dir: &Path) -> mlua::Result<()> {
     let store = crate::frames::arena::store(lua);
     let mut arena = store.borrow_mut();
     arena.fonts.assets.add_addon(root);
+    // Adding a source can resolve a prior miss; readable assets stay readable.
+    arena
+        .fonts
+        .asset_presence
+        .get_mut()
+        .retain(|_, found| *found);
     arena.fonts.faces.borrow_mut().clear();
     arena.fonts.layouts.borrow_mut().clear();
     arena.dirty = true;
-    arena.full_layout = true;
     arena.full_layout = true;
     arena.dirty_regions.clear();
     Ok(())

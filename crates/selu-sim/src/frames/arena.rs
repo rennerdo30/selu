@@ -84,6 +84,8 @@ pub struct Region {
     pub level_explicit: bool,
     pub mouse: bool,
     pub enabled: bool,
+    pub button_state: &'static str,
+    pub button_state_locked: bool,
     pub keyboard: bool,
     pub propagate_keyboard: bool,
     pub wheel: bool,
@@ -111,6 +113,7 @@ pub struct Region {
 pub struct Arena {
     pub fonts: crate::fonts::FontBook,
     pub regions: Vec<Region>,
+    pub update_subscribers: std::collections::BTreeSet<usize>,
     pub event_subscribers: std::collections::HashMap<String, std::collections::BTreeSet<usize>>,
     pub dirty: bool,
     pub full_layout: bool,

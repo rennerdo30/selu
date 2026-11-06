@@ -15,7 +15,14 @@ fn invoke(sim: &Sim, i: usize, name: &str, args: Vec<Value>) -> SimResult<()> {
             crate::core::call_lua::<()>(sim.lua(), f, args)
         });
         crate::core::flush(sim.lua(), sim.ctx());
-        result?;
+        if let Err(error) = result {
+            if *crate::core::lock(&sim.ctx().tolerant_ui) {
+                sim.ctx().log(format!("error: {error}"));
+                crate::core::check_budget(sim.ctx())?;
+            } else {
+                return Err(error);
+            }
+        }
     }
     crate::core::flush(sim.lua(), sim.ctx());
     Ok(())
@@ -34,10 +41,8 @@ fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool) -> Option<usize> {
     a.regions
         .iter()
         .enumerate()
-        .filter(|(_, r)| {
-            clip(&a, id(&r.table.get()).unwrap_or(0)).is_none_or(|q| {
-                x >= q.left && x < q.left + q.width && y >= q.bottom && y < q.bottom + q.height
-            }) && r.visible
+        .filter(|(index, r)| {
+            r.visible
                 && r.mouse
                 && (r.enabled || (motion && r.motion_disabled))
                 && r.rect.is_some_and(|q| {
@@ -45,6 +50,9 @@ fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool) -> Option<usize> {
                         && x <= q.left + q.width
                         && y >= q.bottom
                         && y <= q.bottom + q.height
+                })
+                && clip(&a, *index).is_none_or(|q| {
+                    x >= q.left && x < q.left + q.width && y >= q.bottom && y < q.bottom + q.height
                 })
         })
         .max_by_key(|(i, r)| (r.strata, r.level, r.layer, *i))
@@ -79,47 +87,59 @@ impl crate::session::Vm {
             }))
         })
     }
-    pub fn click(&self, x: f64, y: f64, button: &str) -> SimResult<Option<RegionId>> {
+    pub fn mouse_down(&self, x: f64, y: f64, button: &str) -> SimResult<Option<RegionId>> {
+        self.button_phase(x, y, button, true)
+    }
+    pub fn mouse_up(&self, x: f64, y: f64, button: &str) -> SimResult<Option<RegionId>> {
+        self.button_phase(x, y, button, false)
+    }
+    fn button_phase(
+        &self,
+        x: f64,
+        y: f64,
+        button: &str,
+        down: bool,
+    ) -> SimResult<Option<RegionId>> {
         dispatch(self.lua(), self.ctx(), || {
             self.hover(x, y)?;
             crate::core::flush(self.lua(), self.ctx());
-            let target = hit(self, x, y);
             let a = store(self.lua());
-            a.borrow_mut().capture = target;
+            let target = if down {
+                let target = hit(self, x, y);
+                a.borrow_mut().capture = target;
+                target
+            } else {
+                a.borrow().capture
+            };
             if let Some(i) = target {
-                // Blizzard_SharedXML/Shared/Frame/EventEditBox.lua:
-                // OnMouseDown_Intrinsic calls SetFocus before its mouse event.
-                if a.borrow().regions[i].kind == "EditBox" {
+                let table = a.borrow().regions[i].table.get();
+                {
+                    let mut a = a.borrow_mut();
+                    let r = &mut a.regions[i];
+                    if !r.button_state_locked {
+                        r.button_state = if down { "PUSHED" } else { "NORMAL" };
+                    }
+                }
+                super::widgets::sync_button_textures(self.lua(), self.ctx(), &table)?;
+                if down && a.borrow().regions[i].kind == "EditBox" {
                     focus(&mut a.borrow_mut(), self.ctx(), Some(i));
                     crate::core::flush(self.lua(), self.ctx());
                 }
-                let registered = |down: bool| {
-                    let suffix = if down { "Down" } else { "Up" };
-                    a.borrow().regions[i]
-                        .click_buttons
-                        .iter()
-                        .any(|b| b == &format!("{button}{suffix}") || b == &format!("Any{suffix}"))
-                };
-                let button = Value::String(self.lua().create_string(button)?);
-                invoke(self, i, "OnMouseDown", vec![button.clone()])?;
-                if eligible(self, i) && registered(true) {
-                    {
-                        let mut arena = a.borrow_mut();
-                        if arena.regions[i].kind == "CheckButton" {
-                            arena.regions[i].checked = !arena.regions[i].checked;
-                        }
-                    }
-                    for name in ["PreClick", "OnClick", "PostClick"] {
-                        if !eligible(self, i) {
-                            break;
-                        }
-                        invoke(self, i, name, vec![button.clone(), Value::Boolean(true)])?;
-                    }
+                let value = Value::String(self.lua().create_string(button)?);
+                if down || eligible(self, i) {
+                    invoke(
+                        self,
+                        i,
+                        if down { "OnMouseDown" } else { "OnMouseUp" },
+                        vec![value.clone()],
+                    )?;
                 }
-                if eligible(self, i) {
-                    invoke(self, i, "OnMouseUp", vec![button.clone()])?;
-                }
-                if eligible(self, i) && registered(false) {
+                let suffix = if down { "Down" } else { "Up" };
+                let registered = a.borrow().regions[i]
+                    .click_buttons
+                    .iter()
+                    .any(|b| b == &format!("{button}{suffix}") || b == &format!("Any{suffix}"));
+                if eligible(self, i) && registered && (down || hit(self, x, y) == Some(i)) {
                     {
                         let mut a = a.borrow_mut();
                         if a.regions[i].kind == "CheckButton" {
@@ -130,15 +150,24 @@ impl crate::session::Vm {
                         if !eligible(self, i) {
                             break;
                         }
-                        invoke(self, i, name, vec![button.clone(), Value::Boolean(false)])?;
+                        invoke(self, i, name, vec![value.clone(), Value::Boolean(down)])?;
                     }
                 }
             }
-            a.borrow_mut().capture = None;
+            if !down {
+                a.borrow_mut().capture = None;
+            }
             Ok(target.map(|i| RegionId {
                 index: i as u32,
                 generation: 0,
             }))
+        })
+    }
+    pub fn click(&self, x: f64, y: f64, button: &str) -> SimResult<Option<RegionId>> {
+        dispatch(self.lua(), self.ctx(), || {
+            let target = self.mouse_down(x, y, button)?;
+            self.mouse_up(x, y, button)?;
+            Ok(target)
         })
     }
     pub fn drag(&self, from: (f64, f64), to: (f64, f64)) -> SimResult<()> {
@@ -256,15 +285,22 @@ impl crate::session::Vm {
     pub fn key(&self, key: &str, down: bool) -> SimResult<()> {
         dispatch(self.lua(), self.ctx(), || {
             let a = store(self.lua());
+            let focus = a.borrow().focus;
             let mut targets = a
                 .borrow()
                 .regions
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| r.visible && r.enabled && r.keyboard)
+                .filter(|(i, r)| {
+                    r.visible
+                        && r.enabled
+                        && r.keyboard
+                        && (r.kind != "EditBox" || focus == Some(*i))
+                })
                 .map(|(i, r)| (r.strata, r.level, i))
                 .collect::<Vec<_>>();
             targets.sort();
+            let mut consumed = false;
             for (_, _, i) in targets.into_iter().rev() {
                 invoke(
                     self,
@@ -273,8 +309,12 @@ impl crate::session::Vm {
                     vec![Value::String(self.lua().create_string(key)?)],
                 )?;
                 if !a.borrow().regions[i].propagate_keyboard {
+                    consumed = true;
                     break;
                 }
+            }
+            if !consumed {
+                crate::bindings::key(self.lua(), key, down)?;
             }
             Ok(())
         })
