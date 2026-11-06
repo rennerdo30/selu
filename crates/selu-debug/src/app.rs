@@ -615,6 +615,9 @@ impl Studio {
             ctx.request_repaint();
         }
         let now = ctx.input(|i| i.time);
+        if !self.sim_ready() {
+            self.playing = false;
+        }
         if self.playing {
             // Game time follows wall time. The tick moves forward when an
             // advance is sent, so time that passed while a reply was in flight
@@ -1476,7 +1479,46 @@ impl Studio {
         }
         self.line(LineKind::Build, format!("opened {}", dir.display()));
         self.load_after_build = true;
+        self.playing = false;
         self.rebuild();
+    }
+
+    /// Whether there is an addon to simulate. A project opens before its
+    /// first successful build; until then the game clock, reload and the
+    /// time buttons are off, and the preview says why.
+    fn sim_ready(&self) -> bool {
+        !self.opts.addons.is_empty()
+    }
+
+    /// Why the simulator is not running yet, for the preview.
+    fn not_ready_reason(&self) -> (bool, String) {
+        let name = self
+            .opts
+            .project
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map_or_else(
+                || "the project".to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+        if self.build.is_some() {
+            (
+                true,
+                format!("Building {name}...\nThe game starts when the build is done."),
+            )
+        } else if self.build_failed {
+            (
+                false,
+                "The project does not build yet.\nFix the errors in Problems and save; the game starts after the first successful build.".into(),
+            )
+        } else if self.opts.project.is_some() {
+            (
+                false,
+                "Nothing to run yet: no built addon was found.\nBuild the project (Ctrl+B).".into(),
+            )
+        } else {
+            (false, "No addon loaded.".into())
+        }
     }
 
     /// A fresh simulator session for the current options: client assets,
@@ -1592,10 +1634,10 @@ impl Studio {
                 i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::V),
             )
         });
-        if run {
+        if run && self.sim_ready() {
             self.playing = !self.playing;
         }
-        if reload {
+        if reload && self.sim_ready() {
             self.act(Command::Reload);
         }
         if build {
@@ -1957,15 +1999,16 @@ impl Studio {
                         self.games_open = true;
                     }
                     ui.separator();
+                    let ready = self.sim_ready();
                     let label = if self.playing { "Pause" } else { "Run" };
                     if ui
-                        .add(egui::Button::new(label).shortcut_text("F5"))
+                        .add_enabled(ready, egui::Button::new(label).shortcut_text("F5"))
                         .clicked()
                     {
                         self.playing = !self.playing;
                     }
                     if ui
-                        .add(egui::Button::new("/reload").shortcut_text("Ctrl+R"))
+                        .add_enabled(ready, egui::Button::new("/reload").shortcut_text("Ctrl+R"))
                         .clicked()
                     {
                         self.act(Command::Reload);
@@ -1976,7 +2019,7 @@ impl Studio {
                         ("Advance 1 s", 1.0),
                         ("Advance 10 s", 10.0),
                     ] {
-                        if ui.button(label).clicked() {
+                        if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
                             self.act(Command::AdvanceTime { seconds });
                         }
                     }
@@ -2002,7 +2045,10 @@ impl Studio {
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
         child.spacing_mut().item_spacing.x = 4.0;
-        let (icon, tip) = if self.playing {
+        let ready = self.sim_ready();
+        let (icon, tip) = if !ready {
+            (icon::PLAY, "Nothing to run until the project builds")
+        } else if self.playing {
             (icon::PAUSE, "Pause (F5)")
         } else {
             (icon::PLAY, "Run the game clock (F5)")
@@ -2013,11 +2059,19 @@ impl Studio {
             palette::OK
         }))
         .min_size(egui::vec2(32.0, 26.0));
-        if child.add(play).on_hover_text(tip).clicked() {
+        if child
+            .add_enabled(ready, play)
+            .on_hover_text(tip)
+            .on_disabled_hover_text(tip)
+            .clicked()
+        {
             self.playing = !self.playing;
         }
         if child
-            .add(egui::Button::new(icon_text(icon::REFRESH, 13.0)).min_size(egui::vec2(32.0, 26.0)))
+            .add_enabled(
+                ready,
+                egui::Button::new(icon_text(icon::REFRESH, 13.0)).min_size(egui::vec2(32.0, 26.0)),
+            )
             .on_hover_text("/reload (Ctrl+R)")
             .clicked()
         {
@@ -2194,7 +2248,7 @@ impl Studio {
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 ui.label(small(format!("session {}", self.generation)));
-                if let Some(s) = &self.snapshot {
+                if let Some(s) = self.snapshot.as_ref().filter(|_| self.sim_ready()) {
                     ui.label(small(format!(
                         "game {:.2} s{}",
                         s.time,
@@ -2216,9 +2270,10 @@ impl Studio {
         ui.horizontal(|ui| {
             caption(ui, "Game preview");
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                let ready = self.sim_ready();
                 for (label, seconds) in [("+10s", 10.0), ("+1s", 1.0)] {
                     if ui
-                        .small_button(label)
+                        .add_enabled(ready, egui::Button::new(label).small())
                         .on_hover_text("Advance the game clock")
                         .clicked()
                     {
@@ -2239,8 +2294,29 @@ impl Studio {
         let screen_h = (ui.available_width() * 9.0 / 16.0).min(ui.available_height() * 0.6);
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), screen_h), Sense::hover());
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-        self.screen(&mut child);
+        if self.sim_ready() {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            self.screen(&mut child);
+        } else {
+            ui.painter().rect_filled(rect, 4.0, palette::PANEL);
+            let (busy, text) = self.not_ready_reason();
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(rect.shrink(24.0))
+                    .layout(egui::Layout::top_down(Align::Center)),
+            );
+            child.add_space((rect.height() / 2.0 - 40.0).max(0.0));
+            if busy {
+                child.add(egui::Spinner::new().size(20.0).color(palette::ACCENT));
+                child.add_space(8.0);
+            }
+            let color = if !busy && self.build_failed {
+                palette::ERROR
+            } else {
+                palette::MUTED
+            };
+            child.label(egui::RichText::new(text).color(color));
+        }
         ui.add_space(8.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
