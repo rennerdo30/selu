@@ -47,6 +47,9 @@ pub enum Command {
     Eval {
         code: String,
     },
+    Scenario {
+        state: selu_sim::world::Scenario,
+    },
     Snapshot,
     // Round 10 (S6) adds: SetBreakpoints, Pause, Resume, StepIn/Over/Out,
     // Stack, Locals. While paused the worker serves only those and
@@ -59,6 +62,9 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "update", rename_all = "snake_case")]
 pub enum Update {
+    Scenario {
+        state: selu_sim::world::Scenario,
+    },
     Prints {
         lines: Vec<String>,
     },
@@ -191,6 +197,10 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
                 Ok(None)
             }
             Command::Eval { code } => session.eval(&code).map(|_| None).map_err(|e| e.to_string()),
+            Command::Scenario { state } => state
+                .apply(session.sim())
+                .map(|_| None)
+                .map_err(|e| e.to_string()),
             Command::Snapshot => session
                 .snapshot()
                 .map(|s| {
@@ -247,6 +257,9 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
             Err(message) => {
                 let _ = outbox.send(Update::Error { message });
             }
+        }
+        if let Ok(state) = selu_sim::world::Scenario::capture(session.sim()) {
+            let _ = outbox.send(Update::Scenario { state });
         }
         let _ = outbox.send(Update::Done { seq });
         seq += 1;
@@ -318,5 +331,45 @@ mod tests {
                 ]
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod scenario_tests {
+    #[test]
+    fn studio_scenario_round_trip() {
+        let mut state = selu_sim::world::Scenario::default();
+        state.units.insert(
+            "target".into(),
+            selu_sim::world::Unit {
+                classification: "rare".into(),
+                ..Default::default()
+            },
+        );
+        state.bags.insert(0, vec![6948]);
+        let path =
+            std::env::temp_dir().join(format!("selu-studio-scenario-{}.toml", std::process::id()));
+        assert!(!path.exists());
+        state.save(&path).unwrap();
+        let loaded = selu_sim::world::Scenario::load(&path).unwrap();
+        assert_eq!(state, loaded);
+        let worker = super::Worker::spawn(Default::default());
+        let updates = worker.call(super::Command::Scenario { state: loaded });
+        assert!(
+            !updates
+                .iter()
+                .any(|u| matches!(u, super::Update::Error { .. })),
+            "{updates:?}"
+        );
+        let updates = worker.call(super::Command::Eval {
+            code: "assert(UnitClassification('target')=='rare')".into(),
+        });
+        assert!(
+            !updates
+                .iter()
+                .any(|u| matches!(u, super::Update::Error { .. })),
+            "{updates:?}"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 }

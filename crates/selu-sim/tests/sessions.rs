@@ -22,6 +22,7 @@ fn migration_world_trace_and_isolation() {
             max_power: 100,
             auras: vec![],
             combat: false,
+            ..Default::default()
         },
     )
     .unwrap();
