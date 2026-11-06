@@ -543,3 +543,19 @@ entry={"name"="StaticPopupFlag","attributes"={"SeluScalarUnion"=["boolean","numb
 evidence = "documented"
 note = "Pinned 18c6d677b605b312f3d813d498404631fb941977: SimpleFontAPIDocumentation.lua GetFontObject returns SimpleFont and defines its ScriptObject interface; XML Font globals expose that interface. FontDocumentation.lua GetFontInfo also accepts SimpleFont."
 entry = { name = "Font", type = "ScriptObject", inherits = ["SimpleFontAPI"], attributes = { SeluAliasOf = "SimpleFont" } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_SharedXML/FontableFrameMixin.lua:120,131-133 creates a named font and calls CopyFontObject; :20-22 calls SetFont. SimpleFontAPIDocumentation.lua documents the font interface."
+[functions.entry]
+name = "CreateFont"
+params = ["name"]
+evidence = "source"
+[functions.entry.signature]
+name = "CreateFont"
+[[functions.entry.signature.arguments]]
+name = "name"
+type = "cstring"
+[[functions.entry.signature.returns]]
+name = "font"
+type = "SimpleFont"
