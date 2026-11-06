@@ -23,12 +23,13 @@ local function lookup(s)
     return v
 end
 local function expand(s,p)
+    if not s or not string.find(s,'$parent',1,true) then return s end
     local name
     for i=1,128 do
         if not p then break end
         name=p:GetName(); if name then break end; p=p:GetParent()
     end
-    return s and (string.gsub(s, '%$parent', function() return name or '' end))
+    return (string.gsub(s, '%$parent', function() return name or '' end))
 end
 local function relativeKey(frame,path)
     local object=frame
@@ -43,7 +44,10 @@ local apply, create
 local constructionDepth, deferredAnchors=0,{}
 local function anchorPoint(frame,value,x,y,defer)
     local point=value.point or 'CENTER'
-    local relative=value.relativeKey and relativeKey(frame,value.relativeKey) or lookup(expand(value.relativeTo,frame:GetParent()))
+    local relative=value.relativeKey and relativeKey(frame,value.relativeKey)
+    if not relative and value.relativeTo then
+        relative=value.relativeTo=='$parent' and frame:GetParent() or lookup(expand(value.relativeTo,string.find(value.relativeTo,'$parent',1,true) and frame:GetParent()))
+    end
     if deferredAnchors[frame] then deferredAnchors[frame][point]=nil end
     if (value.relativeKey or value.relativeTo) and not relative then
         if defer then
@@ -93,6 +97,31 @@ end
 local function dimension(n)
     return n.children[1] or n
 end
+local templateInfo={}
+local function resolveInfo(name,seen)
+    if templateInfo[name] then return templateInfo[name] end
+    local n=templates[name];if not n then return nil end
+    assert(not seen[name],'XML template metadata cycle');seen[name]=true
+    local info={width=0,height=0,type=nativeKind(n.tag),keyValues={},sourceLocation='external XML',inherits=n.a.inherits}
+    local parents={};if intrinsic[n.tag] then parents[#parents+1]=n.tag end
+    for _,parent in ipairs(names(n.a.inherits)) do parents[#parents+1]=parent end
+    for _,parent in ipairs(parents) do
+        local inherited=resolveInfo(parent,seen)
+        if inherited then info.width=inherited.width;info.height=inherited.height end
+    end
+    for _,child in ipairs(n.children) do
+        if child.tag=='Size' then local d=dimension(child).a;info.width=tonumber(d.x) or 0;info.height=tonumber(d.y) or 0
+        elseif child.tag=='KeyValues' then for _,kv in ipairs(child.children) do info.keyValues[#info.keyValues+1]={key=kv.a.key,keyType='string',type=kv.a.type or 'string',value=kv.a.value or ''} end end
+    end
+    seen[name]=nil;templateInfo[name]=info;return info
+end
+C_XMLUtil=rawget(_G,'C_XMLUtil') or {}
+function C_XMLUtil.GetTemplateInfo(name)
+    local info=resolveInfo(name,{});if not info then return nil end
+    local copy={};for key,value in pairs(info) do copy[key]=value end
+    copy.keyValues={};for index,value in ipairs(info.keyValues) do local kv={};for key,field in pairs(value) do kv[key]=field end;copy.keyValues[index]=kv end
+    return copy
+end
 local function script(f,n,intrinsicOwner,plan)
     local a=n.a
     if a.font then f:SetFont(a.font,tonumber(a.height) or 12,a.flags or '') end
@@ -108,9 +137,19 @@ local function script(f,n,intrinsicOwner,plan)
             OnKeyDown='key',OnKeyUp='key',OnChar='text',OnTextChanged='userInput',
             OnCursorChanged='x,y,width,height',OnDragStart='button',OnDragStop='button'}
         local args='self,'..(arguments[n.tag] and arguments[n.tag]..',' or '')..'...'
-        fn=assert(loadstring('return function('..args..')\n'..n.text..'\nend', '@XML/'..n.tag))()
+        -- Compile each immutable XML script node once; create a fresh handler
+        -- closure per instance so function identity and environments stay local.
+        n.scriptFactory=n.scriptFactory or assert(loadstring('return function('..args..')\n'..n.text..'\nend', '@XML/'..n.tag))
+        fn=n.scriptFactory()
     end
     if not fn then note('script '..(a['function'] or n.tag)); return end
+    -- UI.xsd ScriptType defaults autoEnableInput to true. Lua SetScript
+    -- alone does not imply this XML input subscription.
+    if a.autoEnableInput~='false' then
+        if n.tag=='OnMouseWheel' then f:EnableMouseWheel(true)
+        elseif n.tag=='OnKeyDown' or n.tag=='OnKeyUp' then f:EnableKeyboard(true)
+        elseif n.tag=='OnEnter' or n.tag=='OnLeave' or n.tag=='OnMouseDown' or n.tag=='OnMouseUp' or n.tag=='OnClick' or n.tag=='OnDoubleClick' or n.tag=='OnDragStart' or n.tag=='OnDragStop' then f:EnableMouse(true) end
+    end
     if intrinsicOwner and n.tag=='OnLoad' and not a.intrinsicOrder then
         -- Resolve intrinsic methods after final mixins/KeyValues, before
         -- normal OnLoad. Derived secure mixins override native initialization.
@@ -229,6 +268,11 @@ apply=function(f,n,seen)
     if a.scale then f:SetScale(tonumber(a.scale)) end
     if a.enableMouse then f:EnableMouse(a.enableMouse=='true') end
     if a.enableKeyboard then f:EnableKeyboard(a.enableKeyboard=='true') end
+    if a.enableMouseWheel then f:EnableMouseWheel(a.enableMouseWheel=='true') end
+    if a.movable then f:SetMovable(a.movable=='true') end
+    if a.clampedToScreen then f:SetClampedToScreen(a.clampedToScreen=='true') end
+    if a.registerForClicks then f:RegisterForClicks(unpack(names(a.registerForClicks))) end
+    if a.registerForDrag then f:RegisterForDrag(unpack(names(a.registerForDrag))) end
     if a.autoFocus then f:SetAutoFocus(a.autoFocus=='true') end
     if a.multiLine then f:SetMultiLine(a.multiLine=='true') end
     if a.id then f:SetID(tonumber(a.id)) end
@@ -248,6 +292,7 @@ apply=function(f,n,seen)
             local d=dimension(c).a; local path,_,flags=f:GetFont()
             f:SetFont(path,tonumber(d.val or d.value) or 12,flags)
         elseif c.tag=='Anchors' then
+            seen.anchors=true
             for _,anchor in ipairs(c.children) do
                 local v=anchor.a; local x,y=tonumber(v.x) or 0,tonumber(v.y) or 0
                 for _,offset in ipairs(anchor.children) do
@@ -342,7 +387,14 @@ create=function(n,parent,layer,subLevel)
     elseif n.tag=='Font' then f=CreateFont(name)
     else f=native(nativeKind(n.tag),name,parent) end
     if layer and subLevel then f:SetDrawLayer(layer,subLevel) end
-    construct(f,function(plan) apply(f,n,plan) end)
+    construct(f,function(plan)
+        apply(f,n,plan)
+        -- XML textures without anchors fill their parent. Lua CreateTexture
+        -- stays unanchored; inherited/explicit XML anchors take precedence.
+        if not plan.anchors and (n.tag=='Texture' or n.tag=='MaskTexture' or string.match(n.tag,'Texture$')) and f:GetNumPoints()==0 then
+            f:SetAllPoints(parent)
+        end
+    end)
     if n.tag~='Texture' and n.tag~='FontString' and n.tag~='Font' then
         local onload=f.__scripts.OnLoad; if onload then invoke(onload,f) end
     end
@@ -379,6 +431,7 @@ function __selu_xml_declare(n)
     if n.a.virtual=='true' or n.a.intrinsic=='true' then
         templates[n.a.name]=n
         inheritedParents={}
+        templateInfo={}
         if n.a.intrinsic=='true' then intrinsic[n.a.name]=n.tag end
     else create(n,nil) end
 end

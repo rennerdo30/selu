@@ -27,6 +27,9 @@ pub enum Arg {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
+    Input {
+        events: Vec<PreviewInput>,
+    },
     LoadDefaultUi {
         source: PathBuf,
     },
@@ -72,6 +75,35 @@ pub enum Command {
     // Stack, Locals. While paused the worker serves only those and
     // Snapshot (decision 17).
     Shutdown,
+}
+
+/// Native preview input; widget scripts and binding XML own UI policy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PreviewInput {
+    Hover {
+        x: f64,
+        y: f64,
+    },
+    MouseButton {
+        x: f64,
+        y: f64,
+        button: String,
+        down: bool,
+    },
+    Wheel {
+        x: f64,
+        y: f64,
+        delta: f64,
+    },
+    Drag {
+        from: (f64, f64),
+        to: (f64, f64),
+    },
+    Key {
+        key: String,
+        down: bool,
+    },
+    Text(String),
 }
 
 /// Worker to front end. After every command the worker sends the new
@@ -295,6 +327,26 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
                 };
                 result.map(|_| None).map_err(|e| e.to_string())
             }
+            Command::Input { events } => events
+                .into_iter()
+                .try_for_each(|event| {
+                    match event {
+                        PreviewInput::Hover { x, y } => session.hover(x, y).map(|_| ()),
+                        PreviewInput::MouseButton { x, y, button, down } => {
+                            if down {
+                                session.mouse_down(x, y, &button).map(|_| ())
+                            } else {
+                                session.mouse_up(x, y, &button).map(|_| ())
+                            }
+                        }
+                        PreviewInput::Wheel { x, y, delta } => session.wheel(x, y, delta),
+                        PreviewInput::Drag { from, to } => session.drag(from, to),
+                        PreviewInput::Key { key, down } => session.key(&key, down),
+                        PreviewInput::Text(text) => session.type_text(&text),
+                    }
+                    .map_err(|error| error.to_string())
+                })
+                .map(|_| None),
             Command::Key { key, down } => session
                 .key(&key, down)
                 .map(|_| None)

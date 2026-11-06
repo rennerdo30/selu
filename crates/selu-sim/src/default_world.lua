@@ -4,6 +4,11 @@ if __selu_synthetic_strings then
 if rawget(_G,'GENERAL')==nil then GENERAL='General' end
 if rawget(_G,'COMBAT_LOG')==nil then COMBAT_LOG='Combat Log' end
 if rawget(_G,'VOICE')==nil then VOICE='Voice' end
+if rawget(_G,'PLAYER_LEVEL')==nil then PLAYER_LEVEL='Level %s' end
+if rawget(_G,'PLAYER_LEVEL_NO_SPEC')==nil then PLAYER_LEVEL_NO_SPEC='Level %s' end
+if rawget(_G,'NUM_FREE_SLOTS')==nil then NUM_FREE_SLOTS='%s free slots' end
+if rawget(_G,'CHARACTER_BUTTON')==nil then CHARACTER_BUTTON='Character' end
+if rawget(_G,'BACKPACK_TOOLTIP')==nil then BACKPACK_TOOLTIP='Backpack' end
 if rawget(_G,'CHAT_NAME_TEMPLATE')==nil then CHAT_NAME_TEMPLATE='Chat %d' end
 -- Synthetic enUS labels for the fixed raid/group tags consumed by
 -- ChatFrameConstants.lua. Installed localized GlobalStrings are unavailable.
@@ -83,6 +88,11 @@ function C_UnitAurasPrivate.IsPrivateAuraFilteredOutByInstanceID() return true e
 function GetTasksTable() return {} end
 function GetNumAutoQuestPopUps() return 0 end
 function GetNumShapeshiftForms() return 0 end
+function GetCursorMoney() return 0 end
+function GetPlayerTradeMoney() return 0 end
+function GetMerchantNumItems() return 0 end
+C_CurrencyInfo=C_CurrencyInfo or {}
+function C_CurrencyInfo.GetBackpackCurrencyInfo() return nil end
 C_NamePlate=C_NamePlate or {}
 function C_NamePlate.GetNamePlateForUnit() return nil end
 function C_NamePlate.GetNamePlates() return {} end
@@ -122,7 +132,7 @@ if version then
     function GetBuildInfo() return version,tostring(build),'',interface end
 end
 local cvars={uiScale='1',useUiScale='0',scriptErrors='0',cameraFov='90',statusText='1',statusTextDisplay='BOTH',
-    ActionButtonUseKeyDown='1',chatStyle='classic',nameplateShowEnemies='0',
+    ActionButtonUseKeyDown='1',chatStyle='classic',chatMouseScroll='1',nameplateShowEnemies='0',
     minimapZoom='0',rotateMinimap='0',showTutorials='0'}
 function GetCVar(name) return cvars[name] or '0' end
 function GetCVarBool(name) return GetCVar(name)=='1' end

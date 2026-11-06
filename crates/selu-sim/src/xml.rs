@@ -398,6 +398,24 @@ mod tests {
         sim.eval("Root:SetDisabledTexture(\"Interface/Buttons/WHITE8X8\"); Root:Disable(); assert(not Root:GetNormalTexture():IsShown() and Root:GetDisabledTexture():IsShown()); Root:Enable(); assert(Root:GetNormalTexture():IsShown() and not Root:GetDisabledTexture():IsShown())").unwrap();
     }
     #[test]
+    fn xml_textures_fill_parent_only_without_inherited_or_explicit_anchors() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="Canvas"><Size x="80" y="30"/><Anchors><Anchor point="CENTER"/></Anchors><Layers><Layer><Texture parentKey="Fill"/><Texture parentKey="Inset"><Size x="10" y="8"/><Anchors><Anchor point="CENTER"/></Anchors></Texture></Layer></Layers></Frame></Ui>"#,
+        );
+        sim.eval("assert(Canvas.Fill:GetNumPoints()==2); assert(Canvas.Fill:GetWidth()==80 and Canvas.Fill:GetHeight()==30); assert(Canvas.Inset:GetNumPoints()==1 and Canvas.Inset:GetWidth()==10); local luaTexture=Canvas:CreateTexture(); assert(luaTexture:GetNumPoints()==0)").unwrap();
+    }
+    #[test]
+    fn template_metadata_resolves_inheritance_without_instantiating_regions() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="MeasuredBase" virtual="true"><Size x="50" y="12"/></Frame><Frame name="MeasuredDerived" inherits="MeasuredBase" virtual="true"/></Ui>"#,
+        );
+        sim.eval("local before=UIParent:GetNumChildren();local info=C_XMLUtil.GetTemplateInfo('MeasuredDerived');assert(info.width==50 and info.height==12);assert(info.type=='Frame');assert(C_XMLUtil.GetTemplateInfo('MissingInfo')==nil);info.width=0;assert(C_XMLUtil.GetTemplateInfo('MeasuredDerived').width==50);assert(UIParent:GetNumChildren()==before)").unwrap();
+    }
+    #[test]
     fn utf8_and_multiline_scripts_survive_encoding() {
         let sim = crate::Sim::new().unwrap();
         run(

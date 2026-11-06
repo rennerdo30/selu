@@ -1,4 +1,8 @@
 {
+  "InputDeviceInterfaceType": {
+    "Mkb": 0,
+    "Gamepad": 1
+  },
   "GameMode": {
     "Standard": 1,
     "Plunderstorm": 2,

@@ -275,9 +275,14 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
     // The locally installed GlobalStrings DB2 can be absent. These source-
     // documented localized string families get visible synthetic labels in
     // the opt-in default UI; other unknown globals still remain unknown.
-    if ["HUD_EDIT_MODE_", "ICON_TAG_RAID_TARGET_", "CHAT_MSG_"]
-        .iter()
-        .any(|prefix| key.starts_with(prefix))
+    if [
+        "HUD_EDIT_MODE_",
+        "ICON_TAG_RAID_TARGET_",
+        "CHAT_MSG_",
+        "PROMPT_",
+    ]
+    .iter()
+    .any(|prefix| key.starts_with(prefix))
         && lua
             .named_registry_value::<Option<bool>>("selu.synthetic_strings")?
             .unwrap_or(false)

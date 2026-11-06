@@ -166,7 +166,22 @@ mod tests {
     #[test]
     fn uppercase_native_frames_keep_attribute_callbacks() {
         let sim = crate::Sim::new().unwrap();
-        sim.eval("local f=CreateFrame('FRAME'); assert(f:GetObjectType()=='Frame'); f:SetForbidden(); local n=0; f:SetScript('OnAttributeChanged',function(self,name,value) assert(name=='demo' and value==7); n=n+1 end); f:SetAttribute('demo',7); f:SetAttribute('demo',7); assert(f:GetAttribute('demo')==7 and n==1)").unwrap();
+        // UIParentPanelManager/Shared/UIParentPanelManager.lua:124-129,900
+        // repeatedly writes panel-show=true as a command. The native client
+        // fires on every call (owner-confirmed); silent writes use NoHandler.
+        sim.eval("local f=CreateFrame('FRAME'); assert(f:GetObjectType()=='Frame'); f:SetForbidden(); local n=0; f:SetScript('OnAttributeChanged',function(self,name,value) assert(name=='demo' and value==7); n=n+1 end); f:SetAttribute('demo',7); f:SetAttribute('demo',7); assert(f:GetAttribute('demo')==7 and n==2)").unwrap();
+    }
+    #[test]
+    fn native_geometry_coerces_xml_numeric_strings() {
+        let sim = crate::Sim::new().unwrap();
+        // Blizzard_ClassNameplateBar.xml:19 omits KeyValue type, so scale
+        // arrives as a string. Native Lua number arguments accept it.
+        sim.eval("local f=CreateFrame('Frame');f:SetScale('0.75');f:SetSize('80','40');assert(f:GetScale()==0.75 and f:GetWidth()==80 and f:GetHeight()==40)").unwrap();
+    }
+    #[test]
+    fn repeated_attribute_commands_fire_while_silent_writes_stay_silent() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("local f=CreateFrame('Frame');local calls=0;f:SetScript('OnAttributeChanged',function() calls=calls+1 end);f:SetAttribute('command',true);f:SetAttribute('command',true);f:SetAttributeNoHandler('command',false);assert(calls==2 and f:GetAttribute('command')==false)").unwrap();
     }
     #[test]
     fn more_than_eight_thousand_regions_keep_identity_across_registry_ownership() {

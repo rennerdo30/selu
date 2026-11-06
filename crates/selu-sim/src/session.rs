@@ -631,9 +631,11 @@ impl Session {
                     core::call_lua::<()>(
                         &self.sim.lua,
                         if name == "@selu/xml-runtime" {
-                            crate::host_lua::load(&self.sim.lua, &source)
-                                .set_name(&name)
-                                .into_function()?
+                            crate::host_lua::factory(
+                                &self.sim.lua,
+                                "selu.xml.runtime_chunk",
+                                &format!("return function(...)\n{source}\nend"),
+                            )?
                         } else {
                             self.sim.lua.load(&source).set_name(&name).into_function()?
                         },
@@ -654,6 +656,13 @@ impl Session {
             ) {
                 report.errors.push(error.to_string());
             }
+        }
+        #[cfg(debug_assertions)]
+        if std::env::var_os("SELU_SIM_PROFILE").is_some() {
+            eprintln!(
+                "PROFILE_LUA_MEMORY source complete before collection: {} bytes",
+                self.sim.lua.used_memory()
+            );
         }
         drop(gc_pause);
         crate::profile::report_hooks("Blizzard sources complete");
@@ -1284,7 +1293,7 @@ impl Vm {
         globals.set("__selu_sim_frames", lua.create_table()?)?;
         frames::install(&lua, &ctx)?;
         let create: Function = globals.get("CreateFrame")?;
-        globals.set("UIParent", create.call::<Table>("Frame")?)?;
+        globals.set("UIParent", create.call::<Table>(("Frame", "UIParent"))?)?;
         let registry: Table = globals.get("__selu_sim_frames")?;
         registry.raw_set(registry.raw_len(), Value::Nil)?;
         globals.raw_set("__selu_frame_families", lua.create_table()?)?;
@@ -1332,6 +1341,26 @@ impl Vm {
         lua.globals()
             .set("__selu_loaded_dirs", lua.create_table()?)?;
         crate::world::install(&lua)?;
+        crate::bindings::install(&lua)?;
+        let item_ctx = ctx.clone();
+        lua.globals().raw_set(
+            "__selu_item_data_result",
+            lua.create_function(move |lua, (id, success): (u32, bool)| {
+                let event = "ITEM_DATA_LOAD_RESULT";
+                let args = vec![Value::Integer(i64::from(id)), Value::Boolean(success)];
+                item_ctx.record(
+                    TraceKind::Event,
+                    event,
+                    args.iter().map(value_string).collect(),
+                );
+                let tolerant = *lock(&item_ctx.tolerant_ui);
+                dispatch(lua, &item_ctx, || {
+                    crate::events::deliver(lua, &item_ctx, event, &args, tolerant)
+                })?;
+                Ok(())
+            })?,
+        )?;
+        crate::host_lua::load(&lua, include_str!("inventory.lua")).exec()?;
         crate::world::install_restrictions(&lua, &ctx)?;
         crate::trace::install(&lua, &ctx)?;
         crate::host_lua::seal(&lua)?;
@@ -1484,52 +1513,8 @@ impl Vm {
     }
 
     fn fire_now(&self, event: &str, args: &[Value]) -> SimResult<usize> {
-        let _profile = crate::profile::Span::new("events.dispatch");
-        let arena = crate::frames::arena::store(&self.lua);
-        let mut delivered = 0;
-        let mut next_index = 0;
-        loop {
-            // Query the live ordered subscription index after each callback:
-            // unregistering a later frame still suppresses that delivery.
-            let next = {
-                let arena = arena.borrow();
-                arena
-                    .event_subscribers
-                    .get(event)
-                    .and_then(|indices| indices.range(next_index..).next())
-                    .map(|&index| (index, arena.regions[index].table.get()))
-            };
-            let Some((index, frame)) = next else { break };
-            next_index = index + 1;
-            let registered: Value = frame.get::<Table>("__events")?.get(event)?;
-            if matches!(registered, Value::Nil) {
-                continue;
-            }
-            let on_event: Value = frame.get::<Table>("__scripts")?.get("OnEvent")?;
-            if let Value::Function(func) = on_event {
-                let mut call = MultiValue::new();
-                call.push_back(Value::Table(frame));
-                call.push_back(Value::String(self.lua.create_string(event)?));
-                for a in args {
-                    call.push_back(a.clone());
-                }
-                self.ctx
-                    .record(TraceKind::Script, "OnEvent", vec![event.into()]);
-                let result = core::script_callback(&self.lua, &self.ctx, || {
-                    core::call_lua::<()>(&self.lua, func, call)
-                });
-                core::flush(&self.lua, &self.ctx);
-                if let Err(error) = result {
-                    if lock(&self.state).tolerant_ui {
-                        self.ctx.log(format!("error: {error}"));
-                    } else {
-                        return Err(error);
-                    }
-                }
-                delivered += 1;
-            }
-        }
-        Ok(delivered)
+        let tolerant = lock(&self.state).tolerant_ui;
+        crate::events::deliver(&self.lua, &self.ctx, event, args, tolerant)
     }
 
     pub fn prints(&self) -> Vec<String> {
@@ -1581,6 +1566,12 @@ impl std::ops::Deref for Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scenario_inventory_metadata_and_load_results_share_world_and_events() {
+        let s = Session::new(SessionConfig::default()).unwrap();
+        s.set_bag(0, &[117, 0]).unwrap();
+        s.eval("assert(C_Container.GetContainerNumSlots(0)==2);assert(C_Container.GetContainerItemID(0,2)==nil);assert(C_Container.GetContainerItemInfo(0,2)==nil);assert(C_Container.GetContainerNumFreeSlots(0)==1);assert(C_Container.GetContainerItemInfo(0,1).itemID==117);local f=CreateFrame('Frame');local results={};f:RegisterEvent('ITEM_DATA_LOAD_RESULT');f:SetScript('OnEvent',function(_,event,id,success) assert(event=='ITEM_DATA_LOAD_RESULT');results[id]=success end);C_Item.RequestLoadItemDataByID(117);C_Item.RequestLoadItemDataByID(999999);assert(results[117]==true and results[999999]==false);assert(C_Item.IsItemDataCachedByID(117));assert(C_Item.GetItemInfo(117)=='Simulated item 117')").unwrap();
+    }
     #[test]
     fn protected_ranges_preserve_errors_arguments_and_budget_cleanup() {
         let mut session = Session::new(SessionConfig::default()).unwrap();

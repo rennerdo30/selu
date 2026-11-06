@@ -620,6 +620,8 @@ visible synthetic text. These are not client-localization fidelity claims.
 Numeric GameMode/GameRule enums and primitive Constants are sourced from the
 Forever client export at BlizzardInterfaceResources commit
 `d1ee569878094270c0ad8d8b00de0762158fd578` (Resources/LuaEnum.lua).
+InputDeviceInterfaceType also follows InputConstantsDocumentation.lua:20-28
+(Mkb 0, Gamepad 1), so default mouse/keyboard mode stays unambiguous.
 
 Simulator Lua helpers capture private builtin/library snapshots when the VM
 is created. Addons retain the real mutable global environment. Blizzard
@@ -654,8 +656,8 @@ Prefer a locally readable payload when the first atlas set is missing: the
 micro-menu base sheet 4708813 is unavailable here, while set 1 sheet 8200846
 is installed. Candidate headers must match the full reversed encoding key and BLTE signature;
 payload reads still verify CASC content hashes. If every
-candidate is missing, Studio draws a clipped, labelled fallback per micro
-button. This is an availability choice, not active atlas-set emulation.
+candidate is missing, Studio draws the same generic missing-texture marker
+for every region. This is an availability choice, not active atlas-set emulation.
 
 Source text is cached under LOCALAPPDATA/Selu/ui-source by source root and
 CASC build key. The cache holds no VM or player state. Checkout fallback
@@ -668,7 +670,27 @@ Layout reuses dependency/visit scratch arrays, and style-only changes do not
 force a full geometry pass. Frame setters retain only fields they can mutate;
 unrelated frame calls do not decode textures. Events use a live ordered
 subscription index rather than scanning every region. No hidden-subtree
-geometry is skipped: login scripts may query those frames.
+geometry is skipped: login scripts may query those frames. Native method tables
+serve known calls directly; manifest fallback runs only for unknown methods.
+The native count-hook fast path charges the same budget at the same quanta and
+delegates stale-source/budget faults to mlua's protected hook. XML runtime and
+inline script compilation are cached per VM/node, without caching player state.
+`SELU_SIM_PROFILE_LUA_SAMPLES=1` adds development-only instruction samples;
+these are not wall-time samples.
+
+Preview input is batched onto the worker: hover/leave, mouse phases, wheel,
+keyboard/text and modifiers use native widget state and Blizzard handlers.
+XML script autoEnableInput follows the schema default. Dragging commits movement
+on release; continuous drag preview and full text-editing keys remain incomplete.
+Container APIs read the same bag slots as Scenario. Item IDs currently receive
+explicitly synthetic names, count 1, quality 1 and generic question-mark art;
+item-data completion uses the normal event subscription dispatcher.
+SetAttribute fires OnAttributeChanged on every write, including equal values;
+SetAttributeNoHandler remains silent, as used by UIParentPanelManager.
+
+The client-backed interaction binary owns one thread-confined Session and queues
+cases onto it. Each case closes source panels, clears focus/held keys and resets
+changed bag state. A failed case rebuilds the fixture before the next case.
 
 Default UI TOCs honor addon-level AllowLoadGameType/ExcludeLoadGameType in
 addition to per-file filters. A Forever session excludes Plunderstorm-only

@@ -23,6 +23,8 @@ use std::collections::HashSet;
 mod bindings;
 mod client_ui;
 pub mod core;
+mod events;
+mod fast_hook;
 pub mod fonts;
 pub mod frames;
 mod host_lua;

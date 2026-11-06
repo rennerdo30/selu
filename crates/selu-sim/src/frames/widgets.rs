@@ -111,6 +111,11 @@ fn number(v: Option<&Value>, default: f64) -> f64 {
     match v {
         Some(Value::Number(n)) => *n,
         Some(Value::Integer(n)) => *n as f64,
+        Some(Value::String(s)) => s
+            .to_str()
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(default),
         _ => default,
     }
 }
@@ -125,12 +130,13 @@ fn boolean(v: Option<&Value>) -> bool {
 }
 pub(crate) fn sync_button_textures(lua: &Lua, ctx: &Ctx, button: &Table) -> mlua::Result<()> {
     let arena = store(lua);
-    let (enabled, pressed) = {
+    let (enabled, pressed, hovered) = {
         let arena = arena.borrow();
         let r = &arena.regions[id(button)?];
         (
             r.enabled && r.button_state != "DISABLED",
             r.button_state == "PUSHED",
+            arena.hover == Some(id(button)?),
         )
     };
     let pushed = button.raw_get::<Option<Table>>("__selu_PushedTexture")?;
@@ -142,6 +148,7 @@ pub(crate) fn sync_button_textures(lua: &Lua, ctx: &Ctx, button: &Table) -> mlua
         ),
         ("__selu_PushedTexture", enabled && pressed),
         ("__selu_DisabledTexture", !enabled),
+        ("__selu_HighlightTexture", enabled && hovered),
     ] {
         if let Some(texture) = button.raw_get::<Option<Table>>(key)? {
             call(
@@ -453,6 +460,13 @@ pub fn create(
                 }
             }
             for method in METHODS.split_whitespace().chain([
+                "IsMouseMotionFocus",
+                "IsMouseOver",
+                "SetPadding",
+                "GetPadding",
+                "ClearPadding",
+                "GetTextWidth",
+                "GetTextHeight",
                 "GetAttribute",
                 "SetAttribute",
                 "SetAttributeNoHandler",
@@ -518,18 +532,14 @@ pub fn create(
             lua.set_named_registry_value(&key, m.clone())?;
             m
         };
-        let methods = RegionTable::new(lua, &methods)?;
         let mt = lua.create_table()?;
+        let fallback_mt = lua.create_table()?;
         let context = ctx.clone();
         let widget = kind.to_owned();
-        mt.set(
+        fallback_mt.set(
             "__index",
             lua.create_function(move |lua, (_, key): (Table, String)| {
                 let _profile = crate::profile::Span::new("frames.method_lookup");
-                let known = methods.raw_get::<Value>(key.clone())?;
-                if !known.is_nil() {
-                    return Ok(known);
-                }
                 let catalog = lua.app_data_ref::<super::MethodCatalog>();
                 let fallback = super::missing_method(
                     &widget,
@@ -560,6 +570,11 @@ pub fn create(
                 }
             })?,
         )?;
+        // Lua performs known native method lookup directly. Crossing into Rust
+        // for every colon call allocated a String and fetched a registry table.
+        // Unknown fields still consult the manifest-shaped fallback below.
+        methods.set_metatable(Some(fallback_mt));
+        mt.raw_set("__index", methods)?;
         let describe = match lua.named_registry_value::<Option<Function>>("selu.region_tostring")? {
             Some(function) => function,
             None => {
@@ -608,6 +623,34 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     let i = id(t)?;
     let v = &args[1..];
     let a = store(lua);
+    if matches!(method, "IsMouseMotionFocus" | "IsMouseOver") {
+        return (a.borrow().hover == Some(i)).into_lua_multi(lua);
+    }
+    if matches!(method, "SetPadding" | "ClearPadding" | "GetPadding") {
+        if method == "GetPadding" {
+            let padding = t.raw_get::<Option<Table>>("__selu_padding")?;
+            let mut values = MultiValue::new();
+            for index in 1..=4 {
+                values.push_back(Value::Number(
+                    padding
+                        .as_ref()
+                        .map(|p| p.raw_get::<f64>(index))
+                        .transpose()?
+                        .unwrap_or(0.),
+                ));
+            }
+            return Ok(values);
+        }
+        let values = if method == "SetPadding" {
+            (0..4)
+                .map(|index| number(v.get(index), 0.))
+                .collect::<Vec<_>>()
+        } else {
+            vec![0.; 4]
+        };
+        t.raw_set("__selu_padding", lua.create_sequence_from(values)?)?;
+        return ().into_lua_multi(lua);
+    }
     macro_rules! out {
         ($x:expr) => {
             return $x.into_lua_multi(lua)
@@ -818,6 +861,21 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     if method == "GetFontString" {
         out!(t.raw_get::<Value>("__selu_button_text")?);
     }
+    if matches!(method, "GetTextWidth" | "GetTextHeight") {
+        if let Some(child) = t.raw_get::<Option<Table>>("__selu_button_text")? {
+            return call(
+                lua,
+                ctx,
+                if method == "GetTextWidth" {
+                    "GetStringWidth"
+                } else {
+                    "GetStringHeight"
+                },
+                MultiValue::from_vec(vec![Value::Table(child)]),
+            );
+        }
+        out!(0.0);
+    }
     if method == "SetFontString" {
         t.raw_set(
             "__selu_button_text",
@@ -1014,23 +1072,28 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         method,
         "GetAttribute" | "SetAttribute" | "SetAttributeNoHandler"
     ) {
-        let attributes = t
-            .raw_get::<Option<Table>>("__attributes")?
-            .unwrap_or(lua.create_table()?);
+        let attributes = t.raw_get::<Option<Table>>("__attributes")?;
         let name =
             string(v.first()).ok_or_else(|| mlua::Error::runtime("attribute name expected"))?;
-        let old = attributes.raw_get::<Value>(name.as_str())?;
         if method == "GetAttribute" {
-            out!(old);
+            out!(
+                attributes
+                    .map(|attributes| attributes.raw_get::<Value>(name))
+                    .transpose()?
+                    .unwrap_or(Value::Nil)
+            );
         }
+        let attributes = match attributes {
+            Some(attributes) => attributes,
+            None => lua.create_table()?,
+        };
         let value = v.get(1).cloned().unwrap_or(Value::Nil);
         attributes.raw_set(name.as_str(), value.clone())?;
         t.raw_set("__attributes", attributes)?;
-        if method != "SetAttributeNoHandler"
-            && (matches!(old, Value::LightUserData(_))
-                || matches!(value, Value::LightUserData(_))
-                || old != value)
-        {
+        // Native SetAttribute is a command as well as storage. Blizzard's
+        // panel delegate writes the same true value on every show/hide; each
+        // write invokes its handler. Only SetAttributeNoHandler is silent.
+        if method != "SetAttributeNoHandler" {
             callback(
                 ctx,
                 t.clone(),

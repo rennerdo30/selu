@@ -361,14 +361,14 @@ pub const DEFAULT_BUDGET: u64 = 5_000;
 pub struct Budget {
     /// Hook calls allowed per dispatch.
     pub limit: u64,
-    used: u64,
+    pub(crate) used: u64,
     callbacks: usize,
     pending_tasks: usize,
     callback_depth: usize,
     failure: Option<&'static str>,
     /// The limit was hit in this dispatch; the hook now fails on every
     /// instruction.
-    exhausted: bool,
+    pub(crate) exhausted: bool,
     blizzard_bootstrap: bool,
 }
 
@@ -559,6 +559,7 @@ fn budget_instruction(lua: &Lua, budget: &Shared<Budget>, quantum: u32) -> mlua:
 // resume boundaries, restoring the caller before executing more Lua. Count
 // every instruction so repeated short coroutine resumes cannot lose credit.
 fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
+    let fast_budget = budget.clone();
     let stale = lua
         .app_data_ref::<Ctx>()
         .map(|ctx| ctx.stale_sources.clone());
@@ -574,11 +575,13 @@ fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
             budget_instruction(lua, &budget, interval)
         },
     );
+    crate::fast_hook::install(lua, fast_budget, interval, None);
 }
 
 pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) {
     let budget = ctx.budget.clone();
     if let Some(thread) = thread {
+        let fast_budget = budget.clone();
         let stale = ctx.stale_sources.clone();
         {
             let mut current = lock(&budget);
@@ -593,6 +596,7 @@ pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) 
                 budget_instruction(lua, &budget, 1)
             },
         );
+        crate::fast_hook::install(lua, fast_budget, 1, Some(thread));
     } else {
         let interval = if lock(&budget).blizzard_bootstrap {
             HOOK_INTERVAL

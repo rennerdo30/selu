@@ -15,6 +15,7 @@ mod enabled {
         counts: BTreeMap<&'static str, u64>,
         calls: bool,
         sites: BTreeMap<usize, (String, u64)>,
+        lua_samples: BTreeMap<(String, i32), u64>,
     }
     thread_local! {
         static DATA: RefCell<Data> = RefCell::new(Data {
@@ -35,6 +36,30 @@ mod enabled {
                 (precise, coarse + 1)
             });
         });
+    }
+    /// Instruction samples, not wall-time samples. No Lua code is executed.
+    ///
+    /// # Safety
+    /// `lua` must be the live state currently invoking its count hook.
+    pub unsafe fn lua_sample(lua: *mut mlua::ffi::lua_State) {
+        // SAFETY: called only inside a live count hook. S/l metadata queries
+        // neither push values nor run Lua. Source is VM-owned, NUL terminated.
+        unsafe {
+            let mut debug = std::mem::zeroed::<mlua::ffi::lua_Debug>();
+            if mlua::ffi::lua_getstack(lua, 0, &mut debug) != 0
+                && mlua::ffi::lua_getinfo(lua, c"Sl".as_ptr(), &mut debug) != 0
+                && !debug.source.is_null()
+            {
+                let source = std::ffi::CStr::from_ptr(debug.source).to_string_lossy();
+                DATA.with(|data| {
+                    let mut data = data.borrow_mut();
+                    *data
+                        .lua_samples
+                        .entry((source.into_owned(), debug.currentline))
+                        .or_default() += 1;
+                });
+            }
+        }
     }
     pub fn secure_call(function: &mlua::Function, rawget: bool) {
         DATA.with(|data| {
@@ -132,6 +157,11 @@ mod enabled {
             }
             for (name, count) in &data.counts {
                 eprintln!("PROFILE_COUNT {name}: {count}");
+            }
+            if !data.lua_samples.is_empty() {
+                eprintln!("SELU_SIM_PROFILE Lua instruction sampling active (one per 10000 instructions; not wall time)");
+                let mut samples=data.lua_samples.iter().collect::<Vec<_>>();samples.sort_by_key(|(_,count)|std::cmp::Reverse(**count));
+                for ((source,line),count) in samples.into_iter().take(25) {eprintln!("PROFILE_LUA_SAMPLE {count}: {source}:{line}");}
             }
             if data.calls {
                 let mut grouped = BTreeMap::<&str, u64>::new();

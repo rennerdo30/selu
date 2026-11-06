@@ -34,7 +34,7 @@ fn eligible(sim: &Sim, i: usize) -> bool {
     let r = &a.regions[i];
     r.visible && r.enabled && r.mouse && a.capture == Some(i)
 }
-fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool) -> Option<usize> {
+fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool, wheel: bool) -> Option<usize> {
     let a = store(sim.lua());
     let mut a = a.borrow_mut();
     layout::resolve(&mut a, sim.ctx());
@@ -43,7 +43,7 @@ fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool) -> Option<usize> {
         .enumerate()
         .filter(|(index, r)| {
             r.visible
-                && r.mouse
+                && (r.mouse || (wheel && r.wheel))
                 && (r.enabled || (motion && r.motion_disabled))
                 && r.rect.is_some_and(|q| {
                     x >= q.left
@@ -59,12 +59,12 @@ fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool) -> Option<usize> {
         .map(|(i, _)| i)
 }
 fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
-    hit_motion(sim, x, y, false)
+    hit_motion(sim, x, y, false, false)
 }
 impl crate::session::Vm {
     pub fn hover(&self, x: f64, y: f64) -> SimResult<Option<RegionId>> {
         dispatch(self.lua(), self.ctx(), || {
-            let target = hit_motion(self, x, y, true);
+            let target = hit_motion(self, x, y, true, false);
             let a = store(self.lua());
             let mut a = a.borrow_mut();
             let old = a.hover;
@@ -74,6 +74,12 @@ impl crate::session::Vm {
             let new_table = target.map(|i| a.regions[i].table.get());
             drop(a);
             if old != target {
+                if let Some(table) = &old_table {
+                    super::widgets::sync_button_textures(self.lua(), self.ctx(), table)?;
+                }
+                if let Some(table) = &new_table {
+                    super::widgets::sync_button_textures(self.lua(), self.ctx(), table)?;
+                }
                 if let Some(t) = old_table {
                     callback(self.ctx(), t, "OnLeave", vec![Value::Boolean(true)]);
                 }
@@ -255,6 +261,14 @@ impl crate::session::Vm {
                 if registered {
                     invoke(self, i, "OnDragStop", vec![button])?;
                 }
+                {
+                    let mut arena = a.borrow_mut();
+                    if !arena.regions[i].button_state_locked {
+                        arena.regions[i].button_state = "NORMAL";
+                    }
+                }
+                let table = a.borrow().regions[i].table.get();
+                super::widgets::sync_button_textures(self.lua(), self.ctx(), &table)?;
             } else {
                 a.borrow_mut().cursor = to;
             }
@@ -265,7 +279,7 @@ impl crate::session::Vm {
     /// Deliver wheel motion; scripts own the policy for changing slider values.
     pub fn wheel(&self, x: f64, y: f64, delta: f64) -> SimResult<()> {
         dispatch(self.lua(), self.ctx(), || {
-            let mut target = hit(self, x, y);
+            let mut target = hit_motion(self, x, y, false, true);
             while let Some(i) = target {
                 let a = store(self.lua());
                 let arena = a.borrow();
@@ -285,7 +299,42 @@ impl crate::session::Vm {
     pub fn key(&self, key: &str, down: bool) -> SimResult<()> {
         dispatch(self.lua(), self.ctx(), || {
             let a = store(self.lua());
+            let key = key.to_ascii_uppercase();
+            let changed = if down {
+                a.borrow_mut().keys.insert(key.clone())
+            } else {
+                a.borrow_mut().keys.remove(&key)
+            };
+            if changed
+                && matches!(
+                    key.as_str(),
+                    "LSHIFT" | "RSHIFT" | "LCTRL" | "RCTRL" | "LALT" | "RALT"
+                )
+            {
+                self.fire(
+                    "MODIFIER_STATE_CHANGED",
+                    vec![
+                        Value::String(self.lua().create_string(&key)?),
+                        Value::Integer(i64::from(down)),
+                    ],
+                )?;
+            }
             let focus = a.borrow().focus;
+            if down
+                && let Some(i) = focus
+                && a.borrow().regions[i].visible
+            {
+                let script = match key.as_str() {
+                    "ESCAPE" => Some("OnEscapePressed"),
+                    "ENTER" => Some("OnEnterPressed"),
+                    "TAB" => Some("OnTabPressed"),
+                    _ => None,
+                };
+                if let Some(script) = script {
+                    invoke(self, i, script, vec![])?;
+                    return Ok(());
+                }
+            }
             let mut targets = a
                 .borrow()
                 .regions
@@ -306,7 +355,7 @@ impl crate::session::Vm {
                     self,
                     i,
                     if down { "OnKeyDown" } else { "OnKeyUp" },
-                    vec![Value::String(self.lua().create_string(key)?)],
+                    vec![Value::String(self.lua().create_string(&key)?)],
                 )?;
                 if !a.borrow().regions[i].propagate_keyboard {
                     consumed = true;
@@ -314,7 +363,7 @@ impl crate::session::Vm {
                 }
             }
             if !consumed {
-                crate::bindings::key(self.lua(), key, down)?;
+                crate::bindings::key(self.lua(), &key, down)?;
             }
             Ok(())
         })

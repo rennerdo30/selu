@@ -128,6 +128,7 @@ pub struct Arena {
     pub layout_geometry_marks: Vec<u8>,
     pub layout_dependents: Vec<std::collections::HashSet<usize>>,
     pub cursor: (f64, f64),
+    pub keys: std::collections::HashSet<String>,
     pub hover: Option<usize>,
     pub focus: Option<usize>,
     pub capture: Option<usize>,

@@ -38,7 +38,7 @@ return function(t)
   owner(t,o,anchor);clear();t:ClearAllPoints()
   if anchor=='ANCHOR_LEFT' then t:SetPoint('TOPRIGHT',o,'TOPLEFT',0,0)
   elseif anchor=='ANCHOR_TOP' then t:SetPoint('BOTTOM',o,'TOP',0,0)
-  else t:SetPoint('TOPLEFT',o,'TOPRIGHT',0,0) end
+  elseif anchor~='ANCHOR_NONE' then t:SetPoint('TOPLEFT',o,'TOPRIGHT',0,0) end
  end
  local bg=t:CreateTexture(nil,'BACKGROUND');bg:SetAllPoints(t)
  bg:SetTexture('Interface/Tooltips/UI-Tooltip-Background');bg:SetVertexColor(0.1,0.1,0.1,1)

@@ -243,6 +243,11 @@ impl Vm {
         Ok(())
     }
     pub fn set_bag(&self, bag: i32, items: &[u32]) -> SimResult<()> {
+        if items.iter().any(|id| *id > 0) {
+            self.ctx().not_simulated(
+                "scenario item metadata: unit stacks, synthetic names and generic client icons",
+            );
+        }
         let bags: Table = self.lua.globals().raw_get("__selu_world_bags")?;
         bags.set(bag, self.lua.create_sequence_from(items.iter().copied())?)?;
         self.fire("BAG_UPDATE", vec![Value::Integer(bag as i64)])?;

@@ -6,7 +6,7 @@
 //! screen, inspector, and a bottom area with the console, the event trace
 //! (with "fire an event") and the log.
 
-use selu_debug::{Arg, Command, Update, Worker};
+use selu_debug::{Arg, Command, PreviewInput, Update, Worker};
 use selu_sim::{RegionSnapshot, SessionConfig, Snapshot, TextureFill, TraceRecord};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -195,6 +195,9 @@ pub struct Studio {
     console: VecDeque<Line>,
     trace: VecDeque<TraceRecord>,
     selected: Option<u32>,
+    preview_pointer: Option<(f64, f64)>,
+    preview_drag_start: Option<(f64, f64)>,
+    preview_modifiers: Modifiers,
     input: String,
     history: Vec<String>,
     history_pos: Option<usize>,
@@ -304,6 +307,9 @@ impl Studio {
             console: VecDeque::new(),
             trace: VecDeque::new(),
             selected: None,
+            preview_pointer: None,
+            preview_drag_start: None,
+            preview_modifiers: Modifiers::NONE,
             input: String::new(),
             history: Vec::new(),
             history_pos: None,
@@ -2977,7 +2983,7 @@ impl Studio {
             ui.centered_and_justified(|ui| ui.label("starting the session..."));
             return;
         };
-        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click());
+        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let area = response.rect;
         let (uw, uh) = (snap.ui_width as f32, snap.ui_height as f32);
         let scale = (area.width() / uw).min(area.height() / uh);
@@ -3265,33 +3271,113 @@ impl Studio {
         if response.clicked() {
             self.selected = response.interact_pointer_pos().and_then(hit);
         }
+        let position = ui.input(|i| i.pointer.interact_pos()).map(|p| {
+            (
+                ((p.x - origin.x) / scale) as f64,
+                (uh - (p.y - origin.y) / scale) as f64,
+            )
+        });
+        let pointer = position.filter(|_| response.hovered());
+        let mut events = Vec::new();
+        // Coalesce hover while the worker is busy; button/key transitions are
+        // retained. One batch produces one snapshot, without a mouse backlog.
+        if self.in_flight == 0 && pointer != self.preview_pointer {
+            let (x, y) = pointer.unwrap_or((-1., -1.));
+            events.push(PreviewInput::Hover { x, y });
+            self.preview_pointer = pointer;
+        }
         if response.hovered() && ui.input(|i| i.pointer.primary_pressed()) {
             response.request_focus();
-            if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
-                self.act(Command::MouseButton {
-                    x: ((p.x - origin.x) / scale) as f64,
-                    y: (uh - (p.y - origin.y) / scale) as f64,
-                    button: "LeftButton".into(),
-                    down: true,
+            self.preview_drag_start = position;
+        }
+        let focused = response.has_focus();
+        let modifiers = if focused {
+            ui.input(|i| i.modifiers)
+        } else {
+            Modifiers::NONE
+        };
+        for (key, was, now) in [
+            ("LSHIFT", self.preview_modifiers.shift, modifiers.shift),
+            ("LCTRL", self.preview_modifiers.ctrl, modifiers.ctrl),
+            ("LALT", self.preview_modifiers.alt, modifiers.alt),
+        ] {
+            if was != now {
+                events.push(PreviewInput::Key {
+                    key: key.into(),
+                    down: now,
                 });
             }
         }
-        if response.has_focus()
-            && ui.input(|i| i.pointer.primary_released())
-            && let Some(p) = ui.input(|i| i.pointer.interact_pos())
-        {
-            self.act(Command::MouseButton {
-                x: ((p.x - origin.x) / scale) as f64,
-                y: (uh - (p.y - origin.y) / scale) as f64,
-                button: "LeftButton".into(),
-                down: false,
-            });
+        self.preview_modifiers = modifiers;
+        if let Some((x, y)) = position {
+            for (button, name) in [
+                (egui::PointerButton::Primary, "LeftButton"),
+                (egui::PointerButton::Secondary, "RightButton"),
+                (egui::PointerButton::Middle, "MiddleButton"),
+            ] {
+                if response.hovered() && ui.input(|i| i.pointer.button_pressed(button)) {
+                    events.push(PreviewInput::MouseButton {
+                        x,
+                        y,
+                        button: name.into(),
+                        down: true,
+                    });
+                }
+                if focused && ui.input(|i| i.pointer.button_released(button)) {
+                    if button == egui::PointerButton::Primary
+                        && response.drag_stopped()
+                        && let Some(from) = self.preview_drag_start.take()
+                    {
+                        events.push(PreviewInput::Drag { from, to: (x, y) });
+                    }
+                    events.push(PreviewInput::MouseButton {
+                        x,
+                        y,
+                        button: name.into(),
+                        down: false,
+                    });
+                    self.preview_drag_start = None;
+                }
+            }
+            if response.hovered() {
+                let delta = ui.input(|i| {
+                    i.events
+                        .iter()
+                        .filter_map(|event| match event {
+                            egui::Event::MouseWheel { delta, .. } => Some(delta.y),
+                            _ => None,
+                        })
+                        .sum::<f32>()
+                });
+                if delta != 0. {
+                    events.push(PreviewInput::Wheel {
+                        x,
+                        y,
+                        delta: f64::from(delta.signum()),
+                    });
+                }
+            }
         }
-        if response.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
-            self.act(Command::Key {
-                key: "ESCAPE".into(),
-                down: true,
-            });
+        if focused {
+            for event in ui.input(|i| i.events.clone()) {
+                match event {
+                    egui::Event::Text(text) => events.push(PreviewInput::Text(text)),
+                    egui::Event::Key { key, pressed, .. } => events.push(PreviewInput::Key {
+                        key: match key {
+                            Key::ArrowUp => "UP".into(),
+                            Key::ArrowDown => "DOWN".into(),
+                            Key::ArrowLeft => "LEFT".into(),
+                            Key::ArrowRight => "RIGHT".into(),
+                            _ => format!("{key:?}").to_ascii_uppercase(),
+                        },
+                        down: pressed,
+                    }),
+                    _ => {}
+                }
+            }
+        }
+        if !events.is_empty() {
+            self.act(Command::Input { events });
         }
     }
 
