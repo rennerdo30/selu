@@ -79,7 +79,7 @@ local function script(f,n,intrinsicOwner)
         fn=assert(loadstring('return function('..args..')\n'..n.text..'\nend', '@XML/'..n.tag))()
     end
     if not fn then note('script '..(a['function'] or n.tag)); return end
-    if intrinsicOwner and n.tag=='OnLoad' then
+    if intrinsicOwner and n.tag=='OnLoad' and not a.intrinsicOrder then
         -- Intrinsic OnLoad is a constructor, before derived instance setup.
         local loaded=rawget(f,'__selu_intrinsic_loaded') or {}
         rawset(f,'__selu_intrinsic_loaded',loaded)
@@ -108,7 +108,10 @@ local function script(f,n,intrinsicOwner)
     if a.inherit=='prepend' or a.inherit=='append' then
         local old=f:GetScript(n.tag)
         f:SetScript(n.tag,function(...)
-            if a.inherit=='prepend' then invoke(fn,...); if old then invoke(old,...) end
+            -- The attribute places the inherited handler, not the local one.
+            -- FloatingChatFrame.xml's append handler sets chatFrame before
+            -- inherited ChatFrameEditBoxMixin.OnLoad reads that field.
+            if a.inherit=='append' then invoke(fn,...); if old then invoke(old,...) end
             else if old then invoke(old,...) end; invoke(fn,...) end
         end)
     else f:SetScript(n.tag,fn) end
@@ -266,13 +269,13 @@ create=function(n,parent,layer)
     else f=native(nativeKind(n.tag),name,parent) end
     apply(f,n,{})
     if n.tag~='Texture' and n.tag~='FontString' and n.tag~='Font' then
-        local onload=f:GetScript('OnLoad'); if onload then invoke(onload,f) end
+        local onload=f.__scripts.OnLoad; if onload then invoke(onload,f) end
     end
     return f
 end
 function __selu_xml_apply(f,s)
     inherit(f,s,{})
-    local onload=f:GetScript('OnLoad'); if onload then invoke(onload,f) end
+    local onload=f.__scripts.OnLoad; if onload then invoke(onload,f) end
 end
 function __selu_xml_intrinsic(kind) if intrinsic[kind] then return nativeKind(kind) end end
 function __selu_xml_declare(n)

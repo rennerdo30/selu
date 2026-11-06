@@ -1,5 +1,15 @@
 -- Synthetic startup data only. Never reads a player account or SavedVariables.
 local version,build,interface=...
+-- Synthetic enUS labels for the fixed raid/group tags consumed by
+-- ChatFrameConstants.lua. Installed localized GlobalStrings are unavailable.
+for index=1,8 do
+    local name='RAID_TARGET_'..index
+    if rawget(_G,name)==nil then _G[name]='Raid marker '..index end
+    for alias=1,2 do
+        local key='GROUP'..index..'_CHAT_TAG'..alias
+        if rawget(_G,key)==nil then _G[key]='Group '..index..' alias '..alias end
+    end
+end
 -- Scenario/world implementations take precedence over bootstrap stand-ins.
 local standins=rawget(_G,'__selu_native_standins') or {}
 local originals={}
@@ -61,6 +71,15 @@ C_CVar.GetCVarNumber=GetCVarNumber; C_CVar.SetCVar=SetCVar
 function C_CVar.AreCVarsLoaded() return true end
 function C_CVar.GetCVarDefault(name) return cvars[name] or '0' end
 function UnitRace(unit) if unit=='player' then return 'Human','Human',1 end end
+function UnitEffectiveLevel(unit) return UnitLevel(unit) end
+-- UnitDocumentation marks this MayReturnNothing. The fake world has no
+-- alternate-power timers; a non-nil bar ID makes Blizzard enumerate forever.
+function UnitPowerBarTimerInfo() return nil end
+C_ActionBar=C_ActionBar or {}
+function C_ActionBar.GetActionBarPage() return 1 end
+function GetActionBarPage() return 1 end
+Kiosk=Kiosk or {}
+function Kiosk.IsEnabled() return false end
 function UnitGUID(unit) if unit=='player' then return 'Player-1-00000001' end end
 function UnitIsUnit(a,b) return a==b and UnitExists(a) end
 function UnitIsPlayer(unit) return unit=='player' end

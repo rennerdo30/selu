@@ -218,9 +218,10 @@ mod tests {
         sim.eval("NativeMixin={Init=function(self) self.ready=true; self.shows=0 end,Shown=function(self) self.shows=self.shows+1; self.order=(self.order or '')..'native' end}").unwrap();
         run(
             &sim,
-            r#"<Ui><Frame name="NativeEventFrame" intrinsic="true" mixin="NativeMixin"><Scripts><OnLoad method="Init"/><OnShow method="Shown" intrinsicOrder="postcall"/></Scripts></Frame><NativeEventFrame name="Root" hidden="true"><Scripts><OnLoad>assert(self.ready)</OnLoad><OnShow>self.order='normal-'</OnShow></Scripts></NativeEventFrame></Ui>"#,
+            r#"<Ui><Frame name="NativeEventFrame" intrinsic="true" mixin="NativeMixin"><Scripts><OnLoad method="Init"/><OnShow method="Shown" intrinsicOrder="postcall"/></Scripts></Frame><NativeEventFrame name="Root" hidden="true"><Scripts><OnLoad>assert(self.ready)</OnLoad><OnShow>self.order='normal-'</OnShow></Scripts></NativeEventFrame><Button name="NativeItem" intrinsic="true"><Scripts><OnLoad intrinsicOrder="postcall">assert(self.loaded and self:GetNormalTexture()); self.postLoaded=true</OnLoad></Scripts><NormalTexture parentKey="Normal"/></Button><NativeItem name="Item"><Scripts><OnLoad>self.loaded=true</OnLoad></Scripts></NativeItem></Ui>"#,
         );
         sim.eval("Root:Show(); assert(Root.order=='normal-native' and Root.shows==1); Root:SetScript('OnShow',nil); Root:Hide(); Root:Show(); assert(Root.shows==2); local f=CreateFrame('NativeEventFrame'); assert(f.ready)").unwrap();
+        sim.eval("assert(Item.postLoaded)").unwrap();
     }
     #[test]
     fn initial_hidden_attribute_does_not_fire_inherited_onhide() {
@@ -247,6 +248,16 @@ mod tests {
             r#"<Ui><Frame name="Root"><Frames><Frame parentKey="Group"><Frames><Frame parentKey="Reference"/><Frame parentKey="Child"><Anchors><Anchor point="TOP" relativeKey="$parent.Reference" relativePoint="BOTTOM" x="3" y="4"/></Anchors></Frame></Frames></Frame></Frames></Frame></Ui>"#,
         );
         sim.eval("local p,r,rp,x,y=Root.Group.Child:GetPoint(); assert(r==Root.Group.Reference and p=='TOP' and rp=='BOTTOM' and x==3 and y==4)").unwrap();
+    }
+    #[test]
+    fn script_inherit_positions_the_inherited_handler() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="BaseScript" virtual="true"><Scripts><OnLoad>self.order=(self.order or '')..'base'</OnLoad></Scripts></Frame><Frame name="Append" inherits="BaseScript"><Scripts><OnLoad inherit="append">self.order='local-'</OnLoad></Scripts></Frame><Frame name="Prepend" inherits="BaseScript"><Scripts><OnLoad inherit="prepend">self.order=self.order..'-local'</OnLoad></Scripts></Frame></Ui>"#,
+        );
+        sim.eval("assert(Append.order=='local-base'); assert(Prepend.order=='base-local')")
+            .unwrap();
     }
     #[test]
     fn scripts_methods_and_inheritance_cycles() {

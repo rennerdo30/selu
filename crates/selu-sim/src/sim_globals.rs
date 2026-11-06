@@ -23,6 +23,7 @@ pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
                 invalidate();self._parent=parent;self._font_explicit=false
             end
             function f:GetFontObject() return self._parent or self end
+            function f:SetIndentedWordWrap(value) self._indentedWordWrap=value end
             function f:CopyFontObject(source)
                 if type(source)=='string' then source=_G[source] end
                 self:SetFont(source:GetFont())

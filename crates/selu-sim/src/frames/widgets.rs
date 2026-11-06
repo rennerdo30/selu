@@ -286,6 +286,12 @@ pub fn create(
             "SetStatusBarColor",
             "GetStatusBarColor",
             "GetNormalTexture",
+            "GetAtlas",
+            "SetClampRectInsets",
+            "SetAllowOverlappedModels",
+            "SetIndentedWordWrap",
+            "IsOwned",
+            "GetViewInsets",
             "GetHighlightTexture",
             "GetPushedTexture",
             "GetDisabledTexture",
@@ -399,6 +405,25 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         ($x:expr) => {
             return $x.into_lua_multi(lua)
         };
+    }
+    if method == "IsOwned" {
+        out!(!t.raw_get::<Value>("__tooltip_owner")?.is_nil());
+    }
+    if method == "GetViewInsets" {
+        ctx.not_simulated("model view insets");
+        out!((0.0, 0.0, 0.0, 0.0));
+    }
+    if method == "GetAtlas" {
+        out!(t.raw_get::<Value>("__selu_atlas_name")?);
+    }
+    if method == "SetAtlas" {
+        t.raw_set(
+            "__selu_atlas_name",
+            v.first().cloned().unwrap_or(Value::Nil),
+        )?;
+    }
+    if matches!(method, "SetTexture" | "SetColorTexture") {
+        t.raw_set("__selu_atlas_name", Value::Nil)?;
     }
     if method == "SetFormattedText" {
         let format = crate::host_lua::factory(

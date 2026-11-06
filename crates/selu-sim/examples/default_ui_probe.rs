@@ -198,11 +198,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.login()?;
     session.advance_time(1.0 / 60.0);
     let snapshot_start = std::time::Instant::now();
+    let snapshot = session.snapshot()?;
     println!(
         "regions={} snapshot={:?}",
-        session.snapshot()?.regions.len(),
+        snapshot.regions.len(),
         snapshot_start.elapsed()
     );
+    for name in [
+        "PlayerFrame",
+        "Minimap",
+        "MinimapCluster",
+        "MainActionBar",
+        "MainMenuBar",
+        "MicroMenuContainer",
+        "BagsBar",
+        "ChatFrame1",
+        "DefaultUiAnchorButton",
+    ] {
+        if let Some(frame) = snapshot
+            .regions
+            .iter()
+            .find(|frame| frame.name.as_deref() == Some(name))
+        {
+            println!(
+                "HUD {name}: shown={} visible={} rect={:?}",
+                frame.shown, frame.visible, frame.rect
+            );
+        } else {
+            println!("HUD {name}: absent");
+        }
+    }
     selu_sim::profile::report();
     Ok(())
 }
