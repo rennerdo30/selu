@@ -170,6 +170,8 @@ impl std::error::Error for SavedFixtureError {}
 
 pub struct Session {
     default_ui_source: Option<PathBuf>,
+    default_ui_report: Option<loader::DefaultUiReport>,
+    default_ui_log_end: usize,
     config: SessionConfig,
     sim: Vm,
     generation: Generation,
@@ -394,6 +396,17 @@ fn runtime(message: String) -> mlua::Error {
 }
 
 impl Session {
+    pub fn default_ui_report(&self) -> Option<&loader::DefaultUiReport> {
+        self.default_ui_report.as_ref()
+    }
+    pub fn default_ui_startup_errors(&self) -> Vec<String> {
+        lock(&self.sim.logs)
+            .iter()
+            .skip(self.default_ui_log_end)
+            .filter(|s| s.starts_with("error:") || s.starts_with("callback error"))
+            .cloned()
+            .collect()
+    }
     /// Load external Blizzard sources before the user's addon. Each source
     /// chunk has its own error boundary; failures remain visible in the receipt.
     /// This method performs no saved-variable reads or writes.
@@ -404,17 +417,25 @@ impl Session {
     ) -> SimResult<crate::loader::DefaultUiReport> {
         let start = std::time::Instant::now();
         let log_start = lock(&self.sim.logs).len();
-        let ctx=self.sim.ctx.clone();
-        self.sim.lua.globals().raw_set("__selu_secure_invoke",self.sim.lua.create_function(move|lua,(function,args):(Function,MultiValue)| {
-            match core::script_callback(lua,&ctx,||core::call_lua::<MultiValue>(lua,function,args)) {
-                Ok(values)=>Ok(values),
-                Err(error)=>{
-                    ctx.log(format!("error: {error}"));
-                    core::check_budget(&ctx)?;
-                    Ok(MultiValue::new())
-                }
-            }
-        })?)?;
+        self.sim.ctx.not_simulated("native taint tracking");
+        let ctx = self.sim.ctx.clone();
+        self.sim.lua.globals().raw_set(
+            "__selu_secure_invoke",
+            self.sim.lua.create_function(
+                move |lua, (function, args): (Function, MultiValue)| match core::script_callback(
+                    lua,
+                    &ctx,
+                    || core::call_lua::<MultiValue>(lua, function, args),
+                ) {
+                    Ok(values) => Ok(values),
+                    Err(error) => {
+                        ctx.log(format!("error: {error}"));
+                        core::check_budget(&ctx)?;
+                        Ok(MultiValue::new())
+                    }
+                },
+            )?,
+        )?;
         let build = self
             .config
             .manifest
@@ -430,6 +451,10 @@ impl Session {
         } else {
             chunk.call::<()>(())?;
         }
+        self.sim
+            .lua
+            .load(include_str!("default_curves.lua"))
+            .exec()?;
         let source_root = source.canonicalize().map_err(|e| runtime(e.to_string()))?;
         let mut source_notes = Vec::new();
         let storage = if let (Some(install), Some(target)) =
@@ -457,6 +482,16 @@ impl Session {
         )
         .map_err(runtime)?;
         report.notes.extend(source_notes);
+        let saved_names: Table = self.sim.lua.globals().raw_get("__selu_saved_names")?;
+        for toc in &addons {
+            for name in toc
+                .list("SavedVariables")
+                .into_iter()
+                .chain(toc.list("SavedVariablesPerCharacter"))
+            {
+                saved_names.raw_set(name, true)?;
+            }
+        }
         self.default_ui_source = Some(source.to_path_buf());
         let api = self
             .sim
@@ -525,6 +560,8 @@ impl Session {
         }
         report.notes.sort();
         report.notes.dedup();
+        self.default_ui_log_end = lock(&self.sim.logs).len();
+        self.default_ui_report = Some(report.clone());
         Ok(report)
     }
 
@@ -547,6 +584,8 @@ impl Session {
         let sim = Self::start_vm(&config)?;
         Ok(Session {
             default_ui_source: None,
+            default_ui_report: None,
+            default_ui_log_end: 0,
             config,
             sim,
             generation: Generation::default(),

@@ -30,7 +30,7 @@ pub(crate) fn read_ui_text(
     std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DefaultUiReport {
     pub addons_loaded: usize,
     pub errors: Vec<String>,
@@ -119,6 +119,25 @@ pub(crate) fn default_ui_order_client(
     let mut active = std::collections::HashSet::new();
     let mut done = std::collections::HashSet::new();
     let mut out = Vec::new();
+    // These shared libraries already exist when the native client enters its
+    // game addon pass. LoadFirst addons consume their globals without listing
+    // an explicit dependency (for example SecondsFormatterMixin).
+    for root in [
+        "Blizzard_SharedXMLBase",
+        "Blizzard_SharedXML",
+        "Blizzard_SharedXMLGame",
+    ] {
+        if all.contains_key(root) {
+            visit(
+                root,
+                &all,
+                &mut active,
+                &mut done,
+                &mut out,
+                &mut report.errors,
+            );
+        }
+    }
     for name in names {
         if all[&name].get("LoadOnDemand") != Some("1") {
             visit(

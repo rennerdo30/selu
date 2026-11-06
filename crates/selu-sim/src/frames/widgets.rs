@@ -52,6 +52,23 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
 pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
     lua.set_app_data(ctx.clone());
     lua.set_app_data(Rc::new(RefCell::new(Arena::default())) as Store);
+    lua.globals().raw_set(
+        "__selu_child_regions",
+        lua.create_function(|lua, (parent, regions): (Table, bool)| {
+            let parent = id(&parent)?;
+            let list = lua.create_table()?;
+            let arena = store(lua);
+            let arena = arena.borrow();
+            let mut index = 1;
+            for child in &arena.regions {
+                if child.parent == Some(parent) && is_region(&child.kind) == regions {
+                    list.raw_set(index, child.table.get())?;
+                    index += 1;
+                }
+            }
+            Ok(list)
+        })?,
+    )?;
     let ctx = ctx.clone();
     lua.globals().set(
         "CreateFrame",
@@ -273,6 +290,15 @@ pub fn create(
                 })?,
             )?;
         }
+        let enumerate:Function=lua.load("return function(regions,count) return function(self) local children=__selu_child_regions(self,regions); if count then return #children end; return unpack(children) end end").eval()?;
+        for (name, regions, count) in [
+            ("GetChildren", false, false),
+            ("GetRegions", true, false),
+            ("GetNumChildren", false, true),
+            ("GetNumRegions", true, true),
+        ] {
+            m.raw_set(name, enumerate.call::<Function>((regions, count))?)?;
+        }
         lua.set_named_registry_value(&key, m.clone())?;
         m
     };
@@ -374,7 +400,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         let value = v.get(1).cloned().unwrap_or(Value::Nil);
         attributes.raw_set(name.as_str(), value.clone())?;
         t.raw_set("__attributes", attributes)?;
-        if old != value {
+        if matches!(old, Value::LightUserData(_))
+            || matches!(value, Value::LightUserData(_))
+            || old != value
+        {
             callback(
                 ctx,
                 t.clone(),
@@ -546,6 +575,9 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         arena.dirty = true;
         arena.full_layout = true;
         layout::resolve(&mut arena, ctx);
+        if status {
+            out!(true);
+        }
         out!(());
     }
     if method == "GetStatusBarTexture" {

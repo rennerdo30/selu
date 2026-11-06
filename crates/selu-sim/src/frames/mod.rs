@@ -142,6 +142,11 @@ mod manifest;
 #[cfg(test)]
 mod tests {
     #[test]
+    fn child_enumeration_preserves_regions_identity_and_reparenting() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("local p=CreateFrame('Frame'); local a=CreateFrame('Button',nil,p); local b=CreateFrame('Frame',nil,p); local t=p:CreateTexture(); local s=p:CreateFontString(); local x,y=p:GetChildren(); assert(x==a and y==b and p:GetNumChildren()==2); local x,y=p:GetRegions(); assert(x==t and y==s and p:GetNumRegions()==2); a:SetParent(b); assert(p:GetNumChildren()==1 and b:GetNumChildren()==1 and b:GetChildren()==a)").unwrap();
+    }
+    #[test]
     fn status_bar_texture_tracks_value_and_colour() {
         let sim = crate::Sim::new().unwrap();
         sim.eval("local f=CreateFrame('StatusBar','StatusFixture'); f:SetSize(100,20); f:SetPoint('CENTER'); f:SetMinMaxValues(0,100); f:SetStatusBarTexture('test.blp'); f:SetValue(25); f:SetStatusBarColor(0,1,0); assert(f:GetStatusBarTexture():GetParent()==f)").unwrap();
@@ -166,7 +171,7 @@ mod tests {
     #[test]
     fn more_than_eight_thousand_regions_keep_identity_across_registry_ownership() {
         let sim = crate::Sim::new().unwrap();
-        sim.eval("for i=1,8100 do local f=CreateFrame('Frame','RegistryFrame'..i); f.index=i end; assert(RegistryFrame8100.index==8100); assert(RegistryFrame1:GetName()=='RegistryFrame1')").unwrap();
+        sim.eval("for i=1,8100 do local f=CreateFrame('Frame','RegistryFrame'..i); f.index=i end; assert(RegistryFrame8100.index==8100); assert(RegistryFrame1:GetName()=='RegistryFrame1'); assert(UIParent:GetNumChildren()>8000)").unwrap();
         assert!(sim.snapshot().unwrap().regions.len() > 8000);
     }
     use crate::Sim;

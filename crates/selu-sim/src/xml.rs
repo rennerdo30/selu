@@ -91,7 +91,11 @@ pub(crate) fn read_client(
         } else {
             for element in node.descendants().filter(|n| n.is_element()) {
                 let tag = element.tag_name().name();
-                if !SUPPORTED.contains(&tag) && !element.parent_element().is_some_and(|p|p.tag_name().name()=="Scripts") {
+                if !SUPPORTED.contains(&tag)
+                    && !element
+                        .parent_element()
+                        .is_some_and(|p| p.tag_name().name() == "Scripts")
+                {
                     diagnostic(format!("not simulated: XML element {tag}"));
                 }
             }
@@ -147,6 +151,8 @@ const SUPPORTED: &[&str] = &[
     "BarColor",
     "KeyValue",
     "FontFamily",
+    "FontHeight",
+    "AbsValue",
     "Member",
     "Color",
     "TexCoords",
@@ -169,8 +175,11 @@ mod tests {
     }
     #[test]
     fn nested_intrinsic_types_apply_before_instance_fields() {
-        let sim=crate::Sim::new().unwrap();
-        run(&sim,r#"<Ui><Frame name="NativeBase" intrinsic="true"><KeyValues><KeyValue key="base" type="number" value="1"/></KeyValues></Frame><NativeBase name="NativeDerived" intrinsic="true"><Size x="40" y="20"/></NativeBase><NativeDerived name="Instance"/></Ui>"#);
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="NativeBase" intrinsic="true"><KeyValues><KeyValue key="base" type="number" value="1"/></KeyValues></Frame><NativeBase name="NativeDerived" intrinsic="true"><Size x="40" y="20"/></NativeBase><NativeDerived name="Instance"/></Ui>"#,
+        );
         sim.eval("assert(Instance.base==1 and Instance:GetWidth()==40); local f=CreateFrame('NativeDerived'); assert(f.base==1 and f:GetWidth()==40 and f:GetObjectType()=='Frame')").unwrap();
     }
     #[test]
@@ -186,10 +195,10 @@ mod tests {
           <Frame name="Nested" virtual="true" inherits="Base,Other" mixin="DemoMixin">
             <Frames><Button name="$parentButton" parentKey="Button" parentArray="buttons"/></Frames>
           </Frame>
-          <Frame name="Root" inherits="Nested"/>
+          <Frame name="Root" inherits="Nested" id="17"/>
         </Ui>"#,
         );
-        sim.eval("assert(Root:GetWidth()==80); assert(Root.value==7); assert(Root:Answer()==42); assert(Root.Button==RootButton); assert(Root.buttons[1]==RootButton); assert(RootButton:GetParent()==Root); local f=CreateFrame('Frame','FromLua',nil,'Nested'); assert(f.Button==FromLuaButton)").unwrap();
+        sim.eval("assert(Root:GetID()==17 and Root:GetWidth()==80); assert(Root.value==7); assert(Root:Answer()==42); assert(Root.Button==RootButton); assert(Root.buttons[1]==RootButton); assert(RootButton:GetParent()==Root); local f=CreateFrame('Frame','FromLua',nil,'Nested'); assert(f.Button==FromLuaButton)").unwrap();
     }
     #[test]
     fn scripts_methods_and_inheritance_cycles() {

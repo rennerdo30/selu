@@ -1,5 +1,54 @@
 //! Bounded local-source startup probe. Never opens WTF or launches a client.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|s| s == "--types") {
+        let session = selu_sim::Session::new(selu_sim::SessionConfig {
+            target: Some("wowf@1.60.1.70790".into()),
+            ..Default::default()
+        })?;
+        let manifest = session.config().manifest.as_ref().ok_or("no manifest")?;
+        for schema in
+            manifest.tables.iter().chain(&manifest.enums).filter(|s| {
+                s.name.contains("LFG_ROLE") || s.namespace.as_deref() == Some("Constants")
+            })
+        {
+            println!("constant schema: {schema:?}");
+        }
+        for global in manifest
+            .data_globals
+            .iter()
+            .filter(|s| s.name.contains("LFG_ROLE") || s.name == "Constants")
+        {
+            println!("constant global: {global:?}");
+        }
+        for name in [
+            "C_ClassColor.GetClassColor",
+            "C_CurveUtil.CreateCurve",
+            "C_UnitAuras.GetAuraSlots",
+        ] {
+            if let Some(function) = manifest.function(name) {
+                if let Some(signature) = &function.signature {
+                    println!("{name}: {:?}", signature.returns);
+                    for ty in signature.returns.iter().filter_map(|r| r.ty.as_deref()) {
+                        for schema in manifest
+                            .tables
+                            .iter()
+                            .chain(&manifest.widgets)
+                            .filter(|s| s.name == ty)
+                        {
+                            println!(
+                                "schema {}: fields={:?} methods={:?} inherits={:?}",
+                                schema.name,
+                                schema.fields.iter().map(|f| &f.name).collect::<Vec<_>>(),
+                                schema.methods.iter().map(|f| &f.name).collect::<Vec<_>>(),
+                                schema.inherits
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
     let root = std::path::Path::new("E:/Games/Battle.net/World of Warcraft");
     match selu_gamedata::Storage::open(root, "wowf", None) {
         Ok(storage) => {

@@ -20,8 +20,41 @@ pub(crate) fn value(
         .trim_end_matches('?');
     Ok(match ty {
         "boolean" | "bool" => Value::Boolean(false),
-        "number" | "integer" | "float" | "double" => Value::Number(0.0),
-        "string" | "cstring" => Value::String(lua.create_string("")?),
+        "number" | "integer" | "float" | "double" | "luaIndex" | "uiUnit" | "WOWMONEY"
+        | "fileID" | "Seconds" | "BigUInteger" | "BigInteger" | "time_t" | "Milliseconds"
+        | "normalizedValue" | "SingleColorValue" | "uiFontHeight" | "size" => Value::Number(0.0),
+        "string"
+        | "cstring"
+        | "WOWGUID"
+        | "UnitToken"
+        | "UnitTokenVariant"
+        | "FramePoint"
+        | "DrawLayer"
+        | "textureAtlas"
+        | "textureKit"
+        | "stringView"
+        | "UnitTokenNamePlate"
+        | "UnitTokenPvPRestrictedForAddOns"
+        | "UnitTokenRestrictedForAddOns"
+        | "mouseButton"
+        | "MouseButton"
+        | "JustifyHorizontal"
+        | "JustifyVertical"
+        | "FrameStrata"
+        | "ScriptTypeName"
+        | "BlendMode"
+        | "FontAlphabet"
+        | "HTMLTextType"
+        | "Orientation"
+        | "InsertMode"
+        | "LoopType"
+        | "FilterMode"
+        | "SimpleButtonStateToken"
+        | "ClickButton" => Value::String(lua.create_string("")?),
+        "colorRGB" | "colorRGBA" => {
+            let create: mlua::Function = lua.globals().get("CreateColor")?;
+            create.call::<Value>((0.0, 0.0, 0.0, 1.0))?
+        }
         "nil" | "void" => Value::Nil,
         "LuaFunctionReference" => Value::Function(lua.create_function(|_, _: MultiValue| Ok(()))?),
         _ => {

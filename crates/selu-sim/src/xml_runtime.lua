@@ -92,6 +92,9 @@ apply=function(f,n,seen)
     if a.alpha then f:SetAlpha(tonumber(a.alpha)) end
     if a.scale then f:SetScale(tonumber(a.scale)) end
     if a.enableMouse then f:EnableMouse(a.enableMouse=='true') end
+    if a.id then f:SetID(tonumber(a.id)) end
+    if a.orientation then f:SetOrientation(a.orientation) end
+    if a.drawLayer then f:SetDrawLayer(a.drawLayer,tonumber(a.subLevel) or 0) end
     if a.minValue or a.maxValue then f:SetMinMaxValues(tonumber(a.minValue) or 0,tonumber(a.maxValue) or 1) end
     if a.defaultValue then f:SetValue(tonumber(a.defaultValue)) end
     if a.setAllPoints=='true' then f:SetAllPoints(f:GetParent()) end
@@ -102,6 +105,9 @@ apply=function(f,n,seen)
         local b=c.a
         if c.tag=='Size' then
             local d=dimension(c).a; f:SetSize(tonumber(d.x) or 0,tonumber(d.y) or 0)
+        elseif c.tag=='FontHeight' then
+            local d=dimension(c).a; local path,_,flags=f:GetFont()
+            f:SetFont(path,tonumber(d.val or d.value) or 12,flags)
         elseif c.tag=='Anchors' then
             for _,anchor in ipairs(c.children) do
                 local v=anchor.a; local x,y=tonumber(v.x) or 0,tonumber(v.y) or 0

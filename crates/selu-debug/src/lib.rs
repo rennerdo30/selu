@@ -163,41 +163,73 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
     let (mut prints_seen, mut logs_seen, mut trace_seen) = (0, 0, 0);
     let mut seq = 0;
     let mut manifest_seen = String::new();
+    let mut default_ui_start = None;
     while let Ok(command) = inbox.recv() {
         if command == Command::Shutdown {
             break;
         }
         let before = session.generation();
         let result: Result<Option<Update>, String> = match command {
-            Command::LoadDefaultUi { source } => session
-                .load_default_ui(&source, |name| {
-                    eprintln!("Default UI: loading {name}");
-                    let _ = outbox.send(Update::Logs {
-                        lines: vec![format!("Default UI: loading {name}")],
-                    });
-                })
-                .map(|report| {
-                    let mut lines = vec![format!(
-                        "Default UI: {} addons, {} errors, {:.2}s",
-                        report.addons_loaded,
-                        report.errors.len(),
-                        report.elapsed.as_secs_f64()
-                    )];
-                    lines.extend(report.errors);
-                    lines.extend(report.notes);
-                    for line in &lines {
-                        eprintln!("{line}");
-                    }
-                    let _ = outbox.send(Update::Logs { lines });
-                    None
-                })
-                .map_err(|e| e.to_string()),
+            Command::LoadDefaultUi { source } => {
+                default_ui_start = Some(std::time::Instant::now());
+                session
+                    .load_default_ui(&source, |name| {
+                        eprintln!("Default UI: loading {name}");
+                        let _ = outbox.send(Update::Logs {
+                            lines: vec![format!("Default UI: loading {name}")],
+                        });
+                    })
+                    .map(|report| {
+                        let mut lines = vec![format!(
+                            "Default UI: {} addons, {} errors, {:.2}s",
+                            report.addons_loaded,
+                            report.errors.len(),
+                            report.elapsed.as_secs_f64()
+                        )];
+                        let reported: std::collections::HashSet<_> =
+                            report.errors.iter().chain(&report.notes).cloned().collect();
+                        lines.extend(report.errors.into_iter().map(|s| {
+                            if s.starts_with("error:") {
+                                s
+                            } else {
+                                format!("error: {s}")
+                            }
+                        }));
+                        lines.extend(report.notes);
+                        let logs = session.logs();
+                        lines.extend(logs.iter().filter(|s| !reported.contains(*s)).cloned());
+                        logs_seen = logs.len();
+                        for line in &lines {
+                            eprintln!("{line}");
+                        }
+                        let _ = outbox.send(Update::Logs { lines });
+                        None
+                    })
+                    .map_err(|e| e.to_string())
+            }
             Command::LoadAddon { dir } => session
                 .load_addon_dir(&dir)
                 .map(|_| None)
                 .map_err(|e| e.to_string()),
-            Command::Login => session.login().map(|_| None).map_err(|e| e.to_string()),
-            Command::Reload => session.reload().map(|_| None).map_err(|e| e.to_string()),
+            Command::Login => session
+                .login()
+                .map(|_| {
+                    if default_ui_start.is_some() {
+                        finish_default_ui_startup(&session, &outbox, default_ui_start.take());
+                    }
+                    None
+                })
+                .map_err(|e| e.to_string()),
+            Command::Reload => {
+                default_ui_start = Some(std::time::Instant::now());
+                session
+                    .reload()
+                    .map(|_| {
+                        finish_default_ui_startup(&session, &outbox, default_ui_start.take());
+                        None
+                    })
+                    .map_err(|e| e.to_string())
+            }
             Command::Fire { event, args } => args
                 .iter()
                 .map(|a| to_value(&session, a))
@@ -279,9 +311,57 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
     }
 }
 
+fn finish_default_ui_startup(
+    session: &Session,
+    outbox: &Sender<Update>,
+    start: Option<std::time::Instant>,
+) {
+    let Some(report) = session.default_ui_report() else {
+        return;
+    };
+    session.advance_time(1.0 / 60.0);
+    let errors = session.default_ui_startup_errors();
+    let summary = format!(
+        "Default UI ready: {} addons, {} load errors, {} startup errors, {:.2}s total",
+        report.addons_loaded,
+        report.errors.len(),
+        errors.len(),
+        start
+            .map(|s| s.elapsed().as_secs_f64())
+            .unwrap_or(report.elapsed.as_secs_f64())
+    );
+    eprintln!("{summary}");
+    for error in &errors {
+        eprintln!("{error}");
+    }
+    let _ = outbox.send(Update::Logs {
+        lines: vec![summary],
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn default_ui_bootstrap_runs_initial_timers_and_preserves_world_apis() {
+        let worker = Worker::spawn(SessionConfig::default());
+        worker.call(Command::Eval {
+            code: "UnitRace=function() return 'ScenarioRace' end".into(),
+        });
+        worker.call(Command::LoadDefaultUi {
+            source: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../selu-sim/tests/fixtures/default-ui"),
+        });
+        worker.call(Command::Eval {code:"assert(UnitRace()=='ScenarioRace'); C_Timer.After(0,function() BootstrapTimerRan=true end)".into()});
+        worker.call(Command::Login);
+        let updates = worker.call(Command::Eval {
+            code: "assert(BootstrapTimerRan); assert(GetTime()>0)".into(),
+        });
+        assert!(
+            !updates.iter().any(|u| matches!(u, Update::Error { .. })),
+            "{updates:?}"
+        );
+    }
 
     fn hello() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../selu-sim/tests/addons/Hello")

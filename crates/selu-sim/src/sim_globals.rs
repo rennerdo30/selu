@@ -79,6 +79,10 @@ fn json_value(lua: &Lua, value: &serde_json::Value) -> SimResult<Value> {
 pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx) -> SimResult<()> {
     let globals = lua.globals();
     let shapes: Table = globals.raw_get("__selu_global_shapes")?;
+    let standins = globals
+        .raw_get::<Option<Table>>("__selu_native_standins")?
+        .unwrap_or(lua.create_table()?);
+    globals.raw_set("__selu_native_standins", standins.clone())?;
     let enums = globals
         .raw_get::<Option<Table>>("Enum")?
         .unwrap_or(lua.create_table()?);
@@ -89,9 +93,82 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
         for (key, value) in &declaration.values {
             table.raw_set(key.as_str(), json_value(lua, value)?)?;
         }
+        let numbers: Vec<_> = declaration
+            .values
+            .values()
+            .filter_map(|v| v.as_f64())
+            .collect();
+        if !numbers.is_empty() {
+            let name = format!("{}Meta", declaration.name);
+            let meta = enums
+                .raw_get::<Option<Table>>(name.as_str())?
+                .unwrap_or(lua.create_table()?);
+            meta.raw_set("NumValues", numbers.len())?;
+            meta.raw_set(
+                "MinValue",
+                numbers.iter().copied().fold(f64::INFINITY, f64::min),
+            )?;
+            meta.raw_set(
+                "MaxValue",
+                numbers.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            )?;
+            enums.raw_set(name, meta)?;
+        }
         enums.raw_set(declaration.name.as_str(), table)?;
     }
     globals.raw_set("Enum", enums)?;
+    let constants: Vec<_> = manifest
+        .tables
+        .iter()
+        .chain(&manifest.enums)
+        .filter(|d| d.ty.as_deref() == Some("Constants"))
+        .collect();
+    let root = globals
+        .raw_get::<Option<Table>>("Constants")?
+        .unwrap_or(lua.create_table()?);
+    for declaration in &constants {
+        if root.raw_get::<Value>(declaration.name.as_str())?.is_nil() {
+            root.raw_set(declaration.name.as_str(), lua.create_table()?)?;
+        }
+    }
+    globals.raw_set("Constants", root.clone())?;
+    for _ in 0..=constants.len() {
+        let mut changed = false;
+        for declaration in &constants {
+            let table: Table = root.raw_get(declaration.name.as_str())?;
+            for field in &declaration.fields {
+                if !table.raw_get::<Value>(field.name.as_str())?.is_nil() {
+                    continue;
+                }
+                let Some(value) = field.attributes.get("Value") else {
+                    continue;
+                };
+                let value = if let Some(reference) = value.get("reference").and_then(|v| v.as_str())
+                {
+                    let mut value = Value::Table(globals.clone());
+                    for part in reference.split('.') {
+                        value = if let Value::Table(table) = value {
+                            table.raw_get(part)?
+                        } else {
+                            Value::Nil
+                        };
+                    }
+                    value
+                } else if !value.is_object() {
+                    json_value(lua, value)?
+                } else {
+                    Value::Nil
+                };
+                if !value.is_nil() {
+                    table.raw_set(field.name.as_str(), value)?;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     let mut schemas = std::collections::HashMap::new();
     for schema in manifest.tables.iter().chain(&manifest.widgets) {
         schemas.insert(schema.name.clone(), schema.clone());
@@ -130,13 +207,12 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
         let schemas = schemas.clone();
         let context = ctx.clone();
         let full_name = entry.name.clone();
-        owner.raw_set(
-            name,
-            lua.create_function(move |lua, _: mlua::MultiValue| {
-                context.not_simulated(&full_name);
-                crate::native_defaults::values(lua, &returns, &schemas, &context, 0)
-            })?,
-        )?;
+        let native = lua.create_function(move |lua, _: mlua::MultiValue| {
+            context.not_simulated(&full_name);
+            crate::native_defaults::values(lua, &returns, &schemas, &context, 0)
+        })?;
+        standins.raw_set(entry.name.as_str(), native.clone())?;
+        owner.raw_set(name, native)?;
     }
     for function in manifest
         .functions
@@ -386,6 +462,7 @@ mod sg_tests {
             .unwrap(),
         );
         manifest.tables.push(serde_json::from_value(serde_json::json!({"name":"SyntheticRecord","fields":[{"name":"count","type":"number"}],"methods":[{"name":"Reset","returns":[{"name":"ok","type":"boolean"}]}]})).unwrap());
+        manifest.tables.push(serde_json::from_value(serde_json::json!({"name":"SyntheticConstants","type":"Constants","fields":[{"name":"Negative","type":"number","attributes":{"Value":-1}},{"name":"Reference","type":"number","attributes":{"Value":{"reference":"Enum.SyntheticEnum.Ready"}}}]})).unwrap());
         manifest.functions.push(serde_json::from_value(serde_json::json!({
             "name":"C_Synthetic.Native","evidence":"verified",
             "signature":{"name":"Native","returns":[{"name":"text","type":"string"},{"name":"flag","type":"boolean"},{"name":"count","type":"number"},{"name":"record","type":"SyntheticRecord"}]}
@@ -395,7 +472,7 @@ mod sg_tests {
             ..Default::default()
         })
         .unwrap();
-        s.eval("assert(Enum.SyntheticEnum.Ready==7); for i=1,2 do local s,b,n,r=C_Synthetic.Native(); assert(s=='' and b==false and n==0); assert(r.count==0 and r:Reset()==false and r.undeclared==nil) end").unwrap();
+        s.eval("assert(Enum.SyntheticEnum.Ready==7 and Enum.SyntheticEnumMeta.NumValues==1); assert(Constants.SyntheticConstants.Negative==-1 and Constants.SyntheticConstants.Reference==7); for i=1,2 do local s,b,n,r=C_Synthetic.Native(); assert(s=='' and b==false and n==0); assert(r.count==0 and r:Reset()==false and r.undeclared==nil) end").unwrap();
         assert_eq!(
             s.logs()
                 .iter()
