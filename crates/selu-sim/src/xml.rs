@@ -201,6 +201,15 @@ mod tests {
         sim.eval("assert(Root:GetID()==17 and Root:GetWidth()==80); assert(Root.value==7); assert(Root:Answer()==42); assert(Root.Button==RootButton); assert(Root.buttons[1]==RootButton); assert(RootButton:GetParent()==Root); local f=CreateFrame('Frame','FromLua',nil,'Nested'); assert(f.Button==FromLuaButton)").unwrap();
     }
     #[test]
+    fn relative_keys_anchor_to_anonymous_parent_members() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="Root"><Frames><Frame parentKey="Group"><Frames><Frame parentKey="Reference"/><Frame parentKey="Child"><Anchors><Anchor point="TOP" relativeKey="$parent.Reference" relativePoint="BOTTOM" x="3" y="4"/></Anchors></Frame></Frames></Frame></Frames></Frame></Ui>"#,
+        );
+        sim.eval("local p,r,rp,x,y=Root.Group.Child:GetPoint(); assert(r==Root.Group.Reference and p=='TOP' and rp=='BOTTOM' and x==3 and y==4)").unwrap();
+    }
+    #[test]
     fn scripts_methods_and_inheritance_cycles() {
         let sim = crate::Sim::new().unwrap();
         sim.eval("DemoMixin={Load=function(self) self.loaded=true end}")

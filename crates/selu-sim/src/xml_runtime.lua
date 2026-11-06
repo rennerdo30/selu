@@ -25,6 +25,15 @@ local function expand(s,p)
     end
     return s and (string.gsub(s, '%$parent', function() return name or '' end))
 end
+local function relativeKey(frame,path)
+    local object=frame
+    for key in string.gmatch(path,'[^.]+') do
+        if not object then return nil end
+        if key=='$parent' then object=object:GetParent()
+        else object=object[key] end
+    end
+    return object
+end
 local apply, create
 local function invoke(fn,...)
     if __selu_secure_invoke then return __selu_secure_invoke(fn,...) end
@@ -120,7 +129,9 @@ apply=function(f,n,seen)
                 for _,offset in ipairs(anchor.children) do
                     local d=dimension(offset).a; x=tonumber(d.x) or 0; y=tonumber(d.y) or 0
                 end
-                f:SetPoint(v.point or 'CENTER',lookup(expand(v.relativeTo,f:GetParent())) or f:GetParent(),v.relativePoint or v.point or 'CENTER',x,y)
+                local relative=v.relativeKey and relativeKey(f,v.relativeKey) or lookup(expand(v.relativeTo,f:GetParent()))
+                if v.relativeKey and not relative then note('relativeKey '..v.relativeKey) end
+                f:SetPoint(v.point or 'CENTER',relative or f:GetParent(),v.relativePoint or v.point or 'CENTER',x,y)
             end
         elseif c.tag=='KeyValues' then
             for _,kv in ipairs(c.children) do
