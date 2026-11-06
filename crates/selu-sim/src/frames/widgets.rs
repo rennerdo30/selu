@@ -19,6 +19,12 @@ fn boolean(v: Option<&Value>) -> bool {
     !matches!(v, None | Some(Value::Nil) | Some(Value::Boolean(false)))
 }
 pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
+    if matches!(name, "OnShow" | "OnHide")
+        && t.raw_get::<bool>("__selu_initial_visibility")
+            .unwrap_or(false)
+    {
+        return;
+    }
     // A transition without a handler must not retain the frame until the
     // outer dispatch finishes (large addon construction can create thousands).
     if !matches!(
@@ -470,12 +476,24 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     ) {
         let scripts: Table = t.raw_get("__scripts")?;
         let name = string(v.first()).unwrap_or_default();
+        let intrinsic = t
+            .raw_get::<Option<Table>>("__selu_intrinsic_scripts")?
+            .map(|handlers| handlers.raw_get::<Option<Table>>(name.as_str()))
+            .transpose()?
+            .flatten();
+        let (script_owner, script_key) = if let Some(slot) = intrinsic {
+            (slot, "normal".to_owned())
+        } else {
+            (scripts.clone(), name.clone())
+        };
         match method {
-            "GetScript" => out!(scripts.raw_get::<Value>(name)?),
+            "GetScript" => out!(script_owner.raw_get::<Value>(script_key)?),
             "HasScript" => out!(has_script(&a.borrow().regions[i].kind, &name)),
-            "SetScript" => scripts.raw_set(name, v.get(1).cloned().unwrap_or(Value::Nil))?,
+            "SetScript" => {
+                script_owner.raw_set(script_key, v.get(1).cloned().unwrap_or(Value::Nil))?
+            }
             "HookScript" => {
-                let old = scripts.raw_get::<Option<Function>>(name.clone())?;
+                let old = script_owner.raw_get::<Option<Function>>(script_key.clone())?;
                 let hook = match v.get(1) {
                     Some(Value::Function(f)) => f.clone(),
                     _ => return Err(mlua::Error::runtime("function expected")),
@@ -483,8 +501,8 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 let old = old.map(|f| lua.create_registry_value(f)).transpose()?;
                 let hook = lua.create_registry_value(hook)?;
                 let context = ctx.clone();
-                scripts.raw_set(
-                    name,
+                script_owner.raw_set(
+                    script_key,
                     lua.create_function(move |lua, args: MultiValue| {
                         if let Some(old) = &old {
                             crate::core::script_callback(lua, &context, || {

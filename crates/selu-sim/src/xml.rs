@@ -206,6 +206,16 @@ mod tests {
         sim.eval("assert(Root:GetID()==17 and Root:GetWidth()==80); assert(Root.value==7); assert(Root:Answer()==42); assert(Root.Button==RootButton); assert(Root.buttons[1]==RootButton); assert(RootButton:GetParent()==Root); local f=CreateFrame('Frame','FromLua',nil,'Nested'); assert(f.Button==FromLuaButton)").unwrap();
     }
     #[test]
+    fn intrinsic_constructors_and_postcall_handlers_survive_normal_scripts() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("NativeMixin={Init=function(self) self.ready=true; self.shows=0 end,Shown=function(self) self.shows=self.shows+1; self.order=(self.order or '')..'native' end}").unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="NativeEventFrame" intrinsic="true" mixin="NativeMixin"><Scripts><OnLoad method="Init"/><OnShow method="Shown" intrinsicOrder="postcall"/></Scripts></Frame><NativeEventFrame name="Root" hidden="true"><Scripts><OnLoad>assert(self.ready)</OnLoad><OnShow>self.order='normal-'</OnShow></Scripts></NativeEventFrame></Ui>"#,
+        );
+        sim.eval("Root:Show(); assert(Root.order=='normal-native' and Root.shows==1); Root:SetScript('OnShow',nil); Root:Hide(); Root:Show(); assert(Root.shows==2); local f=CreateFrame('NativeEventFrame'); assert(f.ready)").unwrap();
+    }
+    #[test]
     fn initial_hidden_attribute_does_not_fire_inherited_onhide() {
         let sim = crate::Sim::new().unwrap();
         run(

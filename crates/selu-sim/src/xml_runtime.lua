@@ -61,7 +61,7 @@ end
 local function dimension(n)
     return n.children[1] or n
 end
-local function script(f,n)
+local function script(f,n,intrinsicOwner)
     local a=n.a
     if a.font then f:SetFont(a.font,tonumber(a.height) or 12,a.flags or '') end
     if a.justifyH then f:SetJustifyH(a.justifyH) end
@@ -79,6 +79,32 @@ local function script(f,n)
         fn=assert(loadstring('return function('..args..')\n'..n.text..'\nend', '@XML/'..n.tag))()
     end
     if not fn then note('script '..(a['function'] or n.tag)); return end
+    if intrinsicOwner and n.tag=='OnLoad' then
+        -- Intrinsic OnLoad is a constructor, before derived instance setup.
+        local loaded=rawget(f,'__selu_intrinsic_loaded') or {}
+        rawset(f,'__selu_intrinsic_loaded',loaded)
+        if not loaded[intrinsicOwner] then loaded[intrinsicOwner]=true; invoke(fn,f) end
+        return
+    end
+    if intrinsicOwner and (a.intrinsicOrder=='precall' or a.intrinsicOrder=='postcall') then
+        local handlers=rawget(f,'__selu_intrinsic_scripts') or {}
+        rawset(f,'__selu_intrinsic_scripts',handlers)
+        local slot=handlers[n.tag]
+        if not slot then
+            slot={precall={},postcall={},owners={},normal=f:GetScript(n.tag)}
+            handlers[n.tag]=slot
+            f.__scripts[n.tag]=function(...)
+                for _,handler in ipairs(slot.precall) do invoke(handler,...) end
+                if slot.normal then invoke(slot.normal,...) end
+                for _,handler in ipairs(slot.postcall) do invoke(handler,...) end
+            end
+        end
+        if not slot.owners[intrinsicOwner] then
+            slot.owners[intrinsicOwner]=true
+            table.insert(slot[a.intrinsicOrder],fn)
+        end
+        return
+    end
     if a.inherit=='prepend' or a.inherit=='append' then
         local old=f:GetScript(n.tag)
         f:SetScript(n.tag,function(...)
@@ -142,7 +168,9 @@ apply=function(f,n,seen)
         -- Inherited visibility scripts must not observe a half-built frame.
         local event=a.hidden=='true' and 'OnHide' or 'OnShow'
         local previous=f:GetScript(event); f:SetScript(event,nil)
+        rawset(f,'__selu_initial_visibility',true)
         local ok,err=pcall(function() if a.hidden=='true' then f:Hide() else f:Show() end end)
+        rawset(f,'__selu_initial_visibility',nil)
         f:SetScript(event,previous)
         if not ok then error(err,0) end
     end
@@ -188,7 +216,7 @@ apply=function(f,n,seen)
                 for i=1,#keys-1 do owner[keys[i]]=owner[keys[i]] or {}; owner=owner[keys[i]] end
                 if #keys>0 then owner[keys[#keys]]=value end
             end
-        elseif c.tag=='Scripts' then for _,s in ipairs(c.children) do script(f,s) end
+        elseif c.tag=='Scripts' then for _,s in ipairs(c.children) do script(f,s,n.a.intrinsic=='true' and n.a.name) end
         elseif c.tag=='Animations' then
             for _,group in ipairs(c.children) do
                 if group.tag=='AnimationGroup' then animationGroup(f,group)
