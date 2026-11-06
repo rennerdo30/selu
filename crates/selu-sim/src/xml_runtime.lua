@@ -1,11 +1,15 @@
 -- This registry is private to the simulator VM. Blizzard sources stay external.
-if __selu_xml_declare then return end
+if rawget(_G,'__selu_xml_declare') then return end
 local templates, intrinsic, warned = {}, {}, {}
 local function note(s)
     if not warned[s] then warned[s]=true; print('not simulated: XML '..s) end
 end
+local parsedNames={}
 local function names(s)
+    s=s or ''
+    if parsedNames[s] then return parsedNames[s] end
     local t={}; for name in string.gmatch(s or '', '[^,%s]+') do t[#t+1]=name end
+    parsedNames[s]=t
     return t
 end
 local function lookup(s)
@@ -197,7 +201,7 @@ apply=function(f,n,seen)
     if a.minValue or a.maxValue then f:SetMinMaxValues(tonumber(a.minValue) or 0,tonumber(a.maxValue) or 1) end
     if a.defaultValue then f:SetValue(tonumber(a.defaultValue)) end
     if a.setAllPoints=='true' then f:SetAllPoints(f:GetParent()) end
-    if a.text then f:SetText(lookup(a.text) or a.text) end
+    if a.text then seen.text=seen.text or {}; seen.text[#seen.text+1]=a.text end
     if a.file then f:SetTexture(a.file) end
     if a.atlas then f:SetAtlas(a.atlas,a.useAtlasSize=='true') end
     for _,c in ipairs(n.children) do
@@ -241,9 +245,12 @@ apply=function(f,n,seen)
                 if group.tag=='AnimationGroup' then animationGroup(f,group)
                 else note('animation element '..group.tag) end
             end
-        elseif c.tag=='Frames' then for _,child in ipairs(c.children) do create(child,f) end
+        elseif c.tag=='Frames' then
+            seen.children=seen.children or {}
+            for _,child in ipairs(c.children) do seen.children[#seen.children+1]={node=child} end
         elseif c.tag=='ScrollChild' then
-            if c.children[1] then f:SetScrollChild(create(c.children[1],f)) end
+            seen.children=seen.children or {}
+            if c.children[1] then seen.children[#seen.children+1]={node=c.children[1],scroll=true} end
         elseif c.tag=='ButtonText' then f:SetFontString(create(c,f))
         elseif c.tag=='NormalFont' or c.tag=='HighlightFont' or c.tag=='DisabledFont' then
             local setter=f['Set'..c.tag..'Object']
@@ -264,6 +271,22 @@ apply=function(f,n,seen)
         else note('element '..c.tag) end
     end
 end
+local function construct(f,prepare)
+    local plan={}
+    rawset(f,'__selu_xml_constructing',true)
+    local ok,err=pcall(function()
+        prepare(plan)
+        -- Children may inspect their parent's derived KeyValues/mixins from
+        -- OnLoad (ThreeSliceButton's controller initializes its parent art).
+        for _,child in ipairs(plan.children or {}) do
+            local object=create(child.node,f)
+            if child.scroll then f:SetScrollChild(object) end
+        end
+        for _,text in ipairs(plan.text or {}) do f:SetText(lookup(text) or text) end
+    end)
+    rawset(f,'__selu_xml_constructing',nil)
+    if not ok then error(err,0) end
+end
 local native=CreateFrame
 create=function(n,parent,layer)
     local a=n.a
@@ -275,14 +298,14 @@ create=function(n,parent,layer)
     elseif n.tag=='FontString' or n.tag=='ButtonText' then f=parent:CreateFontString(name,layer)
     elseif n.tag=='Font' then f=CreateFont(name)
     else f=native(nativeKind(n.tag),name,parent) end
-    apply(f,n,{})
+    construct(f,function(plan) apply(f,n,plan) end)
     if n.tag~='Texture' and n.tag~='FontString' and n.tag~='Font' then
         local onload=f.__scripts.OnLoad; if onload then invoke(onload,f) end
     end
     return f
 end
 function __selu_xml_apply(f,s)
-    inherit(f,s,{})
+    construct(f,function(plan) inherit(f,s,plan) end)
     local onload=f.__scripts.OnLoad; if onload then invoke(onload,f) end
 end
 function __selu_xml_intrinsic(kind) if intrinsic[kind] then return nativeKind(kind) end end

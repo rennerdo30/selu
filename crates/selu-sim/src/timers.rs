@@ -133,12 +133,21 @@ mod tests {
             table={}; string={}; math={}; coroutine={}
             pairs=nil; ipairs=nil; type=nil; tostring=nil; tonumber=nil
             unpack=nil; select=nil; pcall=nil; xpcall=nil; error=nil; assert=nil
-            rawget=nil; rawset=nil; getmetatable=nil; setmetatable=nil; GetTime=nil
+            rawget=nil; rawset=nil; getmetatable=nil; setmetatable=nil; GetTime=nil; print=nil
             after(0.01,function() TimerSurvived=true end)
             local late=create('Button'); late:SetScript('OnUpdate',function() UpdateSurvived=true end)
         "#).unwrap();
         sim.fire("PLAYER_LOGIN", vec![]).unwrap();
         sim.advance_time(0.05);
+        crate::host_lua::load(sim.lua(), include_str!("xml_runtime.lua"))
+            .exec()
+            .unwrap();
+        crate::host_lua::load(sim.lua(),"__selu_xml_declare({tag='Frame',a={},children={{tag='UnsupportedProbe',a={},children={}}}})").exec().unwrap();
+        assert!(
+            sim.prints()
+                .iter()
+                .any(|line| line.contains("XML element UnsupportedProbe"))
+        );
         for name in ["TimerSurvived", "EventSurvived", "UpdateSurvived"] {
             assert!(sim.lua().globals().get::<bool>(name).unwrap(), "{name}");
         }

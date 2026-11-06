@@ -199,7 +199,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session.eval("__probe_original_pcall=pcall; local original=pcall; pcall=function(...) local function finish(ok,...) if not ok then print('CAUGHT '..tostring((...))) end; return ok,... end; return finish(original(...)) end")?;
     }
     session.login()?;
-    if let Err(error)=session.eval(r#"local f=MainActionBar; local m=EditModeManagerFrame; print('HUDMETA',f.system,f.systemIndex,f.numButtonsShowable,f.noSpacers,f.actionButtons and #f.actionButtons,f.shownButtonContainers and #f.shownButtonContainers,m.layoutInfo and m.layoutInfo.activeLayout); if m.GetActiveLayoutSystemInfo then local s=m:GetActiveLayoutSystemInfo(f.system,f.systemIndex); print('HUDMETA system',s and s.system,s and s.systemIndex,s and #s.settings) end; for i=1,f:GetNumPoints() do local p,r,rp,x,y=f:GetPoint(i); print('HUDMETA point',p,r and r:GetName(),rp,x,y) end"#) {eprintln!("HUD diagnostic: {error}");}
+    session.lua().globals().raw_set(
+        "__probe_meta",
+        session
+            .lua()
+            .create_function(|_, values: mlua::MultiValue| {
+                println!(
+                    "HUDMETA {}",
+                    values
+                        .iter()
+                        .map(|value| format!("{value:?}"))
+                        .collect::<Vec<_>>()
+                        .join("\t")
+                );
+                Ok(())
+            })?,
+    )?;
+    if let Err(error)=session.eval(r#"local f=MainActionBar; local m=EditModeManagerFrame; __probe_meta('fields',f.system,f.systemIndex,f.numButtonsShowable,f.noSpacers,f.actionButtons and #f.actionButtons,f.shownButtonContainers and #f.shownButtonContainers,m.layoutInfo and m.layoutInfo.activeLayout); if m.GetActiveLayoutSystemInfo then local s=m:GetActiveLayoutSystemInfo(f.system,f.systemIndex); __probe_meta('system',s and s.system,s and s.systemIndex,s and #s.settings) end; for i=1,f:GetNumPoints() do local p,r,rp,x,y=f:GetPoint(i); __probe_meta('point',p,r and r:GetName(),rp,x,y) end"#) {eprintln!("HUD diagnostic: {error}");}
     if std::env::var_os("SELU_SIM_PROFILE_PCALL").is_some() {
         session.eval("pcall=__probe_original_pcall; __probe_original_pcall=nil")?;
     }

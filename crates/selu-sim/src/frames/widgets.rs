@@ -19,6 +19,12 @@ fn boolean(v: Option<&Value>) -> bool {
     !matches!(v, None | Some(Value::Nil) | Some(Value::Boolean(false)))
 }
 pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
+    if matches!(name, "OnShow" | "OnHide" | "OnSizeChanged")
+        && t.raw_get::<bool>("__selu_xml_constructing")
+            .unwrap_or(false)
+    {
+        return;
+    }
     if matches!(name, "OnShow" | "OnHide")
         && t.raw_get::<bool>("__selu_initial_visibility")
             .unwrap_or(false)
@@ -869,7 +875,8 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             arena.regions[i].thumb = Some(index);
         }
         arena.dirty = true;
-        arena.full_layout = true;
+        arena.dirty_regions.insert(i);
+        arena.dirty_regions.insert(index);
         layout::resolve(&mut arena, ctx);
         if status {
             out!(true);

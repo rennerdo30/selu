@@ -55,7 +55,10 @@ pub(crate) fn seal(lua: &Lua) -> mlua::Result<()> {
         let (name, value) = pair?;
         if matches!(value, Value::Function(_))
             && (name.starts_with("__selu_")
-                || matches!(name.as_str(), "GetTime" | "CreateFrame" | "CreateFont"))
+                || matches!(
+                    name.as_str(),
+                    "GetTime" | "CreateFrame" | "CreateFont" | "print"
+                ))
         {
             environment.raw_set(name, value)?;
         }
@@ -63,7 +66,7 @@ pub(crate) fn seal(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 pub(crate) fn load<'a>(lua: &'a Lua, source: &'a str) -> Chunk<'a> {
-    const UPVALUES: &str = "local _G,assert,collectgarbage,error,getfenv,getmetatable,ipairs,load,loadstring,next,pairs,pcall,rawequal,rawget,rawset,select,setfenv,setmetatable,tonumber,tostring,type,unpack,xpcall,table,string,math,coroutine = _G,assert,collectgarbage,error,getfenv,getmetatable,ipairs,load,loadstring,next,pairs,pcall,rawequal,rawget,rawset,select,setfenv,setmetatable,tonumber,tostring,type,unpack,xpcall,table,string,math,coroutine";
+    const UPVALUES: &str = "local _G,assert,collectgarbage,error,getfenv,getmetatable,ipairs,load,loadstring,next,pairs,pcall,print,rawequal,rawget,rawset,select,setfenv,setmetatable,tonumber,tostring,type,unpack,xpcall,table,string,math,coroutine = _G,assert,collectgarbage,error,getfenv,getmetatable,ipairs,load,loadstring,next,pairs,pcall,print,rawequal,rawget,rawset,select,setfenv,setmetatable,tonumber,tostring,type,unpack,xpcall,table,string,math,coroutine";
     lua.load(format!("{UPVALUES}\n{source}")).set_environment(
         lua.named_registry_value::<Table>(ENV)
             .expect("host environment installed before helpers"),

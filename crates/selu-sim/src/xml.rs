@@ -274,6 +274,17 @@ mod tests {
         sim.eval("local p,r,rp,x,y=Root.Group.Child:GetPoint(); assert(r==Root.Group.Reference and p=='TOP' and rp=='BOTTOM' and x==3 and y==4)").unwrap();
     }
     #[test]
+    fn inherited_children_observe_final_parent_keyvalues_and_mixins() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("ParentMixin={Read=function(self) return self.value end}")
+            .unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="ParentBase" virtual="true"><Frames><Frame parentKey="Controller"><Scripts><OnLoad>local parent=self:GetParent(); assert(parent.value==42 and parent:Read()==42); self.ready=true</OnLoad></Scripts></Frame></Frames></Frame><Frame name="Root" inherits="ParentBase" mixin="ParentMixin"><KeyValues><KeyValue key="value" value="42" type="number"/></KeyValues></Frame></Ui>"#,
+        );
+        sim.eval("assert(Root.Controller.ready)").unwrap();
+    }
+    #[test]
     fn scoped_modifiers_preserve_inner_template_declarations() {
         let sim = crate::Sim::new().unwrap();
         sim.eval("NestedMixin={value=42}").unwrap();

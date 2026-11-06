@@ -185,6 +185,11 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
     // Seed the dependency closure from mutations; external bulk invalidations
     // (root resize, input, font roots) retain conservative full resolution.
     let mut changed = vec![a.full_layout || a.dirty_regions.is_empty(); a.regions.len()];
+    crate::profile::count(if changed.first() == Some(&true) {
+        "layout.full"
+    } else {
+        "layout.partial"
+    });
     let mut active = if changed.first() == Some(&true) {
         (0..a.regions.len()).collect::<Vec<_>>()
     } else {
