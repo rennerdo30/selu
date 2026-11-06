@@ -567,6 +567,22 @@ fn sb_native_error_boundary_normalizes_and_chains() {
 }
 
 #[test]
+fn native_error_boundary_keeps_readable_primitive_text() {
+    // Numeric and boolean errors keep their text, so two different numeric
+    // errors stay two records (Renner's Toolkit ErrorLog relies on this).
+    let lua = common::compile("onError((e: Error) => { print(e.message); });");
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    sim.eval("geterrorhandler()(1001); geterrorhandler()(1002); geterrorhandler()(false)")
+        .unwrap();
+    assert_eq!(sim.prints(), ["1001", "1002", "false"]);
+    sim.set_secret_global("hidden").unwrap();
+    sim.eval("geterrorhandler()(hidden); geterrorhandler()({})")
+        .unwrap();
+    assert_eq!(&sim.prints()[3..], ["<secret error>", "<table error>"]);
+}
+
+#[test]
 fn sb_error_chaining_preserves_zero_arguments_and_survives_sink_failure() {
     let lua = common::compile("onError((e: Error) => { throw new Error(e.message); });");
     let sim = selu_sim::Sim::new().unwrap();

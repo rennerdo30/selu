@@ -686,6 +686,11 @@ pub(crate) const ON_ERROR_RUNTIME: &str = r#"local function __selu_on_error(call
       if ok and existing then
         normalized = value
       elseif type(value) == "string" then normalized = __selu_new_error(value)
+      elseif type(value) == "number" or type(value) == "boolean" then
+        -- Readable primitives keep their text, as the client's own handlers see it.
+        local converted, text = __selu_pcall(__selu_tostring, value)
+        if converted and type(text) == "string" then normalized = __selu_new_error(text)
+        else normalized = __selu_new_error("<" .. type(value) .. " error>") end
       else normalized = __selu_new_error("<" .. type(value) .. " error>") end
     end
     if normalized.stack == nil then normalized.stack = __selu_stack() end

@@ -139,8 +139,10 @@ reserved names before source bindings, so local source names cannot replace them
 
 `onError((error: Error) => { ... })` installs a typed native diagnostic boundary.
 SELU0543 rejects an incompatible callback or arity. Strings become messages;
-existing Selu Errors retain identity; other values are described by Lua type
-without invoking their conversion hooks. Secret values become `<secret error>`.
+existing Selu Errors retain identity; readable numbers and booleans keep their
+text (`1001`, `false`), so distinct values stay distinct; other values are
+described by Lua type (`<table error>`) without invoking their conversion hooks.
+Secret values become `<secret error>`.
 The compiler's adapter calls the prior native handler once with the original
 arguments, even when the Selu callback throws. Native values are never exposed
 by this adapter. Install early, retain errors in a bounded Selu array, and attach
