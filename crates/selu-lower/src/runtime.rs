@@ -61,7 +61,7 @@ impl Lowerer<'_> {
         out.extend(crate::restrictions::emit_restriction_runtime(
             program,
             self.types,
-            &self.target.universe,
+            self.target.universe,
         ));
         out.extend(entry);
         out.extend(body);
@@ -69,7 +69,7 @@ impl Lowerer<'_> {
     }
     pub(crate) fn runtime_pieces(&mut self, program: &Program) -> Vec<Piece> {
         let mut pieces =
-            crate::restrictions::runtime_pieces(program, self.types, &self.target.universe);
+            crate::restrictions::runtime_pieces(program, self.types, self.target.universe);
         if self.addon_errors {
             pieces.push(piece(
                 "10-errors-state",

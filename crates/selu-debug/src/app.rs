@@ -1013,7 +1013,7 @@ impl Studio {
         let usable = |c: &crate::game::Client| {
             c.exe.is_some() && c.flavour.as_ref().is_some_and(|f| flavours.contains(f))
         };
-        if !self.game_clients.get(selected).is_some_and(&usable) {
+        if !self.game_clients.get(selected).is_some_and(usable) {
             selected = order
                 .iter()
                 .copied()
@@ -1091,7 +1091,7 @@ impl Studio {
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                let can = self.game_clients.get(selected).is_some_and(&usable);
+                let can = self.game_clients.get(selected).is_some_and(usable);
                 let run = egui::Button::new(egui::RichText::new("Run").color(Color32::WHITE))
                     .fill(palette::ACCENT);
                 if ui.add_enabled(can, run).clicked() {

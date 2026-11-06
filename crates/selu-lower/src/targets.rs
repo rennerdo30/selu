@@ -101,7 +101,7 @@ impl Lowerer<'_> {
         let n = args[0].dotted_name()?;
         if !self.target.shared {
             return Some(LExpr::Bool(selu_check::targets::exists(
-                &self.target.manifest,
+                self.target.manifest,
                 &n,
             )));
         }

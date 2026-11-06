@@ -96,6 +96,9 @@ impl PartialEq for NamedShape {
         self.key == other.key
     }
 }
+// Function is the largest variant, as before; sharing class member maps
+// behind an Arc only made the second-largest variant smaller.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Union(Vec<Type>),
