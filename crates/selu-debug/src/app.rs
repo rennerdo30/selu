@@ -357,6 +357,7 @@ impl Studio {
         if std::env::var_os("SELU_STUDIO_OPEN_SETTINGS").is_some() {
             studio.open_settings();
         }
+        studio.queue_default_ui();
         for dir in studio.opts.addons.clone() {
             studio.send(Command::LoadAddon { dir });
         }
@@ -1366,6 +1367,14 @@ impl Studio {
                 });
                 ui.add_space(6.0);
                 ui.label("Client assets (takes effect after restarting Studio)");
+                let mut enabled = !self.game_settings.disable_default_ui;
+                if ui.checkbox(&mut enabled, "Default UI (applies on next project load)").changed() {
+                    self.game_settings.disable_default_ui = !enabled; changed = true;
+                }
+                let mut source=self.game_settings.default_ui_source.as_ref().map(|p|p.display().to_string()).unwrap_or_else(|| "E:/Development/wow-ui-source".into());
+                if ui.text_edit_singleline(&mut source).changed() {
+                    self.game_settings.default_ui_source=Some(PathBuf::from(source.trim())); changed=true;
+                }
                 changed |= ui.checkbox(&mut self.game_settings.disable_client_assets, "Disable client fonts and art").changed();
                 let mut root = self.game_settings.client_install.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
                 if ui.text_edit_singleline(&mut root).changed() {
@@ -1550,11 +1559,34 @@ impl Studio {
         });
         self.in_flight = 0;
         self.snapshot = None;
+        self.queue_default_ui();
         for dir in self.opts.addons.clone() {
             self.send(Command::LoadAddon { dir });
         }
         self.send(Command::Login);
         self.send(Command::Snapshot);
+    }
+
+    fn queue_default_ui(&mut self) {
+        if self.game_settings.disable_default_ui {
+            return;
+        }
+        let source = self
+            .game_settings
+            .default_ui_source
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("E:/Development/wow-ui-source"));
+        let target = self
+            .opts
+            .manifest
+            .as_ref()
+            .map(selu_manifest::Manifest::target_string)
+            .or_else(|| self.opts.target.clone());
+        if source.join("Interface/ui-toc-list.txt").is_file()
+            && target.as_deref().is_some_and(|s| s.starts_with("wowf@"))
+        {
+            self.send(Command::LoadDefaultUi { source });
+        }
     }
 
     /// After the first successful build of a newly opened project: load the

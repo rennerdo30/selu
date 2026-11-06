@@ -1,0 +1,4 @@
+## SavedVariables: SyntheticOnly
+broken.lua
+frames.xml
+after.lua

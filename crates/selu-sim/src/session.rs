@@ -168,6 +168,7 @@ impl std::fmt::Display for SavedFixtureError {
 impl std::error::Error for SavedFixtureError {}
 
 pub struct Session {
+    default_ui_source: Option<PathBuf>,
     config: SessionConfig,
     sim: Vm,
     generation: Generation,
@@ -396,33 +397,89 @@ impl Session {
     /// chunk has its own error boundary; failures remain visible in the receipt.
     /// This method performs no saved-variable reads or writes.
     pub fn load_default_ui(
-        &self, source: &Path, mut progress: impl FnMut(&str),
+        &mut self,
+        source: &Path,
+        mut progress: impl FnMut(&str),
     ) -> SimResult<crate::loader::DefaultUiReport> {
         let start = std::time::Instant::now();
-        let (addons, mut report) = loader::default_ui_order(source, self.config.target.as_deref()).map_err(runtime)?;
+        let build = self
+            .config
+            .manifest
+            .as_ref()
+            .map(|m| (&m.build, m.interface));
+        let chunk = self.sim.lua.load(include_str!("default_world.lua"));
+        if let Some((b, interface)) = build {
+            chunk.call::<()>((
+                format!("{}.{}.{}", b.major, b.minor, b.patch),
+                b.build,
+                interface,
+            ))?;
+        } else {
+            chunk.call::<()>(())?;
+        }
+        let source_root = source.canonicalize().map_err(|e| runtime(e.to_string()))?;
+        let mut source_notes = Vec::new();
+        let storage = if let (Some(install), Some(target)) =
+            (&self.config.client_install, &self.config.target)
+        {
+            match selu_gamedata::Storage::open(
+                install,
+                target.split('@').next().unwrap_or(""),
+                None,
+            ) {
+                Ok(storage) => Some(storage),
+                Err(e) => {
+                    source_notes.push(format!("CASC UI unavailable; using source checkout: {e}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let client = storage.as_ref().map(|s| (s, source_root.as_path()));
+        let (addons, mut report) = loader::default_ui_order_client(
+            &source_root,
+            self.config.target.as_deref(),
+            storage.as_ref(),
+        )
+        .map_err(runtime)?;
+        report.notes.extend(source_notes);
+        self.default_ui_source = Some(source.to_path_buf());
         for toc in addons {
             progress(&toc.name);
-            let files = match loader::read_files_with_diagnostics(&toc, |s| report.notes.push(s)) {
+            let files = match loader::read_files_client(&toc, &mut |s| report.notes.push(s), client)
+            {
                 Ok(files) => files,
-                Err(e) => { report.errors.push(e); continue; }
+                Err(e) => {
+                    report.errors.push(e);
+                    continue;
+                }
             };
             crate::fonts::register_addon_root(self.sim.lua(), &toc.dir)?;
             let ns = self.sim.lua.create_table()?;
             for (name, source) in files {
                 let result = dispatch(&self.sim.lua, &self.sim.ctx, || {
-                    core::call_lua::<()>(&self.sim.lua,
+                    core::call_lua::<()>(
+                        &self.sim.lua,
                         self.sim.lua.load(&source).set_name(&name).into_function()?,
-                        (toc.name.as_str(), ns.clone()))
+                        (toc.name.as_str(), ns.clone()),
+                    )
                 });
-                if let Err(error) = result { report.errors.push(format!("{}: {error}", toc.name)); }
+                if let Err(error) = result {
+                    report.errors.push(format!("{}: {error}", toc.name));
+                }
             }
             report.addons_loaded += 1;
-            if let Err(error) = self.sim.fire("ADDON_LOADED", vec![Value::String(self.sim.lua.create_string(&toc.name)?)]) {
+            if let Err(error) = self.sim.fire(
+                "ADDON_LOADED",
+                vec![Value::String(self.sim.lua.create_string(&toc.name)?)],
+            ) {
                 report.errors.push(error.to_string());
             }
         }
         report.elapsed = start.elapsed();
-        report.notes.sort(); report.notes.dedup();
+        report.notes.sort();
+        report.notes.dedup();
         Ok(report)
     }
 
@@ -444,6 +501,7 @@ impl Session {
         }
         let sim = Self::start_vm(&config)?;
         Ok(Session {
+            default_ui_source: None,
             config,
             sim,
             generation: Generation::default(),
@@ -851,6 +909,9 @@ impl Session {
         self.saved = saved;
         self.sim = replacement;
         self.generation = self.generation.next();
+        if let Some(source) = self.default_ui_source.clone() {
+            self.load_default_ui(&source, |_| {})?;
+        }
         for dir in &addons {
             self.load_addon_dir(dir)?;
         }
@@ -1242,6 +1303,23 @@ impl std::ops::Deref for Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn blizzard_chunk_errors_are_captured_and_loading_continues() {
+        let mut s = Session::new(SessionConfig::default()).unwrap();
+        let mut progress = Vec::new();
+        let report = s
+            .load_default_ui(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/default-ui"),
+                |name| progress.push(name.to_owned()),
+            )
+            .unwrap();
+        assert_eq!(report.addons_loaded, 1);
+        assert_eq!(progress, ["Blizzard_Test"]);
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].contains("synthetic Blizzard chunk failure"));
+        s.eval("assert(AfterBrokenBlizzardChunk); assert(SyntheticOnly==nil)")
+            .unwrap();
+    }
     use super::*;
 
     #[test]
@@ -1279,17 +1357,22 @@ mod tests {
     }
 
     #[test]
-    fn xml_files_are_a_visible_error() {
+    fn xml_files_load_in_toc_order() {
         let dir = std::env::temp_dir().join(format!("selu-sim-xml-{}", std::process::id()));
         let addon = dir.join("WithXml");
         std::fs::create_dir_all(&addon).unwrap();
         std::fs::write(addon.join("WithXml.toc"), "main.lua\nframes.xml\n").unwrap();
         std::fs::write(addon.join("main.lua"), "print('x')").unwrap();
-        std::fs::write(addon.join("frames.xml"), "<Ui/>").unwrap();
+        std::fs::write(
+            addon.join("frames.xml"),
+            "<Ui><Frame name=\"FromXml\"><Size x=\"90\" y=\"30\"/></Frame></Ui>",
+        )
+        .unwrap();
         let mut s = Session::new(SessionConfig::default()).unwrap();
-        let err = s.load_addon_dir(&addon).unwrap_err().to_string();
+        s.load_addon_dir(&addon).unwrap();
+        s.eval("assert(FromXml:GetWidth()==90)").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(err.contains("XML files are not supported"), "{err}");
+        assert_eq!(s.prints(), ["x"]);
     }
 
     #[test]

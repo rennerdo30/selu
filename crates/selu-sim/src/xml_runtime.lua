@@ -18,7 +18,12 @@ local function lookup(s)
     return v
 end
 local function expand(s,p)
-    return s and (string.gsub(s, '%$parent', function() return p and p:GetName() or '' end))
+    local name
+    for i=1,128 do
+        if not p then break end
+        name=p:GetName(); if name then break end; p=p:GetParent()
+    end
+    return s and (string.gsub(s, '%$parent', function() return name or '' end))
 end
 local apply, create
 local function inherit(f,s,seen)
@@ -27,6 +32,8 @@ local function inherit(f,s,seen)
         local n=templates[name]
         if n then
             seen[name]=true; apply(f,n,seen); seen[name]=nil
+        elseif type(rawget(_G,name))=='table' and rawget(_G,name).GetObjectType and rawget(_G,name):GetObjectType()=='Font' then
+            f:SetFontObject(rawget(_G,name))
         else note('template '..name) end
     end
 end
@@ -35,6 +42,9 @@ local function dimension(n)
 end
 local function script(f,n)
     local a=n.a
+    if a.font then f:SetFont(a.font,tonumber(a.height) or 12,a.flags or '') end
+    if a.justifyH then f:SetJustifyH(a.justifyH) end
+    if a.justifyV then f:SetJustifyV(a.justifyV) end
     local fn
     if a.method then fn=function(self,...) return self[a.method](self,...) end
     elseif a['function'] then fn=lookup(a['function'])
@@ -130,8 +140,22 @@ create=function(n,parent,layer)
     end
     return f
 end
-function __selu_xml_apply(f,s) inherit(f,s,{}) end
+function __selu_xml_apply(f,s)
+    inherit(f,s,{})
+    local onload=f:GetScript('OnLoad'); if onload then onload(f) end
+end
+function __selu_xml_intrinsic(kind) return intrinsic[kind] end
 function __selu_xml_declare(n)
+    if n.tag=='FontFamily' then
+        for _,member in ipairs(n.children) do
+            if member.a.alphabet=='roman' and member.children[1] then
+                local font=member.children[1]
+                font.a.name=n.a.name; create(font,nil); return
+            end
+        end
+        note('font alphabet '..tostring(n.a.name)); return
+    end
+    if n.tag=='Font' then create(n,nil); return end
     if n.a.virtual=='true' or n.a.intrinsic=='true' then
         templates[n.a.name]=n
         if n.a.intrinsic=='true' then intrinsic[n.a.name]=n.tag end

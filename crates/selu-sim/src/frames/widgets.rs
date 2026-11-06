@@ -63,7 +63,21 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
                 Option<Table>,
                 Option<String>,
             )| {
-                let t = create(lua, &ctx, kind.as_deref().unwrap_or("Frame"), name, parent)?;
+                let mut kind = kind.unwrap_or_else(|| "Frame".into());
+                let mut templates = templates;
+                if let Some(resolve) = lua
+                    .globals()
+                    .raw_get::<Option<Function>>("__selu_xml_intrinsic")?
+                {
+                    if let Some(base) = resolve.call::<Option<String>>(kind.clone())? {
+                        templates = Some(match templates {
+                            Some(names) => format!("{kind},{names}"),
+                            None => kind.clone(),
+                        });
+                        kind = base;
+                    }
+                }
+                let t = create(lua, &ctx, &kind, name, parent)?;
                 crate::regions::templates(lua, &t, templates.as_deref())?;
                 if templates.as_deref().is_some_and(|s| s.contains("Secure")) {
                     ctx.not_simulated("secure templates");

@@ -203,7 +203,7 @@ fn main() -> ExitCode {
             project,
             selu,
         };
-        let native = eframe::NativeOptions {
+        let mut native = eframe::NativeOptions {
             viewport: eframe::egui::ViewportBuilder::default()
                 .with_title("Selu Studio")
                 .with_inner_size([1600.0, 980.0])
@@ -217,6 +217,12 @@ fn main() -> ExitCode {
                 ),
             ..Default::default()
         };
+        if std::env::var_os("SELU_STUDIO_SCREENSHOT").is_some() {
+            native.viewport = native
+                .viewport
+                .with_active(false)
+                .with_position([-32000.0, -32000.0]);
+        }
         return match eframe::run_native(
             "Selu Studio",
             native,

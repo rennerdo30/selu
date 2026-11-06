@@ -1,0 +1,7 @@
+local minimap=assert(rawget(_G,'Minimap'),'default UI did not construct Minimap')
+local button=CreateFrame('Button','DefaultUiAnchorProbe',minimap)
+button:SetSize(28,28)
+button:SetPoint('TOPLEFT',minimap,'TOPRIGHT',4,0)
+local texture=button:CreateTexture(nil,'ARTWORK')
+texture:SetAllPoints(button)
+texture:SetColorTexture(0.1,1,0.3,1)

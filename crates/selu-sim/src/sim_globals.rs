@@ -76,13 +76,72 @@ fn json_value(lua: &Lua, value: &serde_json::Value) -> SimResult<Value> {
     })
 }
 
-pub fn install_manifest(
-    lua: &Lua,
-    manifest: &selu_manifest::Manifest,
-    _ctx: &Ctx,
-) -> SimResult<()> {
+pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx) -> SimResult<()> {
     let globals = lua.globals();
     let shapes: Table = globals.raw_get("__selu_global_shapes")?;
+    // Native stand-ins use checked manifest return declarations. Existing
+    // simulator implementations always win, including namespace members.
+    for entry in manifest.functions.iter().filter(|f| f.available) {
+        let Some(signature) = &entry.signature else {
+            continue;
+        };
+        let mut owner = globals.clone();
+        let parts: Vec<_> = entry.name.split('.').collect();
+        for part in &parts[..parts.len() - 1] {
+            owner = match owner.raw_get::<Value>(*part)? {
+                Value::Table(table) => table,
+                Value::Nil => {
+                    let table = lua.create_table()?;
+                    owner.raw_set(*part, table.clone())?;
+                    table
+                }
+                _ => break,
+            };
+        }
+        let name = parts[parts.len() - 1];
+        if !owner.raw_get::<Value>(name)?.is_nil() {
+            continue;
+        }
+        let returns: Vec<_> = signature
+            .returns
+            .iter()
+            .map(|r| {
+                let ty = r.ty.as_deref().unwrap_or("").trim_end_matches('?');
+                if ty == "boolean" || ty == "bool" {
+                    'b'
+                } else if matches!(ty, "number" | "integer" | "float" | "double")
+                    || manifest.enums.iter().any(|e| e.name == ty)
+                {
+                    'n'
+                } else if matches!(ty, "string" | "cstring") {
+                    's'
+                } else if ty == "nil" || ty == "void" {
+                    'v'
+                } else {
+                    't'
+                }
+            })
+            .collect();
+        let context = ctx.clone();
+        let full_name = entry.name.clone();
+        owner.raw_set(
+            name,
+            lua.create_function(move |lua, _: mlua::MultiValue| {
+                context.not_simulated(&full_name);
+                let mut values = mlua::MultiValue::new();
+                for ty in &returns {
+                    values.push_back(match ty {
+                        'b' => Value::Boolean(false),
+                        'n' => Value::Number(0.0),
+                        's' => Value::String(lua.create_string("")?),
+                        'v' => Value::Nil,
+                        _ => Value::Table(lua.create_table()?),
+                    });
+                }
+                Ok(values)
+            })?,
+        )?;
+    }
     for function in manifest
         .functions
         .iter()
@@ -318,6 +377,30 @@ pub fn configure_screen(lua: &Lua, size: (f64, f64)) -> SimResult<()> {
 
 #[cfg(test)]
 mod sg_tests {
+    #[test]
+    fn native_defaults_follow_manifest_returns_and_log_once() {
+        let mut manifest: selu_manifest::Manifest = serde_json::from_str(include_str!(
+            "../../../manifests/fixtures/forever-1.0.0.1000.json"
+        ))
+        .unwrap();
+        manifest.functions.push(serde_json::from_value(serde_json::json!({
+            "name":"C_Synthetic.Native","evidence":"verified",
+            "signature":{"name":"Native","returns":[{"name":"text","type":"string"},{"name":"flag","type":"boolean"},{"name":"count","type":"number"}]}
+        })).unwrap());
+        let s = crate::Session::new(crate::SessionConfig {
+            manifest: Some(manifest),
+            ..Default::default()
+        })
+        .unwrap();
+        s.eval("for i=1,2 do local s,b,n=C_Synthetic.Native(); assert(s=='' and b==false and n==0) end").unwrap();
+        assert_eq!(
+            s.logs()
+                .iter()
+                .filter(|s| s.contains("not simulated: C_Synthetic.Native"))
+                .count(),
+            1
+        );
+    }
     #[test]
     fn wow_string_aliases_and_frame_ids() {
         let sim = crate::Sim::new().unwrap();

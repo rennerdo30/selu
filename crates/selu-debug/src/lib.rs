@@ -27,6 +27,9 @@ pub enum Arg {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
+    LoadDefaultUi {
+        source: PathBuf,
+    },
     LoadAddon {
         dir: PathBuf,
     },
@@ -166,6 +169,29 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
         }
         let before = session.generation();
         let result: Result<Option<Update>, String> = match command {
+            Command::LoadDefaultUi { source } => session
+                .load_default_ui(&source, |name| {
+                    eprintln!("Default UI: loading {name}");
+                    let _ = outbox.send(Update::Logs {
+                        lines: vec![format!("Default UI: loading {name}")],
+                    });
+                })
+                .map(|report| {
+                    let mut lines = vec![format!(
+                        "Default UI: {} addons, {} errors, {:.2}s",
+                        report.addons_loaded,
+                        report.errors.len(),
+                        report.elapsed.as_secs_f64()
+                    )];
+                    lines.extend(report.errors);
+                    lines.extend(report.notes);
+                    for line in &lines {
+                        eprintln!("{line}");
+                    }
+                    let _ = outbox.send(Update::Logs { lines });
+                    None
+                })
+                .map_err(|e| e.to_string()),
             Command::LoadAddon { dir } => session
                 .load_addon_dir(&dir)
                 .map(|_| None)

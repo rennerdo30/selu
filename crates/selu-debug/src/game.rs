@@ -150,6 +150,10 @@ pub fn battlenet_exe() -> Option<PathBuf> {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
+    pub disable_default_ui: bool,
+    #[serde(default)]
+    pub default_ui_source: Option<PathBuf>,
+    #[serde(default)]
     pub disable_client_assets: bool,
     #[serde(default)]
     pub client_install: Option<PathBuf>,
