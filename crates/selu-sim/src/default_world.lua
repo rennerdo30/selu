@@ -19,4 +19,7 @@ function GetRealZoneText() return GetZoneText() end
 function GetSubZoneText() return 'Northshire Valley' end
 function IsLoggedIn() return true end
 function IsPlayerInWorld() return true end
-function securecallfunction(fn,...) return fn(...) end
+function securecallfunction(fn,...) return __selu_secure_invoke(fn,...) end
+function secureexecuterange(values,callback,...)
+    for key,value in pairs(values) do __selu_secure_invoke(callback,key,value,...) end
+end

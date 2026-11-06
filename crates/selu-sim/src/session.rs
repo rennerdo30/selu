@@ -404,6 +404,17 @@ impl Session {
     ) -> SimResult<crate::loader::DefaultUiReport> {
         let start = std::time::Instant::now();
         let log_start = lock(&self.sim.logs).len();
+        let ctx=self.sim.ctx.clone();
+        self.sim.lua.globals().raw_set("__selu_secure_invoke",self.sim.lua.create_function(move|lua,(function,args):(Function,MultiValue)| {
+            match core::script_callback(lua,&ctx,||core::call_lua::<MultiValue>(lua,function,args)) {
+                Ok(values)=>Ok(values),
+                Err(error)=>{
+                    ctx.log(format!("error: {error}"));
+                    core::check_budget(&ctx)?;
+                    Ok(MultiValue::new())
+                }
+            }
+        })?)?;
         let build = self
             .config
             .manifest
@@ -1357,7 +1368,7 @@ mod tests {
             .unwrap();
         assert_eq!(report.addons_loaded, 1);
         assert_eq!(progress, ["Blizzard_Test"]);
-        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors.len(), 2);
         assert!(report.errors[0].contains("synthetic Blizzard chunk failure"));
         s.eval("assert(AfterBrokenBlizzardChunk); assert(SyntheticOnly==nil)")
             .unwrap();
