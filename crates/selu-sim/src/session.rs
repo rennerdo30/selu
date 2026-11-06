@@ -107,6 +107,7 @@ impl HostValue {
 }
 #[derive(Default)]
 struct VmState {
+    tolerant_ui: bool,
     blizzard_loaded: HashSet<String>,
     loaded: Vec<PathBuf>,
     loading: HashSet<PathBuf>,
@@ -417,6 +418,41 @@ impl Session {
     ) -> SimResult<crate::loader::DefaultUiReport> {
         let start = std::time::Instant::now();
         let log_start = lock(&self.sim.logs).len();
+        lock(&self.sim.state).tolerant_ui = true;
+        crate::native_stdlib::install(&self.sim.lua)?;
+        let mut events: HashSet<String> = self
+            .config
+            .manifest
+            .as_ref()
+            .map(|m| m.events.iter().map(|e| e.name.clone()).collect())
+            .unwrap_or_default();
+        events.extend(
+            [
+                "VARIABLES_LOADED",
+                "ADDON_LOADED",
+                "PLAYER_LOGIN",
+                "PLAYER_ENTERING_WORLD",
+                "PLAYER_LEAVING_WORLD",
+                "PLAYER_LOGOUT",
+                "CVAR_UPDATE",
+                "CVAR_LOADED",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        );
+        let event_api = self
+            .sim
+            .lua
+            .globals()
+            .raw_get::<Option<Table>>("C_EventUtils")?
+            .unwrap_or(self.sim.lua.create_table()?);
+        event_api.raw_set(
+            "IsEventValid",
+            self.sim
+                .lua
+                .create_function(move |_, name: String| Ok(events.contains(&name)))?,
+        )?;
+        self.sim.lua.globals().raw_set("C_EventUtils", event_api)?;
         self.sim.ctx.not_simulated("native taint tracking");
         let ctx = self.sim.ctx.clone();
         self.sim.lua.globals().raw_set(
@@ -873,6 +909,24 @@ impl Session {
             return Ok(());
         }
         self.logged_in = true;
+        if self.default_ui_report.is_some() {
+            for (event, args) in [
+                ("VARIABLES_LOADED", vec![]),
+                ("PLAYER_LOGIN", vec![]),
+                (
+                    "PLAYER_ENTERING_WORLD",
+                    vec![
+                        Value::Boolean(self.generation.0 == 0),
+                        Value::Boolean(self.generation.0 != 0),
+                    ],
+                ),
+            ] {
+                if let Err(error) = self.sim.fire(event, args) {
+                    self.sim.ctx.log(format!("error: {error}"));
+                }
+            }
+            return Ok(());
+        }
         self.sim.fire("PLAYER_LOGIN", vec![])?;
         self.sim.fire(
             "PLAYER_ENTERING_WORLD",
@@ -1339,7 +1393,13 @@ impl Vm {
                     core::call_lua::<()>(&self.lua, func, call)
                 });
                 core::flush(&self.lua, &self.ctx);
-                result?;
+                if let Err(error) = result {
+                    if lock(&self.state).tolerant_ui {
+                        self.ctx.log(format!("error: {error}"));
+                    } else {
+                        return Err(error);
+                    }
+                }
                 delivered += 1;
             }
         }
@@ -1411,6 +1471,8 @@ mod tests {
         assert!(report.errors[0].contains("synthetic Blizzard chunk failure"));
         s.eval("assert(AfterBrokenBlizzardChunk); assert(SyntheticOnly==nil)")
             .unwrap();
+        s.login().unwrap();
+        s.eval("assert(NativeLoginContinued)").unwrap();
     }
     use super::*;
 

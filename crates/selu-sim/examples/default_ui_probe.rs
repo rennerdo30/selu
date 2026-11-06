@@ -6,11 +6,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         })?;
         let manifest = session.config().manifest.as_ref().ok_or("no manifest")?;
-        for schema in
-            manifest.tables.iter().chain(&manifest.enums).filter(|s| {
-                s.name.contains("LFG_ROLE") || s.namespace.as_deref() == Some("Constants")
-            })
-        {
+        for schema in manifest.tables.iter().chain(&manifest.enums).filter(|s| {
+            s.name.contains("LFG_ROLE")
+                || s.name == "GameMode"
+                || s.namespace.as_deref() == Some("Constants")
+        }) {
             println!("constant schema: {schema:?}");
         }
         for global in manifest

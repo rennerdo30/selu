@@ -8,11 +8,11 @@ local function remember(owner,key,name)
     local value=rawget(owner,key)
     if value~=nil and standins[name]~=value then originals[#originals+1]={owner,key,value} end
 end
-for _,name in ipairs({'GetBuildInfo','Mixin','CreateFromMixins','issecure','GetCVar','GetCVarBool','GetCVarNumber','SetCVar',
+for _,name in ipairs({'GetBuildInfo','Mixin','CreateFromMixins','CopyTable','GetCurrentEnvironment','GetGlobalEnvironment','issecure','GetCVar','GetCVarBool','GetCVarNumber','SetCVar',
     'UnitRace','UnitGUID','UnitIsUnit','UnitIsPlayer','UnitPlayerControlled','UnitIsConnected','UnitIsVisible','UnitSex',
     'UnitFactionGroup','HasFullControl','GetUnitName','GetSpecialization','UnitInParty','UnitInRaid','UnitPowerType',
     'GetPowerDisplayMod','GetZoneText','GetRealZoneText','GetSubZoneText','IsLoggedIn','IsPlayerInWorld',
-    'securecallfunction','secureexecuterange','UnitHealthPercent','UnitPowerPercent'}) do remember(_G,name,name) end
+    'securecall','securecallfunction','secureexecuterange','UnitHealthPercent','UnitPowerPercent'}) do remember(_G,name,name) end
 for namespace,keys in pairs({C_UnitAuras={'GetAuraSlots','GetAuraDataByIndex','GetAuraDataBySlot','GetAuraDataByAuraInstanceID','GetPlayerAuraBySpellID','GetUnitAuras'},
     C_CVar={'GetCVar','GetCVarBool','GetCVarNumber','SetCVar','AreCVarsLoaded','GetCVarDefault'}}) do
     for _,key in ipairs(keys) do remember(rawget(_G,namespace),key,namespace..'.'..key) end
@@ -23,6 +23,20 @@ function Mixin(object,...)
     return object
 end
 function CreateFromMixins(...) return Mixin({},...) end
+function CopyTable(source)
+    local seen={}
+    local function copy(value)
+        if type(value)~='table' then return value end
+        if seen[value] then return seen[value] end
+        local result={}; seen[value]=result
+        for key,child in pairs(value) do result[key]=copy(child) end
+        local mt=getmetatable(value); if type(mt)=='table' then setmetatable(result,mt) end
+        return result
+    end
+    return copy(source)
+end
+function GetCurrentEnvironment() return _G end
+function GetGlobalEnvironment() return _G end
 function issecure() return true end
 if version then
     function GetBuildInfo() return version,tostring(build),'',interface end
@@ -65,6 +79,10 @@ function GetSubZoneText() return 'Northshire Valley' end
 function IsLoggedIn() return true end
 function IsPlayerInWorld() return true end
 function securecallfunction(fn,...) return __selu_secure_invoke(fn,...) end
+function securecall(fn,...)
+    if type(fn)=='string' then fn=_G[fn] end
+    return __selu_secure_invoke(fn,...)
+end
 function secureexecuterange(values,callback,...)
     for key,value in pairs(values) do __selu_secure_invoke(callback,key,value,...) end
 end

@@ -25,6 +25,7 @@ pub mod fonts;
 pub mod frames;
 pub mod loader;
 mod native_defaults;
+mod native_stdlib;
 mod xml;
 mod regions;
 pub mod saved;

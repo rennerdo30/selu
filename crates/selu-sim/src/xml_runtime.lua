@@ -26,6 +26,10 @@ local function expand(s,p)
     return s and (string.gsub(s, '%$parent', function() return name or '' end))
 end
 local apply, create
+local function invoke(fn,...)
+    if __selu_secure_invoke then return __selu_secure_invoke(fn,...) end
+    return fn(...)
+end
 local function nativeKind(kind)
     local seen={}
     while intrinsic[kind] do
@@ -66,10 +70,12 @@ local function script(f,n)
         fn=assert(loadstring('return function('..args..')\n'..n.text..'\nend', '@XML/'..n.tag))()
     end
     if not fn then note('script '..(a['function'] or n.tag)); return end
-    if a.inherit=='prepend' then
+    if a.inherit=='prepend' or a.inherit=='append' then
         local old=f:GetScript(n.tag)
-        f:SetScript(n.tag,function(...) fn(...); if old then old(...) end end)
-    elseif a.inherit=='append' then f:HookScript(n.tag,fn)
+        f:SetScript(n.tag,function(...)
+            if a.inherit=='prepend' then invoke(fn,...); if old then invoke(old,...) end
+            else if old then invoke(old,...) end; invoke(fn,...) end
+        end)
     else f:SetScript(n.tag,fn) end
 end
 apply=function(f,n,seen)
@@ -161,13 +167,13 @@ create=function(n,parent,layer)
     end
     apply(f,n,{})
     if n.tag~='Texture' and n.tag~='FontString' and n.tag~='Font' then
-        local onload=f:GetScript('OnLoad'); if onload then onload(f) end
+        local onload=f:GetScript('OnLoad'); if onload then invoke(onload,f) end
     end
     return f
 end
 function __selu_xml_apply(f,s)
     inherit(f,s,{})
-    local onload=f:GetScript('OnLoad'); if onload then onload(f) end
+    local onload=f:GetScript('OnLoad'); if onload then invoke(onload,f) end
 end
 function __selu_xml_intrinsic(kind) if intrinsic[kind] then return nativeKind(kind) end end
 function __selu_xml_declare(n)
