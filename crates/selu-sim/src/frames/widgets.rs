@@ -9,6 +9,104 @@ type CreateFrameArgs = (
     Option<String>,
     Option<i32>,
 );
+// Retain only fields that this operation can change. Geometry setters do not
+// clone text, font names, visual vectors and the entire region twice per call.
+struct Before {
+    parent: Option<usize>,
+    width: f64,
+    height: f64,
+    scale: f64,
+    alpha: f64,
+    shown: bool,
+    strata: Strata,
+    level: i32,
+    points: Option<Vec<Point>>,
+    font_path: Option<String>,
+    font_size: f64,
+    font_flags: Option<String>,
+    text: Option<String>,
+    text_value: Value,
+    visual: Option<crate::core::VisualStyle>,
+    font_overrides: u8,
+    scroll: (f64, f64),
+    value: f64,
+    min: f64,
+    max: f64,
+    orientation: Option<String>,
+    scroll_child: Option<usize>,
+    enabled: bool,
+}
+impl Before {
+    fn capture(r: &Region, method: &str) -> Self {
+        Self {
+            parent: r.parent,
+            width: r.width,
+            height: r.height,
+            scale: r.scale,
+            alpha: r.alpha,
+            shown: r.shown,
+            strata: r.strata,
+            level: r.level,
+            points: matches!(method, "SetPoint" | "ClearAllPoints" | "SetAllPoints")
+                .then(|| r.points.clone()),
+            font_path: (method == "SetFont").then(|| r.font_path.clone()),
+            font_size: r.font_size,
+            font_flags: (method == "SetFont").then(|| r.font_flags.clone()),
+            text: if method == "SetText" {
+                r.text.clone()
+            } else {
+                None
+            },
+            text_value: if method == "SetText" {
+                r.text_value.clone()
+            } else {
+                Value::Nil
+            },
+            visual: matches!(
+                method,
+                "SetTextColor"
+                    | "SetShadowColor"
+                    | "SetShadowOffset"
+                    | "SetJustifyH"
+                    | "SetJustifyV"
+                    | "SetTextInsets"
+                    | "SetNonSpaceWrap"
+                    | "SetEllipsis"
+                    | "SetSpacing"
+                    | "SetWordWrap"
+                    | "SetMaxLines"
+                    | "SetTexCoord"
+                    | "SetVertexColor"
+                    | "SetBlendMode"
+                    | "SetHorizTile"
+                    | "SetVertTile"
+                    | "SetDesaturated"
+            )
+            .then(|| r.visual.clone()),
+            font_overrides: r.font_overrides,
+            scroll: r.scroll,
+            value: r.value,
+            min: r.min,
+            max: r.max,
+            orientation: (method == "SetOrientation").then(|| r.orientation.clone()),
+            scroll_child: r.scroll_child,
+            enabled: r.enabled,
+        }
+    }
+}
+struct After {
+    rect: Option<crate::Rect>,
+    width: f64,
+    height: f64,
+    value: f64,
+    scroll: (f64, f64),
+    enabled: bool,
+    min: f64,
+    max: f64,
+    is_slider: bool,
+    is_edit_box: bool,
+    text_changed: bool,
+}
 fn number(v: Option<&Value>, default: f64) -> f64 {
     match v {
         Some(Value::Number(n)) => *n,
@@ -300,113 +398,139 @@ pub fn create(
             a.full_layout = true;
         }
     }
-    // Shared method table per type. Missing addon fields remain nil.
-    let key = format!("selu.methods.{kind}");
-    let methods = if let Ok(m) = lua.named_registry_value::<Table>(&key) {
-        m
+    // A type shares its dispatch closure as well as its methods. Region
+    // identity lives on the receiver, so this retains no per-region handle.
+    let metakey = format!("selu.region_metatable.{kind}");
+    let mt = if let Some(mt) = lua.named_registry_value::<Option<Table>>(&metakey)? {
+        mt
     } else {
-        let m = lua.create_table()?;
-        for method in METHODS.split_whitespace().chain([
-            "GetAttribute",
-            "SetAttribute",
-            "SetStatusBarTexture",
-            "GetStatusBarTexture",
-            "SetStatusBarColor",
-            "GetStatusBarColor",
-            "GetNormalTexture",
-            "GetAtlas",
-            "GetScaledRect",
-            "SetNormalAtlas",
-            "SetPushedAtlas",
-            "SetHighlightAtlas",
-            "SetDisabledAtlas",
-            "SetUnit",
-            "GetUnit",
-            "SetGUIDMatch",
-            "SetClampRectInsets",
-            "SetAllowOverlappedModels",
-            "SetIndentedWordWrap",
-            "IsOwned",
-            "GetViewInsets",
-            "SetViewInsets",
-            "GetHighlightTexture",
-            "GetPushedTexture",
-            "GetDisabledTexture",
-            "SetDisabledTexture",
-            "SetFontString",
-            "GetFontString",
-            "SetNormalFontObject",
-            "SetHighlightFontObject",
-            "SetDisabledFontObject",
-            "SetFormattedText",
-        ]) {
-            let method = method.to_owned();
-            let context = ctx.clone();
-            m.set(
-                method.clone(),
-                lua.create_function(move |lua, args: MultiValue| {
-                    let result = call(lua, &context, &method, args);
-                    crate::core::flush_scripts(lua, &context)?;
-                    crate::core::check_budget(&context)?;
-                    result
-                })?,
+        // Shared method table per type. Missing addon fields remain nil.
+        let key = format!("selu.methods.{kind}");
+        let methods = if let Ok(m) = lua.named_registry_value::<Table>(&key) {
+            m
+        } else {
+            let m = lua.create_table()?;
+            for method in METHODS.split_whitespace().chain([
+                "GetAttribute",
+                "SetAttribute",
+                "SetStatusBarTexture",
+                "GetStatusBarTexture",
+                "SetStatusBarColor",
+                "GetStatusBarColor",
+                "GetNormalTexture",
+                "GetAtlas",
+                "GetScaledRect",
+                "SetNormalAtlas",
+                "SetPushedAtlas",
+                "SetHighlightAtlas",
+                "SetDisabledAtlas",
+                "SetUnit",
+                "GetUnit",
+                "SetGUIDMatch",
+                "SetClampRectInsets",
+                "SetAllowOverlappedModels",
+                "SetIndentedWordWrap",
+                "IsOwned",
+                "GetViewInsets",
+                "SetViewInsets",
+                "GetHighlightTexture",
+                "GetPushedTexture",
+                "GetDisabledTexture",
+                "SetDisabledTexture",
+                "SetFontString",
+                "GetFontString",
+                "SetNormalFontObject",
+                "SetHighlightFontObject",
+                "SetDisabledFontObject",
+                "SetFormattedText",
+            ]) {
+                let method = method.to_owned();
+                let context = ctx.clone();
+                m.set(
+                    method.clone(),
+                    lua.create_function(move |lua, args: MultiValue| {
+                        let result = call(lua, &context, &method, args);
+                        crate::core::flush_scripts(lua, &context)?;
+                        crate::core::check_budget(&context)?;
+                        result
+                    })?,
+                )?;
+            }
+            let enumerate = crate::host_lua::factory(
+                lua,
+                "selu.helper.enumerate",
+                "return function(regions,count) return function(self) local children=__selu_child_regions(self,regions); if count then return #children end; return unpack(children) end end",
             )?;
-        }
-        let enumerate = crate::host_lua::factory(
-            lua,
-            "selu.helper.enumerate",
-            "return function(regions,count) return function(self) local children=__selu_child_regions(self,regions); if count then return #children end; return unpack(children) end end",
+            for (name, regions, count) in [
+                ("GetChildren", false, false),
+                ("GetRegions", true, false),
+                ("GetNumChildren", false, true),
+                ("GetNumRegions", true, true),
+            ] {
+                m.raw_set(name, enumerate.call::<Function>((regions, count))?)?;
+            }
+            lua.set_named_registry_value(&key, m.clone())?;
+            m
+        };
+        let methods = RegionTable::new(lua, &methods)?;
+        let mt = lua.create_table()?;
+        let context = ctx.clone();
+        let widget = kind.to_owned();
+        mt.set(
+            "__index",
+            lua.create_function(move |lua, (_, key): (Table, String)| {
+                let _profile = crate::profile::Span::new("frames.method_lookup");
+                let known = methods.raw_get::<Value>(key.clone())?;
+                if !known.is_nil() {
+                    return Ok(known);
+                }
+                let catalog = lua.app_data_ref::<super::MethodCatalog>();
+                let fallback = super::missing_method(
+                    &widget,
+                    &key,
+                    catalog.as_deref().and_then(|c| c.0.as_ref()),
+                );
+                drop(catalog);
+                if let Some(fallback) = fallback {
+                    let context = context.clone();
+                    Ok(Value::Function(lua.create_function(
+                        move |lua, _: MultiValue| {
+                            context.not_simulated(&fallback.target);
+                            let mut out = MultiValue::new();
+                            for c in fallback.empty_shape.chars() {
+                                out.push_back(match c {
+                                    'b' => Value::Boolean(false),
+                                    'd' => Value::Number(0.0),
+                                    's' => Value::String(lua.create_string("")?),
+                                    't' => Value::Table(lua.create_table()?),
+                                    _ => Value::Nil,
+                                });
+                            }
+                            Ok(out)
+                        },
+                    )?))
+                } else {
+                    Ok(Value::Nil)
+                }
+            })?,
         )?;
-        for (name, regions, count) in [
-            ("GetChildren", false, false),
-            ("GetRegions", true, false),
-            ("GetNumChildren", false, true),
-            ("GetNumRegions", true, true),
-        ] {
-            m.raw_set(name, enumerate.call::<Function>((regions, count))?)?;
-        }
-        lua.set_named_registry_value(&key, m.clone())?;
-        m
+        let describe = match lua.named_registry_value::<Option<Function>>("selu.region_tostring")? {
+            Some(function) => function,
+            None => {
+                let function = lua.create_function(|lua, region: Table| {
+                    let index = id(&region)?;
+                    let arena = store(lua);
+                    let arena = arena.borrow();
+                    Ok(format!("{}:{}", arena.regions[index].kind, index))
+                })?;
+                lua.set_named_registry_value("selu.region_tostring", function.clone())?;
+                function
+            }
+        };
+        mt.raw_set("__tostring", describe)?;
+        lua.set_named_registry_value(&metakey, mt.clone())?;
+        mt
     };
-    let methods = RegionTable::new(lua, &methods)?;
-    let mt = lua.create_table()?;
-    let context = ctx.clone();
-    let widget = kind.to_owned();
-    mt.set(
-        "__index",
-        lua.create_function(move |lua, (_, key): (Table, String)| {
-            let _profile = crate::profile::Span::new("frames.method_lookup");
-            let known = methods.raw_get::<Value>(key.clone())?;
-            if !known.is_nil() {
-                return Ok(known);
-            }
-            let catalog = lua.app_data_ref::<super::MethodCatalog>();
-            let fallback =
-                super::missing_method(&widget, &key, catalog.as_deref().and_then(|c| c.0.as_ref()));
-            drop(catalog);
-            if let Some(fallback) = fallback {
-                let context = context.clone();
-                Ok(Value::Function(lua.create_function(
-                    move |lua, _: MultiValue| {
-                        context.not_simulated(&fallback.target);
-                        let mut out = MultiValue::new();
-                        for c in fallback.empty_shape.chars() {
-                            out.push_back(match c {
-                                'b' => Value::Boolean(false),
-                                'd' => Value::Number(0.0),
-                                's' => Value::String(lua.create_string("")?),
-                                't' => Value::Table(lua.create_table()?),
-                                _ => Value::Nil,
-                            });
-                        }
-                        Ok(out)
-                    },
-                )?))
-            } else {
-                Ok(Value::Nil)
-            }
-        })?,
-    )?;
     t.set_metatable(Some(mt));
     if let Some(name) = name {
         lua.globals().set(name, t.clone())?;
@@ -418,7 +542,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
+const METHODS: &str = "SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText ClearText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent IsEventRegistered UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     let _profile = crate::profile::Span::new("frames.methods");
     if !ctx
@@ -492,6 +616,14 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     if method == "GetUnit" {
         out!(t.raw_get::<Value>("__selu_unit")?);
     }
+    if method == "IsEventRegistered" {
+        let event = v.first().cloned().unwrap_or(Value::Nil);
+        out!(
+            t.raw_get::<Table>("__events")?
+                .raw_get::<Option<bool>>(event)?
+                .unwrap_or(false)
+        );
+    }
     if method == "IsOwned" {
         out!(!t.raw_get::<Value>("__tooltip_owner")?.is_nil());
     }
@@ -525,6 +657,14 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     }
     if matches!(method, "SetTexture" | "SetColorTexture") {
         t.raw_set("__selu_atlas_name", Value::Nil)?;
+    }
+    if method == "ClearText" {
+        return call(
+            lua,
+            ctx,
+            "SetText",
+            MultiValue::from_vec(vec![Value::Table(t.clone()), Value::Nil]),
+        );
     }
     if method == "SetFormattedText" {
         let format = crate::host_lua::factory(
@@ -831,9 +971,28 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                     })?,
                 )?;
             }
-            "RegisterEvent" => t.raw_get::<Table>("__events")?.raw_set(name, true)?,
-            "UnregisterEvent" => t.raw_get::<Table>("__events")?.raw_set(name, Value::Nil)?,
-            _ => t.raw_set("__events", lua.create_table()?)?,
+            "RegisterEvent" => {
+                t.raw_get::<Table>("__events")?
+                    .raw_set(name.as_str(), true)?;
+                a.borrow_mut()
+                    .event_subscribers
+                    .entry(name)
+                    .or_default()
+                    .insert(i);
+            }
+            "UnregisterEvent" => {
+                t.raw_get::<Table>("__events")?
+                    .raw_set(name.as_str(), Value::Nil)?;
+                if let Some(indices) = a.borrow_mut().event_subscribers.get_mut(&name) {
+                    indices.remove(&i);
+                }
+            }
+            _ => {
+                t.raw_set("__events", lua.create_table()?)?;
+                for indices in a.borrow_mut().event_subscribers.values_mut() {
+                    indices.remove(&i);
+                }
+            }
         }
         out!(());
     }
@@ -993,7 +1152,9 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         }
     }
     layout::resolve(&mut a.borrow_mut(), ctx);
-    let old = a.borrow().regions[i].clone();
+    let old =
+        (!method.starts_with("Get") && !method.starts_with("Is") && !method.starts_with("Has"))
+            .then(|| Before::capture(&a.borrow().regions[i], method));
     let n = number(v.first(), 0.0);
     let s = string(v.first()).unwrap_or_default();
     let mut a = a.borrow_mut();
@@ -1102,10 +1263,12 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         } else {
             s.clone()
         });
-    let current_asset_available = match &a.regions[i].texture {
-        Some(TextureFill::File(path)) => a.fonts.asset(path),
-        _ => false,
-    };
+    // Geometry, color and visibility calls must not decode the current art.
+    let current_asset_available = matches!(method, "GetTexture" | "GetTextureFileID")
+        && match &a.regions[i].texture {
+            Some(TextureFill::File(path)) => a.fonts.asset(path),
+            _ => false,
+        };
     let current_asset_id = if method == "GetTextureFileID" && current_asset_available {
         match &a.regions[i].texture {
             Some(TextureFill::File(path)) => a.fonts.assets.file_id(path),
@@ -1628,6 +1791,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             out!(());
         }
     }
+    let old = old.expect("only mutators continue after method dispatch");
     let r = &a.regions[i];
     let geometry_changed = old.parent != r.parent
         || old.width != r.width
@@ -1637,19 +1801,34 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         || old.shown != r.shown
         || old.strata != r.strata
         || old.level != r.level
-        || old.points != r.points
-        || old.font_path != r.font_path
+        || old
+            .points
+            .as_ref()
+            .is_some_and(|points| *points != r.points)
+        || old
+            .font_path
+            .as_ref()
+            .is_some_and(|path| *path != r.font_path)
         || old.font_size != r.font_size
-        || old.font_flags != r.font_flags
-        || old.text != r.text
-        || old.text_value != r.text_value
-        || old.visual != r.visual
+        || old
+            .font_flags
+            .as_ref()
+            .is_some_and(|flags| *flags != r.font_flags)
+        || (method == "SetText" && old.text != r.text)
+        || (method == "SetText" && old.text_value != r.text_value)
+        || old
+            .visual
+            .as_ref()
+            .is_some_and(|visual| *visual != r.visual)
         || old.font_overrides != r.font_overrides
         || old.scroll != r.scroll
         || old.value != r.value
         || old.min != r.min
         || old.max != r.max
-        || old.orientation != r.orientation
+        || old
+            .orientation
+            .as_ref()
+            .is_some_and(|orientation| *orientation != r.orientation)
         || old.scroll_child != r.scroll_child;
     if geometry_changed
         && ((method == "SetAtlas" && boolean(v.get(1)))
@@ -1670,7 +1849,20 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         layout::resolve(&mut a, ctx);
     }
     let batched = a.layout_batches > 0;
-    let new = a.regions[i].clone();
+    let r = &a.regions[i];
+    let new = After {
+        rect: r.rect,
+        width: r.width,
+        height: r.height,
+        value: r.value,
+        scroll: r.scroll,
+        enabled: r.enabled,
+        min: r.min,
+        max: r.max,
+        is_slider: r.kind == "Slider",
+        is_edit_box: r.kind == "EditBox",
+        text_changed: method == "SetText" && old.text != r.text,
+    };
     drop(a);
     if !batched && new.rect.is_none() && (old.width, old.height) != (new.width, new.height) {
         callback(
@@ -1680,7 +1872,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             vec![Value::Number(new.width), Value::Number(new.height)],
         );
     }
-    if old.value != new.value && new.kind == "Slider" {
+    if old.value != new.value && new.is_slider {
         callback(
             ctx,
             t.clone(),
@@ -1724,10 +1916,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             vec![Value::Number(new.min), Value::Number(new.max)],
         );
     }
-    if method == "SetText" && new.kind == "EditBox" {
+    if method == "SetText" && new.is_edit_box {
         callback(ctx, t.clone(), "OnTextSet", vec![]);
     }
-    if old.text != new.text {
+    if new.text_changed {
         callback(ctx, t.clone(), "OnTextChanged", vec![Value::Boolean(false)]);
     }
     if matches!(method, "SetFont" | "SetTexture") {

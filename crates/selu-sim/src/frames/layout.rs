@@ -24,6 +24,7 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
         return;
     }
     let _profile = crate::profile::Span::new("layout.resolve");
+    let full = a.full_layout || (a.dirty_regions.is_empty() && !a.styles_dirty);
     let previous_count = a.layout_dependencies.len();
     a.layout_dependencies.resize_with(a.regions.len(), Vec::new);
     a.layout_dependents
@@ -66,12 +67,15 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
     };
     for index in style_regions {
         let r = &mut a.regions[index];
-        let original_style = r.visual.clone();
         let mut object = r
             .table
             .raw_get::<Option<mlua::Table>>("__font_object")
             .ok()
             .flatten();
+        if object.is_none() {
+            continue;
+        }
+        let original_style = r.visual.clone();
         let mut style_read = false;
         for _ in 0..64 {
             let Some(t) = object else { break };
@@ -184,26 +188,36 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
     a.styles_dirty = false;
     // Seed the dependency closure from mutations; external bulk invalidations
     // (root resize, input, font roots) retain conservative full resolution.
-    let mut changed = vec![a.full_layout || a.dirty_regions.is_empty(); a.regions.len()];
-    crate::profile::count(if changed.first() == Some(&true) {
+    if !full && a.dirty_regions.is_empty() {
+        a.dirty = false;
+        return;
+    }
+    a.layout_epoch = a.layout_epoch.wrapping_add(1);
+    if a.layout_epoch == 0 {
+        a.layout_seen.fill(0);
+        a.layout_epoch = 1;
+    }
+    let epoch = a.layout_epoch;
+    a.layout_seen.resize(a.regions.len(), 0);
+    crate::profile::count(if full {
         "layout.full"
     } else {
         "layout.partial"
     });
-    let mut active = if changed.first() == Some(&true) {
+    let mut active = if full {
         (0..a.regions.len()).collect::<Vec<_>>()
     } else {
         a.dirty_regions.iter().copied().collect()
     };
     a.dirty_regions.clear();
     for index in &active {
-        changed[*index] = true;
+        a.layout_seen[*index] = epoch;
     }
     let mut cursor = 0;
     while cursor < active.len() {
         for dependent in &a.layout_dependents[active[cursor]] {
-            if !changed[*dependent] {
-                changed[*dependent] = true;
+            if a.layout_seen[*dependent] != epoch {
+                a.layout_seen[*dependent] = epoch;
                 active.push(*dependent);
             }
         }
@@ -217,20 +231,28 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
             (r.visible, r.rect, r.effective_scale)
         })
         .collect::<Vec<_>>();
-    let mut inherited = changed
-        .iter()
-        .map(|v| if *v { 0u8 } else { 2 })
-        .collect::<Vec<_>>();
+    // Unchanged nodes stay resolved. Reset only the dependency closure rather
+    // than scanning every region for each single-widget mutation.
+    let mut inherited = std::mem::take(&mut a.layout_inherit_marks);
+    let mut marks = std::mem::take(&mut a.layout_geometry_marks);
+    inherited.resize(a.regions.len(), 2);
+    marks.resize(a.regions.len(), 2);
+    for &index in &active {
+        inherited[index] = 0;
+        marks[index] = 0;
+    }
     for &i in &active {
         inherit(i, a, &mut inherited, ctx);
     }
-    let mut marks = changed
-        .iter()
-        .map(|v| if *v { 0u8 } else { 2 })
-        .collect::<Vec<_>>();
     for &i in &active {
         visit(i, a, &mut marks, ctx);
     }
+    for &index in &active {
+        inherited[index] = 2;
+        marks[index] = 2;
+    }
+    a.layout_inherit_marks = inherited;
+    a.layout_geometry_marks = marks;
     for &i in &active {
         let r = &a.regions[i];
         if let (Some(index), Some(mut rect)) = (r.status_texture, r.rect) {
@@ -337,9 +359,15 @@ fn inherit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) {
         return;
     }
     marks[i] = 1;
-    let r = a.regions[i].clone();
+    let r = &a.regions[i];
     let (mut scale, mut alpha, mut visible) = (r.scale, r.alpha, r.shown);
-    if let Some(p) = r.parent {
+    let (parent, region, strata_explicit, level_explicit) = (
+        r.parent,
+        is_region(&r.kind),
+        r.strata_explicit,
+        r.level_explicit,
+    );
+    if let Some(p) = parent {
         inherit(p, a, marks, ctx);
         let parent = &a.regions[p];
         scale *= parent.effective_scale;
@@ -347,11 +375,11 @@ fn inherit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) {
         visible &= parent.visible;
         let strata = parent.strata;
         let level = parent.level;
-        if is_region(&r.kind) || !r.strata_explicit {
+        if region || !strata_explicit {
             a.regions[i].strata = strata;
         }
-        if is_region(&r.kind) || !r.level_explicit {
-            a.regions[i].level = level + if is_region(&r.kind) { 0 } else { 1 };
+        if region || !level_explicit {
+            a.regions[i].level = level + if region { 0 } else { 1 };
         }
     }
     a.regions[i].effective_scale = scale;
@@ -368,12 +396,12 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
         return false;
     }
     marks[i] = 1;
-    let r = a.regions[i].clone();
+    let points = a.regions[i].points.clone();
     let mut valid = true;
-    let scale = r.effective_scale;
+    let scale = a.regions[i].effective_scale;
     let mut xs = Vec::new();
     let mut ys = Vec::new();
-    for p in &r.points {
+    for p in &points {
         if p.relative >= a.regions.len() {
             ctx.not_simulated("unresolvable anchor");
             valid = false;
@@ -402,6 +430,8 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
         }
         Some((pos - f * size, size))
     }
+    let r = &a.regions[i];
+    let parent = r.parent;
     let intrinsic = r.kind == "FontString" || (r.kind == "EditBox" && r.multi_line);
     let width = if intrinsic && r.width == 0.0 {
         a.fonts
@@ -414,7 +444,7 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
     let logical_width = horizontal.map(|(_, w)| w / scale).unwrap_or(width);
     let height = if intrinsic && r.height == 0.0 {
         text_height(
-            &r,
+            r,
             (logical_width - r.visual.text_insets[0] - r.visual.text_insets[1]).max(0.0),
             &a.fonts,
         ) + r.visual.text_insets[2]
@@ -443,7 +473,7 @@ fn visit(i: usize, a: &mut Arena, marks: &mut [u8], ctx: &Ctx) -> bool {
     };
     let out = &mut a.regions[i];
     out.rect = rect;
-    if let Some(p) = r.parent
+    if let Some(p) = parent
         && a.regions[p].scroll_child == Some(i)
     {
         let (x, y) = a.regions[p].scroll;

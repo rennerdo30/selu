@@ -491,6 +491,9 @@ impl Session {
         )?;
         self.sim.lua.globals().raw_set("C_EventUtils", event_api)?;
         self.sim.ctx.not_simulated("native taint tracking");
+        self.sim
+            .ctx
+            .not_simulated("localized SecondsFormatter rendering (configuration only)");
         let ctx = self.sim.ctx.clone();
         self.sim.lua.globals().raw_set(
             "__selu_secure_invoke",
@@ -551,6 +554,12 @@ impl Session {
         } else {
             None
         };
+        let _text_cache = crate::ui_source_cache::Scope::new(
+            &source_root,
+            storage
+                .as_ref()
+                .map(|storage| storage.build.build_key.as_str()),
+        );
         let client = storage.as_deref().map(|s| (s, source_root.as_path()));
         let (addons, mut report) = loader::default_ui_order_client(
             &source_root,
@@ -994,6 +1003,23 @@ impl Session {
                 if let Err(error) = self.sim.fire(event, args) {
                     self.sim.ctx.log(format!("error: {error}"));
                 }
+            }
+            // Synthetic server greeting follows the normal Blizzard chat event path.
+            let empty = Value::String(self.sim.lua.create_string("")?);
+            let mut args = vec![empty; 18];
+            for index in [6, 7, 10, 12] {
+                args[index] = Value::Integer(0);
+            }
+            args[13] = Value::Boolean(false);
+            args[15] = Value::Boolean(false);
+            args[0] = Value::String(
+                self.sim
+                    .lua
+                    .create_string("Welcome to Selu's simulated Northshire Valley.")?,
+            );
+            args[17] = Value::Table(self.sim.lua.create_table()?);
+            if let Err(error) = self.sim.fire("CHAT_MSG_SYSTEM", args) {
+                self.sim.ctx.log(format!("error: {error}"));
             }
             return Ok(());
         }
@@ -1456,10 +1482,22 @@ impl Vm {
 
     fn fire_now(&self, event: &str, args: &[Value]) -> SimResult<usize> {
         let _profile = crate::profile::Span::new("events.dispatch");
-        let registry = self.lua.globals().get::<Table>("__selu_sim_frames")?;
+        let arena = crate::frames::arena::store(&self.lua);
         let mut delivered = 0;
-        for pair in registry.pairs::<i64, Table>() {
-            let (_, frame) = pair?;
+        let mut next_index = 0;
+        loop {
+            // Query the live ordered subscription index after each callback:
+            // unregistering a later frame still suppresses that delivery.
+            let next = {
+                let arena = arena.borrow();
+                arena
+                    .event_subscribers
+                    .get(event)
+                    .and_then(|indices| indices.range(next_index..).next())
+                    .map(|&index| (index, arena.regions[index].table.get()))
+            };
+            let Some((index, frame)) = next else { break };
+            next_index = index + 1;
             let registered: Value = frame.get::<Table>("__events")?.get(event)?;
             if matches!(registered, Value::Nil) {
                 continue;
@@ -1540,6 +1578,33 @@ impl std::ops::Deref for Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_ui_native_helpers_preserve_unique_font_names() {
+        let mut session = Session::new(SessionConfig::default()).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/default-ui");
+        session.load_default_ui(&source, |_| {}).unwrap();
+        session
+            .eval(
+                r#"
+            local first=CreateFrame('Frame'); local second=CreateFrame('Frame')
+            assert(tostring(first)~=tostring(second))
+            assert(tostring({})=='table')
+            CreateFont(tostring(first)); CreateFont(tostring(second))
+            assert(type(table.insert)=='function')
+            first:RegisterEvent('CUSTOM_EVENT')
+            assert(first:IsEventRegistered('CUSTOM_EVENT'))
+            first:UnregisterEvent('CUSTOM_EVENT')
+            assert(not first:IsEventRegistered('CUSTOM_EVENT'))
+            local shared={value=42};local original={a=shared,b=shared};original.self=original
+            local copied=securecopy(original);assert(copied~=original and copied.a~=shared and copied.a==copied.b and copied.self==copied)
+            local ok=pcall(securecopy,{nested={}},{maxTraversalDepth=0});assert(not ok)
+            forceinsecure()
+            assert(GetChatWindowMessages(1)=='SYSTEM')
+            assert(C_StringUtil.EscapeDecimalNonPrintables('日本語'..string.char(1))=='日本語\\001')
+        "#,
+            )
+            .unwrap();
+    }
     #[test]
     fn blizzard_login_queries_live_geometry_and_allows_large_system_searches() {
         let mut session = Session::new(SessionConfig::default()).unwrap();

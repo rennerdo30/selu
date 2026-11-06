@@ -89,6 +89,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
+        let atlas_bytes = storage.read(897470)?;
+        let member_bytes = storage.read(897532)?;
+        let element_bytes = storage.read(1989276)?;
+        let atlases = selu_gamedata::db2::Table::parse(&atlas_bytes)?;
+        let members = selu_gamedata::db2::Table::parse(&member_bytes)?;
+        let elements = selu_gamedata::db2::Table::parse(&element_bytes)?;
+        for element in 0..elements.count() {
+            if elements.text(element, 0)? == "UI-HUD-MicroMenu-Professions-Up" {
+                let id = elements.value(element, 1)?;
+                let mut count = 0;
+                for member in 0..members.count() {
+                    if members.value(member, 9)? == id {
+                        for sheet in 0..atlases.count() {
+                            if atlases.value(sheet, 0)? == members.value(member, 2)? {
+                                count += 1;
+                                let file = atlases.value(sheet, 1)?;
+                                println!(
+                                    "MICRO CANDIDATE sheet={} set={} file={} installed={}",
+                                    atlases.value(sheet, 0)?,
+                                    atlases.value(sheet, 2)?,
+                                    file,
+                                    storage.read(file).is_ok()
+                                );
+                            }
+                        }
+                    }
+                }
+                println!("MICRO CANDIDATES {count}");
+            }
+        }
         for (name, id) in [
             ("UiTextureAtlas", 897470),
             ("UiTextureAtlasMember", 897532),
@@ -242,6 +272,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..4 {
         session.advance_time(1.0 / 60.0);
     }
+    session.eval("__probe_meta(\"FILTER\",ChatFrameUtil.ProcessMessageEventFilters(DEFAULT_CHAT_FRAME,\"CHAT_MSG_SYSTEM\",\"System filter probe\")); __probe_meta(\"REGISTERED\",DEFAULT_CHAT_FRAME:IsEventRegistered(\"CHAT_MSG_SYSTEM\"))")?;
+    session.eval("__probe_meta(\"PRINTJOIN\",string.join(\"|\",\"alpha\",\"beta\")); DEFAULT_CHAT_FRAME:AddMessage(\"Direct chat probe\"); getprinthandler()(\"Handler chat probe\")")?;
+    session.eval("local c=DEFAULT_CHAT_FRAME; print('Simulator addon print probe'); __probe_meta('CHAT',c and c:GetNumMessages(),c and c.visibleLines and #c.visibleLines,c and c.isLayoutDirty,c and c.isDisplayDirty,c and c:GetWidth(),c and c:GetHeight()); if c then for i=1,math.min(c:GetNumMessages(),4) do __probe_meta('MESSAGE',c:GetMessageInfo(i)) end; for i,line in ipairs(c.visibleLines or {}) do if i<4 then __probe_meta('LINE',line:GetText(),line:IsShown(),line:GetAlpha(),line:GetRect()) end end end")?;
+    session.advance_time(1.0 / 60.0);
     let snapshot_start = std::time::Instant::now();
     let snapshot = session.snapshot()?;
     println!(
@@ -279,6 +313,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             r.name.as_deref().unwrap_or(""),
             r.size
         );
+    }
+    for region in snapshot.regions.iter().filter(|r| {
+        r.visible
+            && r.rect.is_some()
+            && r.name.is_some()
+            && !matches!(r.widget.as_str(), "Texture" | "FontString" | "MaskTexture")
+    }) {
+        let rect = region.rect.unwrap();
+        if rect.bottom > 600.0 && rect.width > 150.0 && rect.height > 20.0 && rect.height < 200.0 {
+            println!(
+                "PANEL {} {} {:?}",
+                region.name.as_deref().unwrap(),
+                region.widget,
+                rect
+            );
+        }
     }
     for name in [
         "PlayerFrame",

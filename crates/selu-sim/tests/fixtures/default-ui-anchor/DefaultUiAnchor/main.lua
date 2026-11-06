@@ -7,3 +7,5 @@ button:SetFrameLevel(100)
 local texture=button:CreateTexture(nil,'ARTWORK')
 texture:SetAllPoints(button)
 texture:SetColorTexture(0.1,1,0.3,1)
+
+print('Minimap anchor ready.')

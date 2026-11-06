@@ -777,9 +777,20 @@ pub(crate) fn call_lua<R: mlua::FromLuaMulti>(
                 r#"
 local xpcall, error, unpack, select = xpcall, error, unpack, select
 return function(render)
+ local function result(ok, ...) if not ok then error((...),0) end; return ... end
  return function(fn, ...)
-  local args, count = {...}, select('#', ...)
-  local function result(ok, ...) if not ok then error((...),0) end; return ... end
+  local count = select('#', ...)
+  if count == 0 then return result(xpcall(fn,render)) end
+  if count == 1 then
+   local a = ...; return result(xpcall(function() return fn(a) end,render))
+  end
+  if count == 2 then
+   local a,b = ...; return result(xpcall(function() return fn(a,b) end,render))
+  end
+  if count == 3 then
+   local a,b,c = ...; return result(xpcall(function() return fn(a,b,c) end,render))
+  end
+  local args = {...}
   return result(xpcall(function() return fn(unpack(args,1,count)) end,render))
  end
 end

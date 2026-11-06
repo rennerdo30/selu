@@ -111,6 +111,7 @@ pub struct Region {
 pub struct Arena {
     pub fonts: crate::fonts::FontBook,
     pub regions: Vec<Region>,
+    pub event_subscribers: std::collections::HashMap<String, std::collections::BTreeSet<usize>>,
     pub dirty: bool,
     pub full_layout: bool,
     pub layout_batches: usize,
@@ -118,6 +119,10 @@ pub struct Arena {
     pub styles_dirty: bool,
     pub dirty_regions: std::collections::HashSet<usize>,
     pub layout_dependencies: Vec<Vec<usize>>,
+    pub layout_seen: Vec<u64>,
+    pub layout_epoch: u64,
+    pub layout_inherit_marks: Vec<u8>,
+    pub layout_geometry_marks: Vec<u8>,
     pub layout_dependents: Vec<std::collections::HashSet<usize>>,
     pub cursor: (f64, f64),
     pub hover: Option<usize>,

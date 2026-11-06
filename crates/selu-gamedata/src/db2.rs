@@ -208,9 +208,28 @@ impl AtlasIndex {
         let a = storage.read(TABLES[0].1)?;
         let m = storage.read(TABLES[1].1)?;
         let e = storage.read(TABLES[2].1)?;
-        Self::decode(&Table::parse(&a)?, &Table::parse(&m)?, &Table::parse(&e)?)
+        let mut available = HashMap::new();
+        Self::decode_available(
+            &Table::parse(&a)?,
+            &Table::parse(&m)?,
+            &Table::parse(&e)?,
+            |file| {
+                *available
+                    .entry(file)
+                    .or_insert_with(|| storage.has_local_file(file) && storage.read(file).is_ok())
+            },
+        )
     }
+    #[cfg(test)]
     fn decode(atlases: &Table<'_>, members: &Table<'_>, elements: &Table<'_>) -> Result<Self> {
+        Self::decode_available(atlases, members, elements, |_| false)
+    }
+    fn decode_available(
+        atlases: &Table<'_>,
+        members: &Table<'_>,
+        elements: &Table<'_>,
+        mut available: impl FnMut(u32) -> bool,
+    ) -> Result<Self> {
         // Verified against the installed 1.60.1.70790 tables; field orders are
         // documented by wowdev/WoWDBDefs definitions/UiTextureAtlas*.dbd.
         if atlases.layout != 0x91378408
@@ -306,7 +325,14 @@ impl AtlasIndex {
                 let key = alias.to_ascii_lowercase();
                 match &record {
                     Ok(record) => {
-                        index.records.entry(key).or_insert_with(|| record.clone());
+                        let replace = index.records.get(&key).is_none_or(|previous| {
+                            previous.file_data_id != record.file_data_id
+                                && !available(previous.file_data_id)
+                                && available(record.file_data_id)
+                        });
+                        if replace {
+                            index.records.insert(key, record.clone());
+                        }
                     }
                     Err(error) => {
                         index.unavailable.insert(key, error.to_string());
@@ -414,6 +440,38 @@ mod tests {
         let length = (bytes.len() - string_start) as u32;
         bytes[220..224].copy_from_slice(&length.to_le_bytes());
         bytes
+    }
+    #[test]
+    fn atlas_variants_prefer_installed_payload_and_keep_aliases() {
+        let a = records(
+            0x91378408,
+            &[
+                vec![12, 1234, 0, 256, 256, 0],
+                vec![13, 5678, 1, 256, 256, 0],
+            ],
+            &[],
+        );
+        let m = records(
+            0x75e12f73,
+            &[
+                vec![0, 7, 12, 32, 16, 10, 42, 20, 36, 9, 0, 0, 0, 0],
+                vec![0, 8, 13, 32, 16, 50, 82, 60, 76, 9, 0, 0, 0, 0],
+            ],
+            &[(0, 0, "Alias"), (1, 0, "Alias")],
+        );
+        let e = records(0x7ccbd18f, &[vec![0, 9]], &[(0, 0, "Micro-Test")]);
+        let (a, m, e) = (
+            Table::parse(&a).unwrap(),
+            Table::parse(&m).unwrap(),
+            Table::parse(&e).unwrap(),
+        );
+        let available = AtlasIndex::decode_available(&a, &m, &e, |id| id == 5678).unwrap();
+        for name in ["micro-test", "alias"] {
+            assert_eq!(available.records[name].file_data_id, 5678);
+            assert_eq!(available.records[name].left, 50);
+        }
+        let unavailable = AtlasIndex::decode(&a, &m, &e).unwrap();
+        assert_eq!(unavailable.records["micro-test"].file_data_id, 1234);
     }
     #[test]
     fn atlas_names_join_elements_and_invalid_members_stay_local() {

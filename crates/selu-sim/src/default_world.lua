@@ -55,10 +55,31 @@ function CopyTable(source)
     end
     return copy(source)
 end
+-- FrameScriptDocumentation.lua: preserve cycles and shared references.
+-- Native taint propagation remains outside the simulator's fake world.
+function securecopy(value,options)
+    options=options or {}
+    local seen={}
+    local function copy(item,depth)
+        if type(item)~='table' then return item end
+        if rawget(item,'__kind') or rawget(item,'GetObjectType') then
+            assert(options.permitScriptObjects,'securecopy: script objects are not permitted')
+            return item
+        end
+        if seen[item] then return seen[item] end
+        assert(depth<=(options.maxTraversalDepth or 100),'securecopy: maximum traversal depth exceeded')
+        local result={};seen[item]=result
+        for key,child in pairs(item) do result[copy(key,depth+1)]=copy(child,depth+1) end
+        return result
+    end
+    return copy(value,0)
+end
 function GetCurrentEnvironment() return _G end
 function GetGlobalEnvironment() return _G end
 function debuglocals() return '' end
 function issecure() return true end
+-- Native taint is not modeled; print handlers still need this host transition.
+function forceinsecure() end
 if version then
     function GetBuildInfo() return version,tostring(build),'',interface end
 end
@@ -205,6 +226,33 @@ function string.join(separator,...)
 end
 _G.string.join=string.join
 _G.strjoin=string.join
+-- SecondsFormatterAPIDocumentation.lua: native formatter configuration must
+-- survive even in an empty aura world. Localized duration rendering is absent.
+C_StringUtil=C_StringUtil or {}
+function C_StringUtil.CreateSecondsFormatter()
+    local formatter={}
+    for _,key in ipairs({'ApproximationSeconds','CanRoundUpIntervals','CanRoundUpLastUnit','ConvertToLower',
+        'DefaultAbbreviation','DesiredUnitCount','DesiredUnitCountCurve','MaxInterval','MaxIntervalCurve',
+        'MillisecondsThreshold','MinInterval','MinIntervalCurve','Rounding','StripIntervalWhitespace'}) do
+        formatter['Set'..key]=function(self,value) self[key]=value end
+        formatter['Get'..key]=function(self) return self[key] end
+    end
+    return formatter
+end
+function GetNumGroupMembers() return 0 end
+function GetNumSubgroupMembers() return 0 end
+function GetNumPartyMembers() return 0 end
+function UnitGroupRolesAssigned() return 'NONE' end
+function GetChatWindowMessages(id)
+    if id==1 then return 'SYSTEM','SAY','YELL','WHISPER','PARTY','GUILD','CHANNEL' end
+end
+-- LuaTableExtensionsDocumentation.lua: these operate over all keys.
+function table.count(values) local count=0; for _ in pairs(values) do count=count+1 end; return count end
+function table.isempty(values) return next(values)==nil end
+function table.keys(values) local result={}; for key in pairs(values) do result[#result+1]=key end; return result end
+function table.values(values) local result={}; for _,value in pairs(values) do result[#result+1]=value end; return result end
+function table.indexof(values,needle) for key,value in pairs(values) do if value==needle then return key end end end
+for _,name in ipairs({'count','isempty','keys','values','indexof'}) do _G.table[name]=table[name] end
 -- Native numeric extensions documented by LuaMathExtensionsDocumentation.lua.
 function math.clamp(value,minimum,maximum) return math.max(minimum,math.min(maximum,value)) end
 function math.saturate(value) return math.clamp(value,0,1) end

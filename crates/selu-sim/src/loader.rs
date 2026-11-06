@@ -20,18 +20,30 @@ pub(crate) fn read_ui_text(
         if !name.starts_with("Interface/") {
             return Err("UI input is outside Interface".into());
         }
+        if let Some(text) = crate::ui_source_cache::get(path, false) {
+            return Ok(text);
+        }
+        let _casc_profile = crate::profile::Span::new("source.casc");
         match storage.read_path(&name) {
             Ok(bytes) => {
-                return String::from_utf8(bytes)
+                let text = String::from_utf8(bytes)
                     .map(|text| text.trim_start_matches('\u{feff}').to_owned())
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.to_string())?;
+                crate::ui_source_cache::put(path, &text, false);
+                return Ok(text);
             }
             Err(e) => diagnostic(format!("CASC UI fallback: {name}: {e}")),
         }
     }
-    std::fs::read_to_string(path)
+    if let Some(text) = crate::ui_source_cache::get(path, true) {
+        return Ok(text);
+    }
+    let _checkout_profile = crate::profile::Span::new("source.checkout");
+    let text = std::fs::read_to_string(path)
         .map(|text| text.trim_start_matches('\u{feff}').to_owned())
-        .map_err(|e| format!("{}: {e}", path.display()))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    crate::ui_source_cache::put(path, &text, true);
+    Ok(text)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -79,6 +91,18 @@ pub(crate) fn default_ui_order_client(
         }
         match read_toc_target_client(&dir, target, client, &mut |n| report.notes.push(n)) {
             Ok(toc) => {
+                let game = match target.unwrap_or("").split('@').next().unwrap_or("") {
+                    "wowf" | "forever" => "camelot",
+                    "wow" | "retail" => "mainline",
+                    "classic-era" => "vanilla",
+                    "classic-anniversary" => "tbc",
+                    "classic-titan" => "wrath",
+                    "classic" => "mists",
+                    _ => "",
+                };
+                if !toc.allowed_game(game) {
+                    continue;
+                }
                 if toc
                     .get("AllowLoad")
                     .is_some_and(|v| v.eq_ignore_ascii_case("Glue"))
@@ -169,6 +193,28 @@ pub struct Toc {
 }
 
 impl Toc {
+    fn allowed_game(&self, game: &str) -> bool {
+        if game.is_empty() {
+            return true;
+        }
+        let matches = |token: &str| {
+            token.eq_ignore_ascii_case(game)
+                || (token.eq_ignore_ascii_case("mainline")
+                    && matches!(game, "mainline" | "camelot"))
+                || (token.eq_ignore_ascii_case("standard") && game == "mainline")
+                || (token.eq_ignore_ascii_case("classic")
+                    && !matches!(game, "mainline" | "camelot"))
+        };
+        (self.get("AllowLoadGameType").is_none()
+            || self
+                .list("AllowLoadGameType")
+                .iter()
+                .any(|token| matches(token)))
+            && !self
+                .list("ExcludeLoadGameType")
+                .iter()
+                .any(|token| matches(token))
+    }
     /// First value for a metadata key, compared case-insensitively.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.metadata
@@ -400,6 +446,16 @@ pub(crate) fn read_files_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn addon_game_types_filter_whole_packages() {
+        let toc = |metadata| parse_toc("Demo", Path::new("Demo"), metadata);
+        assert!(!toc("## AllowLoadGameType: plunderstorm\nmain.lua").allowed_game("camelot"));
+        assert!(toc("## AllowLoadGameType: mainline\nmain.lua").allowed_game("camelot"));
+        assert!(toc("## AllowLoadGameType: camelot\nmain.lua").allowed_game("camelot"));
+        assert!(!toc("## ExcludeLoadGameType: camelot\nmain.lua").allowed_game("camelot"));
+        assert!(!toc("## AllowLoadGameType: classic\nmain.lua").allowed_game("camelot"));
+        assert!(toc("main.lua").allowed_game("camelot"));
+    }
     #[test]
     fn forever_toc_fallback_preserves_current_and_legacy_suffixes() {
         let unique = std::time::SystemTime::now()

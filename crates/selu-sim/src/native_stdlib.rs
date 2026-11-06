@@ -10,6 +10,45 @@ fn word(lua: &Lua, value: Value) -> mlua::Result<u32> {
     Ok(n.trunc().rem_euclid(4294967296.0) as u32)
 }
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
+    // StringUtilDocumentation.lua: preserve printable UTF-8, escape controls
+    // (except tab/CR/LF) and invalid UTF-8 bytes as decimal byte escapes.
+    let strings = lua
+        .globals()
+        .raw_get::<Option<mlua::Table>>("C_StringUtil")?
+        .unwrap_or(lua.create_table()?);
+    strings.raw_set(
+        "EscapeDecimalNonPrintables",
+        lua.create_function(|lua, value: mlua::String| {
+            let bytes = value.as_bytes();
+            let mut remaining = bytes.as_ref();
+            let mut result = String::new();
+            while !remaining.is_empty() {
+                let (valid, invalid) = match std::str::from_utf8(remaining) {
+                    Ok(text) => (text, 0),
+                    Err(error) => (
+                        std::str::from_utf8(&remaining[..error.valid_up_to()])
+                            .expect("valid prefix"),
+                        error
+                            .error_len()
+                            .unwrap_or(remaining.len() - error.valid_up_to()),
+                    ),
+                };
+                for ch in valid.chars() {
+                    if ch.is_ascii_control() && !matches!(ch, '\t' | '\r' | '\n') {
+                        result.push_str(&format!("\\{:03}", ch as u8));
+                    } else {
+                        result.push(ch);
+                    }
+                }
+                for byte in &remaining[valid.len()..valid.len() + invalid] {
+                    result.push_str(&format!("\\{byte:03}"));
+                }
+                remaining = &remaining[valid.len() + invalid..];
+            }
+            lua.create_string(&result)
+        })?,
+    )?;
+    lua.globals().raw_set("C_StringUtil", strings)?;
     if !lua.globals().raw_get::<Value>("bit")?.is_nil() {
         return Ok(());
     }

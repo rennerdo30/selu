@@ -112,6 +112,20 @@ impl Storage {
     pub fn read_path(&self, path: &str) -> Result<Vec<u8>> {
         self.read(self.resolve(path)?)
     }
+    /// Availability from this immutable local index; payload integrity is still
+    /// checked by read(). Does not download or decode candidate texture sheets.
+    pub fn has_local_file(&self, id: u32) -> bool {
+        let Some(ckey) = self.content_keys.get(&id) else {
+            return false;
+        };
+        self.cache.join(hex::encode(ckey)).is_file()
+            || self.encoding.find_ekey(ckey).is_some_and(|entry| {
+                entry
+                    .ekeys
+                    .iter()
+                    .any(|ekey| self.index.find(ekey).is_some())
+            })
+    }
     pub fn read(&self, id: u32) -> Result<Vec<u8>> {
         let ckey = self
             .content_keys

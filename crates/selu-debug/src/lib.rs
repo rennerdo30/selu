@@ -161,6 +161,7 @@ fn to_value(session: &Session, arg: &Arg) -> Result<SimValue, String> {
 }
 
 fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) {
+    let session_start = std::time::Instant::now();
     let mut session = match Session::new(config) {
         Ok(s) => s,
         Err(e) => {
@@ -170,6 +171,7 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
             return;
         }
     };
+    let session_creation = session_start.elapsed();
     let (mut prints_seen, mut logs_seen, mut trace_seen) = (0, 0, 0);
     let mut seq = 0;
     let mut manifest_seen = String::new();
@@ -181,7 +183,7 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
         let before = session.generation();
         let result: Result<Option<Update>, String> = match command {
             Command::LoadDefaultUi { source } => {
-                default_ui_start = Some(std::time::Instant::now());
+                default_ui_start = std::time::Instant::now().checked_sub(session_creation);
                 session
                     .load_default_ui(&source, |name| {
                         eprintln!("Default UI: loading {name}");

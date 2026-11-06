@@ -321,3 +321,15 @@ fn timer_accounting_hooks_are_private() {
     let s = Sim::new().unwrap();
     s.eval("assert(rawget(_G,'__selu_sim_begin_callback')==nil);assert(rawget(_G,'__selu_sim_end_callback')==nil)").unwrap();
 }
+
+#[test]
+fn indexed_events_observe_registration_changes_and_reload() {
+    let mut s = selu_sim::Session::new(selu_sim::SessionConfig::default()).unwrap();
+    s.eval("a=CreateFrame('Frame'); b=CreateFrame('Frame'); count=0; a:RegisterEvent('INDEX'); b:RegisterEvent('INDEX'); a:SetScript('OnEvent',function() count=count+1; b:UnregisterAllEvents() end); b:SetScript('OnEvent',function() error('unregistered sibling') end)").unwrap();
+    assert_eq!(s.fire("INDEX", vec![]).unwrap(), 1);
+    s.eval("assert(count==1); a:UnregisterEvent('INDEX')")
+        .unwrap();
+    assert_eq!(s.fire("INDEX", vec![]).unwrap(), 0);
+    s.reload().unwrap();
+    assert_eq!(s.fire("INDEX", vec![]).unwrap(), 0);
+}

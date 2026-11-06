@@ -633,13 +633,38 @@ sessions retain the 10,000 callback limit. UPDATE_CHAT_WINDOWS initializes the
 synthetic profile after VARIABLES_LOADED. FontString line height uses the client
 font metrics. Model view insets retain their values but do not render a 3D model.
 
-The installed 70790 atlas metadata resolves micro-menu sprites to FileDataID
-4708813, but CASC reports that texture sheet is not installed locally. Such art
-remains a labelled placeholder. This differs from an unavailable atlas name and
-is not evidence that atlas metadata lookup failed. Full HUD acceptance remains
-open: private/forbidden partitions, missing native/world data, unwanted panels
-and unpositioned render regions still require stage-1 work. Later interaction
-and richer world scenarios do not replace those acceptance requirements.
+The installed 70790 atlas metadata has multiple members for a named element.
+Prefer a locally readable payload when the first atlas set is missing: the
+micro-menu base sheet 4708813 is unavailable here, while set 1 sheet 8200846
+is installed. Candidate reads still verify CASC content hashes. If every
+candidate is missing, Studio draws a clipped, labelled fallback per micro
+button. This is an availability choice, not active atlas-set emulation.
+
+Source text is cached under LOCALAPPDATA/Selu/ui-source by source root and
+CASC build key. The cache holds no VM or player state. Checkout fallback
+entries revalidate file size and modification time; malformed cache files
+are discarded. Source loading remains on Studio's worker. The reported
+startup duration includes Session construction, login and four settling
+frames, excluding time idle before the load command.
+
+Layout reuses dependency/visit scratch arrays, and style-only changes do not
+force a full geometry pass. Frame setters retain only fields they can mutate;
+unrelated frame calls do not decode textures. Events use a live ordered
+subscription index rather than scanning every region. No hidden-subtree
+geometry is skipped: login scripts may query those frames.
+
+Default UI TOCs honor addon-level AllowLoadGameType/ExcludeLoadGameType in
+addition to per-file filters. A Forever session excludes Plunderstorm-only
+packages, including the training lobby. Native frame descriptions are unique
+and deterministic, preventing Blizzard custom font names from overwriting the
+Lua `table` library. Generic table descriptions remain deterministic.
+
+The empty-world chat profile registers system messages, supplies a visibly
+synthetic server greeting after entering the world, and supports the native
+transition used by Blizzard's print handler. The preview fixture also prints
+its Minimap-anchor confirmation into the normal chat buffer. SecondsFormatter
+configuration and securecopy graph copying support aura setup; native taint and
+localized duration rendering remain unmodeled.
 
 ### Import SavedVariables in Studio
 

@@ -281,6 +281,18 @@ mod tests {
     }
 
     #[test]
+    fn incremental_marks_recover_after_cycle_and_follow_dependents() {
+        let sim = Sim::new().unwrap();
+        sim.eval("a=CreateFrame('Frame');b=CreateFrame('Frame');a:SetSize(10,10);b:SetSize(20,20);a:SetPoint('LEFT',b,'RIGHT');b:SetPoint('LEFT',a,'RIGHT')").unwrap();
+        assert!(sim.snapshot().unwrap().regions[1].rect.is_none());
+        sim.eval("b:ClearAllPoints();b:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',30,40)")
+            .unwrap();
+        let first = sim.snapshot().unwrap();
+        assert_eq!(first.regions[1].rect.unwrap().left, 50.0);
+        sim.eval("b:SetWidth(40)").unwrap();
+        assert_eq!(sim.snapshot().unwrap().regions[1].rect.unwrap().left, 70.0);
+    }
+    #[test]
     fn anchor_cycles_get_no_rectangle() {
         let sim = Sim::new().unwrap();
         sim.eval(
