@@ -129,6 +129,10 @@ const SUPPORTED: &[&str] = &[
     "Layers",
     "Layer",
     "Frames",
+    "Animations",
+    "AnimationGroup",
+    "Alpha",
+    "Translation",
     "Anchors",
     "Anchor",
     "Size",
@@ -199,6 +203,14 @@ mod tests {
         </Ui>"#,
         );
         sim.eval("assert(Root:GetID()==17 and Root:GetWidth()==80); assert(Root.value==7); assert(Root:Answer()==42); assert(Root.Button==RootButton); assert(Root.buttons[1]==RootButton); assert(RootButton:GetParent()==Root); local f=CreateFrame('Frame','FromLua',nil,'Nested'); assert(f.Button==FromLuaButton)").unwrap();
+    }
+    #[test]
+    fn animation_groups_are_available_to_frame_onload() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="Root"><Animations><AnimationGroup parentKey="Anim" looping="REPEAT"><Alpha duration="2" fromAlpha="0" toAlpha="1"/></AnimationGroup></Animations><Scripts><OnLoad>assert(self.Anim:GetLooping()=='REPEAT'); assert(self.Anim:GetDuration()==2)</OnLoad></Scripts></Frame></Ui>"#,
+        );
     }
     #[test]
     fn relative_keys_anchor_to_anonymous_parent_members() {

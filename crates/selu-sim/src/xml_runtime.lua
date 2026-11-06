@@ -87,6 +87,42 @@ local function script(f,n)
         end)
     else f:SetScript(n.tag,fn) end
 end
+local function animationGroup(frame,node)
+    local group=frame:CreateAnimationGroup()
+    local a=node.a
+    if a.parentKey then frame[a.parentKey]=group end
+    if a.parentArray then
+        frame[a.parentArray]=frame[a.parentArray] or {}
+        table.insert(frame[a.parentArray],group)
+    end
+    if a.name then _G[expand(a.name,frame)]=group end
+    if a.looping then group:SetLooping(a.looping) end
+    for _,child in ipairs(node.children) do
+        if child.tag=='Scripts' then
+            for _,s in ipairs(child.children) do script(group,s) end
+        else
+            local animation=group:CreateAnimation(child.tag)
+            if animation then
+                local v=child.a
+                if v.parentKey then group[v.parentKey]=animation end
+                for key,method in pairs({duration='SetDuration',order='SetOrder',startDelay='SetStartDelay',endDelay='SetEndDelay',fromAlpha='SetFromAlpha',toAlpha='SetToAlpha'}) do
+                    if v[key] then animation[method](animation,tonumber(v[key])) end
+                end
+                if v.smoothing then animation:SetSmoothing(v.smoothing) end
+                if v.targetKey then
+                    local target=relativeKey(frame,v.targetKey)
+                    if target then animation:SetTarget(target) else note('animation targetKey '..v.targetKey) end
+                end
+                for _,property in ipairs(child.children) do
+                    if property.tag=='Offset' then
+                        local offset=dimension(property).a
+                        animation:SetOffset(tonumber(offset.x) or 0,tonumber(offset.y) or 0)
+                    else note('animation element '..property.tag) end
+                end
+            end
+        end
+    end
+end
 apply=function(f,n,seen)
     if intrinsic[n.tag] then
         assert(not seen[n.tag],'XML intrinsic inheritance cycle: '..n.tag)
@@ -145,6 +181,11 @@ apply=function(f,n,seen)
                 if #keys>0 then owner[keys[#keys]]=value end
             end
         elseif c.tag=='Scripts' then for _,s in ipairs(c.children) do script(f,s) end
+        elseif c.tag=='Animations' then
+            for _,group in ipairs(c.children) do
+                if group.tag=='AnimationGroup' then animationGroup(f,group)
+                else note('animation element '..group.tag) end
+            end
         elseif c.tag=='Frames' then for _,child in ipairs(c.children) do create(child,f) end
         elseif c.tag=='Layers' then
             for _,layer in ipairs(c.children) do
