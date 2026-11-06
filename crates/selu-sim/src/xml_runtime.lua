@@ -93,7 +93,7 @@ end
 local function dimension(n)
     return n.children[1] or n
 end
-local function script(f,n,intrinsicOwner)
+local function script(f,n,intrinsicOwner,plan)
     local a=n.a
     if a.font then f:SetFont(a.font,tonumber(a.height) or 12,a.flags or '') end
     if a.justifyH then f:SetJustifyH(a.justifyH) end
@@ -112,10 +112,14 @@ local function script(f,n,intrinsicOwner)
     end
     if not fn then note('script '..(a['function'] or n.tag)); return end
     if intrinsicOwner and n.tag=='OnLoad' and not a.intrinsicOrder then
-        -- Intrinsic OnLoad is a constructor, before derived instance setup.
+        -- Resolve intrinsic methods after final mixins/KeyValues, before
+        -- normal OnLoad. Derived secure mixins override native initialization.
         local loaded=rawget(f,'__selu_intrinsic_loaded') or {}
         rawset(f,'__selu_intrinsic_loaded',loaded)
-        if not loaded[intrinsicOwner] then loaded[intrinsicOwner]=true; invoke(fn,f) end
+        if not loaded[intrinsicOwner] then
+            loaded[intrinsicOwner]=true
+            plan.constructors=plan.constructors or {};plan.constructors[#plan.constructors+1]=fn
+        end
         return
     end
     if intrinsicOwner and (a.intrinsicOrder=='precall' or a.intrinsicOrder=='postcall') then
@@ -269,7 +273,7 @@ apply=function(f,n,seen)
                 else note('mixin '..tostring(entry.a.key)) end
                 if entry.a.source=='secure' or entry.a.targetPartition or entry.a.inboundPartition then note('secure mixin partitions') end
             end
-        elseif c.tag=='Scripts' then for _,s in ipairs(c.children) do script(f,s,n.a.intrinsic=='true' and n.a.name) end
+        elseif c.tag=='Scripts' then for _,s in ipairs(c.children) do script(f,s,n.a.intrinsic=='true' and n.a.name,seen) end
         elseif c.tag=='Animations' then
             for _,group in ipairs(c.children) do
                 if group.tag=='AnimationGroup' then animationGroup(f,group)
@@ -287,7 +291,7 @@ apply=function(f,n,seen)
             if setter and b.style then setter(f,lookup(b.style)) end
         elseif c.tag=='Layers' then
             for _,layer in ipairs(c.children) do
-                for _,child in ipairs(layer.children) do create(child,f,layer.a.level or 'ARTWORK') end
+                for _,child in ipairs(layer.children) do create(child,f,layer.a.level or 'ARTWORK',tonumber(layer.a.textureSubLevel)) end
             end
         elseif c.tag=='Color' then
             local r,g,bl,al=tonumber(b.r) or 1,tonumber(b.g) or 1,tonumber(b.b) or 1,tonumber(b.a) or 1
@@ -307,6 +311,7 @@ local function construct(f,prepare)
     rawset(f,'__selu_xml_constructing',true)
     local ok,err=pcall(function()
         prepare(plan)
+        for _,constructor in ipairs(plan.constructors or {}) do invoke(constructor,f) end
         -- Children may inspect their parent's derived KeyValues/mixins from
         -- OnLoad (ThreeSliceButton's controller initializes its parent art).
         for _,child in ipairs(plan.children or {}) do
@@ -316,19 +321,17 @@ local function construct(f,prepare)
         for _,text in ipairs(plan.text or {}) do f:SetText(lookup(text) or text) end
     end)
     constructionDepth=constructionDepth-1
-    if constructionDepth==0 then
+    if ok and next(deferredAnchors) then
         local pending=deferredAnchors;deferredAnchors={}
-        if ok then
-            for frame,points in pairs(pending) do
-                for _,point in pairs(points) do anchorPoint(frame,point[1],point[2],point[3],false) end
-            end
+        for frame,points in pairs(pending) do
+            for _,point in pairs(points) do anchorPoint(frame,point[1],point[2],point[3],constructionDepth>0) end
         end
-    end
+    elseif not ok and constructionDepth==0 then deferredAnchors={} end
     rawset(f,'__selu_xml_constructing',nil)
     if not ok then error(err,0) end
 end
 local native=CreateFrame
-create=function(n,parent,layer)
+create=function(n,parent,layer,subLevel)
     local a=n.a
     parent=lookup(expand(parentAttribute(n,{}),parent)) or parent
     local name=expand(a.name,parent)
@@ -338,6 +341,7 @@ create=function(n,parent,layer)
     elseif n.tag=='FontString' or n.tag=='ButtonText' then f=parent:CreateFontString(name,layer)
     elseif n.tag=='Font' then f=CreateFont(name)
     else f=native(nativeKind(n.tag),name,parent) end
+    if layer and subLevel then f:SetDrawLayer(layer,subLevel) end
     construct(f,function(plan) apply(f,n,plan) end)
     if n.tag~='Texture' and n.tag~='FontString' and n.tag~='Font' then
         local onload=f.__scripts.OnLoad; if onload then invoke(onload,f) end

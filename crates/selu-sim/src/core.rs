@@ -783,25 +783,85 @@ fn boundary_renderer(lua: &Lua) -> mlua::Result<mlua::Function> {
     Ok(render)
 }
 
-/// Iterate native ranges without a Lua wrapper or a fresh closure per item.
-/// Callback budgets and original error custody use the ordinary host boundary.
+/// Iterate protected callbacks directly on Lua's stack. The range owns its
+/// argument handles once; individual items need no mlua registry references.
 pub(crate) fn install_secure_range(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    #[cfg(debug_assertions)]
+    let legacy = std::env::var_os("SELU_SIM_PROFILE_LEGACY_RANGE").is_some();
+    #[cfg(not(debug_assertions))]
+    let legacy = false;
     #[cfg(debug_assertions)]
     if std::env::var_os("SELU_SIM_PROFILE").is_some() {
         eprintln!(
-            "SELU_SIM_PROFILE protected range: native iteration; per-callback accounting active"
+            "SELU_SIM_PROFILE protected range: {}; per-callback accounting active",
+            if legacy {
+                "per-item handles (comparison)"
+            } else {
+                "native stack iteration"
+            }
         );
     }
+    let report_ctx = ctx.clone();
+    let report = lua.create_function(move |_, error: mlua::Value| {
+        let message = match error {
+            mlua::Value::String(text) => text.to_string_lossy(),
+            mlua::Value::Error(error) => error.to_string(),
+            _ => return Err(mlua::Error::runtime("invalid rendered range error")),
+        };
+        report_ctx.log(format!("error: {message}"));
+        check_budget(&report_ctx)
+    })?;
+    let report = lua.create_registry_value(report)?;
     let ctx = ctx.clone();
     lua.globals().raw_set("secureexecuterange",lua.create_function(move |lua,(values,callback,extra):(mlua::Table,mlua::Function,mlua::MultiValue)| {
-        for item in values.pairs::<mlua::Value,mlua::Value>() {
-            let (key,value)=item?;
-            let mut args=extra.clone();args.push_front(value);args.push_front(key);
-            if let Err(error)=script_callback(lua,&ctx,||call_lua::<()>(lua,callback.clone(),args)) {
-                ctx.log(format!("error: {error}"));check_budget(&ctx)?;
+        if legacy {
+            for item in values.pairs::<mlua::Value,mlua::Value>() {
+                let (key,value)=item?;let mut args=extra.clone();args.push_front(value);args.push_front(key);
+                if let Err(error)=script_callback(lua,&ctx,||call_lua::<()>(lua,callback.clone(),args)) {ctx.log(format!("error: {error}"));check_budget(&ctx)?;}
             }
+            return Ok(());
         }
-        Ok(())
+        struct Restore {budget:Shared<Budget>,depth:usize}
+        impl Drop for Restore {fn drop(&mut self){lock(&self.budget).callback_depth=self.depth;}}
+        let _restore=Restore{budget:ctx.budget.clone(),depth:lock(&ctx.budget).callback_depth};
+        let mut args=extra;
+        args.push_front(mlua::Value::Function(callback));args.push_front(mlua::Value::Table(values));
+        args.push_front(mlua::Value::Function(lua.registry_value::<mlua::Function>(&report)?));
+        args.push_front(mlua::Value::Function(boundary_renderer(lua)?));
+        let mut failure=None;
+        // SAFETY: exec_raw protects stack restoration and lua_next errors.
+        // The closure owns only borrowed references and primitive indices;
+        // no Rust Drop value lives across an unprotected Lua operation.
+        // Callback/report execution uses lua_pcall; accounting/locks finish
+        // before either call. Restore also covers hook or panic unwinding.
+        let error=unsafe {lua.exec_raw::<mlua::Value>(args,|state| {
+            let top=mlua::ffi::lua_gettop(state);
+            if mlua::ffi::lua_checkstack(state,top+6)==0 {
+                failure=Some(mlua::Error::runtime("protected range stack overflow"));
+                mlua::ffi::lua_settop(state,0);return;
+            }
+            mlua::ffi::lua_pushnil(state);
+            while mlua::ffi::lua_next(state,3)!=0 {
+                if let Err(error)=begin_callback(lua,&ctx) {failure=Some(error);break;}
+                mlua::ffi::lua_pushvalue(state,4);
+                mlua::ffi::lua_pushvalue(state,top+1);
+                mlua::ffi::lua_pushvalue(state,top+2);
+                for index in 5..=top {mlua::ffi::lua_pushvalue(state,index);}
+                let status=mlua::ffi::lua_pcall(state,top-2,0,1);
+                end_callback(&ctx);
+                if status!=0 {
+                    mlua::ffi::lua_pushvalue(state,2);mlua::ffi::lua_insert(state,-2);
+                    if mlua::ffi::lua_pcall(state,1,0,0)!=0 {
+                        mlua::ffi::lua_replace(state,1);mlua::ffi::lua_settop(state,1);return;
+                    }
+                }
+                mlua::ffi::lua_pop(state,1);
+            }
+            mlua::ffi::lua_settop(state,0);
+        })}?;
+        if let Some(error)=failure {return Err(error);}
+        check_budget(&ctx)?;
+        match error {mlua::Value::Nil=>Ok(()),mlua::Value::Error(error)=>Err(*error),mlua::Value::String(error)=>Err(mlua::Error::runtime(error.to_string_lossy())),_=>Err(mlua::Error::runtime("protected range reporter failed"))}
     })?)
 }
 

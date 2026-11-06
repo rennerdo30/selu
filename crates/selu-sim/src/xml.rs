@@ -277,6 +277,23 @@ mod tests {
         sim.eval("assert(Root.Selection and Root.Selection:GetParent()==Root); assert(#Root.selections==1 and Root.selections[1]==Root.Selection)").unwrap();
     }
     #[test]
+    fn nested_forward_anchors_are_ready_before_own_onload() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="Outer"><Frames><Frame parentKey="Nested"><Layers><Layer><FontString parentKey="Label"><Anchors><Anchor point="LEFT" relativeKey="$parent.Button" relativePoint="RIGHT" x="5"/></Anchors></FontString></Layer></Layers><Frames><Button parentKey="Button"/></Frames><Scripts><OnLoad>assert(select(2,self.Label:GetPoint())==self.Button and select(4,self.Label:GetPoint())==5)</OnLoad></Scripts></Frame></Frames></Frame></Ui>"#,
+        );
+    }
+    #[test]
+    fn intrinsic_constructor_resolves_final_derived_mixin() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("BaseInit={Init=function(self)self.base=true end};DerivedInit={Init=function(self)assert(self.value==42);self.derived=true end}").unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="NativeInit" intrinsic="true" mixin="BaseInit"><Scripts><OnLoad method="Init"/></Scripts></Frame><NativeInit name="Constructed" mixin="DerivedInit"><KeyValues><KeyValue key="value" type="number" value="42"/></KeyValues><Scripts><OnLoad>assert(self.derived and not self.base)</OnLoad></Scripts></NativeInit></Ui>"#,
+        );
+    }
+    #[test]
     fn intrinsic_constructors_and_postcall_handlers_survive_normal_scripts() {
         let sim = crate::Sim::new().unwrap();
         sim.eval("NativeMixin={Init=function(self) self.ready=true; self.shows=0 end,Shown=function(self) self.shows=self.shows+1; self.order=(self.order or '')..'native' end}").unwrap();

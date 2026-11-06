@@ -1757,8 +1757,8 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                     r.visual.uv = [0.0, 1.0, 0.0, 1.0];
                 }
                 if boolean(v.get(1)) {
-                    r.width = atlas.width as f64;
-                    r.height = atlas.height as f64;
+                    r.width = atlas.width;
+                    r.height = atlas.height;
                 }
             } else {
                 ctx.not_simulated(&format!("unavailable atlas: {s}"));

@@ -29,11 +29,12 @@ for _,name in ipairs({'GetBuildInfo','Mixin','CreateFromMixins','CopyTable','Get
     'UnitFactionGroup','HasFullControl','GetUnitName','GetSpecialization','UnitInParty','UnitInRaid','UnitPowerType',
     'GetPowerDisplayMod','GetZoneText','GetRealZoneText','GetSubZoneText','IsLoggedIn','IsPlayerInWorld',
     'securecall','securecallfunction','secureexecuterange','CreateSecureDelegate','UnitHealthPercent','UnitPowerPercent',
-    'GetChatWindowInfo','GetChatWindowSavedPosition','GetChatWindowSavedDimensions'}) do remember(_G,name,name) end
+    'GetChatWindowInfo','GetChatWindowSavedPosition','GetChatWindowSavedDimensions','GetTasksTable','GetNumAutoQuestPopUps','GetNumShapeshiftForms'}) do remember(_G,name,name) end
 for namespace,keys in pairs({C_UnitAuras={'GetAuraSlots','GetAuraDataByIndex','GetAuraDataBySlot','GetAuraDataByAuraInstanceID','GetPlayerAuraBySpellID','GetUnitAuras'},
     C_CVar={'GetCVar','GetCVarBool','GetCVarNumber','SetCVar','AreCVarsLoaded','GetCVarDefault'},
     C_EditMode={'GetLayouts'},
     C_GameRules={'GetActiveGameMode','IsStandard','IsWoWHack','IsPlunderstorm'},
+    C_NamePlate={'GetNamePlateForUnit','GetNamePlates'},
     C_InputInterfaceStyle={'GetCurrentStyle'}}) do
     for _,key in ipairs(keys) do remember(rawget(_G,namespace),key,namespace..'.'..key) end
 end
@@ -78,6 +79,13 @@ for _,key in ipairs({'GetPrivateAuraAnchors','GetAllPrivateAuraInstanceIDs','Get
 function C_UnitAurasPrivate.GetAuraDataByAuraInstanceIDPrivate() return nil end
 function C_UnitAurasPrivate.GetPrivateAuraCasterGUID() return nil end
 function C_UnitAurasPrivate.IsPrivateAuraFilteredOutByInstanceID() return true end
+-- Native quest task list is empty in the outdoor baseline.
+function GetTasksTable() return {} end
+function GetNumAutoQuestPopUps() return 0 end
+function GetNumShapeshiftForms() return 0 end
+C_NamePlate=C_NamePlate or {}
+function C_NamePlate.GetNamePlateForUnit() return nil end
+function C_NamePlate.GetNamePlates() return {} end
 -- Scenario API's empty-world values. The outdoor baseline has no stages.
 C_Scenario=C_Scenario or {}
 function C_Scenario.ShouldShowCriteria() return false end

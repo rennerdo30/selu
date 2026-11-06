@@ -95,3 +95,23 @@ fn action_button_has_pressed_texture_until_release() {
     s.mouse_up(x, y, "LeftButton").unwrap();
     s.eval("assert(ActionButton1:GetButtonState()=='NORMAL');assert(not ActionButton1:GetPushedTexture():IsVisible())").unwrap();
 }
+
+#[test]
+#[ignore = "requires read-only local game art and matching Blizzard UI sources"]
+fn fresh_login_has_no_absent_unit_frames_or_empty_objective_tracker() {
+    let s = loaded();
+    s.eval("assert(not UnitExists('target') and not UnitExists('focus'))")
+        .unwrap();
+    for name in ["TargetFrame", "FocusFrame", "ObjectiveTrackerFrame"] {
+        assert!(
+            !shown(&s, name),
+            "{name} is visible; {:?}",
+            s.logs()
+                .iter()
+                .filter(|line| line.starts_with("error:") || line.starts_with("callback error:"))
+                .rev()
+                .take(12)
+                .collect::<Vec<_>>()
+        );
+    }
+}

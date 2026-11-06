@@ -1,4 +1,18 @@
 //! Bounded local-source startup probe. Never opens WTF or launches a client.
+fn painted(r: &selu_sim::RegionSnapshot) -> bool {
+    r.visible
+        && r.alpha > 0.0
+        && r.widget != "MaskTexture"
+        && ((r.text.as_ref().is_some_and(|s| !s.is_empty()) && r.visual.color[3] > 0.0)
+            || (r.visual.tint[3] > 0.0
+                && r.texture.as_ref().is_some_and(|t| match t {
+                    selu_sim::TextureFill::Color(c) => c[3] > 0.0,
+                    selu_sim::TextureFill::Gradient { min, max, .. } => {
+                        min[3] > 0.0 || max[3] > 0.0
+                    }
+                    _ => true,
+                })))
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|s| s == "--ui-data") {
         let storage = selu_gamedata::Storage::open(
@@ -70,6 +84,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None,
         )?;
         println!("client build {}", storage.build.version);
+        if let Some(folder) = std::env::var_os("SELU_SIM_DUMP_ART") {
+            for (name, file) in [
+                (
+                    "PlayerFrame.xml",
+                    "Interface/AddOns/Blizzard_UnitFrame/Mainline/PlayerFrame.xml",
+                ),
+                (
+                    "MainMenuBarMicroButtons.xml",
+                    "Interface/AddOns/Blizzard_MicroMenu/Mainline/MainMenuBarMicroButtons.xml",
+                ),
+            ] {
+                match storage.read_path(file) {
+                    Ok(bytes) => std::fs::write(
+                        std::path::Path::new(&folder).join(format!("client-{name}")),
+                        bytes,
+                    )?,
+                    Err(error) => println!("UI file {file}: {error}"),
+                }
+            }
+        }
+        for name in ["classicon-WARRIOR", "UI-HUD-UnitFrame-Player-PortraitOn"] {
+            let atlas = storage.atlas(name)?;
+            let bytes = storage.read(atlas.file_data_id)?;
+            let pixels = selu_gamedata::blp::decode(&bytes)?;
+            println!(
+                "ART METADATA {atlas:?}; actual {}x{}",
+                pixels.width(),
+                pixels.height()
+            );
+            if let Some(folder) = std::env::var_os("SELU_SIM_DUMP_ART") {
+                pixels.save(
+                    std::path::Path::new(&folder).join(format!("{}.png", atlas.file_data_id)),
+                )?;
+            }
+        }
         println!(
             "action bar atlas: {:?}",
             storage.atlas("UI-HUD-ActionBar-Frame")?
@@ -89,6 +138,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
+        match storage
+            .read_path("DBFilesClient/UiCanvas.db2")
+            .or_else(|_| storage.read(1989363))
+        {
+            Ok(bytes) => {
+                let table = match selu_gamedata::db2::Table::parse(&bytes) {
+                    Ok(table) => table,
+                    Err(error) => {
+                        println!(
+                            "CANVAS parse {error} header {:?}",
+                            (136..=200)
+                                .step_by(4)
+                                .map(|at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()))
+                                .collect::<Vec<_>>()
+                        );
+                        let fields =
+                            u32::from_le_bytes(bytes[140..144].try_into().unwrap()) as usize;
+                        for i in 0..fields {
+                            let at = 244 + fields * 4 + i * 24;
+                            println!("CANVAS FIELD {:?}", &bytes[at..at + 24]);
+                        }
+                        return Ok(());
+                    }
+                };
+                println!("CANVAS layout={:08x}", table.layout);
+                for row in 0..table.count() {
+                    println!(
+                        "CANVAS {:?}",
+                        (0..8)
+                            .map_while(|column| table.value(row, column).ok())
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+            Err(error) => println!("CANVAS unavailable: {error}"),
+        }
         let atlas_bytes = storage.read(897470)?;
         let member_bytes = storage.read(897532)?;
         let element_bytes = storage.read(1989276)?;
@@ -96,13 +181,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let members = selu_gamedata::db2::Table::parse(&member_bytes)?;
         let elements = selu_gamedata::db2::Table::parse(&element_bytes)?;
         for element in 0..elements.count() {
-            if elements.text(element, 0)? == "UI-HUD-MicroMenu-Professions-Up" {
+            if [
+                "UI-HUD-MicroMenu-Professions-Up",
+                "UI-HUD-UnitFrame-SmallCircle",
+            ]
+            .contains(&elements.text(element, 0)?)
+            {
                 let id = elements.value(element, 1)?;
                 let mut count = 0;
                 for member in 0..members.count() {
                     if members.value(member, 9)? == id {
                         for sheet in 0..atlases.count() {
                             if atlases.value(sheet, 0)? == members.value(member, 2)? {
+                                println!(
+                                    "CANDIDATE {} member={:?} sheet={:?}",
+                                    elements.text(element, 0)?,
+                                    (0..14)
+                                        .map_while(|column| members.value(member, column).ok())
+                                        .collect::<Vec<_>>(),
+                                    (0..6)
+                                        .map_while(|column| atlases.value(sheet, column).ok())
+                                        .collect::<Vec<_>>()
+                                );
                                 count += 1;
                                 let file = atlases.value(sheet, 1)?;
                                 println!(
@@ -284,6 +384,87 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         snapshot.regions.len(),
         snapshot_start.elapsed()
     );
+    session.eval("__probe_meta('PORTRAITSTATE',PlayerFrame.unit,PlayerFrame.portrait and PlayerFrame.portrait:GetAtlas(),PlayerFrame.portrait and PlayerFrame.portrait:GetTexture(),PlayerFrame.portrait and PlayerFrame.portrait:GetDrawLayer(),GetClassAtlas(select(2,UnitClass('player'))))")?;
+    let portrait: mlua::Table = session
+        .lua()
+        .globals()
+        .raw_get::<mlua::Table>("PlayerFrame")?
+        .raw_get("portrait")?;
+    let portrait = selu_sim::frames::arena::id(&portrait)?;
+    for region in &snapshot.regions {
+        let parent = region
+            .parent
+            .and_then(|id| snapshot.regions.get(id.index as usize));
+        if region.id.index as usize == portrait
+            || parent.is_some_and(|parent| parent.name.as_deref() == Some("CharacterMicroButton"))
+            || (region.texture.is_some()
+                && parent
+                    .is_some_and(|parent| parent.name.as_deref() == Some("PlayerFrameContainer")))
+        {
+            println!(
+                "ARTSTATE {} {:?} {:?} {:?} {:?} {:?}",
+                region.id.index,
+                parent.map(|r| &r.name),
+                region.rect,
+                region.texture,
+                region.layer,
+                region.visual.uv
+            );
+            println!(
+                "ART FLAGS {} kind={} visible={} shown={} alpha={} tint={:?}",
+                region.id.index,
+                region.widget,
+                region.visible,
+                region.shown,
+                region.alpha,
+                region.visual.tint
+            );
+        }
+    }
+    {
+        let store = selu_sim::frames::arena::store(session.lua());
+        let arena = store.borrow();
+        for region in snapshot.regions.iter().filter(|r| {
+            r.visible
+                && r.texture.is_some()
+                && r.rect.is_some_and(|q| {
+                    q.left < 515.0
+                        && q.left + q.width > 450.0
+                        && q.bottom < 330.0
+                        && q.bottom + q.height > 270.0
+                })
+        }) {
+            let native = &arena.regions[region.id.index as usize];
+            let table = native.table.get();
+            let keys = native.parent.map(|parent| {
+                arena.regions[parent]
+                    .table
+                    .get()
+                    .pairs::<mlua::Value, mlua::Value>()
+                    .filter_map(|entry| {
+                        let (key, value) = entry.ok()?;
+                        if value == mlua::Value::Table(table.clone()) {
+                            Some(format!("{key:?}"))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            });
+            println!(
+                "PORTRAIT OVERLAP {} {} {:?} {:?} {:?} {:?} {:?} {:?}",
+                region.id.index,
+                region.widget,
+                region.layer,
+                region.rect,
+                region.texture,
+                table.raw_get::<Option<String>>("__selu_atlas")?,
+                keys,
+                region.visual.uv
+            );
+        }
+    }
+
     let unplaced = snapshot
         .regions
         .iter()
@@ -297,18 +478,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "UNPLACED painted-visible={}",
-        unplaced
-            .iter()
-            .filter(|r| r.visible
-                && (r.texture.is_some() || r.text.as_ref().is_some_and(|text| !text.is_empty())))
-            .count()
+        unplaced.iter().filter(|r| painted(r)).count()
     );
     {
         let arena = selu_sim::frames::arena::store(session.lua());
         let arena = arena.borrow();
-        for r in unplaced.iter().filter(|r| {
-            r.visible && (r.texture.is_some() || r.text.as_ref().is_some_and(|s| !s.is_empty()))
-        }) {
+        for r in unplaced.iter().filter(|r| painted(r)) {
             let native = &arena.regions[r.id.index as usize];
             let mut parent = native.parent;
             let mut lineage = Vec::new();

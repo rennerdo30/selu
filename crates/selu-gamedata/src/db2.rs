@@ -12,8 +12,8 @@ pub struct Atlas {
     pub right: u32,
     pub top: u32,
     pub bottom: u32,
-    pub width: u32,
-    pub height: u32,
+    pub width: f64,
+    pub height: f64,
     pub sheet_width: u32,
     pub sheet_height: u32,
     pub raw_width: u32,
@@ -26,13 +26,29 @@ pub const TABLES: [(&str, u32); 3] = [
     ("UiTextureAtlasMember", 897532),
     ("UiTextureAtlasElement", 1989276),
 ];
+fn scalar(bytes: &[u8], record: usize, (bit, width, signed): (usize, usize, bool)) -> Result<u32> {
+    let shift = bit % 8;
+    let source = slice(bytes, record + bit / 8, (shift + width).div_ceil(8))?;
+    let packed = source
+        .iter()
+        .enumerate()
+        .fold(0u64, |value, (index, byte)| {
+            value | (u64::from(*byte) << (index * 8))
+        });
+    let mut value = ((packed >> shift) & ((1u64 << width) - 1)) as u32;
+    if signed && width < 32 && value & (1u32 << (width - 1)) != 0 {
+        value |= u32::MAX << width;
+    }
+    Ok(value)
+}
+
 pub struct Table<'a> {
     bytes: &'a [u8],
     pub layout: u32,
     offset: usize,
     count: usize,
     size: usize,
-    fields: Vec<(usize, usize)>,
+    fields: Vec<(usize, usize, bool)>,
     string_start: usize,
     string_end: usize,
     source_rows: Vec<usize>,
@@ -78,22 +94,18 @@ impl<'a> Table<'a> {
             let c = slice(b, p, 24)?;
             let bit = u16::from_le_bytes(c[..2].try_into()?) as usize;
             let width = u16::from_le_bytes(c[2..4].try_into()?) as usize;
-            // A full-width signed bitpacked scalar has the same 32 raw bits
-            // as an uncompressed scalar (GlobalColor.Color in build 70790).
-            let full_width_signed = le(c, 8)? == 5
-                && width == 32
+            // WDC5 signed scalar bitpacking (UiCanvas dimensions and colors).
+            // Pallet/common/array encodings still fail closed.
+            let signed = le(c, 8)? == 5
                 && le(c, 4)? == 0
-                && le(c, 12)? == 0
-                && le(c, 16)? == 32
+                && (le(c, 12)? as usize == bit || (width == 32 && le(c, 12)? == 0))
+                && le(c, 16)? as usize == width
                 && le(c, 20)? == 0;
-            if (le(c, 8)? != 0 && !full_width_signed)
-                || !bit.is_multiple_of(8)
-                || ![8, 16, 32].contains(&width)
-                || bit + width > size * 8
-            {
+            let plain = le(c, 8)? == 0 && bit.is_multiple_of(8) && [8, 16, 32].contains(&width);
+            if !(plain || signed) || width == 0 || width > 32 || bit + width > size * 8 {
                 return Err("unsupported DB2 field storage".into());
             }
-            fields.push((bit / 8, width / 8));
+            fields.push((bit, width, signed));
         }
         let inline_id = if flags & 4 == 0 {
             Some((le(b, 172)? >> 16) as usize)
@@ -103,15 +115,8 @@ impl<'a> Table<'a> {
         let mut ids = Vec::with_capacity(count);
         for row in 0..count {
             let id = if let Some(column) = inline_id {
-                let (column_offset, width) =
-                    *fields.get(column).ok_or("invalid inline ID column")?;
-                let mut value = [0; 4];
-                value[..width].copy_from_slice(slice(
-                    b,
-                    offset + row * size + column_offset,
-                    width,
-                )?);
-                u32::from_le_bytes(value)
+                let field = *fields.get(column).ok_or("invalid inline ID column")?;
+                scalar(b, offset + row * size, field)?
             } else {
                 le(b, string_end + row * 4)?
             };
@@ -171,18 +176,17 @@ impl<'a> Table<'a> {
         if self.inline_id == Some(column) {
             return Ok(self.ids[row]);
         }
-        let (p, n) = *self.fields.get(column).ok_or("column out of bounds")?;
-        let mut out = [0; 4];
-        out[..n].copy_from_slice(slice(
+        let field = *self.fields.get(column).ok_or("column out of bounds")?;
+        scalar(
             self.bytes,
-            self.offset + self.source_rows[row] * self.size + p,
-            n,
-        )?);
-        Ok(u32::from_le_bytes(out))
+            self.offset + self.source_rows[row] * self.size,
+            field,
+        )
     }
+
     pub fn text(&self, row: usize, column: usize) -> Result<&str> {
         let rel = self.value(row, column)? as i32;
-        let field = self.offset + self.source_rows[row] * self.size + self.fields[column].0;
+        let field = self.offset + self.source_rows[row] * self.size + self.fields[column].0 / 8;
         if rel == 0 {
             return Ok("");
         }
@@ -208,11 +212,13 @@ impl AtlasIndex {
         let a = storage.read(TABLES[0].1)?;
         let m = storage.read(TABLES[1].1)?;
         let e = storage.read(TABLES[2].1)?;
+        let canvases = storage.read(1989363)?;
         let mut available = HashMap::new();
         Self::decode_available(
             &Table::parse(&a)?,
             &Table::parse(&m)?,
             &Table::parse(&e)?,
+            Some(&Table::parse(&canvases)?),
             |file| {
                 *available
                     .entry(file)
@@ -222,12 +228,13 @@ impl AtlasIndex {
     }
     #[cfg(test)]
     fn decode(atlases: &Table<'_>, members: &Table<'_>, elements: &Table<'_>) -> Result<Self> {
-        Self::decode_available(atlases, members, elements, |_| false)
+        Self::decode_available(atlases, members, elements, None, |_| false)
     }
     fn decode_available(
         atlases: &Table<'_>,
         members: &Table<'_>,
         elements: &Table<'_>,
+        canvases: Option<&Table<'_>>,
         mut available: impl FnMut(u32) -> bool,
     ) -> Result<Self> {
         // Verified against the installed 1.60.1.70790 tables; field orders are
@@ -238,6 +245,23 @@ impl AtlasIndex {
         {
             return Err("unsupported atlas DB2 layout hash".into());
         }
+        let mut canvas_sizes = HashMap::new();
+        if let Some(canvases) = canvases {
+            if canvases.layout != 0x9ca2cfb4 {
+                return Err("unsupported UiCanvas DB2 layout hash".into());
+            }
+            for row in 0..canvases.count() {
+                let size = (canvases.value(row, 0)?, canvases.value(row, 1)?);
+                if size.0 == 0 || size.1 == 0 {
+                    return Err("invalid atlas canvas dimensions".into());
+                }
+                canvas_sizes.insert(canvases.id(row)?, size);
+            }
+        }
+        let base = canvas_sizes
+            .values()
+            .copied()
+            .min_by_key(|(width, height)| u64::from(*width) * u64::from(*height));
         let mut sheets = HashMap::new();
         for row in 0..atlases.count {
             sheets.insert(
@@ -246,6 +270,7 @@ impl AtlasIndex {
                     atlases.value(row, 1)?,
                     atlases.value(row, 3)?,
                     atlases.value(row, 4)?,
+                    atlases.value(row, 5)?,
                 ),
             );
         }
@@ -269,7 +294,7 @@ impl AtlasIndex {
                 continue;
             }
             let record = (|| -> Result<Atlas> {
-                let (file, sw, sh) = sheets
+                let (file, sw, sh, canvas) = sheets
                     .get(&members.value(row, 2)?)
                     .copied()
                     .ok_or("atlas sheet missing")?;
@@ -287,6 +312,13 @@ impl AtlasIndex {
                     members.value(row, 11)?,
                     members.value(row, 12)?,
                 );
+                let density = match (base, canvas_sizes.get(&canvas)) {
+                    (Some((base_width, base_height)), Some((width, height))) => (
+                        f64::from(*width) / f64::from(base_width),
+                        f64::from(*height) / f64::from(base_height),
+                    ),
+                    _ => (1.0, 1.0),
+                };
                 let raw_width = members.value(row, 3)?;
                 let raw_height = members.value(row, 4)?;
                 Ok(Atlas {
@@ -297,18 +329,18 @@ impl AtlasIndex {
                     top,
                     bottom,
                     width: if ow > 0 {
-                        ow
+                        f64::from(ow)
                     } else if raw_width > 0 {
-                        raw_width
+                        f64::from(raw_width) / density.0
                     } else {
-                        right - left
+                        f64::from(right - left) / density.0
                     },
                     height: if oh > 0 {
-                        oh
+                        f64::from(oh)
                     } else if raw_height > 0 {
-                        raw_height
+                        f64::from(raw_height) / density.1
                     } else {
-                        bottom - top
+                        f64::from(bottom - top) / density.1
                     },
                     sheet_width: sw,
                     sheet_height: sh,
@@ -379,6 +411,23 @@ mod tests {
         assert!(Table::parse(&bytes).is_err());
     }
     #[test]
+    fn signed_bitpacked_scalars_cross_byte_boundaries_and_sign_extend() {
+        let mut bytes = records(0, &[vec![1, 0]], &[]);
+        let at = 244 + 2 * 4 + 24;
+        bytes[at..at + 2].copy_from_slice(&35u16.to_le_bytes());
+        bytes[at + 2..at + 4].copy_from_slice(&13u16.to_le_bytes());
+        for (offset, value) in [(8, 5u32), (12, 35), (16, 13)] {
+            bytes[at + offset..at + offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let row = 244 + 2 * 28;
+        bytes[row + 4..row + 8].copy_from_slice(&(2048u32 << 3).to_le_bytes());
+        assert_eq!(Table::parse(&bytes).unwrap().value(0, 1).unwrap(), 2048);
+        bytes[row + 4..row + 8].copy_from_slice(&(8191u32 << 3).to_le_bytes());
+        assert_eq!(Table::parse(&bytes).unwrap().value(0, 1).unwrap(), u32::MAX);
+        bytes[at + 16..at + 20].copy_from_slice(&14u32.to_le_bytes());
+        assert!(Table::parse(&bytes).is_err());
+    }
+    #[test]
     fn copied_rows_keep_source_string_offsets_and_alias_ids() {
         let mut bytes = records(0, &[vec![7, 0]], &[(0, 1, "Copied label")]);
         bytes[240..244].copy_from_slice(&1u32.to_le_bytes());
@@ -442,6 +491,51 @@ mod tests {
         bytes
     }
     #[test]
+    fn atlas_canvas_density_changes_logical_size_without_changing_uvs() {
+        let a = records(0x91378408, &[vec![12, 1234, 0, 256, 256, 2]], &[]);
+        let m = records(
+            0x75e12f73,
+            &[
+                vec![0, 7, 12, 78, 78, 10, 88, 20, 98, 9, 0, 0, 0, 0],
+                vec![0, 8, 12, 78, 78, 10, 88, 20, 98, 10, 26, 26, 0, 0],
+            ],
+            &[],
+        );
+        let e = records(
+            0x7ccbd18f,
+            &[vec![0, 9], vec![0, 10]],
+            &[(0, 0, "Density-Test"), (1, 0, "Explicit-Size")],
+        );
+        let mut c = records(0x9ca2cfb4, &[vec![1024, 768], vec![2048, 1536]], &[]);
+        c[172..176].copy_from_slice(&4u32.to_le_bytes());
+        c[228..232].copy_from_slice(&8u32.to_le_bytes());
+        for id in [1u32, 2] {
+            c.extend_from_slice(&id.to_le_bytes());
+        }
+        let index = AtlasIndex::decode_available(
+            &Table::parse(&a).unwrap(),
+            &Table::parse(&m).unwrap(),
+            &Table::parse(&e).unwrap(),
+            Some(&Table::parse(&c).unwrap()),
+            |_| true,
+        )
+        .unwrap();
+        let atlas = &index.records["density-test"];
+        assert_eq!((atlas.width, atlas.height), (39.0, 39.0));
+        assert_eq!(
+            (atlas.left, atlas.right, atlas.top, atlas.bottom),
+            (10, 88, 20, 98)
+        );
+        assert_eq!((atlas.raw_width, atlas.raw_height), (78, 78));
+        assert_eq!(
+            (
+                index.records["explicit-size"].width,
+                index.records["explicit-size"].height
+            ),
+            (26.0, 26.0)
+        );
+    }
+    #[test]
     fn atlas_variants_prefer_installed_payload_and_keep_aliases() {
         let a = records(
             0x91378408,
@@ -465,7 +559,7 @@ mod tests {
             Table::parse(&m).unwrap(),
             Table::parse(&e).unwrap(),
         );
-        let available = AtlasIndex::decode_available(&a, &m, &e, |id| id == 5678).unwrap();
+        let available = AtlasIndex::decode_available(&a, &m, &e, None, |id| id == 5678).unwrap();
         for name in ["micro-test", "alias"] {
             assert_eq!(available.records[name].file_data_id, 5678);
             assert_eq!(available.records[name].left, 50);
@@ -504,7 +598,7 @@ mod tests {
                 atlas.width,
                 atlas.height
             ),
-            (1234, 10, 20, 64, 16)
+            (1234, 10, 20, 64.0, 16.0)
         );
         assert_eq!((atlas.raw_width, atlas.raw_height), (32, 16));
         assert!(atlas.tiles_horizontally && atlas.tiles_vertically);

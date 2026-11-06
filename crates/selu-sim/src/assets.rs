@@ -253,7 +253,7 @@ mod tests {
             fallback.h_advance_unscaled(fallback.glyph_id('W'))
         );
         let a = r.atlas("UI-Character-Info-Title").unwrap();
-        assert_eq!((a.width, a.height), (196, 40));
+        assert_eq!((a.width, a.height), (196.0, 40.0));
         assert!(matches!(
             r.lookup(&a.file_data_id.to_string()),
             Lookup::Found(_)

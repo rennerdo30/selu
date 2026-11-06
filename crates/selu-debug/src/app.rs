@@ -3162,13 +3162,23 @@ impl Studio {
                         }
                         continue;
                     }
-                    painter.rect_filled(rect, 0.0, fade(r, Color32::from_rgb(60, 70, 95)));
-                    painter.with_clip_rect(rect.intersect(area)).text(
-                        rect.center(),
-                        Align2::CENTER_CENTER,
-                        "Missing texture",
-                        FontId::proportional(10.0),
-                        fade(r, Color32::LIGHT_GRAY),
+                    // The same missing-resource symbol at every size, with no
+                    // frame names or clipped labels mistaken for client art.
+                    painter.rect_filled(rect, 0.0, fade(r, Color32::from_rgb(46, 35, 49)));
+                    let middle = rect.center();
+                    for tile in [
+                        ERect::from_min_max(rect.min, middle),
+                        ERect::from_min_max(middle, rect.max),
+                    ] {
+                        painter.rect_filled(tile, 0.0, fade(r, Color32::from_rgb(132, 63, 127)));
+                    }
+                    painter.line_segment(
+                        [rect.left_top(), rect.right_bottom()],
+                        Stroke::new(1.0, fade(r, Color32::from_rgb(218, 130, 210))),
+                    );
+                    painter.line_segment(
+                        [rect.right_top(), rect.left_bottom()],
+                        Stroke::new(1.0, fade(r, Color32::from_rgb(218, 130, 210))),
                     );
                 }
                 (None, "FontString" | "EditBox") => {
