@@ -913,8 +913,9 @@ impl Session {
         }
         self.logged_in = true;
         if self.default_ui_report.is_some() {
-            for (event, args) in [
+            for (event, mut args) in [
                 ("VARIABLES_LOADED", vec![]),
+                ("EDIT_MODE_LAYOUTS_UPDATED", vec![]),
                 ("PLAYER_LOGIN", vec![]),
                 (
                     "PLAYER_ENTERING_WORLD",
@@ -924,6 +925,20 @@ impl Session {
                     ],
                 ),
             ] {
+                if event == "EDIT_MODE_LAYOUTS_UPDATED" {
+                    match dispatch(&self.sim.lua, &self.sim.ctx, || {
+                        self.sim
+                            .lua
+                            .load("return C_EditMode.GetLayouts()")
+                            .eval::<Value>()
+                    }) {
+                        Ok(layouts) => args = vec![layouts, Value::Boolean(false)],
+                        Err(error) => {
+                            self.sim.ctx.log(format!("error: {error}"));
+                            continue;
+                        }
+                    }
+                }
                 if let Err(error) = self.sim.fire(event, args) {
                     self.sim.ctx.log(format!("error: {error}"));
                 }
@@ -1475,7 +1490,8 @@ mod tests {
         s.eval("assert(AfterBrokenBlizzardChunk); assert(SyntheticOnly==nil)")
             .unwrap();
         s.login().unwrap();
-        s.eval("assert(NativeLoginContinued)").unwrap();
+        s.eval("assert(NativeLoginContinued and NativeLayoutsReceived)")
+            .unwrap();
     }
     use super::*;
 

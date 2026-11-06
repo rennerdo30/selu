@@ -15,7 +15,8 @@ for _,name in ipairs({'GetBuildInfo','Mixin','CreateFromMixins','CopyTable','Get
     'securecall','securecallfunction','secureexecuterange','UnitHealthPercent','UnitPowerPercent',
     'GetChatWindowInfo','GetChatWindowSavedPosition','GetChatWindowSavedDimensions'}) do remember(_G,name,name) end
 for namespace,keys in pairs({C_UnitAuras={'GetAuraSlots','GetAuraDataByIndex','GetAuraDataBySlot','GetAuraDataByAuraInstanceID','GetPlayerAuraBySpellID','GetUnitAuras'},
-    C_CVar={'GetCVar','GetCVarBool','GetCVarNumber','SetCVar','AreCVarsLoaded','GetCVarDefault'}}) do
+    C_CVar={'GetCVar','GetCVarBool','GetCVarNumber','SetCVar','AreCVarsLoaded','GetCVarDefault'},
+    C_EditMode={'GetLayouts'}}) do
     for _,key in ipairs(keys) do remember(rawget(_G,namespace),key,namespace..'.'..key) end
 end
 -- Native helpers for Blizzard's own Lua, not declarations available to Selu.
@@ -86,6 +87,10 @@ function GetChatWindowInfo(id)
 end
 function GetChatWindowSavedPosition() return nil end
 function GetChatWindowSavedDimensions() return nil end
+-- UpdateLayoutInfo prepends Blizzard's own preset layouts to this empty
+-- saved list. activeLayout is a Lua array index, not the zero-based preset enum.
+C_EditMode=C_EditMode or {}
+function C_EditMode.GetLayouts() return {activeLayout=1,layouts={}} end
 function securecallfunction(fn,...) return __selu_secure_invoke(fn,...) end
 function securecall(fn,...)
     if type(fn)=='string' then fn=_G[fn] end
