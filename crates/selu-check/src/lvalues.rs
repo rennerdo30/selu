@@ -109,10 +109,12 @@ impl Ctx<'_> {
                     .iter()
                     .filter(|t| **t != Type::Null)
                     .map(|t| match (&target.kind, crate::shape_of(t)) {
-                        (
-                            ExprKind::Member { name, .. },
-                            Type::Object(fields) | Type::Class(_, _, fields),
-                        ) => fields.get(name).cloned(),
+                        (ExprKind::Member { name, .. }, Type::Object(fields)) => {
+                            fields.get(name).cloned()
+                        }
+                        (ExprKind::Member { name, .. }, Type::Class(_, _, fields)) => {
+                            fields.get(name).cloned()
+                        }
                         (ExprKind::Index { .. }, Type::Array(item)) => Some(*item),
                         _ => None,
                     })
@@ -141,9 +143,8 @@ impl Ctx<'_> {
                         .iter()
                         .filter(|t| **t != Type::Null)
                         .map(|t| match crate::shape_of(t) {
-                            Type::Object(fields) | Type::Class(_, _, fields) => {
-                                fields.get(name).cloned()
-                            }
+                            Type::Class(_, _, fields) => fields.get(name).cloned(),
+                            Type::Object(fields) => fields.get(name).cloned(),
                             _ => None,
                         })
                         .collect::<Option<Vec<_>>>()?,

@@ -108,7 +108,7 @@ pub enum Type {
     Opaque(String),
     Named(String, NamedShape),
     /// Nominal identity, base identities, and the checked instance member shape.
-    Class(String, Vec<String>, BTreeMap<String, Type>),
+    Class(String, Vec<String>, std::sync::Arc<BTreeMap<String, Type>>),
     ClassObject(String),
     Widget(String, Vec<String>),
     ApiOpaque(String, Vec<Type>),
@@ -200,7 +200,8 @@ impl Type {
                 | Type::Tuple(ts)
                 | Type::ApiIterator(ts)
                 | Type::ApiOpaque(_, ts) => ts.iter().any(|t| visit(t, seen)),
-                Type::Object(fs) | Type::Class(_, _, fs) => fs.values().any(|t| visit(t, seen)),
+                Type::Object(fs) => fs.values().any(|t| visit(t, seen)),
+                Type::Class(_, _, fs) => fs.values().any(|t| visit(t, seen)),
                 Type::Map(k, v) | Type::WeakMap(k, v) => visit(k, seen) || visit(v, seen),
                 Type::Function {
                     params,
@@ -930,7 +931,7 @@ pub struct TypeTable {
     pub saved_schemas: HashMap<usize, Type>,
     pub saved_readers: HashMap<usize, Type>,
     pub(crate) named_roots: Vec<NamedShape>,
-    types: HashMap<ExprId, Type>,
+    types: HashMap<ExprId, std::sync::Arc<Type>>,
     stable: std::collections::HashSet<ExprId>,
     frame_families: std::collections::HashSet<ExprId>,
     method_calls: std::collections::HashSet<ExprId>,
@@ -960,10 +961,11 @@ impl TypeTable {
     }
 
     pub fn set(&mut self, id: ExprId, t: Type) {
-        self.types.insert(id, crate::aliases::shape_of(&t));
+        self.types
+            .insert(id, std::sync::Arc::new(crate::aliases::shape_of(&t)));
     }
     pub fn get(&self, id: ExprId) -> Option<&Type> {
-        self.types.get(&id)
+        self.types.get(&id).map(std::sync::Arc::as_ref)
     }
     pub fn is_string(&self, id: ExprId) -> bool {
         self.get(id)

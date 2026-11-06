@@ -88,7 +88,14 @@ pub fn build(
     target_override: Option<&str>,
     manifest_dir: Option<&Path>,
 ) -> Result<(), ExitCode> {
-    build_impl(project_dir, target_override, manifest_dir, false, &[])
+    build_impl(
+        project_dir,
+        target_override,
+        manifest_dir,
+        false,
+        &[],
+        false,
+    )
 }
 pub fn build_tests(
     project_dir: &Path,
@@ -96,7 +103,22 @@ pub fn build_tests(
     roots: &[String],
     manifest_dir: Option<&Path>,
 ) -> Result<(), ExitCode> {
-    build_impl(project_dir, target_override, manifest_dir, true, roots)
+    build_impl(
+        project_dir,
+        target_override,
+        manifest_dir,
+        true,
+        roots,
+        false,
+    )
+}
+/// Check source and saved schemas without lowering or writing build artifacts.
+pub fn check_project(
+    project: &Path,
+    target: Option<&str>,
+    manifests: Option<&Path>,
+) -> Result<(), ExitCode> {
+    build_impl(project, target, manifests, true, &[], true)
 }
 fn build_impl(
     project_dir: &Path,
@@ -104,7 +126,10 @@ fn build_impl(
     manifest_dir: Option<&Path>,
     quiet: bool,
     roots: &[String],
+    check_only: bool,
 ) -> Result<(), ExitCode> {
+    let timing = std::env::var_os("SELU_TIMINGS").is_some();
+    let started = std::time::Instant::now();
     let config_path = project_dir.join("selu.toml");
     let config_text = std::fs::read_to_string(&config_path).map_err(|e| {
         eprintln!("selu: cannot read {}: {e}", config_path.display());
@@ -154,10 +179,12 @@ fn build_impl(
         eprintln!("selu: {e}");
         ExitCode::FAILURE
     })?;
-    lock.write(project_dir).map_err(|e| {
-        eprintln!("selu: {e}");
-        ExitCode::FAILURE
-    })?;
+    if !check_only {
+        lock.write(project_dir).map_err(|e| {
+            eprintln!("selu: {e}");
+            ExitCode::FAILURE
+        })?;
+    }
     if shared
         && selected.iter().any(|m| {
             m.lua_dialects
@@ -174,6 +201,12 @@ fn build_impl(
     }
     let multi = target_strings.len() > 1;
 
+    if timing {
+        eprintln!("timing setup {:.3}s", started.elapsed().as_secs_f64());
+    }
+    let mut check_time = std::time::Duration::ZERO;
+    let mut lower_time = std::time::Duration::ZERO;
+    let mut imports_time = std::time::Duration::ZERO;
     let mut saved_shapes = std::collections::BTreeMap::new();
     let mut saved_globals = Vec::new();
     let old_saved: SavedFile = match std::fs::read_to_string(project_dir.join("selu.saved.toml")) {
@@ -208,18 +241,23 @@ fn build_impl(
             .join("dist")
             .join(".selu")
             .join(out_dir.file_name().unwrap_or_default());
-        for dir in [&out_dir, &map_dir] {
+        for dir in [&out_dir, &map_dir].into_iter().filter(|_| !check_only) {
             std::fs::create_dir_all(dir).map_err(|e| {
                 eprintln!("selu: cannot create {}: {e}", dir.display());
                 ExitCode::FAILURE
             })?;
         }
 
+        let prepared = selu_check::PreparedTarget::new(manifest, &selected);
+        if timing {
+            eprintln!("timing prepared target {spec}");
+        }
         let mut lua_files: Vec<String> = Vec::new();
         let mut exports = std::collections::BTreeMap::new();
         let mut compiled = Vec::new();
         let addon_errors = sources.iter().any(|m| selu_lower::uses_errors(&m.program));
         for module in &sources {
+            let phase = std::time::Instant::now();
             let mut imports = selu_check::ModuleBindings::default();
             let mut lower_imports = std::collections::BTreeMap::new();
             for (from, key) in &module.dependencies {
@@ -228,13 +266,19 @@ fn build_impl(
                 imports.imports.insert(from.clone(), signatures.clone());
                 lower_imports.insert(from.clone(), (key.clone(), signatures));
             }
-            let (checked, signature) = selu_check::check_module_targets_with_options(
-                &module.program,
-                manifest,
-                imports,
-                &selected,
-                check_options,
-            );
+            imports_time += phase.elapsed();
+            let phase = std::time::Instant::now();
+            let (checked, signature) =
+                prepared.check_module(&module.program, imports, check_options);
+            if timing {
+                eprintln!(
+                    "timing module {} check {:.3}s",
+                    module.key,
+                    phase.elapsed().as_secs_f64()
+                );
+            }
+            check_time += phase.elapsed();
+            let phase = std::time::Instant::now();
             for d in &checked.diagnostics {
                 let source = d
                     .span
@@ -258,21 +302,44 @@ fn build_impl(
                 &mut saved_globals,
             )?;
             exports.insert(module.key.clone(), signature);
+            if check_only {
+                continue;
+            }
             let mut bindings =
                 selu_lower::ModuleBindings::new(module.key.clone(), lower_imports, &module.program);
             bindings.addon_name = project.name.clone();
             bindings.addon_errors = addon_errors;
             let lowered = selu_lower::lower_module_layout(
                 &module.program,
-                &selu_check::targets::with_fallbacks(manifest, &selected),
+                prepared.manifest(),
                 &checked.types,
                 bindings,
                 shared,
                 manifest,
             );
             compiled.push((module, lowered));
+            if timing {
+                eprintln!(
+                    "timing module {} lower {:.3}s",
+                    module.key,
+                    phase.elapsed().as_secs_f64()
+                );
+            }
+            lower_time += phase.elapsed();
+        }
+        if timing {
+            eprintln!(
+                "timing imports {:.3}s check {:.3}s lower {:.3}s elapsed {:.3}s",
+                imports_time.as_secs_f64(),
+                check_time.as_secs_f64(),
+                lower_time.as_secs_f64(),
+                started.elapsed().as_secs_f64()
+            );
         }
         validate_saved(&old_saved, &saved_shapes, &sources, &project.name)?;
+        if check_only {
+            continue;
+        }
         let keybindings: Vec<_> = compiled
             .iter()
             .flat_map(|(_, l)| l.bindings.iter().cloned())
@@ -424,6 +491,9 @@ fn build_impl(
         if !quiet {
             println!("built {} -> {}", project.name, out_dir.display());
         }
+    }
+    if check_only {
+        return Ok(());
     }
     for (path, manifests) in snapshots {
         #[derive(Serialize)]
@@ -669,8 +739,13 @@ pub fn project_sources_roots(src: &Path, roots: &[String]) -> Result<Vec<ModuleS
                         "{}",
                         Diagnostic::warning(
                             "SELU0404",
-                            format!("{} is not reachable from src/main.selu", path.display())
+                            format!("src/{key}.selu is not reachable from src/main.selu")
                         )
+                        .with_span(selu_diagnostics::Span {
+                            file: format!("{key}.selu"),
+                            start: 0,
+                            end: 0
+                        })
                         .render("")
                     );
                 }

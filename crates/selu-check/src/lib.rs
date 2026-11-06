@@ -24,6 +24,7 @@ mod api;
 mod classes;
 mod frame_families;
 mod frames;
+mod index;
 mod modules;
 pub mod restrictions;
 pub mod saved;
@@ -80,6 +81,8 @@ pub fn check_program_with_options(
     manifest: &Manifest,
     options: CheckOptions,
 ) -> Checked {
+    let api_types = Default::default();
+    let index = index::ManifestIndex::new(manifest);
     let mut out = rules::check_rules(program);
     let mut ctx = Ctx {
         binding_statements: bindings::module_statements(program),
@@ -87,6 +90,8 @@ pub fn check_program_with_options(
         next_binding: 0,
         module: ModuleBindings::default(),
         manifest,
+        index: &index,
+        api_types: &api_types,
         secret_capable: restrictions::has_secrets(manifest),
         protected_functions: restrictions::protected_functions(manifest),
         protected_methods: manifest.widgets.iter().any(|w| {
@@ -157,61 +162,116 @@ pub fn check_module_targets_with_options(
     targets: &[Manifest],
     options: CheckOptions,
 ) -> (Checked, ModuleExports) {
-    let effective = targets::with_fallbacks(manifest, targets);
-    let manifest = &effective;
-    let classes = classes::ClassContext::from_imports(&imports);
-    let mut out = rules::check_rules(program);
-    let mut ctx = Ctx {
-        binding_statements: bindings::module_statements(program),
-        flow_info: flow::analyze(program),
-        next_binding: 0,
-        module: imports,
-        manifest,
-        secret_capable: restrictions::has_secrets(manifest),
-        protected_functions: restrictions::protected_functions(manifest),
-        protected_methods: manifest.widgets.iter().any(|w| {
+    PreparedTarget::new(manifest, targets).check_module(program, imports, options)
+}
+
+/// Immutable target data prepared once for all modules of a compilation.
+pub struct PreparedTarget {
+    manifest: Manifest,
+    index: index::ManifestIndex,
+    api_types: std::cell::RefCell<HashMap<(usize, usize, bool), Type>>,
+    availability: targets::Availability,
+    secret_capable: bool,
+    protected_functions: Vec<Type>,
+    protected_methods: bool,
+}
+impl PreparedTarget {
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+    pub fn new(primary: &Manifest, targets: &[Manifest]) -> Self {
+        let manifest = targets::with_fallbacks(primary, targets);
+        let secret_capable = restrictions::has_secrets(&manifest);
+        let protected_functions = restrictions::protected_functions(&manifest);
+        let protected_methods = manifest.widgets.iter().any(|w| {
             w.methods.iter().any(|d| {
                 d.attributes
                     .get("IsProtectedFunction")
                     .and_then(|v| v.as_bool())
                     == Some(true)
             })
-        }),
-        options,
-        availability: targets::Availability::new(targets),
-        out: &mut out,
-        scopes: Vec::new(),
-        fn_depth: 0,
-        returns: Vec::new(),
-        loops: Vec::new(),
-        function_expected: Vec::new(),
-        aliases: Default::default(),
-        classes,
-        types: TypeTable::default(),
-    };
-    ctx.block(&program.stmts, &[], Vec::new());
-    ctx.finish_alias_diagnostics();
-    let context = ctx.class_type_names();
-    for d in ctx.aliases.declarations.values() {
-        ctx.aliases
-            .contexts
-            .entry(aliases::declaration_key(d))
-            .or_insert_with(|| context.clone());
+        });
+        let index = index::ManifestIndex::new(&manifest);
+        Self {
+            manifest,
+            index,
+            api_types: Default::default(),
+            availability: targets::Availability::new(targets),
+            secret_capable,
+            protected_functions,
+            protected_methods,
+        }
     }
-    for e in ctx.module.exports.values_mut() {
-        e.type_contexts = ctx.aliases.contexts.clone();
-        e.classes = ctx.classes.infos.clone();
+    pub fn check_module(
+        &self,
+        program: &Program,
+        imports: ModuleBindings,
+        options: CheckOptions,
+    ) -> (Checked, ModuleExports) {
+        let timing = std::env::var_os("SELU_TIMINGS").is_some();
+        let clock = std::time::Instant::now();
+        let manifest = &self.manifest;
+        let classes = classes::ClassContext::from_imports(&imports);
+        let mut out = rules::check_rules(program);
+        let mut ctx = Ctx {
+            binding_statements: bindings::module_statements(program),
+            flow_info: flow::analyze(program),
+            next_binding: 0,
+            module: imports,
+            manifest,
+            index: &self.index,
+            api_types: &self.api_types,
+            secret_capable: self.secret_capable,
+            protected_functions: self.protected_functions.clone(),
+            protected_methods: self.protected_methods,
+            options,
+            availability: self.availability.clone(),
+            out: &mut out,
+            scopes: Vec::new(),
+            fn_depth: 0,
+            returns: Vec::new(),
+            loops: Vec::new(),
+            function_expected: Vec::new(),
+            aliases: Default::default(),
+            classes,
+            types: TypeTable::default(),
+        };
+        let setup = clock.elapsed();
+        ctx.block(&program.stmts, &[], Vec::new());
+        let body = clock.elapsed() - setup;
+        ctx.finish_alias_diagnostics();
+        let context = std::sync::Arc::new(ctx.class_type_names());
+        for d in ctx.aliases.declarations.values() {
+            ctx.aliases
+                .contexts
+                .entry(aliases::declaration_key(d))
+                .or_insert_with(|| context.clone());
+        }
+        let type_contexts = std::sync::Arc::new(ctx.aliases.contexts.clone());
+        let classes = std::sync::Arc::new(ctx.classes.infos.clone());
+        for e in ctx.module.exports.values_mut() {
+            e.type_contexts = type_contexts.clone();
+            e.classes = classes.clone();
+        }
+        if timing {
+            eprintln!(
+                "timing checker setup {:.6}s body {:.6}s finish {:.6}s",
+                setup.as_secs_f64(),
+                body.as_secs_f64(),
+                (clock.elapsed() - setup - body).as_secs_f64()
+            );
+        }
+        let exports = ctx.module.exports;
+        let types = ctx.types;
+        restrictions::check_uses(program, &types, &mut out);
+        (
+            Checked {
+                diagnostics: out,
+                types,
+            },
+            exports,
+        )
     }
-    let exports = ctx.module.exports;
-    let types = ctx.types;
-    restrictions::check_uses(program, &types, &mut out);
-    (
-        Checked {
-            diagnostics: out,
-            types,
-        },
-        exports,
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +340,8 @@ struct Ctx<'a> {
     classes: classes::ClassContext,
     loops: Vec<loops::LoopCtx>,
     manifest: &'a Manifest,
+    index: &'a index::ManifestIndex,
+    api_types: &'a std::cell::RefCell<HashMap<(usize, usize, bool), Type>>,
     availability: targets::Availability,
     out: &'a mut Vec<Diagnostic>,
     scopes: Vec<Scope>,
@@ -502,7 +564,7 @@ impl Ctx<'_> {
             self.stmt(s);
         }
         if top {
-            let context = self.class_type_names();
+            let context = std::sync::Arc::new(self.class_type_names());
             for d in self.aliases.declarations.values().filter(|d| {
                 stmts
                     .first()
@@ -528,7 +590,7 @@ impl Ctx<'_> {
                     "move `global {name} = ...;` to the top level, and assign it here with `{name} = ...;`"
                 )),
             );
-        } else if self.manifest.has_global(name) {
+        } else if self.index.has_global(name) {
             self.out.push(
                 err(
                     "SELU0312",
@@ -868,7 +930,7 @@ impl Ctx<'_> {
                 self.check_ready(name, &b, span);
                 self.type_of(name).unwrap_or(Type::Error)
             }
-            None if self.manifest.has_global(name) => self.api_global(name),
+            None if self.index.has_global(name) => self.api_global(name),
             None => {
                 self.out.push(
                     err("SELU0310", format!("`{name}` is not declared"), span)
@@ -912,7 +974,7 @@ impl Ctx<'_> {
             return;
         }
         let Some((_, b)) = self.lookup(name).map(|(i, b)| (i, b.clone())) else {
-            if self.manifest.has_global(name) {
+            if self.index.has_global(name) {
                 self.out.push(
                     err("SELU0315", format!("`{name}` belongs to the game and can't be replaced"), span)
                         .with_help("replacing a game global breaks other addons and Blizzard's UI; to run code when it is called, use `hook(...)`"),
@@ -1486,7 +1548,7 @@ impl Ctx<'_> {
     fn mark_if_stable(&mut self, name: &str, id: selu_syntax::ExprId) {
         let stable = match self.lookup(name) {
             Some((_, b)) => matches!(b.kind, Kind::Const | Kind::Function),
-            None => self.manifest.has_global(name),
+            None => self.index.has_global(name),
         };
         if stable {
             self.types.mark_stable(id);

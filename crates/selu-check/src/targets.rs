@@ -7,22 +7,61 @@ use selu_syntax::{Expr, ExprKind};
 #[derive(Clone)]
 pub struct Availability {
     targets: std::sync::Arc<Vec<Manifest>>,
+    names: std::sync::Arc<Vec<std::collections::HashSet<String>>>,
+    namespaces: std::sync::Arc<std::collections::HashSet<String>>,
 }
 impl Availability {
     pub(crate) fn manifests(&self) -> &[Manifest] {
         &self.targets
     }
     pub fn new(targets: &[Manifest]) -> Self {
+        let mut namespaces = std::collections::HashSet::new();
+        let names = targets
+            .iter()
+            .map(|m| {
+                let mut names = std::collections::HashSet::new();
+                for f in &m.functions {
+                    for (i, _) in f.name.match_indices('.') {
+                        namespaces.insert(f.name[..i].to_string());
+                        if f.available {
+                            names.insert(f.name[..i].to_string());
+                        }
+                    }
+                    if f.available {
+                        names.insert(f.name.clone());
+                    }
+                }
+                names.extend(m.events.iter().map(|e| e.name.clone()));
+                names.extend(m.globals.iter().map(|g| g.name.clone()));
+                if !m.enums.is_empty() {
+                    namespaces.insert("Enum".to_string());
+                }
+                for e in &m.enums {
+                    names.insert(format!("Enum.{}", e.name));
+                    names.extend(e.values.keys().map(|v| format!("Enum.{}.{v}", e.name)));
+                }
+                names
+            })
+            .collect();
         Self {
             targets: std::sync::Arc::new(targets.to_vec()),
+            names: std::sync::Arc::new(names),
+            namespaces: std::sync::Arc::new(namespaces),
         }
+    }
+    fn exists(&self, m: &Manifest, n: &str) -> bool {
+        let i = self
+            .targets
+            .iter()
+            .position(|t| std::ptr::eq(t, m))
+            .expect("availability target");
+        self.names[i].contains(n)
     }
 }
 pub fn namespace(m: &Manifest, n: &str) -> bool {
-    m.functions
-        .iter()
-        .any(|f| f.name.starts_with(&format!("{n}.")))
-        || n == "Enum" && !m.enums.is_empty()
+    m.functions.iter().any(|f| {
+        f.name.len() > n.len() && f.name.starts_with(n) && f.name.as_bytes()[n.len()] == b'.'
+    }) || n == "Enum" && !m.enums.is_empty()
 }
 fn enum_exists(m: &Manifest, n: &str) -> bool {
     m.enums.iter().any(|e| {
@@ -103,9 +142,9 @@ impl Ctx<'_> {
                     return true;
                 };
                 if let Some(x) = k.strip_prefix("@has:") {
-                    exists(m, x)
+                    self.availability.exists(m, x)
                 } else if let Some(x) = k.strip_prefix("@lacks:") {
-                    !exists(m, x)
+                    !self.availability.exists(m, x)
                 } else {
                     true
                 }
@@ -118,7 +157,7 @@ impl Ctx<'_> {
             .targets
             .iter()
             .filter(|m| self.target_is_active(m))
-            .filter(|m| !exists(m, n))
+            .filter(|m| !self.availability.exists(m, n))
             .map(Manifest::target_string)
             .collect();
         if missing.is_empty() {
@@ -152,7 +191,11 @@ impl Ctx<'_> {
         if self.lookup(root.split('.').next()?).is_some() {
             return None;
         }
-        if self.availability.targets.iter().any(|m| exists(m, &root))
+        if self
+            .availability
+            .targets
+            .iter()
+            .any(|m| self.availability.exists(m, &root))
             && self.availability_error(&root, &object.span)
         {
             return Some(Type::Error);
@@ -172,7 +215,7 @@ impl Ctx<'_> {
         if self.lookup(n.split('.').next()?).is_some() {
             return None;
         }
-        if self.availability.targets.iter().any(|m| namespace(m, &n)) {
+        if self.availability.namespaces.contains(&n) {
             self.types.set(e.id, Type::Untyped);
             return Some(Type::Untyped);
         }
@@ -182,14 +225,19 @@ impl Ctx<'_> {
         if self.lookup(n).is_some() {
             return None;
         }
-        if self.availability.targets.iter().any(|m| namespace(m, n)) {
+        if self.availability.namespaces.contains(n) {
             self.out.push(
                 err("SELU0502", format!("namespace `{n}` is not a value"), span)
                     .with_help(format!("call `{n}.Bar(...)` directly")),
             );
             return Some(Type::Error);
         }
-        if !self.availability.targets.iter().any(|m| exists(m, n)) {
+        if !self
+            .availability
+            .targets
+            .iter()
+            .any(|m| self.availability.exists(m, n))
+        {
             return None;
         }
         if self.scopes.iter().any(|s| {
@@ -204,7 +252,11 @@ impl Ctx<'_> {
     pub(crate) fn target_call(&mut self, callee: &Expr, args: &[Expr]) -> Option<Type> {
         let n = callee.dotted_name()?;
         if self.lookup(n.split('.').next()?).is_some()
-            || !self.availability.targets.iter().any(|m| exists(m, &n))
+            || !self
+                .availability
+                .targets
+                .iter()
+                .any(|m| self.availability.exists(m, &n))
         {
             return None;
         }
@@ -226,7 +278,11 @@ impl Ctx<'_> {
         let valid = args.len() == 1
             && args[0].dotted_name().is_some_and(|n| {
                 self.lookup(n.split('.').next().unwrap()).is_none()
-                    && self.availability.targets.iter().any(|m| exists(m, &n))
+                    && self
+                        .availability
+                        .targets
+                        .iter()
+                        .any(|m| self.availability.exists(m, &n))
             });
         if !valid {
             self.out.push(

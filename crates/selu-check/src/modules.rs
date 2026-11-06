@@ -6,13 +6,15 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct ModuleExport {
     pub has_value: bool,
-    pub type_contexts: std::collections::HashMap<String, std::collections::HashMap<String, Type>>,
-    pub aliases: std::collections::HashMap<String, selu_syntax::TypeDecl>,
+    pub type_contexts: std::sync::Arc<
+        std::collections::HashMap<String, std::sync::Arc<std::collections::HashMap<String, Type>>>,
+    >,
+    pub aliases: std::sync::Arc<std::collections::HashMap<String, selu_syntax::TypeDecl>>,
     pub ty: Type,
     pub mutable: bool,
     pub saved: bool,
     /// Class signatures reachable through this export, keyed by module and declaration.
-    pub classes: std::collections::HashMap<String, crate::ClassInfo>,
+    pub classes: std::sync::Arc<std::collections::HashMap<String, crate::ClassInfo>>,
 }
 impl Default for ModuleExport {
     fn default() -> Self {
@@ -157,7 +159,7 @@ impl Ctx<'_> {
         if self.module_not_top_level(s) {
             return;
         }
-        let context = self.class_type_names();
+        let context = std::sync::Arc::new(self.class_type_names());
         for d in self
             .aliases
             .declarations
@@ -194,7 +196,7 @@ impl Ctx<'_> {
             e.has_value = true;
             e.ty = ty;
             e.mutable = mutable;
-            e.classes = self.classes.infos.clone();
+            // The final module snapshot is attached once after checking.
             e.saved = matches!(inner.kind, StmtKind::Saved { .. });
         }
     }

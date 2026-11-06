@@ -448,15 +448,33 @@ fn widget_field<'a>(
     })
 }
 impl Ctx<'_> {
+    // Only immutable declarations borrowed from prepared manifests may be cached.
+    fn cached_api_signature(&self, m: &Manifest, d: &Declaration, name: Option<&str>) -> Type {
+        let key = (
+            m as *const Manifest as usize,
+            d as *const Declaration as usize,
+            name.is_some(),
+        );
+        if let Some(ty) = self.api_types.borrow().get(&key) {
+            return ty.clone();
+        }
+        let ty = match name {
+            Some(name) => signature_for(m, name, d),
+            None => signature(m, d, 0),
+        };
+        self.api_types.borrow_mut().insert(key, ty.clone());
+        ty
+    }
+
     pub(crate) fn api_global(&self, name: &str) -> Type {
         if let Some(t) = self.frame_global(name) {
             return t;
         }
-        if let Some(f) = self.manifest.function(name) {
+        if let Some(f) = self.index.function(self.manifest, name) {
             return f
                 .signature
                 .as_ref()
-                .map(|d| signature_for(self.manifest, &f.name, d))
+                .map(|d| self.cached_api_signature(self.manifest, d, Some(&f.name)))
                 .unwrap_or(Type::Untyped);
         }
         if name == "Enum" {
@@ -486,12 +504,14 @@ impl Ctx<'_> {
     pub(crate) fn api_member(&mut self, t: &Type, name: &str, object: &Expr) -> Option<Type> {
         if let Some(root) = object.dotted_name()
             && self.lookup(root.split('.').next().unwrap_or("")).is_none()
-            && let Some(f) = self.manifest.function(&format!("{root}.{name}"))
+            && let Some(f) = self
+                .index
+                .function(self.manifest, &format!("{root}.{name}"))
         {
             return Some(
                 f.signature
                     .as_ref()
-                    .map(|d| signature_for(self.manifest, &f.name, d))
+                    .map(|d| self.cached_api_signature(self.manifest, d, Some(&f.name)))
                     .unwrap_or(Type::Untyped),
             );
         }
@@ -533,7 +553,7 @@ impl Ctx<'_> {
             let (m, d) = method(self.manifest, widget, name, &mut Vec::new())
                 .map(|d| (self.manifest, d))
                 .unwrap_or((m, d));
-            let mut ty = signature(m, d, 0);
+            let mut ty = self.cached_api_signature(m, d, None);
             if let Type::Function { api_semantics, .. } = &mut ty {
                 for callback in api_semantics.script_callbacks.values_mut() {
                     if let Type::Function { params, .. } = callback
@@ -632,14 +652,14 @@ impl Ctx<'_> {
         if self.lookup(root).is_some() {
             return None;
         }
-        if root.starts_with("C_") && self.manifest.function(&full).is_none() {
+        if root.starts_with("C_") && self.index.function(self.manifest, &full).is_none() {
             self.missing(&full, callee.span.clone());
             for a in args {
                 self.value(a);
             }
             return Some(Type::Error);
         }
-        let f = self.manifest.function(&full)?.clone();
+        let f = self.index.function(self.manifest, &full)?.clone();
         let d = f.signature?;
         let ty = signature_for(self.manifest, &full, &d);
         self.types.set(callee.id, ty.clone());

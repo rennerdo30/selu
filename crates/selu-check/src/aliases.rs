@@ -4,12 +4,12 @@ use selu_syntax::{Expr, ExprKind, Stmt, StmtKind, TypeDecl, TypeExpr, TypeExprKi
 use std::collections::HashMap;
 #[derive(Clone, Default)]
 pub(crate) struct Aliases {
-    pub(crate) declarations: HashMap<String, TypeDecl>,
+    pub(crate) declarations: std::sync::Arc<HashMap<String, TypeDecl>>,
     active: Vec<String>,
     shapes: HashMap<String, crate::types::NamedShape>,
     validated: std::collections::HashSet<String>,
-    pub(crate) contexts: HashMap<String, HashMap<String, Type>>,
-    context_stack: Vec<HashMap<String, Type>>,
+    pub(crate) contexts: HashMap<String, std::sync::Arc<HashMap<String, Type>>>,
+    context_stack: Vec<std::sync::Arc<HashMap<String, Type>>>,
 }
 impl Ctx<'_> {
     pub(crate) fn finish_alias_diagnostics(&mut self) {
@@ -37,9 +37,7 @@ impl Ctx<'_> {
                 s
             };
             if let StmtKind::TypeDecl(d) = &s.kind
-                && self
-                    .aliases
-                    .declarations
+                && std::sync::Arc::make_mut(&mut self.aliases.declarations)
                     .insert(d.name.clone(), d.clone())
                     .is_some()
             {
@@ -63,7 +61,12 @@ impl Ctx<'_> {
                                 && !export.has_value
                                 && d.span.as_ref() == Some(local_span))
                         });
-                        self.aliases.contexts.extend(export.type_contexts.clone());
+                        self.aliases.contexts.extend(
+                            export
+                                .type_contexts
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone())),
+                        );
                         let renames: HashMap<_, _> = export
                             .aliases
                             .iter()
@@ -71,7 +74,7 @@ impl Ctx<'_> {
                                 (n.clone(), format!("$module:{}:{}", d.name_span.file, n))
                             })
                             .collect();
-                        for (n, original) in &export.aliases {
+                        for (n, original) in export.aliases.iter() {
                             let mut d = original.clone();
                             let mut map = renames.clone();
                             for (p, _) in &d.params {
@@ -86,8 +89,7 @@ impl Ctx<'_> {
                                     rename_types(t, &map);
                                 }
                             }
-                            self.aliases
-                                .declarations
+                            std::sync::Arc::make_mut(&mut self.aliases.declarations)
                                 .insert(renames[n].clone(), d.clone());
                             if n == remote {
                                 if let Some(existing) = self.aliases.declarations.get(local) {
@@ -97,7 +99,8 @@ impl Ctx<'_> {
                                         &existing.name_span,
                                     ));
                                 } else {
-                                    self.aliases.declarations.insert(local.clone(), d);
+                                    std::sync::Arc::make_mut(&mut self.aliases.declarations)
+                                        .insert(local.clone(), d);
                                 }
                             }
                         }
@@ -196,7 +199,7 @@ impl Ctx<'_> {
         let mut names = HashMap::new();
         self.alias_rewrite(&mut rewritten, env, &mut names);
         if let Some(context) = self.aliases.context_stack.last() {
-            let mut all = context.clone();
+            let mut all = (**context).clone();
             all.extend(names);
             names = all;
         }
@@ -282,7 +285,7 @@ impl Ctx<'_> {
                         .contexts
                         .get(&declaration_key(&d))
                         .cloned()
-                        .unwrap_or_else(|| self.class_type_names());
+                        .unwrap_or_else(|| self.class_type_names().into());
                     self.aliases.context_stack.push(context);
                     let local: HashMap<_, _> = d
                         .params
@@ -434,7 +437,8 @@ impl Ctx<'_> {
                                 .iter()
                                 .filter(|t| {
                                     let fields = match shape_of(t) {
-                                        Type::Class(_, _, fs) | Type::Object(fs) => fs,
+                                        Type::Class(_, _, fs) => fs,
+                                        Type::Object(fs) => fs.into(),
                                         _ => return true,
                                     };
                                     let Some(value) = fields.get(name) else {

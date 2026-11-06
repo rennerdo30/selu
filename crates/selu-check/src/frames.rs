@@ -75,7 +75,7 @@ impl Ctx<'_> {
             .collect()
     }
     pub(crate) fn frame_global(&self, name: &str) -> Option<Type> {
-        let g = self.manifest.globals.iter().find(|g| g.name == name)?;
+        let g = &self.manifest.globals[*self.index.globals.get(name)?];
         let mut ty = api::named(self.manifest, g.ty.as_deref()?, 0);
         if let Type::Widget(_, bases) = &mut ty {
             bases.push(format!("@global:{name}"));
