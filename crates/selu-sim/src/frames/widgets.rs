@@ -25,6 +25,24 @@ fn string(v: Option<&Value>) -> Option<String> {
 fn boolean(v: Option<&Value>) -> bool {
     !matches!(v, None | Some(Value::Nil) | Some(Value::Boolean(false)))
 }
+fn sync_button_textures(lua: &Lua, ctx: &Ctx, button: &Table) -> mlua::Result<()> {
+    let enabled = store(lua).borrow().regions[id(button)?].enabled;
+    let disabled = button.raw_get::<Option<Table>>("__selu_DisabledTexture")?;
+    for (key, shown) in [
+        ("__selu_NormalTexture", enabled || disabled.is_none()),
+        ("__selu_DisabledTexture", !enabled),
+    ] {
+        if let Some(texture) = button.raw_get::<Option<Table>>(key)? {
+            call(
+                lua,
+                ctx,
+                if shown { "Show" } else { "Hide" },
+                MultiValue::from_vec(vec![Value::Table(texture)]),
+            )?;
+        }
+    }
+    Ok(())
+}
 pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
     if matches!(name, "OnShow" | "OnHide" | "OnSizeChanged")
         && t.raw_get::<bool>("__selu_xml_constructing")
@@ -658,6 +676,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             )?;
         }
         t.raw_set(key, child)?;
+        sync_button_textures(lua, ctx, &t)?;
         out!(());
     }
     if method == "CreateAnimationGroup" {
@@ -1668,6 +1687,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         }
     }
     if old.enabled != new.enabled {
+        sync_button_textures(lua, ctx, &t)?;
         callback(
             ctx,
             t.clone(),

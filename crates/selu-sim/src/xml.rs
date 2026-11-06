@@ -338,6 +338,7 @@ mod tests {
         );
         sim.eval("assert(Root:GetNormalTexture()==Root.Art); assert(Root:GetHighlightTexture()==Root.Highlight); assert(not Root.Highlight:IsShown()); Root:SetNormalTexture('Interface/Buttons/WHITE8X8'); assert(Root:GetNormalTexture()==Root.Art and Root.Art:IsShown()); Root:SetNormalTexture(nil); assert(Root:GetNormalTexture()==nil and not Root.Art:IsShown())").unwrap();
         sim.eval("Root:SetNormalAtlas('ui-hud-micromenu-character-Up'); assert(Root:GetNormalTexture():GetAtlas()=='ui-hud-micromenu-character-Up')").unwrap();
+        sim.eval("Root:SetDisabledTexture(\"Interface/Buttons/WHITE8X8\"); Root:Disable(); assert(not Root:GetNormalTexture():IsShown() and Root:GetDisabledTexture():IsShown()); Root:Enable(); assert(Root:GetNormalTexture():IsShown() and not Root:GetDisabledTexture():IsShown())").unwrap();
     }
     #[test]
     fn utf8_and_multiline_scripts_survive_encoding() {
