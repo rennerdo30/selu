@@ -248,6 +248,10 @@ pub struct Studio {
     scenario_status: String,
     saved_choice: Vec<String>,
     saved_lists: [Vec<String>; 3],
+    /// The WTF folder the account list was read from; a new folder rescans.
+    saved_scanned: Option<PathBuf>,
+    /// Why a saved-variables list is empty, shown under the pickers.
+    saved_scan_note: String,
     saved_status: String,
     saved_identity: Option<(String, String)>,
     saved_seed: Option<(
@@ -345,6 +349,8 @@ impl Studio {
             scenario_status: String::new(),
             saved_choice: vec![String::new(); 3],
             saved_lists: Default::default(),
+            saved_scanned: None,
+            saved_scan_note: String::new(),
             saved_status: String::new(),
             saved_identity: None,
             saved_seed: None,
@@ -1490,6 +1496,7 @@ impl Studio {
         self.saved_identity = None;
         self.saved_choice = vec![String::new(); 3];
         self.saved_lists = Default::default();
+        self.saved_scanned = None;
         self.saved_status.clear();
         self.opts.project = Some(dir.clone());
         self.opts.selu = Some(selu);
@@ -2257,7 +2264,9 @@ impl Studio {
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default();
-            if ui.button("Scan accounts").clicked() {
+            let rescan = ui.button("Rescan accounts").clicked();
+            if rescan || self.saved_scanned.as_ref() != Some(&root) {
+                self.saved_scanned = Some(root.clone());
                 if let Some(choice) = self
                     .game_settings
                     .saved_choices
@@ -2266,14 +2275,36 @@ impl Studio {
                 {
                     self.saved_choice = choice.clone();
                 }
-                self.saved_lists[0] = saved_dirs(&root.join("Account"));
-                self.saved_lists[1] = saved_dirs(&root.join("Account").join(&self.saved_choice[0]));
-                self.saved_lists[2] = saved_dirs(
-                    &root
-                        .join("Account")
-                        .join(&self.saved_choice[0])
-                        .join(&self.saved_choice[1]),
-                );
+                let accounts = root.join("Account");
+                self.saved_lists = Default::default();
+                self.saved_scan_note.clear();
+                match saved_dirs(&accounts) {
+                    Ok(list) if list.is_empty() => {
+                        self.saved_scan_note = format!(
+                            "No accounts in {}. Log in once with this client so WoW creates it.",
+                            accounts.display()
+                        );
+                    }
+                    Ok(list) => self.saved_lists[0] = list,
+                    Err(e) => self.saved_scan_note = e,
+                }
+                // A remembered choice that no longer exists is dropped.
+                for i in 0..3 {
+                    let known = self.saved_lists[i].contains(&self.saved_choice[i]);
+                    if !known {
+                        for j in i..3 {
+                            self.saved_choice[j].clear();
+                        }
+                        break;
+                    }
+                    if i < 2 {
+                        let mut path = accounts.clone();
+                        for c in &self.saved_choice[..=i] {
+                            path.push(c);
+                        }
+                        self.saved_lists[i + 1] = saved_dirs(&path).unwrap_or_default();
+                    }
+                }
             }
             for (i, label) in ["Account", "Realm", "Character"].iter().enumerate() {
                 let before = self.saved_choice[i].clone();
@@ -2293,8 +2324,11 @@ impl Studio {
                     for j in 0..=i {
                         path.push(&self.saved_choice[j]);
                     }
-                    self.saved_lists[i + 1] = saved_dirs(&path);
+                    self.saved_lists[i + 1] = saved_dirs(&path).unwrap_or_default();
                 }
+            }
+            if !self.saved_scan_note.is_empty() {
+                ui.label(egui::RichText::new(&self.saved_scan_note).color(palette::MUTED));
             }
             if ui
                 .add_enabled(!self.saved_choice[0].is_empty(), egui::Button::new("Load"))
@@ -3726,7 +3760,12 @@ mod tests {
         for part in ["Account/B", "Account/A", "Account/SavedVariables"] {
             std::fs::create_dir_all(root.join(part)).unwrap();
         }
-        assert_eq!(saved_dirs(&root.join("Account")), ["A", "B"]);
+        assert_eq!(saved_dirs(&root.join("Account")).unwrap(), ["A", "B"]);
+        assert!(
+            saved_dirs(&root.join("Missing"))
+                .unwrap_err()
+                .contains("Missing")
+        );
         std::fs::remove_dir_all(root).unwrap();
         let mut settings = crate::game::Settings::default();
         settings.wtf_override = "fixture/WTF".into();
@@ -3881,15 +3920,17 @@ mod open_project_tests {
     }
 }
 
-fn saved_dirs(path: &Path) -> Vec<String> {
-    let mut names: Vec<_> = std::fs::read_dir(path)
-        .into_iter()
+/// The subfolders of a WTF account/realm folder, sorted; an unreadable
+/// folder says why.
+fn saved_dirs(path: &Path) -> Result<Vec<String>, String> {
+    let entries =
+        std::fs::read_dir(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    let mut names: Vec<_> = entries
         .flatten()
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()))
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|s| s != "SavedVariables")
         .collect();
     names.sort();
-    names
+    Ok(names)
 }

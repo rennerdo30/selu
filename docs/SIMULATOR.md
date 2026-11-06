@@ -533,8 +533,10 @@ item IDs per slot, not inventory metadata or item stack counts.
 
 ### Import SavedVariables in Studio
 
-In Scenario > Saved variables, set the WTF folder override if needed, then Scan
-accounts, choose account and realm/character, and Load. The default is the
+In Scenario > Saved variables, set the WTF folder override if needed, then
+choose account and realm/character, and Load. The account list is read when the
+section opens or the folder changes (Rescan accounts reads it again); an empty or
+unreadable `Account` folder is explained under the pickers. The default is the
 configured install's product folder (`_retail_`, `_forever_`, etc.) plus `WTF`.
 Build the project first so its TOC is available. Studio remembers the selection
 per project in its own settings. Load restarts and seeds the declared values
