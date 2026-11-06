@@ -128,7 +128,7 @@ pub fn create(
         })
         .unwrap_or((Strata::Medium, 0));
     a.borrow_mut().regions.push(Region {
-        table: t.clone(),
+        table: RegionTable::new(lua, &t)?,
         kind: kind.into(),
         name: name.clone(),
         parent: pid,
@@ -227,6 +227,7 @@ pub fn create(
         lua.set_named_registry_value(&key, m.clone())?;
         m
     };
+    let methods = RegionTable::new(lua, &methods)?;
     let mt = lua.create_table()?;
     let context = ctx.clone();
     let widget = kind.to_owned();
@@ -422,7 +423,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             _ => {
                 let existing = a.borrow().regions[i].thumb;
                 let child = if let Some(index) = existing {
-                    a.borrow().regions[index].table.clone()
+                    a.borrow().regions[index].table.get()
                 } else {
                     create(lua, ctx, "Texture", None, Some(t.clone()))?
                 };
@@ -451,7 +452,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         out!(
             a.borrow().regions[i]
                 .thumb
-                .map(|index| a.borrow().regions[index].table.clone())
+                .map(|index| a.borrow().regions[index].table.get())
         );
     }
     if method == "GetFontObject" {
@@ -537,11 +538,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         a.regions[i].scroll_child = child;
     }
     if method == "GetScrollChild" {
-        out!(
-            a.regions[i]
-                .scroll_child
-                .map(|c| a.regions[c].table.clone())
-        );
+        out!(a.regions[i].scroll_child.map(|c| a.regions[c].table.get()));
     }
     if matches!(
         method,
@@ -692,7 +689,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "IsObjectType" => out!(super::manifest::inherits(&r.kind, &s)),
         "GetParent" => {
             let p = r.parent;
-            out!(p.map(|p| a.regions[p].table.clone()));
+            out!(p.map(|p| a.regions[p].table.get()));
         }
         "SetParent" => {
             r.parent = match v.first() {
@@ -978,7 +975,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             if let Some(p) = p {
                 out!((
                     p.point,
-                    a.regions.get(p.relative).map(|r| r.table.clone()),
+                    a.regions.get(p.relative).map(|r| r.table.get()),
                     p.anchor,
                     p.x,
                     p.y

@@ -141,6 +141,12 @@ mod manifest;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn more_than_eight_thousand_regions_keep_identity_across_registry_ownership() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("for i=1,8100 do local f=CreateFrame('Frame','RegistryFrame'..i); f.index=i end; assert(RegistryFrame8100.index==8100); assert(RegistryFrame1:GetName()=='RegistryFrame1')").unwrap();
+        assert!(sim.snapshot().unwrap().regions.len() > 8000);
+    }
     use crate::Sim;
 
     #[test]

@@ -4,7 +4,7 @@ use crate::session::Vm as Sim;
 use crate::{RegionId, SimResult, core::dispatch};
 use mlua::{Function, MultiValue, Value};
 fn invoke(sim: &Sim, i: usize, name: &str, args: Vec<Value>) -> SimResult<()> {
-    let t = store(sim.lua()).borrow().regions[i].table.clone();
+    let t = store(sim.lua()).borrow().regions[i].table.get();
     if let Some(f) = t
         .raw_get::<mlua::Table>("__scripts")?
         .raw_get::<Option<Function>>(name)?
@@ -35,7 +35,7 @@ fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool) -> Option<usize> {
         .iter()
         .enumerate()
         .filter(|(_, r)| {
-            clip(&a, id(&r.table).unwrap_or(0)).is_none_or(|q| {
+            clip(&a, id(&r.table.get()).unwrap_or(0)).is_none_or(|q| {
                 x >= q.left && x < q.left + q.width && y >= q.bottom && y < q.bottom + q.height
             }) && r.visible
                 && r.mouse
@@ -62,8 +62,8 @@ impl crate::session::Vm {
             let old = a.hover;
             a.cursor = (x, y);
             a.hover = target;
-            let old_table = old.map(|i| a.regions[i].table.clone());
-            let new_table = target.map(|i| a.regions[i].table.clone());
+            let old_table = old.map(|i| a.regions[i].table.get());
+            let new_table = target.map(|i| a.regions[i].table.get());
             drop(a);
             if old != target {
                 if let Some(t) = old_table {
@@ -218,7 +218,7 @@ impl crate::session::Vm {
                         })
                     };
                     if let Some(value) = value {
-                        let t = a.borrow().regions[i].table.clone();
+                        let t = a.borrow().regions[i].table.get();
                         let set: Function = t.get("SetValue")?;
                         set.call::<()>((t, value, true))?;
                     }
@@ -286,7 +286,7 @@ impl crate::session::Vm {
             let t = a
                 .focus
                 .filter(|&i| a.regions[i].enabled && a.regions[i].keyboard && a.regions[i].visible)
-                .map(|i| a.regions[i].table.clone());
+                .map(|i| a.regions[i].table.get());
             drop(a);
             if let Some(t) = t {
                 callback(self.ctx(), t, "OnEnterPressed", vec![]);
@@ -322,7 +322,7 @@ impl crate::session::Vm {
                 r.selection = (r.cursor_position, r.cursor_position);
                 r.text = Some(current);
                 r.text_value = Value::Nil;
-                let t = r.table.clone();
+                let t = r.table.get();
                 a.dirty = true;
                 a.full_layout = true;
                 drop(a);

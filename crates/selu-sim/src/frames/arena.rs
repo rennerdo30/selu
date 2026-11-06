@@ -3,6 +3,39 @@ use crate::core::{DrawLayer, Rect, SourcePos, Strata, TextureFill};
 use mlua::Table;
 use std::{cell::RefCell, rc::Rc};
 pub type Store = Rc<RefCell<Arena>>;
+/// Persistent region ownership belongs in Lua's registry, not mlua's bounded
+/// Lua 5.1 auxiliary stack. Region clones share one owning registry reference.
+#[derive(Clone)]
+pub struct RegionTable(Rc<RegionTableKey>);
+struct RegionTableKey {
+    lua: mlua::WeakLua,
+    key: Option<mlua::RegistryKey>,
+}
+impl Drop for RegionTableKey {
+    fn drop(&mut self) {
+        if let (Some(lua), Some(key)) = (self.lua.try_upgrade(), self.key.take()) {
+            let _ = lua.remove_registry_value(key);
+        }
+    }
+}
+impl RegionTable {
+    pub fn new(lua: &mlua::Lua, table: &Table) -> mlua::Result<Self> {
+        Ok(Self(Rc::new(RegionTableKey {
+            lua: lua.weak(),
+            key: Some(lua.create_registry_value(table.clone())?),
+        })))
+    }
+    pub fn get(&self) -> Table {
+        self.0
+            .lua
+            .upgrade()
+            .registry_value(self.0.key.as_ref().expect("live region key"))
+            .expect("region registry key belongs to its live VM")
+    }
+    pub fn raw_get<V: mlua::FromLua>(&self, key: impl mlua::IntoLua) -> mlua::Result<V> {
+        self.get().raw_get(key)
+    }
+}
 #[derive(Clone)]
 pub struct Point {
     pub point: String,
@@ -13,7 +46,7 @@ pub struct Point {
 }
 #[derive(Clone)]
 pub struct Region {
-    pub table: Table,
+    pub table: RegionTable,
     pub kind: String,
     pub name: Option<String>,
     pub parent: Option<usize>,
@@ -108,11 +141,11 @@ pub fn focus(a: &mut Arena, ctx: &crate::Ctx, target: Option<usize>) {
         return;
     }
     if let Some(i) = a.focus.take() {
-        super::widgets::callback(ctx, a.regions[i].table.clone(), "OnEditFocusLost", vec![]);
+        super::widgets::callback(ctx, a.regions[i].table.get(), "OnEditFocusLost", vec![]);
     }
     a.focus = target;
     if let Some(i) = target {
-        super::widgets::callback(ctx, a.regions[i].table.clone(), "OnEditFocusGained", vec![]);
+        super::widgets::callback(ctx, a.regions[i].table.get(), "OnEditFocusGained", vec![]);
     }
 }
 

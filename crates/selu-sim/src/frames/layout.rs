@@ -229,7 +229,7 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
         if visible != r.visible {
             super::widgets::callback(
                 ctx,
-                r.table.clone(),
+                r.table.get(),
                 if r.visible { "OnShow" } else { "OnHide" },
                 vec![],
             );
@@ -242,7 +242,7 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
         {
             super::widgets::callback(
                 ctx,
-                r.table.clone(),
+                r.table.get(),
                 "OnSizeChanged",
                 vec![mlua::Value::Number(w), mlua::Value::Number(h)],
             );
