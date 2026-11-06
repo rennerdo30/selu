@@ -59,6 +59,7 @@ pub struct Region {
     pub movable: bool,
     pub clamped: bool,
     pub drag_buttons: Vec<String>,
+    pub click_buttons: Vec<String>,
     pub motion_disabled: bool,
     pub auto_focus: bool,
     pub cursor_position: usize,

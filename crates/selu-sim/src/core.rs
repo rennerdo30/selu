@@ -142,6 +142,8 @@ pub struct VisualStyle {
     pub wrap_modes: [String; 2],
     pub uv: [f32; 4],
     pub tint: [f32; 4],
+    #[serde(default)]
+    pub desaturated: bool,
     pub blend: String,
     #[serde(default)]
     pub text_insets: [f64; 4],
@@ -177,6 +179,7 @@ impl Default for VisualStyle {
             wrap_modes: ["CLAMP".into(), "CLAMP".into()],
             uv: [0.0, 1.0, 0.0, 1.0],
             tint: [1.0; 4],
+            desaturated: false,
             blend: "BLEND".into(),
             text_insets: [0.0; 4],
             text_scroll: (0.0, 0.0),

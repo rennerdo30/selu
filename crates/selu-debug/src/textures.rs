@@ -118,3 +118,39 @@ mod tests {
         assert!(super::blp(&b[..150]).is_err());
     }
 }
+
+/// Desaturate source pixels before vertex tint is applied, preserving alpha.
+pub fn desaturate(image: &mut eframe::egui::ColorImage) {
+    for pixel in &mut image.pixels {
+        let [r, g, b, a] = pixel.to_srgba_unmultiplied();
+        let gray = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32).round() as u8;
+        *pixel = eframe::egui::Color32::from_rgba_unmultiplied(gray, gray, gray, a);
+    }
+}
+#[cfg(test)]
+mod w3_tests {
+    #[test]
+    fn w3_desaturate_pixels_preserves_alpha() {
+        use eframe::egui::{Color32, ColorImage};
+        let mut image = ColorImage::filled([1, 1], Color32::from_rgb(255, 0, 0));
+        super::desaturate(&mut image);
+        assert_eq!(image.pixels[0], Color32::from_rgb(76, 76, 76));
+        let mut translucent =
+            ColorImage::filled([1, 1], Color32::from_rgba_unmultiplied(255, 0, 0, 128));
+        super::desaturate(&mut translucent);
+        let [r, g, b, a] = translucent.pixels[0].to_srgba_unmultiplied();
+        assert_eq!((r, g, b, a), (r, r, r, 128));
+        let color = super::desaturated_color([1.0, 0.0, 0.0, 0.5], true);
+        assert_eq!(color, [0.299, 0.299, 0.299, 0.5]);
+    }
+}
+
+pub fn desaturated_color(mut color: [f32; 4], enabled: bool) -> [f32; 4] {
+    if enabled {
+        let gray = color[0] * 0.299 + color[1] * 0.587 + color[2] * 0.114;
+        color[0] = gray;
+        color[1] = gray;
+        color[2] = gray;
+    }
+    color
+}

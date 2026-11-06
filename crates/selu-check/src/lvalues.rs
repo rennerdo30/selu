@@ -52,7 +52,18 @@ impl Ctx<'_> {
                 }
                 contexts
             }
-            ExprKind::Index { .. } => vec![self.expr_inner(target)],
+            ExprKind::Index { object, .. } => {
+                let read = self.expr_inner(target);
+                let receiver = self.types.get(object.id).cloned().unwrap_or(Type::Error);
+                if receiver.members().len() > 1 {
+                    self.out.push(err(
+                        "SELU0355",
+                        "writing through a union of arrays is not supported",
+                        &target.span,
+                    ));
+                }
+                vec![read]
+            }
             _ => {
                 self.expr(target);
                 self.out.push(

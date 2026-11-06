@@ -856,3 +856,23 @@ fn sh_create_font_checked_result() {
         assert!(codes(r#"const font = CreateFont("SHFont"); font.SetFont("Fonts/FRIZQT__.TTF", 12, ""); font.CopyFontObject(GameFontNormal);"#, flavour).is_empty());
     }
 }
+
+#[test]
+fn w3_variadic_click_registration() {
+    for flavour in ["wow", "wowf"] {
+        assert_eq!(
+            codes(
+                r#"const b = CreateFrame("Button"); b.RegisterForClicks("LeftButtonUp", "RightButtonUp"); b.RegisterForClicks();"#,
+                flavour
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            codes(
+                r#"const b = CreateFrame("Button"); b.RegisterForClicks("LeftButtonUp", true);"#,
+                flavour
+            ),
+            vec!["SELU0481".to_string()]
+        );
+    }
+}

@@ -87,12 +87,39 @@ impl crate::session::Vm {
             let a = store(self.lua());
             a.borrow_mut().capture = target;
             if let Some(i) = target {
+                // Blizzard_SharedXML/Shared/Frame/EventEditBox.lua:
+                // OnMouseDown_Intrinsic calls SetFocus before its mouse event.
+                if a.borrow().regions[i].kind == "EditBox" {
+                    focus(&mut a.borrow_mut(), self.ctx(), Some(i));
+                    crate::core::flush(self.lua(), self.ctx());
+                }
+                let registered = |down: bool| {
+                    let suffix = if down { "Down" } else { "Up" };
+                    a.borrow().regions[i]
+                        .click_buttons
+                        .iter()
+                        .any(|b| b == &format!("{button}{suffix}") || b == &format!("Any{suffix}"))
+                };
                 let button = Value::String(self.lua().create_string(button)?);
                 invoke(self, i, "OnMouseDown", vec![button.clone()])?;
+                if eligible(self, i) && registered(true) {
+                    {
+                        let mut arena = a.borrow_mut();
+                        if arena.regions[i].kind == "CheckButton" {
+                            arena.regions[i].checked = !arena.regions[i].checked;
+                        }
+                    }
+                    for name in ["PreClick", "OnClick", "PostClick"] {
+                        if !eligible(self, i) {
+                            break;
+                        }
+                        invoke(self, i, name, vec![button.clone(), Value::Boolean(true)])?;
+                    }
+                }
                 if eligible(self, i) {
                     invoke(self, i, "OnMouseUp", vec![button.clone()])?;
                 }
-                if eligible(self, i) {
+                if eligible(self, i) && registered(false) {
                     {
                         let mut a = a.borrow_mut();
                         if a.regions[i].kind == "CheckButton" {
@@ -209,10 +236,17 @@ impl crate::session::Vm {
     /// Deliver wheel motion; scripts own the policy for changing slider values.
     pub fn wheel(&self, x: f64, y: f64, delta: f64) -> SimResult<()> {
         dispatch(self.lua(), self.ctx(), || {
-            if let Some(i) = hit(self, x, y) {
-                let enabled = store(self.lua()).borrow().regions[i].wheel;
+            let mut target = hit(self, x, y);
+            while let Some(i) = target {
+                let a = store(self.lua());
+                let arena = a.borrow();
+                let r = &arena.regions[i];
+                let enabled = r.visible && r.enabled && r.wheel;
+                target = r.parent;
+                drop(arena);
                 if enabled {
                     invoke(self, i, "OnMouseWheel", vec![Value::Number(delta)])?;
+                    break;
                 }
             }
             Ok(())
@@ -320,5 +354,86 @@ mod sf_tests {
             sim.prints(),
             vec!["enter\tboolean\ttrue", "leave\tboolean\ttrue"]
         );
+    }
+}
+
+#[cfg(test)]
+mod w3_tests {
+    #[test]
+    fn w3_desaturation_state() {
+        let sim = crate::session::Vm::new().unwrap();
+        sim.eval(
+            r#"
+            local t = UIParent:CreateTexture()
+            print(t:IsDesaturated())
+            t:SetDesaturated(true)
+            print(t:IsDesaturated())
+            t:SetDesaturated(false)
+            print(t:IsDesaturated())
+        "#,
+        )
+        .unwrap();
+        assert_eq!(sim.prints(), vec!["false", "true", "false"]);
+    }
+
+    #[test]
+    fn w3_click_registration() {
+        let sim = crate::session::Vm::new().unwrap();
+        sim.eval(
+            r#"
+            b = CreateFrame("Button")
+            b:SetSize(100,100)
+            b:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT",0,0)
+            b:SetScript("OnClick", function(self, button, down) print(button, down) end)
+        "#,
+        )
+        .unwrap();
+        sim.click(50.0, 50.0, "RightButton").unwrap();
+        assert!(sim.prints().is_empty());
+        sim.eval(r#"b:RegisterForClicks("RightButtonDown", "RightButtonUp")"#)
+            .unwrap();
+        sim.click(50.0, 50.0, "RightButton").unwrap();
+        assert_eq!(
+            sim.prints(),
+            vec!["RightButton\ttrue", "RightButton\tfalse"]
+        );
+        sim.eval("b:RegisterForClicks()").unwrap();
+        sim.click(50.0, 50.0, "RightButton").unwrap();
+        assert_eq!(sim.prints().len(), 2);
+    }
+    #[test]
+    fn w3_wheel_ancestor() {
+        let sim = crate::session::Vm::new().unwrap();
+        sim.eval(
+            r#"
+            local p = CreateFrame("Frame")
+            p:SetSize(100,100)
+            p:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT",0,0)
+            p:EnableMouseWheel(true)
+            p:SetScript("OnMouseWheel", function(self, delta) print(delta) end)
+            local b = CreateFrame("Button", nil, p)
+            b:SetAllPoints(p)
+        "#,
+        )
+        .unwrap();
+        sim.wheel(50.0, 50.0, 1.0).unwrap();
+        assert_eq!(sim.prints(), vec!["1"]);
+    }
+    #[test]
+    fn w3_editbox_click_focus() {
+        let sim = crate::session::Vm::new().unwrap();
+        sim.eval(
+            r#"
+            e = CreateFrame("EditBox")
+            e:SetAutoFocus(false)
+            e:SetSize(100,100)
+            e:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT",0,0)
+        "#,
+        )
+        .unwrap();
+        sim.click(50.0, 50.0, "LeftButton").unwrap();
+        sim.type_text("typed").unwrap();
+        sim.eval("print(e:HasFocus(), e:GetText())").unwrap();
+        assert_eq!(sim.prints(), vec!["true\ttyped"]);
     }
 }

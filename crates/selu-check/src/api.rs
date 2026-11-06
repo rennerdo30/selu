@@ -226,6 +226,21 @@ fn argument_type(m: &Manifest, owner: &Declaration, argument: &Declaration, dept
 }
 
 pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
+    // A single trailing StrideIndex=1 argument is a homogeneous rest group.
+    // Multi-field strides require tuple-group checking and remain fixed arity.
+    let stride_rest = d
+        .arguments
+        .last()
+        .filter(|a| {
+            a.attributes.get("StrideIndex").and_then(|v| v.as_u64()) == Some(1)
+                && d.arguments
+                    .iter()
+                    .filter(|a| a.attributes.contains_key("StrideIndex"))
+                    .count()
+                    == 1
+        })
+        .map(|a| a.name.as_str());
+    let is_rest = |a: &Declaration| a.name == "..." || stride_rest == Some(a.name.as_str());
     let secret = crate::restrictions::secret_results(m, d);
     let mut returns: Vec<Type> = d
         .returns
@@ -328,7 +343,7 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
             .arguments
             .iter()
             .rposition(|a| {
-                a.name != "..."
+                !is_rest(a)
                     && (flag(a, "Required")
                         || (!flag(a, "Optional")
                             && !flag(a, "Nilable")
@@ -338,13 +353,13 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         params: d
             .arguments
             .iter()
-            .filter(|a| a.name != "...")
+            .filter(|a| !is_rest(a))
             .map(|a| argument_type(m, d, a, depth + 1))
             .collect(),
         rest: d
             .arguments
             .iter()
-            .find(|a| a.name == "...")
+            .find(|a| is_rest(a))
             .map(|a| Box::new(argument_type(m, d, a, depth + 1))),
         ret: Box::new(Type::Tuple(returns)),
     }

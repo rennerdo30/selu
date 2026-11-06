@@ -53,6 +53,20 @@ impl Ctx<'_> {
                 }
                 match t {
                     Type::Array(t) => *t,
+                    Type::Union(arms)
+                        if arms
+                            .iter()
+                            .all(|t| matches!(crate::shape_of(t), Type::Array(_))) =>
+                    {
+                        Type::union(
+                            arms.iter()
+                                .map(|t| match crate::shape_of(t) {
+                                    Type::Array(item) => *item,
+                                    _ => unreachable!(),
+                                })
+                                .collect(),
+                        )
+                    }
                     Type::Untyped | Type::Error => Type::Untyped,
                     _ => {
                         self.out.push(

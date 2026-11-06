@@ -2405,6 +2405,7 @@ impl Studio {
             match (&r.texture, r.widget.as_str()) {
                 (Some(TextureFill::Gradient { vertical, min, max }), _) => {
                     let color = |c: &[f32; 4]| {
+                        let c = crate::textures::desaturated_color(*c, r.visual.desaturated);
                         fade(
                             r,
                             Color32::from_rgba_unmultiplied(
@@ -2438,6 +2439,7 @@ impl Studio {
                     painter.add(egui::Shape::mesh(mesh));
                 }
                 (Some(TextureFill::Color(c)), _) => {
+                    let c = crate::textures::desaturated_color(*c, r.visual.desaturated);
                     let tint = r.visual.tint;
                     let col = Color32::from_rgba_unmultiplied(
                         (c[0] * tint[0] * 255.0) as u8,
@@ -2448,13 +2450,21 @@ impl Studio {
                     painter.rect_filled(rect, 0.0, fade(r, col));
                 }
                 (Some(TextureFill::File(name) | TextureFill::Atlas(name)), _) => {
-                    let cached = self.textures.entry(name.clone()).or_insert_with(|| {
+                    let key = if r.visual.desaturated {
+                        format!("\0desaturated:{name}")
+                    } else {
+                        name.clone()
+                    };
+                    let cached = self.textures.entry(key.clone()).or_insert_with(|| {
                         if matches!(r.texture, Some(TextureFill::Atlas(_))) {
                             return Err("unavailable atlas".into());
                         }
-                        crate::textures::load_resolved(&self.assets, name).map(|image| {
+                        crate::textures::load_resolved(&self.assets, name).map(|mut image| {
+                            if r.visual.desaturated {
+                                crate::textures::desaturate(&mut image);
+                            }
                             ui.ctx()
-                                .load_texture(name, image, egui::TextureOptions::LINEAR)
+                                .load_texture(&key, image, egui::TextureOptions::LINEAR)
                         })
                     });
                     if let Ok(texture) = cached {

@@ -684,3 +684,13 @@ fn prepared_receivers_and_indices_are_evaluated_once_at_runtime() {
         vec!["6\t6\t6"]
     );
 }
+
+#[test]
+fn w3_union_array_reads_and_writes() {
+    assert!(
+        codes("function read(xs: number[] | string[]): number | string { return xs[0]; }")
+            .is_empty()
+    );
+    assert!(!codes("function write(xs: number[] | string[]) { xs[0] = 1; }").is_empty());
+    assert!(!codes("function read(xs: number[] | boolean): number { return xs[0]; }").is_empty());
+}
