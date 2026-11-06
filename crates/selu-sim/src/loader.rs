@@ -202,8 +202,16 @@ pub fn parse_toc_game(name: &str, dir: &Path, text: &str, game: Option<&str>) ->
     for line in text.lines() {
         let mut line = line.trim().trim_start_matches('\u{feff}').to_string();
         let mut allowed = true;
-        for directive in ["AllowLoadGameType", "ExcludeLoadGameType", "AllowLoad"] {
-            while let Some(start) = line.find(&format!("[{directive} ")) {
+        for directive in [
+            "AllowLoadGameType",
+            "ExcludeLoadGameType",
+            "AllowLoad",
+            "AllowLoadEnvironment",
+        ] {
+            while let Some(start) = line
+                .to_ascii_lowercase()
+                .find(&format!("[{directive} ").to_ascii_lowercase())
+            {
                 let Some(end) = line[start..].find(']').map(|i| start + i) else {
                     break;
                 };
@@ -212,6 +220,9 @@ pub fn parse_toc_game(name: &str, dir: &Path, text: &str, game: Option<&str>) ->
                         .split([',', ' '])
                         .any(|v| {
                             let v = v.trim();
+                            if directive == "AllowLoadEnvironment" {
+                                return v.eq_ignore_ascii_case("global");
+                            }
                             if directive == "AllowLoad" {
                                 return v.eq_ignore_ascii_case("game")
                                     || v.eq_ignore_ascii_case("both");
@@ -380,6 +391,19 @@ pub(crate) fn read_files_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn global_environment_directive_is_not_part_of_the_filename() {
+        let toc = parse_toc_game(
+            "Demo",
+            Path::new("Demo"),
+            "Shared\\EditModeManager.lua [AllowLoadEnvironment Global]\n[Game]\\EditModeUtil.lua [AllowLoadGameType camelot] [AllowLoadEnvironment Global]\nsecure.lua [AllowLoadEnvironment Secure]\n",
+            Some("camelot"),
+        );
+        assert_eq!(
+            toc.files,
+            ["Shared/EditModeManager.lua", "[Game]/EditModeUtil.lua"]
+        );
+    }
     #[test]
     fn load_context_filters_files_and_dependencies() {
         let toc = parse_toc_game(
