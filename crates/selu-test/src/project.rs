@@ -52,6 +52,11 @@ struct BuildSection {
     debug: bool,
     #[serde(default)]
     layout: BuildLayout,
+    /// Extra files or folders copied into the built addon, relative to the
+    /// project folder (for example `"../Media"`). Folders the code references
+    /// as `Interface\AddOns\<Name>\<Folder>\...` are copied without this.
+    #[serde(default)]
+    assets: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +153,7 @@ fn build_impl(
     };
     let shared = project.build.layout == BuildLayout::Shared;
     let debug = project.build.debug;
+    let assets = project.build.assets;
     let project = project.addon;
 
     let src_dir = project_dir.join("src");
@@ -422,6 +428,10 @@ fn build_impl(
             })?;
             lua_files.push(runtime_name.to_string());
         }
+        let mut referenced = std::collections::BTreeSet::new();
+        for lowered in &lowered_files {
+            asset_roots(&lowered.lua, &project.name, &mut referenced);
+        }
         for ((module, _), lowered) in compiled.into_iter().zip(lowered_files) {
             let lua_name = format!("{}.lua", module.key);
             let output = out_dir.join(&lua_name);
@@ -484,6 +494,14 @@ fn build_impl(
             eprintln!("selu: cannot write .toc: {e}");
             ExitCode::FAILURE
         })?;
+        copy_assets(
+            project_dir,
+            &out_dir,
+            &project.name,
+            &assets,
+            &referenced,
+            &lua_files,
+        )?;
         snapshots
             .entry(map_dir.join("manifest.selum"))
             .or_default()
@@ -536,6 +554,138 @@ pub struct ModuleSource {
     pub program: selu_syntax::Program,
     pub dependencies: std::collections::BTreeMap<String, String>,
 }
+/// The first folder (or file) below `Interface\AddOns\<addon>\` in each
+/// path the code names, for example `Media` in
+/// `"Interface\\AddOns\\Toolkit\\Media\\Logo"` (Lua source). Matching ignores case,
+/// like the game; the spelling in the code is kept.
+fn asset_roots(lua: &str, addon: &str, out: &mut std::collections::BTreeSet<String>) {
+    let lower = lua.to_ascii_lowercase();
+    let addon = addon.to_ascii_lowercase();
+    for sep in ["\\\\", "\\", "/"] {
+        let needle = format!("interface{sep}addons{sep}{addon}{sep}");
+        let mut from = 0;
+        while let Some(at) = lower[from..].find(&needle) {
+            let start = from + at + needle.len();
+            let rest = &lua[start..];
+            let end = rest
+                .find(['\\', '/', '"', '\'', ']', '\n'])
+                .unwrap_or(rest.len());
+            if end > 0 {
+                out.insert(rest[..end].to_string());
+            }
+            from = start;
+        }
+    }
+}
+
+/// Copy the addon's media into the built addon: the folders its code
+/// references (when the project has them) and `[build] assets`. A file is
+/// copied again only when its size or time changed.
+fn copy_assets(
+    project_dir: &Path,
+    out_dir: &Path,
+    addon: &str,
+    explicit: &[String],
+    referenced: &std::collections::BTreeSet<String>,
+    lua_files: &[String],
+) -> Result<(), ExitCode> {
+    let generated = |name: &str| {
+        name.eq_ignore_ascii_case(&format!("{addon}.toc"))
+            || name.eq_ignore_ascii_case("Bindings.xml")
+            || lua_files.iter().any(|f| {
+                f.split(['/', '\\'])
+                    .next()
+                    .is_some_and(|top| top.eq_ignore_ascii_case(name))
+            })
+    };
+    let mut sources: Vec<std::path::PathBuf> = Vec::new();
+    for entry in explicit {
+        let path = project_dir.join(entry);
+        if !path.exists() {
+            eprintln!(
+                "error[SELU0505]: [build] assets names {entry}, but {} does not exist",
+                path.display()
+            );
+            return Err(ExitCode::FAILURE);
+        }
+        sources.push(path);
+    }
+    let names = |dir: &Path| -> Vec<String> {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect()
+    };
+    let in_project = names(project_dir);
+    for root in referenced {
+        if generated(root) {
+            continue;
+        }
+        let provided = sources.iter().any(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(root))
+        });
+        if provided {
+            continue;
+        }
+        match in_project.iter().find(|n| n.eq_ignore_ascii_case(root)) {
+            Some(name) if !matches!(name.as_str(), "src" | "dist" | "selu.toml" | "selu.lock") => {
+                sources.push(project_dir.join(name));
+            }
+            _ => eprintln!(
+                "warning[SELU0504]: the code uses Interface\\AddOns\\{addon}\\{root}\\..., \
+                 but the project has no `{root}`; add it to the project folder or to [build] assets"
+            ),
+        }
+    }
+    for source in sources {
+        let Some(name) = source.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if generated(name) {
+            eprintln!(
+                "error[SELU0505]: asset `{name}` has the name of a file the build writes; rename it"
+            );
+            return Err(ExitCode::FAILURE);
+        }
+        copy_tree(&source, &out_dir.join(name)).map_err(|e| {
+            eprintln!("selu: cannot copy {}: {e}", source.display());
+            ExitCode::FAILURE
+        })?;
+    }
+    Ok(())
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = std::fs::metadata(from)?;
+    if meta.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    let same = std::fs::metadata(to)
+        .is_ok_and(|old| old.len() == meta.len() && old.modified().ok() == meta.modified().ok());
+    if !same {
+        std::fs::copy(from, to)?;
+        if let Ok(time) = meta.modified() {
+            let _ = std::fs::File::options()
+                .write(true)
+                .open(to)
+                .and_then(|f| f.set_modified(time));
+        }
+    }
+    Ok(())
+}
+
 pub fn import_key(key: &str, from: &str) -> Option<String> {
     if !from.starts_with("./") && !from.starts_with("../") {
         return None;

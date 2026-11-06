@@ -68,6 +68,24 @@ otherwise they are warnings. Availability failures remain errors in both modes.
 Guarded fallback declarations retain API signatures, referenced structures and
 widgets, multiple-result semantics, and factory specialization through aliases.
 
+## Media and other addon files
+
+`selu build` writes a complete addon, so the addon's media are copied into it.
+When the code names a path inside the addon, such as
+`"Interface\\AddOns\\MyAddon\\Media\\Logo"`, the build copies the project's
+`Media` folder (matched without case, like the game) into every built addon
+folder. A referenced folder the project lacks is warning SELU0504. Files or
+folders kept elsewhere are listed explicitly; each keeps its own name:
+
+```toml
+[build]
+assets = ["../Media", "Sounds"]
+```
+
+A missing listed asset, or one named like a file the build writes (the TOC,
+`Bindings.xml` or a module folder), is error SELU0505. Unchanged files (same
+size and time) are not copied again.
+
 ## Products and selu.lock
 
 Use `targets = ["wow", "wow_classic", "wow_classic_era"]` or an exact pin such
