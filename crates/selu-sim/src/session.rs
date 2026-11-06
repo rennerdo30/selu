@@ -1600,6 +1600,7 @@ mod tests {
             local ok=pcall(securecopy,{nested={}},{maxTraversalDepth=0});assert(not ok)
             forceinsecure()
             assert(GetChatWindowMessages(1)=='SYSTEM')
+            assert(GetMirrorTimerInfo(1)=='UNKNOWN')
             assert(C_StringUtil.EscapeDecimalNonPrintables('日本語'..string.char(1))=='日本語\\001')
         "#,
             )

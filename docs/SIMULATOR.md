@@ -613,6 +613,8 @@ startup errors are captured and later chunks continue. Missing native
 implementations retain manifest-shaped defaults and once-only notes; explicit
 empty-world models respect no-result APIs such as UnitPowerBarTimerInfo,
 whose documented MayReturnNothing behavior terminates timer enumeration.
+The baseline has no mirror timers: GetMirrorTimerInfo returns the UNKNOWN
+sentinel consumed by Blizzard_MirrorTimer instead of inventing an active bar.
 
 `SELU_SIM_PROFILE=1` enables exclusive phase timings in development builds.
 Source construction batches layout; login handlers query live geometry. Trace
@@ -636,7 +638,8 @@ font metrics. Model view insets retain their values but do not render a 3D model
 The installed 70790 atlas metadata has multiple members for a named element.
 Prefer a locally readable payload when the first atlas set is missing: the
 micro-menu base sheet 4708813 is unavailable here, while set 1 sheet 8200846
-is installed. Candidate reads still verify CASC content hashes. If every
+is installed. Candidate headers must match the full reversed encoding key and BLTE signature;
+payload reads still verify CASC content hashes. If every
 candidate is missing, Studio draws a clipped, labelled fallback per micro
 button. This is an availability choice, not active atlas-set emulation.
 

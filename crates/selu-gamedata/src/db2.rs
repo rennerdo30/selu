@@ -216,7 +216,7 @@ impl AtlasIndex {
             |file| {
                 *available
                     .entry(file)
-                    .or_insert_with(|| storage.has_local_file(file) && storage.read(file).is_ok())
+                    .or_insert_with(|| storage.has_local_file(file))
             },
         )
     }

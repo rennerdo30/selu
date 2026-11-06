@@ -120,10 +120,11 @@ impl Storage {
         };
         self.cache.join(hex::encode(ckey)).is_file()
             || self.encoding.find_ekey(ckey).is_some_and(|entry| {
-                entry
-                    .ekeys
-                    .iter()
-                    .any(|ekey| self.index.find(ekey).is_some())
+                entry.ekeys.iter().any(|ekey| {
+                    self.index
+                        .find(ekey)
+                        .is_some_and(|entry| local_entry_present(&self.data, entry, ekey))
+                })
             })
     }
     pub fn read(&self, id: u32) -> Result<Vec<u8>> {
@@ -180,6 +181,25 @@ fn index_names<'a>(
 fn normalize(path: &str) -> String {
     path.replace('/', "\\").to_ascii_lowercase()
 }
+// CascLib BLTE_ENCODED_HEADER: reversed EKey, 30-byte span header, BLTE.
+// https://github.com/ladislav-zezula/CascLib/blob/master/src/CascStructs.h
+// Local index keys have only nine bytes; a prefix hit alone is insufficient.
+fn local_entry_present(data: &Path, entry: &IndexEntry, ekey: &[u8; 16]) -> bool {
+    let check = || -> std::io::Result<bool> {
+        let mut file = std::fs::File::open(data.join(format!("data.{:03}", entry.archive_number)))?;
+        let Some(end) = entry.archive_offset.checked_add(u64::from(entry.size)) else {
+            return Ok(false);
+        };
+        if entry.size < 34 || file.metadata()?.len() < end {
+            return Ok(false);
+        }
+        file.seek(SeekFrom::Start(entry.archive_offset))?;
+        let mut header = [0u8; 34];
+        file.read_exact(&mut header)?;
+        Ok(header[..16].iter().rev().eq(ekey.iter()) && &header[30..] == b"BLTE")
+    };
+    check().unwrap_or(false)
+}
 fn read_entry(data: &Path, archive: u32, offset: u64, size: u32) -> Result<Vec<u8>> {
     if !(30..=268_435_456).contains(&size) {
         return Err("invalid or oversized CASC entry".into());
@@ -195,6 +215,33 @@ fn read_entry(data: &Path, archive: u32, offset: u64, size: u32) -> Result<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn availability_rejects_prefix_collisions_and_truncated_entries() {
+        let root = std::env::temp_dir().join(format!("selu-entry-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let ekey = std::array::from_fn(|index| index as u8);
+        let entry = IndexEntry {
+            archive_number: 0,
+            archive_offset: 0,
+            size: 34,
+        };
+        let mut bytes = vec![0; 34];
+        for index in 0..16 {
+            bytes[index] = ekey[15 - index];
+        }
+        bytes[30..].copy_from_slice(b"BLTE");
+        let file = root.join("data.000");
+        std::fs::write(&file, &bytes).unwrap();
+        assert!(local_entry_present(&root, &entry, &ekey));
+        let mut collision = ekey;
+        collision[15] = 99;
+        assert!(!local_entry_present(&root, &entry, &collision));
+        bytes.pop();
+        std::fs::write(&file, &bytes).unwrap();
+        assert!(!local_entry_present(&root, &entry, &ekey));
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
     #[test]
     fn root_name_index_preserves_locale_and_ambiguity() {
         let entries = [

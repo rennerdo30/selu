@@ -100,6 +100,9 @@ function UnitEffectiveLevel(unit) return UnitLevel(unit) end
 -- UnitDocumentation marks this MayReturnNothing. The fake world has no
 -- alternate-power timers; a non-nil bar ID makes Blizzard enumerate forever.
 function UnitPowerBarTimerInfo() return nil end
+-- MirrorTimer.lua checks this native absence sentinel before creating bars.
+-- The baseline player is neither drowning nor exhausted nor a ghost.
+function GetMirrorTimerInfo() return 'UNKNOWN',0,0,0,0,'' end
 C_ActionBar=C_ActionBar or {}
 function C_ActionBar.GetActionBarPage() return 1 end
 function GetActionBarPage() return 1 end

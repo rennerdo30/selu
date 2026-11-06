@@ -559,10 +559,18 @@ fn budget_instruction(lua: &Lua, budget: &Shared<Budget>, quantum: u32) -> mlua:
 // resume boundaries, restoring the caller before executing more Lua. Count
 // every instruction so repeated short coroutine resumes cannot lose credit.
 fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
+    let stale = lua
+        .app_data_ref::<Ctx>()
+        .map(|ctx| ctx.stale_sources.clone());
     lua.set_hook(
         HookTriggers::new().every_nth_instruction(interval),
         move |lua, debug| {
-            reject_stale(lua, &debug)?;
+            if let Some(stale) = &stale {
+                reject_stale_sources(stale, &debug)?;
+            } else {
+                // Initial VM wiring installs the hook before the context datum.
+                reject_stale(lua, &debug)?;
+            }
             budget_instruction(lua, &budget, interval)
         },
     );
@@ -571,6 +579,7 @@ fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
 pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) {
     let budget = ctx.budget.clone();
     if let Some(thread) = thread {
+        let stale = ctx.stale_sources.clone();
         {
             let mut current = lock(&budget);
             if current.blizzard_bootstrap {
@@ -580,7 +589,7 @@ pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) 
         thread.set_hook(
             HookTriggers::new().every_nth_instruction(1),
             move |lua, debug| {
-                reject_stale(lua, &debug)?;
+                reject_stale_sources(&stale, &debug)?;
                 budget_instruction(lua, &budget, 1)
             },
         );
@@ -598,7 +607,13 @@ fn reject_stale(lua: &Lua, debug: &mlua::Debug<'_>) -> mlua::Result<()> {
     let Some(ctx) = lua.app_data_ref::<Ctx>() else {
         return Ok(());
     };
-    let stale = lock(&ctx.stale_sources);
+    reject_stale_sources(&ctx.stale_sources, debug)
+}
+fn reject_stale_sources(
+    sources: &Shared<HashSet<String>>,
+    debug: &mlua::Debug<'_>,
+) -> mlua::Result<()> {
+    let stale = lock(sources);
     // Lua source metadata allocates strings. Most VMs have never reloaded;
     // they cannot contain a stale source and need no metadata at all.
     if stale.is_empty() {
