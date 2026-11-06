@@ -74,6 +74,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "action bar atlas: {:?}",
             storage.atlas("UI-HUD-ActionBar-Frame")?
         );
+        for name in [
+            "UI-HUD-MicroMenu-Professions-Up",
+            "UI-HUD-MicroMenu-Professions-Disabled",
+            "UI-HUD-MicroMenu-Collections-Disabled",
+        ] {
+            let atlas = storage.atlas(name)?;
+            println!("HUD ATLAS {name}: {atlas:?}");
+            {
+                println!(
+                    "HUD FILE {}: {:?}",
+                    atlas.file_data_id,
+                    storage.read(atlas.file_data_id).map(|bytes| bytes.len())
+                );
+            }
+        }
         for (name, id) in [
             ("UiTextureAtlas", 897470),
             ("UiTextureAtlasMember", 897532),
@@ -220,22 +235,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("STARTUP {line}");
         }
     }
-    session.lua().globals().raw_set(
-        "__probe_meta",
-        session
-            .lua()
-            .create_function(|_, values: mlua::MultiValue| {
-                println!(
-                    "HUDMETA {}",
-                    values
-                        .iter()
-                        .map(|value| format!("{value:?}"))
-                        .collect::<Vec<_>>()
-                        .join("\t")
-                );
-                Ok(())
-            })?,
-    )?;
     if let Err(error)=session.eval(r#"local f=MainActionBar; local m=EditModeManagerFrame; local a=m:GetActiveLayoutInfo(); __probe_meta('layout',a and a.interfaceStyle,Enum.InputDeviceInterfaceType.Mkb,Enum.InputDeviceInterfaceType.Gamepad,#EditModeUtil:GetBottomActionBars(),m.layoutApplyInProgress,f:IsInDefaultPosition()); __probe_meta('children',#f:GetLayoutChildren()); __probe_meta('fields',f.system,f.systemIndex,f.numButtonsShowable,f.noSpacers,f.actionButtons and #f.actionButtons,f.shownButtonContainers and #f.shownButtonContainers,f.systemInfo~=nil,#m.registeredSystemFrames,m.layoutInfo and m.layoutInfo.activeLayout); if m.GetActiveLayoutSystemInfo then local s=m:GetActiveLayoutSystemInfo(f.system,f.systemIndex); __probe_meta('system',s and s.system,s and s.systemIndex,s and #s.settings) end; for i=1,f:GetNumPoints() do local p,r,rp,x,y=f:GetPoint(i); __probe_meta('point',p,r and r:GetName(),rp,x,y) end"#) {eprintln!("HUD diagnostic: {error}");}
     if std::env::var_os("SELU_SIM_PROFILE_PCALL").is_some() {
         session.eval("pcall=__probe_original_pcall; __probe_original_pcall=nil")?;
@@ -250,6 +249,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         snapshot.regions.len(),
         snapshot_start.elapsed()
     );
+    let unplaced = snapshot
+        .regions
+        .iter()
+        .filter(|r| r.rect.is_none())
+        .collect::<Vec<_>>();
+    println!(
+        "UNPLACED total={} visible={} named={}",
+        unplaced.len(),
+        unplaced.iter().filter(|r| r.visible).count(),
+        unplaced.iter().filter(|r| r.name.is_some()).count()
+    );
+    println!(
+        "UNPLACED painted-visible={}",
+        unplaced
+            .iter()
+            .filter(|r| r.visible
+                && (r.texture.is_some() || r.text.as_ref().is_some_and(|text| !text.is_empty())))
+            .count()
+    );
+    for r in unplaced
+        .iter()
+        .filter(|r| r.visible && r.name.is_some())
+        .take(30)
+    {
+        println!(
+            "UNPLACED {} {} {:?}",
+            r.widget,
+            r.name.as_deref().unwrap_or(""),
+            r.size
+        );
+    }
     for name in [
         "PlayerFrame",
         "Minimap",
