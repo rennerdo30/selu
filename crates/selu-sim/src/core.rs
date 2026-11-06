@@ -736,6 +736,7 @@ pub fn dispatch<R>(
     ctx: &Ctx,
     call: impl FnOnce() -> mlua::Result<R>,
 ) -> mlua::Result<R> {
+    let _profile = crate::profile::Span::new("lua.dispatch");
     let outermost = {
         let mut depth = lock(&ctx.depth);
         *depth += 1;

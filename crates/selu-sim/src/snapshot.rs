@@ -17,6 +17,7 @@ pub fn take(
     generation: Generation,
     ui_size: (f64, f64),
 ) -> SimResult<Snapshot> {
+    let _profile = crate::profile::Span::new("snapshot.take");
     Ok(Snapshot {
         generation,
         time: ctx.now(),

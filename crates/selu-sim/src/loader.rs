@@ -11,6 +11,7 @@ pub(crate) fn read_ui_text(
     client: Option<(&selu_gamedata::Storage, &Path)>,
     diagnostic: &mut impl FnMut(String),
 ) -> Result<String, String> {
+    let _profile = crate::profile::Span::new("source.read");
     if let Some((storage, source)) = client {
         let relative = path
             .strip_prefix(source)

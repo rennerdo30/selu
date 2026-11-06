@@ -66,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut session = selu_sim::Session::new(selu_sim::SessionConfig {
         target: Some("wowf@1.60.1.70790".into()),
+        client_install: Some(root.into()),
         ..Default::default()
     })?;
     let report = session.load_default_ui(
@@ -84,6 +85,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for n in report.notes {
         println!("NOTE {n}");
     }
-    println!("regions={}", session.snapshot()?.regions.len());
+    session.login()?;
+    session.advance_time(1.0 / 60.0);
+    let snapshot_start = std::time::Instant::now();
+    println!(
+        "regions={} snapshot={:?}",
+        session.snapshot()?.regions.len(),
+        snapshot_start.elapsed()
+    );
+    selu_sim::profile::report();
     Ok(())
 }

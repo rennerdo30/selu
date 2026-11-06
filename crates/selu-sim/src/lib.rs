@@ -26,7 +26,7 @@ pub mod frames;
 pub mod loader;
 mod native_defaults;
 mod native_stdlib;
-mod xml;
+pub mod profile;
 mod regions;
 pub mod saved;
 pub mod session;
@@ -37,6 +37,7 @@ mod timers;
 mod trace;
 pub mod world;
 mod wow_api;
+mod xml;
 
 pub use core::{
     Ctx, DrawLayer, Generation, Rect, RegionId, RegionModel, RegionSnapshot, Snapshot, SourcePos,

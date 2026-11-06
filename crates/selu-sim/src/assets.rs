@@ -68,6 +68,7 @@ impl Resolver {
         if let Some(value) = self.atlases.borrow().get(name) {
             return value.clone();
         }
+        let _profile = crate::profile::Span::new("atlas.lookup_uncached");
         let result = self.sources.iter().find_map(|s| match s {
             Source::ClientStorage(Some(storage)) => storage.atlas(name).ok(),
             _ => None,

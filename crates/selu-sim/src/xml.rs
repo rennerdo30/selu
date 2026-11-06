@@ -50,6 +50,7 @@ pub(crate) fn read_client(
     diagnostic: &mut impl FnMut(String),
     client: Option<(&selu_gamedata::Storage, &Path)>,
 ) -> Result<(), String> {
+    let _profile = crate::profile::Span::new("xml.read_parse_encode");
     let path = path
         .canonicalize()
         .map_err(|e| format!("{}: {e}", path.display()))?;

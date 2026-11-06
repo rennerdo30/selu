@@ -420,6 +420,7 @@ impl Session {
         source: &Path,
         mut progress: impl FnMut(&str),
     ) -> SimResult<crate::loader::DefaultUiReport> {
+        let _profile = crate::profile::Span::new("startup.unattributed");
         let start = std::time::Instant::now();
         let log_start = lock(&self.sim.logs).len();
         lock(&self.sim.state).tolerant_ui = true;
@@ -612,6 +613,7 @@ impl Session {
     }
 
     pub fn new(mut config: SessionConfig) -> SimResult<Session> {
+        let _profile = crate::profile::Span::new("session.create");
         if let Some(m) = &config.manifest {
             selu_manifest::resolution::select_checked_manifest(
                 std::slice::from_ref(m),

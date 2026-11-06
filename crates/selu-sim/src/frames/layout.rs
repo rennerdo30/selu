@@ -23,6 +23,7 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
     if !a.dirty {
         return;
     }
+    let _profile = crate::profile::Span::new("layout.resolve");
     for (index, r) in a.regions.iter_mut().enumerate() {
         if !a.full_layout
             && !a.styles_dirty

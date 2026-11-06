@@ -20,12 +20,14 @@ impl Drop for RegionTableKey {
 }
 impl RegionTable {
     pub fn new(lua: &mlua::Lua, table: &Table) -> mlua::Result<Self> {
+        crate::profile::count("registry.create");
         Ok(Self(Rc::new(RegionTableKey {
             lua: lua.weak(),
             key: Some(lua.create_registry_value(table.clone())?),
         })))
     }
     pub fn get(&self) -> Table {
+        crate::profile::count("registry.get");
         self.0
             .lua
             .upgrade()
