@@ -7,6 +7,9 @@ pub(crate) fn install(_lua: &Lua) -> mlua::Result<()> {
 
 /// Only backdrop storage is modeled; no textures, borders or XML scripts.
 pub(crate) fn templates(lua: &Lua, frame: &Table, templates: Option<&str>) -> mlua::Result<()> {
+    if let (Some(names), Some(apply)) = (templates, lua.globals().raw_get::<Option<Function>>("__selu_xml_apply")?) {
+        apply.call::<()>((frame.clone(), names))?;
+    }
     if templates.is_some_and(|s| s.split(',').any(|t| t.trim() == "BackdropTemplate")) {
         let install: Function = lua
             .load(

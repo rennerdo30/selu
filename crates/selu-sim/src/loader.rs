@@ -9,6 +9,48 @@
 
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Default)]
+pub struct DefaultUiReport {
+    pub addons_loaded: usize,
+    pub errors: Vec<String>,
+    pub notes: Vec<String>,
+    pub elapsed: std::time::Duration,
+}
+
+/// Preserve the source list's order, promoting LoadFirst roots and walking
+/// dependencies before dependants. LoadOnDemand addons load only as dependencies.
+pub fn default_ui_order(source: &Path, target: Option<&str>) -> Result<(Vec<Toc>, DefaultUiReport), String> {
+    let root=source.canonicalize().map_err(|e|e.to_string())?;
+    let list=std::fs::read_to_string(root.join("Interface/ui-toc-list.txt")).map_err(|e|e.to_string())?;
+    let mut all=std::collections::BTreeMap::new();
+    let mut names=Vec::new();
+    let mut report=DefaultUiReport::default();
+    for row in list.lines().map(str::trim).filter(|s|!s.is_empty() && !s.starts_with('#')) {
+        let path=root.join(row.replace('\\',"/"));
+        let dir=path.parent().ok_or("invalid UI TOC path")?.canonicalize().map_err(|e|e.to_string())?;
+        if !dir.starts_with(&root) { return Err("UI TOC path escapes source".into()); }
+        match read_toc_target(&dir,target) {
+            Ok(toc)=>{ names.push(toc.name.clone()); all.insert(toc.name.clone(),toc); },
+            Err(e)=>report.errors.push(e),
+        }
+    }
+    names.sort_by_key(|name| all[name].get("LoadFirst")!=Some("1"));
+    fn visit(name:&str, all:&std::collections::BTreeMap<String,Toc>, active:&mut std::collections::HashSet<String>, done:&mut std::collections::HashSet<String>, out:&mut Vec<Toc>, errors:&mut Vec<String>) {
+        if done.contains(name) { return; }
+        let Some(toc)=all.get(name) else { errors.push(format!("missing Blizzard dependency: {name}")); return; };
+        if !active.insert(name.into()) { errors.push(format!("cyclic Blizzard dependency: {name}")); return; }
+        for key in ["Dep","Dependencies","RequiredDeps"] {
+            for dep in toc.list(key) { visit(&dep,all,active,done,out,errors); }
+        }
+        active.remove(name); done.insert(name.into()); out.push(toc.clone());
+    }
+    let mut active=std::collections::HashSet::new(); let mut done=std::collections::HashSet::new(); let mut out=Vec::new();
+    for name in names {
+        if all[&name].get("LoadOnDemand")!=Some("1") { visit(&name,&all,&mut active,&mut done,&mut out,&mut report.errors); }
+    }
+    Ok((out,report))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Toc {
     /// The addon name: the folder name, as the client uses it.
@@ -31,21 +73,40 @@ impl Toc {
 
     /// Names listed in a comma-separated key such as `SavedVariables`.
     pub fn list(&self, key: &str) -> Vec<String> {
-        self.get(key)
-            .map(|v| {
+        self.metadata.iter().filter(|(k,_)| k.eq_ignore_ascii_case(key))
+            .flat_map(|(_,v)| {
                 v.split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
-                    .collect()
             })
-            .unwrap_or_default()
+            .collect()
     }
 }
 
 pub fn parse_toc(name: &str, dir: &Path, text: &str) -> Toc {
+    parse_toc_game(name, dir, text, None)
+}
+
+/// Blizzard's bracket directives apply to metadata as well as file rows.
+pub fn parse_toc_game(name: &str, dir: &Path, text: &str, game: Option<&str>) -> Toc {
     let mut metadata = Vec::new();
     let mut files = Vec::new();
     for line in text.lines() {
+        let mut line = line.trim().trim_start_matches('\u{feff}').to_string();
+        let mut allowed = true;
+        for directive in ["AllowLoadGameType", "ExcludeLoadGameType"] {
+            while let Some(start) = line.find(&format!("[{directive} ")) {
+                let Some(end) = line[start..].find(']').map(|i| start+i) else { break };
+                if let Some(game) = game {
+                    let matches = line[start+directive.len()+2..end].split(',').any(|v| {
+                        let v=v.trim(); v==game || (v=="classic" && game!="mainline")
+                    });
+                    allowed &= if directive=="AllowLoadGameType" { matches } else { !matches };
+                }
+                line.replace_range(start..=end, "");
+            }
+        }
+        if !allowed { continue; }
         let line = line.trim();
         if let Some(meta) = line.strip_prefix("##") {
             if let Some((k, v)) = meta.split_once(':') {
@@ -77,7 +138,8 @@ pub fn read_toc_target(dir: &Path, target: Option<&str>) -> Result<Toc, String> 
         .to_string();
     let suffix = match target.unwrap_or("").split('@').next().unwrap_or("") {
         "retail" => "Mainline",
-        "forever" | "classic-era" => "Vanilla",
+        "wowf" | "forever" => "Camelot",
+        "classic-era" => "Vanilla",
         "classic" => "Mists",
         "classic-anniversary" => "TBC",
         "classic-titan" => "Wrath",
@@ -91,7 +153,21 @@ pub fn read_toc_target(dir: &Path, target: Option<&str>) -> Result<Toc, String> 
     };
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    Ok(parse_toc(&name, dir, &text))
+    let game = match target.unwrap_or("").split('@').next().unwrap_or("") {
+        "wowf" | "forever" => Some("camelot"),
+        "retail" | "wow" => Some("mainline"),
+        "classic-era" => Some("vanilla"),
+        _ => None,
+    };
+    let mut toc = parse_toc_game(&name, dir, &text, game);
+    if let Some(game) = game {
+        let family = if game=="camelot" || game=="mainline" { "Mainline" } else { "Classic" };
+        let folder = match game { "camelot"=>"Camelot", "mainline"=>"Mainline", _=>"Vanilla" };
+        for file in &mut toc.files {
+            *file=file.replace("[Family]", family).replace("[Game]", folder);
+        }
+    }
+    Ok(toc)
 }
 
 /// The `(chunk name, source)` pairs to run, in order. The chunk name is the
@@ -124,10 +200,11 @@ pub fn read_files_with_diagnostics(
         }
         let lower = file.to_ascii_lowercase();
         if lower.ends_with(".xml") {
-            return Err(format!(
-                "{}: XML files are not supported by the simulator yet: {file}",
-                toc.name
-            ));
+            let mut notes = std::collections::HashSet::new();
+            crate::xml::read(&root, &path, &mut Vec::new(), &mut out, &mut |note| {
+                if notes.insert(note.clone()) { diagnostic(note); }
+            })?;
+            continue;
         }
         if !lower.ends_with(".lua") {
             return Err(format!(
@@ -145,6 +222,15 @@ pub fn read_files_with_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blizzard_game_filters_apply_to_files_and_dependencies() {
+        let toc=parse_toc_game("Demo", Path::new("Demo"), "## Dep: A [AllowLoadGameType mainline]\n## Dep: B [AllowLoadGameType classic]\n## LoadFirst: 1\n## LoadOnDemand: 1\n[Game]\\Demo.xml [AllowLoadGameType camelot]\nwrong.lua [ExcludeLoadGameType camelot]\n", Some("camelot"));
+        assert_eq!(toc.list("Dep"), ["B"]);
+        assert_eq!(toc.files,["[Game]/Demo.xml"]);
+        assert_eq!(toc.get("LoadFirst"),Some("1"));
+        assert_eq!(toc.get("LoadOnDemand"),Some("1"));
+    }
 
     #[test]
     fn parses_metadata_comments_and_files() {

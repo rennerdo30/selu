@@ -24,6 +24,7 @@ pub mod core;
 pub mod fonts;
 pub mod frames;
 pub mod loader;
+mod xml;
 mod regions;
 pub mod saved;
 pub mod session;

@@ -392,6 +392,40 @@ fn runtime(message: String) -> mlua::Error {
 }
 
 impl Session {
+    /// Load external Blizzard sources before the user's addon. Each source
+    /// chunk has its own error boundary; failures remain visible in the receipt.
+    /// This method performs no saved-variable reads or writes.
+    pub fn load_default_ui(
+        &self, source: &Path, mut progress: impl FnMut(&str),
+    ) -> SimResult<crate::loader::DefaultUiReport> {
+        let start = std::time::Instant::now();
+        let (addons, mut report) = loader::default_ui_order(source, self.config.target.as_deref()).map_err(runtime)?;
+        for toc in addons {
+            progress(&toc.name);
+            let files = match loader::read_files_with_diagnostics(&toc, |s| report.notes.push(s)) {
+                Ok(files) => files,
+                Err(e) => { report.errors.push(e); continue; }
+            };
+            crate::fonts::register_addon_root(self.sim.lua(), &toc.dir)?;
+            let ns = self.sim.lua.create_table()?;
+            for (name, source) in files {
+                let result = dispatch(&self.sim.lua, &self.sim.ctx, || {
+                    core::call_lua::<()>(&self.sim.lua,
+                        self.sim.lua.load(&source).set_name(&name).into_function()?,
+                        (toc.name.as_str(), ns.clone()))
+                });
+                if let Err(error) = result { report.errors.push(format!("{}: {error}", toc.name)); }
+            }
+            report.addons_loaded += 1;
+            if let Err(error) = self.sim.fire("ADDON_LOADED", vec![Value::String(self.sim.lua.create_string(&toc.name)?)]) {
+                report.errors.push(error.to_string());
+            }
+        }
+        report.elapsed = start.elapsed();
+        report.notes.sort(); report.notes.dedup();
+        Ok(report)
+    }
+
     pub fn new(mut config: SessionConfig) -> SimResult<Session> {
         if let Some(m) = &config.manifest {
             selu_manifest::resolution::select_checked_manifest(
