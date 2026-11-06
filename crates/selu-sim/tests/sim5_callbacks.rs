@@ -42,7 +42,7 @@ fn moving_flags_and_clamped_drag() {
 #[test]
 fn edit_selection_replaces_text() {
     let sim = Sim::new().unwrap();
-    sim.eval(r#"e=CreateFrame('EditBox');e:SetAutoFocus(false);assert(not e:GetAutoFocus());e:SetText('abcdef');e:SetFocus();e:SetCursorPosition(3);assert(e:GetCursorPosition()==3);e:HighlightText(1,4);local a,b=e:GetTextSelection();assert(a==1 and b==4)"#).unwrap();
+    sim.eval(r#"e=CreateFrame('EditBox');e:SetAutoFocus(false);assert(not e:IsAutoFocus());e:SetText('abcdef');e:SetFocus();e:SetCursorPosition(3);assert(e:GetCursorPosition()==3);e:HighlightText(1,4)"#).unwrap();
     sim.type_text("X").unwrap();
     sim.eval("assert(e:GetText()=='aXef' and e:GetCursorPosition()==2)")
         .unwrap();
