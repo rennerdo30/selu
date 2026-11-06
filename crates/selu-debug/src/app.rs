@@ -2169,15 +2169,19 @@ impl Studio {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.label("Quick actions");
             if ui.button("Target a rare elite").clicked() {
-                let mut u = selu_sim::world::Unit::default();
-                u.classification = "rareelite".into();
+                let u = selu_sim::world::Unit {
+                    classification: "rareelite".into(),
+                    ..Default::default()
+                };
                 self.scenario_unit = u.clone();
                 self.scenario.units.insert("target".into(), u);
                 apply = true;
             }
             if ui.button("Rare spawns nearby").clicked() {
-                let mut u = selu_sim::world::Unit::default();
-                u.classification = "rare".into();
+                let u = selu_sim::world::Unit {
+                    classification: "rare".into(),
+                    ..Default::default()
+                };
                 self.scenario.units.insert("nameplate1".into(), u.clone());
                 self.scenario
                     .vignettes
@@ -2203,12 +2207,12 @@ impl Studio {
                 self.scenario.combat = !self.scenario.combat;
                 apply = true;
             }
-            if ui.button("Target dies").clicked() {
-                if let Some(u) = self.scenario.units.get_mut("target") {
-                    u.dead = true;
-                    u.health = 0;
-                    apply = true;
-                }
+            if ui.button("Target dies").clicked()
+                && let Some(u) = self.scenario.units.get_mut("target")
+            {
+                u.dead = true;
+                u.health = 0;
+                apply = true;
             }
             ui.separator();
             ui.label("Units");
@@ -2247,6 +2251,7 @@ impl Studio {
                 ui.label("Level");
                 ui.add(egui::DragValue::new(&mut u.level));
             });
+            ui.label("Classification");
             egui::ComboBox::from_id_salt("classification")
                 .selected_text(&u.classification)
                 .show_ui(ui, |ui| {
@@ -2280,13 +2285,18 @@ impl Studio {
             });
             ui.separator();
             ui.label("Vignettes");
+            if self.scenario.vignettes.is_empty() {
+                ui.label("No vignettes in this scenario.");
+            }
             let mut remove = None;
             for (i, v) in self.scenario.vignettes.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(&v.name);
-                    if ui.small_button("Remove").clicked() {
-                        remove = Some(i);
-                    }
+                ui.push_id(&v.guid, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(&v.name).on_hover_text(&v.guid);
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(i);
+                        }
+                    });
                 });
             }
             if let Some(i) = remove {

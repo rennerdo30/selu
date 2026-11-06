@@ -132,12 +132,15 @@ impl Vm {
         let units: Table = self.lua.globals().raw_get("__selu_world_units")?;
         let old: Option<Table> = units.raw_get(token)?;
         let next = self.lua.create_table()?;
-        let identity_changed = old
-            .as_ref()
-            .map(|old| old.raw_get::<String>("guid"))
-            .transpose()?
-            .as_deref()
-            != Some(unit.guid.as_str());
+        // Baseline players and older world snapshots predate GUIDs. Preserve
+        // their name-based identity semantics instead of refusing the edit.
+        let identity_changed = match &old {
+            Some(old) => match old.raw_get::<Option<String>>("guid")? {
+                Some(guid) if !guid.is_empty() && !unit.guid.is_empty() => guid != unit.guid,
+                _ => old.raw_get::<String>("name")? != unit.name,
+            },
+            None => true,
+        };
         let old_auras = old
             .as_ref()
             .map(|old| {
