@@ -154,6 +154,29 @@ impl Default for SessionConfig {
     }
 }
 
+/// Open the configured client's textures and fonts for the session's
+/// product (from its manifest, else its target). Without a product there is
+/// nothing to open yet.
+fn open_client_assets(sim: &Vm, config: &SessionConfig) -> SimResult<()> {
+    let Some(root) = &config.client_install else {
+        return Ok(());
+    };
+    let target = config
+        .manifest
+        .as_ref()
+        .map(selu_manifest::Manifest::target_string)
+        .or_else(|| config.target.clone());
+    if let Some(target) = target {
+        let product = target.split('@').next().unwrap_or_default();
+        crate::frames::arena::store(sim.lua())
+            .borrow_mut()
+            .fonts
+            .open_client(root, product)
+            .map_err(mlua::Error::runtime)?;
+    }
+    Ok(())
+}
+
 /// A saved fixture failed validation; retain its global for source diagnostics.
 #[derive(Debug)]
 pub struct SavedFixtureError {
@@ -420,21 +443,7 @@ impl Session {
 
     fn start_vm(config: &SessionConfig) -> SimResult<Vm> {
         let sim = Vm::new()?;
-        if let Some(root) = &config.client_install {
-            let target = config
-                .manifest
-                .as_ref()
-                .map(selu_manifest::Manifest::target_string)
-                .or_else(|| config.target.clone());
-            if let Some(target) = target {
-                let product = target.split('@').next().unwrap_or_default();
-                crate::frames::arena::store(sim.lua())
-                    .borrow_mut()
-                    .fonts
-                    .open_client(root, product)
-                    .map_err(mlua::Error::runtime)?;
-            }
-        }
+        open_client_assets(&sim, config)?;
         if let Some(manifest) = &config.manifest {
             crate::sim_globals::install_manifest(sim.lua(), manifest, &sim.ctx)?;
             for family in &manifest.frame_families {
@@ -603,6 +612,11 @@ impl Session {
         if self.config.manifest.is_none() && lock(&self.sim.state).checked_manifests.is_empty() {
             self.config.manifest = discover_manifest(&self.config, dir)?;
             if let Some(m) = &self.config.manifest {
+                // The product is known only now: open the client's textures
+                // and fonts, which the VM could not open at start.
+                if self.config.target.is_none() {
+                    open_client_assets(&self.sim, &self.config)?;
+                }
                 crate::sim_globals::install_manifest(self.sim.lua(), m, &self.sim.ctx)?;
                 for f in &m.frame_families {
                     register_family(&self.sim, &f.prefix, &f.suffix)?;
