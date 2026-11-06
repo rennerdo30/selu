@@ -32,6 +32,30 @@ pub struct Options {
     pub selu: Option<PathBuf>,
 }
 
+/// What the Open Project dialog shows.
+enum OpenStatus {
+    Building(PathBuf),
+    Failed(String),
+}
+
+/// The project folder for a picked folder: the folder itself, its `selu`
+/// subfolder, or its only direct subfolder that contains `selu.toml`.
+fn find_project(picked: &std::path::Path) -> Option<PathBuf> {
+    if picked.join("selu.toml").is_file() {
+        return Some(picked.to_path_buf());
+    }
+    if picked.join("selu").join("selu.toml").is_file() {
+        return Some(picked.join("selu"));
+    }
+    let mut found: Vec<PathBuf> = std::fs::read_dir(picked)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.join("selu.toml").is_file())
+        .collect();
+    found.sort();
+    if found.len() == 1 { found.pop() } else { None }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LineKind {
     Print,
@@ -117,6 +141,7 @@ pub struct Studio {
     game_settings: crate::game::Settings,
     /// File > Open Project in progress: the background build's answer.
     opening: Option<std::sync::mpsc::Receiver<(PathBuf, Result<(), String>)>>,
+    open_status: Option<OpenStatus>,
     game_clients: Vec<crate::game::Client>,
     game_scanned: bool,
     games_open: bool,
@@ -202,6 +227,7 @@ impl Studio {
             build_failed: false,
             game_settings: crate::game::Settings::load(),
             opening: None,
+            open_status: None,
             game_clients: Vec::new(),
             game_scanned: false,
             games_open: false,
@@ -632,6 +658,7 @@ impl eframe::App for Studio {
         self.ui_games(&ctx);
         self.ui_confirm_replace(&ctx);
         self.ui_game_picker(&ctx);
+        self.ui_open_status(&ctx);
         if self.editor.take_settings_request() {
             self.open_settings();
         }
@@ -1322,17 +1349,16 @@ impl Studio {
 
     /// Open another project: Studio restarts through `selu debug <dir>`, which
     /// builds the project and passes the addon folder, as on the command line.
-    fn open_project(&mut self, dir: PathBuf, ctx: &egui::Context) {
-        if !dir.join("selu.toml").is_file() {
-            self.line(
-                LineKind::Error,
-                format!(
-                    "{} is not a Selu project: it has no selu.toml (create one with `selu new`)",
-                    dir.display()
-                ),
+    fn open_project(&mut self, picked: PathBuf, ctx: &egui::Context) {
+        let Some(dir) = find_project(&picked) else {
+            let message = format!(
+                "{} is not a Selu project: no selu.toml in it, in its selu folder or in a direct subfolder.",
+                picked.display()
             );
+            self.line(LineKind::Error, message.clone());
+            self.open_status = Some(OpenStatus::Failed(message));
             return;
-        }
+        };
         let selu = self.opts.selu.clone().unwrap_or_else(|| {
             // Studio started directly: use the selu next to selu-studio, else PATH.
             std::env::current_exe()
@@ -1352,6 +1378,7 @@ impl Studio {
             LineKind::Build,
             format!("opening {} (building)...", dir.display()),
         );
+        self.open_status = Some(OpenStatus::Building(dir.clone()));
         // Build first, off the UI thread: if it fails, this window stays open
         // with the errors instead of closing into nothing.
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1412,7 +1439,55 @@ impl Studio {
                 for line in e.lines() {
                     self.line(LineKind::Error, line.to_string());
                 }
+                self.open_status = Some(OpenStatus::Failed(e));
             }
+        }
+    }
+
+    /// The Open Project dialog: shown while the project builds, and on failure.
+    fn ui_open_status(&mut self, ctx: &egui::Context) {
+        let Some(status) = &self.open_status else {
+            return;
+        };
+        let mut close = false;
+        egui::Modal::new(egui::Id::unique("open-project")).show(ctx, |ui| {
+            ui.set_width(520.0);
+            match status {
+                OpenStatus::Building(dir) => {
+                    ui.label(egui::RichText::new("Opening project").size(16.0).strong());
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!("Building {} ...", dir.display()));
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "Studio restarts with the project when the build succeeds.",
+                        )
+                        .color(palette::MUTED),
+                    );
+                }
+                OpenStatus::Failed(message) => {
+                    ui.label(
+                        egui::RichText::new("Cannot open project")
+                            .size(16.0)
+                            .strong(),
+                    );
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(message).monospace());
+                        });
+                    ui.add_space(8.0);
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                }
+            }
+        });
+        if close {
+            self.open_status = None;
         }
     }
 
@@ -3149,5 +3224,36 @@ mod sim4_texture_tests {
             texture_axis(-1.0, 1.0, "CLAMP"),
             vec![(0.0, 0.5, 0.0, 0.0), (0.5, 1.0, 0.0, 1.0)]
         );
+    }
+}
+
+#[cfg(test)]
+mod open_project_tests {
+    use super::find_project;
+
+    #[test]
+    fn finds_the_project_in_the_folder_its_selu_folder_or_one_subfolder() {
+        let root = std::env::temp_dir().join(format!("selu-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // A worktree whose project lives in `selu/` (the toolkit port layout).
+        let worktree = root.join("worktree");
+        std::fs::create_dir_all(worktree.join("selu")).unwrap();
+        std::fs::write(worktree.join("selu").join("selu.toml"), "").unwrap();
+        assert_eq!(find_project(&worktree), Some(worktree.join("selu")));
+        // The project folder itself.
+        assert_eq!(
+            find_project(&worktree.join("selu")),
+            Some(worktree.join("selu"))
+        );
+        // Exactly one subfolder with a project.
+        let parent = root.join("parent");
+        std::fs::create_dir_all(parent.join("addon")).unwrap();
+        std::fs::write(parent.join("addon").join("selu.toml"), "").unwrap();
+        assert_eq!(find_project(&parent), Some(parent.join("addon")));
+        // No project anywhere.
+        let empty = root.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(find_project(&empty), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
