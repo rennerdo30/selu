@@ -22,6 +22,12 @@ pub enum Source {
     ClientStorage(Option<Arc<selu_gamedata::Storage>>),
 }
 impl Resolver {
+    pub fn client_storage(&self) -> Option<Arc<selu_gamedata::Storage>> {
+        self.sources.iter().find_map(|source| match source {
+            Source::ClientStorage(Some(storage)) => Some(storage.clone()),
+            _ => None,
+        })
+    }
     pub fn open_client(&mut self, root: &std::path::Path, product: &str) -> Result<(), String> {
         // Studio and its worker share one read-only index; decoded images remain lazy.
         type Key = (PathBuf, String);

@@ -113,6 +113,7 @@ pub struct Arena {
     pub regions: Vec<Region>,
     pub dirty: bool,
     pub full_layout: bool,
+    pub layout_batches: usize,
     pub styles_dirty: bool,
     pub dirty_regions: std::collections::HashSet<usize>,
     pub cursor: (f64, f64),
@@ -120,6 +121,21 @@ pub struct Arena {
     pub focus: Option<usize>,
     pub capture: Option<usize>,
     pub moving: Option<usize>,
+}
+/// Startup construction is committed as one layout transaction. The guard
+/// restores normal eager transitions even if source loading returns an error.
+pub(crate) struct LayoutBatch(Store);
+impl LayoutBatch {
+    pub fn new(lua: &mlua::Lua) -> Self {
+        let store = store(lua);
+        store.borrow_mut().layout_batches += 1;
+        Self(store)
+    }
+}
+impl Drop for LayoutBatch {
+    fn drop(&mut self) {
+        self.0.borrow_mut().layout_batches -= 1;
+    }
 }
 pub fn store(lua: &mlua::Lua) -> Store {
     lua.app_data_ref::<Store>()

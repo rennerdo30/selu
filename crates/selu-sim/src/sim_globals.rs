@@ -212,6 +212,7 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
         let context = ctx.clone();
         let full_name = entry.name.clone();
         let native = lua.create_function(move |lua, _: mlua::MultiValue| {
+            let _profile = crate::profile::Span::new("native.defaults");
             crate::native_defaults::record(lua, &full_name);
             context.not_simulated(&full_name);
             crate::native_defaults::values(lua, &returns, &schemas, &context, 0)
@@ -270,6 +271,7 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
 }
 
 pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
+    let _profile = crate::profile::Span::new("globals.lookup");
     let globals = lua.globals();
     let shapes: Table = globals.raw_get("__selu_global_shapes")?;
     // Native Minimap exists in Blizzard_Minimap/Minimap.xml even when an

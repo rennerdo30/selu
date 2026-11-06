@@ -94,3 +94,31 @@ impl Span {
 pub fn count(_: &'static str) {}
 #[cfg(not(debug_assertions))]
 pub fn report() {}
+
+/// A bounded diagnostic A/B arm, never enabled by the product settings.
+pub(crate) struct GcPause<'a>(Option<&'a mlua::Lua>);
+impl<'a> GcPause<'a> {
+    pub fn new(lua: &'a mlua::Lua) -> Self {
+        #[cfg(debug_assertions)]
+        if std::env::var_os("SELU_SIM_PROFILE_GC_PAUSE").is_some() {
+            eprintln!(
+                "SELU_SIM_PROFILE_GC_PAUSE active: paused during source construction, full collection on exit"
+            );
+            lua.gc_stop();
+            return Self(Some(lua));
+        }
+        let _ = lua;
+        Self(None)
+    }
+}
+impl Drop for GcPause<'_> {
+    fn drop(&mut self) {
+        if let Some(lua) = self.0.take() {
+            let _profile = Span::new("gc.final_collection");
+            lua.gc_restart();
+            if let Err(error) = lua.gc_collect() {
+                eprintln!("GC measurement cleanup: {error}");
+            }
+        }
+    }
+}

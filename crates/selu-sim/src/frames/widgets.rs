@@ -55,6 +55,7 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
     lua.globals().raw_set(
         "__selu_child_regions",
         lua.create_function(|lua, (parent, regions): (Table, bool)| {
+            let _profile = crate::profile::Span::new("frames.enumerate_children");
             let parent = id(&parent)?;
             let list = lua.create_table()?;
             let arena = store(lua);
@@ -128,6 +129,7 @@ pub fn create(
     name: Option<String>,
     parent: Option<Table>,
 ) -> mlua::Result<Table> {
+    let _profile = crate::profile::Span::new("frames.create");
     let kind = [
         "Frame",
         "Button",
@@ -180,6 +182,7 @@ pub fn create(
             (a.regions[p].strata, a.regions[p].level + 1)
         })
         .unwrap_or((Strata::Medium, 0));
+    let initial_visible = a.borrow().layout_batches == 0;
     a.borrow_mut().regions.push(Region {
         table: RegionTable::new(lua, &t)?,
         kind: kind.into(),
@@ -195,7 +198,7 @@ pub fn create(
         layer: (DrawLayer::Artwork, 0),
         points: vec![],
         rect: None,
-        visible: true,
+        visible: initial_visible,
         effective_scale: 1.0,
         effective_alpha: 1.0,
         text: None,
@@ -313,6 +316,7 @@ pub fn create(
     mt.set(
         "__index",
         lua.create_function(move |lua, (_, key): (Table, String)| {
+            let _profile = crate::profile::Span::new("frames.method_lookup");
             let known = methods.raw_get::<Value>(key.clone())?;
             if !known.is_nil() {
                 return Ok(known);
@@ -357,6 +361,7 @@ pub fn create(
 }
 const METHODS: &str = "SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+    let _profile = crate::profile::Span::new("frames.methods");
     if !ctx
         .stale_sources
         .lock()
@@ -638,6 +643,29 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             object = current
                 .raw_get::<Option<Table>>("__font_object")?
                 .or(current.raw_get::<Option<Table>>("_parent")?);
+        }
+    }
+    if a.borrow().layout_batches > 0
+        && matches!(
+            method,
+            "IsVisible" | "GetEffectiveScale" | "GetEffectiveAlpha"
+        )
+    {
+        let arena = a.borrow();
+        let mut current = Some(i);
+        let (mut visible, mut scale, mut alpha) = (true, 1.0, 1.0);
+        for _ in 0..128 {
+            let Some(index) = current else { break };
+            let region = &arena.regions[index];
+            visible &= region.shown;
+            scale *= region.scale;
+            alpha *= region.alpha;
+            current = region.parent;
+        }
+        match method {
+            "IsVisible" => out!(visible && current.is_none()),
+            "GetEffectiveScale" => out!(scale),
+            _ => out!(alpha),
         }
     }
     layout::resolve(&mut a.borrow_mut(), ctx);
@@ -1278,9 +1306,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         a.dirty_regions.insert(i);
         layout::resolve(&mut a, ctx);
     }
+    let batched = a.layout_batches > 0;
     let new = a.regions[i].clone();
     drop(a);
-    if new.rect.is_none() && (old.width, old.height) != (new.width, new.height) {
+    if !batched && new.rect.is_none() && (old.width, old.height) != (new.width, new.height) {
         callback(
             ctx,
             t.clone(),

@@ -1,5 +1,48 @@
 //! Bounded local-source startup probe. Never opens WTF or launches a client.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|s| s == "--atlas") {
+        let storage = selu_gamedata::Storage::open(
+            std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),
+            "wowf",
+            None,
+        )?;
+        println!("client build {}", storage.build.version);
+        for (name, id) in [
+            ("UiTextureAtlas", 897470),
+            ("UiTextureAtlasMember", 897532),
+            ("UiTextureAtlasElement", 1989276),
+        ] {
+            let bytes = storage.read(id)?;
+            let table = selu_gamedata::db2::Table::parse(&bytes)?;
+            println!(
+                "{name}: layout={:08X} rows={} fields={:?}",
+                table.layout,
+                table.count(),
+                (0..20)
+                    .map_while(|column| table.value(0, column).ok())
+                    .collect::<Vec<_>>()
+            );
+            if name != "UiTextureAtlas" {
+                for row in (0..table.count())
+                    .filter(|row| {
+                        table
+                            .text(*row, 0)
+                            .is_ok_and(|name| name.contains("UI-HUD-ActionBar-Frame"))
+                    })
+                    .take(4)
+                {
+                    println!(
+                        "{}: {:?}",
+                        table.text(row, 0)?,
+                        (1..20)
+                            .map_while(|column| table.value(row, column).ok())
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "--types") {
         let session = selu_sim::Session::new(selu_sim::SessionConfig {
             target: Some("wowf@1.60.1.70790".into()),

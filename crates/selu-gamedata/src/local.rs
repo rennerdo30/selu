@@ -214,6 +214,7 @@ impl RootFile {
     pub fn iter_all(&self) -> impl Iterator<Item = (u32, &RootEntry)> {
         self.0.iter().map(|(i, e)| (*i, e))
     }
+    #[cfg(test)]
     pub fn find_by_fdid(&self, id: u32, locale: LocaleFlags) -> Option<&RootEntry> {
         self.0
             .iter()

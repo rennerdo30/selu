@@ -421,6 +421,20 @@ impl Session {
         mut progress: impl FnMut(&str),
     ) -> SimResult<crate::loader::DefaultUiReport> {
         let _profile = crate::profile::Span::new("startup.unattributed");
+        let _layout_batch = crate::frames::arena::LayoutBatch::new(&self.sim.lua);
+        let _bootstrap_budget = if cfg!(debug_assertions)
+            && std::env::var_os("SELU_SIM_PROFILE_COARSE_HOOKS").is_some()
+        {
+            eprintln!("SELU_SIM_PROFILE_COARSE_HOOKS active: Blizzard startup only");
+            Some(core::BlizzardBootstrapBudget::new(
+                &self.sim.lua,
+                &self.sim.ctx,
+            ))
+        } else {
+            None
+        };
+        let gc_pause = crate::profile::GcPause::new(&self.sim.lua);
+        eprintln!("Default UI layout transaction: active; resolves after source construction");
         let start = std::time::Instant::now();
         let log_start = lock(&self.sim.logs).len();
         lock(&self.sim.state).tolerant_ui = true;
@@ -498,7 +512,14 @@ impl Session {
         crate::host_lua::load(&self.sim.lua, include_str!("default_curves.lua")).exec()?;
         let source_root = source.canonicalize().map_err(|e| runtime(e.to_string()))?;
         let mut source_notes = Vec::new();
-        let storage = if let (Some(install), Some(target)) =
+        let cached_storage = crate::frames::arena::store(&self.sim.lua)
+            .borrow()
+            .fonts
+            .assets
+            .client_storage();
+        let storage = if cached_storage.is_some() {
+            cached_storage
+        } else if let (Some(install), Some(target)) =
             (&self.config.client_install, &self.config.target)
         {
             match selu_gamedata::Storage::open(
@@ -506,7 +527,7 @@ impl Session {
                 target.split('@').next().unwrap_or(""),
                 None,
             ) {
-                Ok(storage) => Some(storage),
+                Ok(storage) => Some(std::sync::Arc::new(storage)),
                 Err(e) => {
                     source_notes.push(format!("CASC UI unavailable; using source checkout: {e}"));
                     None
@@ -515,11 +536,11 @@ impl Session {
         } else {
             None
         };
-        let client = storage.as_ref().map(|s| (s, source_root.as_path()));
+        let client = storage.as_deref().map(|s| (s, source_root.as_path()));
         let (addons, mut report) = loader::default_ui_order_client(
             &source_root,
             self.config.target.as_deref(),
-            storage.as_ref(),
+            storage.as_deref(),
         )
         .map_err(runtime)?;
         report.notes.extend(source_notes);
@@ -600,6 +621,7 @@ impl Session {
                 report.errors.push(error.to_string());
             }
         }
+        drop(gc_pause);
         report.elapsed = start.elapsed();
         for line in lock(&self.sim.logs).iter().skip(log_start) {
             if line.starts_with("error:") || line.starts_with("callback error") {
@@ -1403,6 +1425,7 @@ impl Vm {
     }
 
     fn fire_now(&self, event: &str, args: &[Value]) -> SimResult<usize> {
+        let _profile = crate::profile::Span::new("events.dispatch");
         let registry = self.lua.globals().get::<Table>("__selu_sim_frames")?;
         let mut delivered = 0;
         for pair in registry.pairs::<i64, Table>() {

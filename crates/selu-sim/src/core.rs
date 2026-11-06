@@ -369,6 +369,7 @@ pub struct Budget {
     /// The limit was hit in this dispatch; the hook now fails on every
     /// instruction.
     exhausted: bool,
+    blizzard_bootstrap: bool,
 }
 
 pub const BUDGET_ERROR: &str = "script ran too long";
@@ -424,6 +425,7 @@ impl Ctx {
                 callback_depth: 0,
                 failure: None,
                 exhausted: false,
+                blizzard_bootstrap: false,
             }),
             pending: shared(VecDeque::new()),
             scripts: shared(VecDeque::new()),
@@ -493,7 +495,41 @@ impl Default for Ctx {
 /// Coroutine resume wrappers coordinate the VM's single mlua hook target;
 /// instruction usage remains shared with synchronous and queued scripts.
 pub fn install_hooks(lua: &Lua, ctx: &Ctx) {
-    set_count_hook(lua, ctx.budget.clone(), HOOK_INTERVAL);
+    set_count_hook(lua, ctx.budget.clone(), 1);
+}
+
+/// Only the external Blizzard startup pass uses native count-hook quanta.
+/// User addon execution retains exact instruction accounting. Coroutine
+/// boundaries charge a partial parent quantum conservatively before switching
+/// to the precise coroutine hook, so repeated short resumes cannot evade it.
+pub(crate) struct BlizzardBootstrapBudget<'a> {
+    lua: &'a Lua,
+    budget: Shared<Budget>,
+    previous: bool,
+}
+impl<'a> BlizzardBootstrapBudget<'a> {
+    pub fn new(lua: &'a Lua, ctx: &Ctx) -> Self {
+        let mut budget = lock(&ctx.budget);
+        let previous = budget.blizzard_bootstrap;
+        budget.blizzard_bootstrap = true;
+        drop(budget);
+        set_count_hook(lua, ctx.budget.clone(), HOOK_INTERVAL);
+        Self {
+            lua,
+            budget: ctx.budget.clone(),
+            previous,
+        }
+    }
+}
+impl Drop for BlizzardBootstrapBudget<'_> {
+    fn drop(&mut self) {
+        lock(&self.budget).blizzard_bootstrap = self.previous;
+        set_count_hook(
+            self.lua,
+            self.budget.clone(),
+            if self.previous { HOOK_INTERVAL } else { 1 },
+        );
+    }
 }
 
 /// Once the budget is exhausted the hook fires on *every* instruction and
@@ -501,12 +537,17 @@ pub fn install_hooks(lua: &Lua, ctx: &Ctx) {
 /// That way the error surfaces in every frame up the stack: a `pcall`
 /// around a runaway loop catches it, but its caller's next instruction
 /// fails again, so `while true do pcall(f) end` can't keep running either.
-fn budget_instruction(budget: &Shared<Budget>) -> mlua::Result<VmState> {
+fn budget_instruction(lua: &Lua, budget: &Shared<Budget>, quantum: u32) -> mlua::Result<VmState> {
     let mut b = lock(budget);
-    b.used = b.used.saturating_add(1);
+    b.used = b.used.saturating_add(u64::from(quantum));
     if b.exhausted || b.used > b.limit.saturating_mul(u64::from(HOOK_INTERVAL)) {
         b.exhausted = true;
-        return Err(mlua::Error::runtime(b.failure.unwrap_or(BUDGET_ERROR)));
+        let reason = b.failure.unwrap_or(BUDGET_ERROR);
+        drop(b);
+        if quantum > 1 {
+            set_count_hook(lua, budget.clone(), 1);
+        }
+        return Err(mlua::Error::runtime(reason));
     }
     Ok(VmState::Continue)
 }
@@ -514,12 +555,12 @@ fn budget_instruction(budget: &Shared<Budget>) -> mlua::Result<VmState> {
 // mlua 0.10 has one hook target per VM. Switch that target only at native
 // resume boundaries, restoring the caller before executing more Lua. Count
 // every instruction so repeated short coroutine resumes cannot lose credit.
-fn set_count_hook(lua: &Lua, budget: Shared<Budget>, _interval: u32) {
+fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
     lua.set_hook(
-        HookTriggers::new().every_nth_instruction(1),
+        HookTriggers::new().every_nth_instruction(interval),
         move |lua, debug| {
-            reject_stale(lua, debug.source().source.as_deref())?;
-            budget_instruction(&budget)
+            reject_stale(lua, &debug)?;
+            budget_instruction(lua, &budget, interval)
         },
     );
 }
@@ -527,21 +568,44 @@ fn set_count_hook(lua: &Lua, budget: Shared<Budget>, _interval: u32) {
 pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) {
     let budget = ctx.budget.clone();
     if let Some(thread) = thread {
+        {
+            let mut current = lock(&budget);
+            if current.blizzard_bootstrap {
+                current.used = current.used.saturating_add(u64::from(HOOK_INTERVAL));
+            }
+        }
         thread.set_hook(
             HookTriggers::new().every_nth_instruction(1),
             move |lua, debug| {
-                reject_stale(lua, debug.source().source.as_deref())?;
-                budget_instruction(&budget)
+                reject_stale(lua, &debug)?;
+                budget_instruction(lua, &budget, 1)
             },
         );
     } else {
-        set_count_hook(lua, budget, 1);
+        let interval = if lock(&budget).blizzard_bootstrap {
+            HOOK_INTERVAL
+        } else {
+            1
+        };
+        set_count_hook(lua, budget, interval);
     }
 }
 
-fn reject_stale(lua: &Lua, source: Option<&str>) -> mlua::Result<()> {
-    if let Some(ctx) = lua.app_data_ref::<Ctx>()
-        && source.is_some_and(|s| lock(&ctx.stale_sources).contains(s.trim_start_matches('@')))
+fn reject_stale(lua: &Lua, debug: &mlua::Debug<'_>) -> mlua::Result<()> {
+    let Some(ctx) = lua.app_data_ref::<Ctx>() else {
+        return Ok(());
+    };
+    let stale = lock(&ctx.stale_sources);
+    // Lua source metadata allocates strings. Most VMs have never reloaded;
+    // they cannot contain a stale source and need no metadata at all.
+    if stale.is_empty() {
+        return Ok(());
+    }
+    if debug
+        .source()
+        .source
+        .as_deref()
+        .is_some_and(|s| stale.contains(s.trim_start_matches('@')))
     {
         return Err(mlua::Error::runtime(
             "SELU0623: stale addon reference after sim.reload(); use sim helpers to access the current Session",
@@ -561,8 +625,13 @@ fn reset_budget(lua: &Lua, ctx: &Ctx) {
     b.failure = None;
     if b.exhausted {
         b.exhausted = false;
+        let interval = if b.blizzard_bootstrap {
+            HOOK_INTERVAL
+        } else {
+            1
+        };
         drop(b);
-        set_count_hook(lua, ctx.budget.clone(), HOOK_INTERVAL);
+        set_count_hook(lua, ctx.budget.clone(), interval);
     }
 }
 
@@ -675,6 +744,7 @@ pub(crate) fn call_lua<R: mlua::FromLuaMulti>(
     function: mlua::Function,
     args: impl mlua::IntoLuaMulti,
 ) -> mlua::Result<R> {
+    let _profile = crate::profile::Span::new("lua.execute_and_boundary");
     const KEY: &str = "selu.host_boundary";
     let protected = match lua.named_registry_value::<Option<mlua::Function>>(KEY)? {
         Some(function) => function,
@@ -930,6 +1000,25 @@ mod tests {
         let logs = lock(&ctx.logs).clone();
         assert_eq!(logs.len(), 2, "{logs:?}");
         assert!(logs[0].starts_with("error: "), "{logs:?}");
+    }
+
+    #[test]
+    fn blizzard_bootstrap_budget_stops_caught_loops_and_restores_precise_mode() {
+        let lua = Lua::new();
+        let ctx = Ctx::new();
+        ctx.set_budget(1);
+        install_hooks(&lua, &ctx);
+        {
+            let _bootstrap = BlizzardBootstrapBudget::new(&lua, &ctx);
+            let error = dispatch(&lua, &ctx, || {
+                lua.load("while true do pcall(function() while true do end end) end")
+                    .exec()
+            })
+            .unwrap_err();
+            assert!(error.to_string().contains(BUDGET_ERROR));
+        }
+        assert!(!lock(&ctx.budget).blizzard_bootstrap);
+        dispatch(&lua, &ctx, || lua.load("return 42").exec()).unwrap();
     }
 
     #[test]

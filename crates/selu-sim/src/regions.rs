@@ -53,6 +53,31 @@ end
 #[cfg(test)]
 mod tests {
     #[test]
+    fn startup_batch_publishes_final_geometry_and_visibility() {
+        let sim = crate::Sim::new().unwrap();
+        let batch = crate::frames::arena::LayoutBatch::new(sim.lua());
+        sim.eval("BatchShows=0; local p=CreateFrame('Frame','BatchParent'); p:SetSize(200,100); p:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',10,20); local c=CreateFrame('Frame','BatchChild',p); c:SetAllPoints(p); c:SetScript('OnShow',function() BatchShows=BatchShows+1 end); local hidden=CreateFrame('Frame','BatchHidden',p); hidden:Hide(); hidden:SetScript('OnShow',function() error('hidden startup frame shown') end); assert(BatchShows==0); assert(c:IsVisible() and not hidden:IsVisible())").unwrap();
+        drop(batch);
+        let snapshot = sim.snapshot().unwrap();
+        let child = snapshot
+            .regions
+            .iter()
+            .find(|r| r.name.as_deref() == Some("BatchChild"))
+            .unwrap();
+        let rect = child.rect.unwrap();
+        assert_eq!(
+            (rect.left, rect.bottom, rect.width, rect.height),
+            (10.0, 20.0, 200.0, 100.0)
+        );
+        sim.advance_time(1.0 / 60.0);
+        assert_eq!(sim.lua().globals().get::<u32>("BatchShows").unwrap(), 1);
+        assert!(
+            sim.logs()
+                .iter()
+                .all(|s| !s.contains("hidden startup frame shown"))
+        );
+    }
+    #[test]
     fn regions_keep_parent_geometry_and_text() {
         let sim = crate::Sim::new().unwrap();
         sim.eval(

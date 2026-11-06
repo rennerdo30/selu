@@ -14,12 +14,14 @@ pub mod blp;
 /// An opened snapshot of the active product's local index and root.
 pub struct Storage {
     pub build: BuildInfo,
-    root: RootFile,
+    root_entry_count: usize,
+    content_keys: HashMap<u32, [u8; 16]>,
     index: CascIndex,
     encoding: EncodingFile,
     data: PathBuf,
     cache: PathBuf,
     names: HashMap<String, u32>,
+    name_hashes: HashMap<u64, Option<u32>>,
 }
 fn key(value: &str) -> Result<[u8; 16]> {
     Ok(hex::decode(value)?
@@ -58,6 +60,14 @@ impl Storage {
         let root_key = key(&config.root_ckey)?;
         let enc = encoding.find_ekey(&root_key).ok_or("root absent locally")?;
         let root = RootFile::parse(&read(enc.ekeys.first().ok_or("root encoding missing")?)?)?;
+        let name_hashes = index_names(root.iter_all());
+        let root_entry_count = root.len();
+        let mut content_keys = HashMap::new();
+        for (id, entry) in root.iter_all() {
+            if entry.locale_flags.matches(LocaleFlags::EN_US) {
+                content_keys.entry(id).or_insert(entry.ckey);
+            }
+        }
         let mut names = HashMap::new();
         if let Some(file) = listfile {
             for line in std::fs::read_to_string(file)?.lines() {
@@ -73,61 +83,53 @@ impl Storage {
         Ok(Self {
             cache,
             build,
-            root,
+            root_entry_count,
+            content_keys,
             index,
             encoding,
             data,
             names,
+            name_hashes,
         })
     }
     pub fn entry_count(&self) -> usize {
-        self.root.len()
+        self.root_entry_count
     }
     pub fn resolve(&self, path: &str) -> Result<u32> {
         let path = normalize(path);
         let hash = hashpath(&path);
-        let mut ids: Vec<_> = self
-            .root
-            .iter_all()
-            .filter(|(_, e)| {
-                e.name_hash == Some(hash) && e.locale_flags.matches(LocaleFlags::EN_US)
-            })
-            .map(|(id, _)| id)
-            .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        match ids.as_slice() {
-            [id] => Ok(*id),
-            [] => self.names.get(&path).copied().ok_or_else(|| {
+        match self.name_hashes.get(&hash) {
+            Some(Some(id)) => Ok(*id),
+            None => self.names.get(&path).copied().ok_or_else(|| {
                 "path has no root name hash; provide an explicit local listfile or FileDataID"
                     .into()
             }),
-            _ => Err("ambiguous root name hash".into()),
+            Some(None) => Err("ambiguous root name hash".into()),
         }
     }
     pub fn read_path(&self, path: &str) -> Result<Vec<u8>> {
         self.read(self.resolve(path)?)
     }
     pub fn read(&self, id: u32) -> Result<Vec<u8>> {
-        let root = self
-            .root
-            .find_by_fdid(id, LocaleFlags::EN_US)
+        let ckey = self
+            .content_keys
+            .get(&id)
             .ok_or("FileDataID absent for enUS")?;
-        let cache = self.cache.join(hex::encode(root.ckey));
+        let cache = self.cache.join(hex::encode(ckey));
         if let Ok(bytes) = std::fs::read(&cache)
-            && Md5::digest(&bytes).as_slice() == root.ckey
+            && Md5::digest(&bytes).as_slice() == ckey
         {
             return Ok(bytes);
         }
         let enc = self
             .encoding
-            .find_ekey(&root.ckey)
+            .find_ekey(ckey)
             .ok_or("content absent locally")?;
         for ekey in &enc.ekeys {
             if let Some(e) = self.index.find(ekey) {
                 let result = read_entry(&self.data, e.archive_number, e.archive_offset, e.size);
                 if let Ok(bytes) = result {
-                    if Md5::digest(&bytes).as_slice() != root.ckey {
+                    if Md5::digest(&bytes).as_slice() != ckey {
                         continue;
                     }
                     std::fs::create_dir_all(&self.cache)?;
@@ -138,6 +140,26 @@ impl Storage {
         }
         Err("file not installed locally".into())
     }
+}
+fn index_names<'a>(
+    entries: impl Iterator<Item = (u32, &'a RootEntry)>,
+) -> HashMap<u64, Option<u32>> {
+    let mut index = HashMap::new();
+    for (id, entry) in entries {
+        if entry.locale_flags.matches(LocaleFlags::EN_US)
+            && let Some(hash) = entry.name_hash
+        {
+            index
+                .entry(hash)
+                .and_modify(|value| {
+                    if *value != Some(id) {
+                        *value = None;
+                    }
+                })
+                .or_insert(Some(id));
+        }
+    }
+    index
 }
 fn normalize(path: &str) -> String {
     path.replace('/', "\\").to_ascii_lowercase()
@@ -157,6 +179,55 @@ fn read_entry(data: &Path, archive: u32, offset: u64, size: u32) -> Result<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn root_name_index_preserves_locale_and_ambiguity() {
+        let entries = [
+            (
+                1,
+                RootEntry {
+                    ckey: [0; 16],
+                    name_hash: Some(10),
+                    locale_flags: LocaleFlags::EN_US,
+                },
+            ),
+            (
+                1,
+                RootEntry {
+                    ckey: [0; 16],
+                    name_hash: Some(10),
+                    locale_flags: LocaleFlags(0),
+                },
+            ),
+            (
+                2,
+                RootEntry {
+                    ckey: [0; 16],
+                    name_hash: Some(20),
+                    locale_flags: LocaleFlags::EN_US,
+                },
+            ),
+            (
+                3,
+                RootEntry {
+                    ckey: [0; 16],
+                    name_hash: Some(20),
+                    locale_flags: LocaleFlags::EN_US,
+                },
+            ),
+            (
+                4,
+                RootEntry {
+                    ckey: [0; 16],
+                    name_hash: Some(30),
+                    locale_flags: LocaleFlags(4),
+                },
+            ),
+        ];
+        let index = index_names(entries.iter().map(|(id, entry)| (*id, entry)));
+        assert_eq!(index.get(&10), Some(&Some(1)));
+        assert_eq!(index.get(&20), Some(&None));
+        assert!(!index.contains_key(&30));
+    }
     #[test]
     fn malformed_build_and_keys_fail() {
         assert!(key("../bad").is_err());

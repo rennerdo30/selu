@@ -20,7 +20,7 @@ pub fn factor(p: &str) -> (f64, f64) {
     )
 }
 pub fn resolve(a: &mut Arena, ctx: &Ctx) {
-    if !a.dirty {
+    if !a.dirty || a.layout_batches > 0 {
         return;
     }
     let _profile = crate::profile::Span::new("layout.resolve");
