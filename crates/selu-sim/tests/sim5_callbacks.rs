@@ -93,6 +93,49 @@ fn autofocus_policy_and_edit_snapshot() {
     sim.eval("e=CreateFrame('EditBox');e:Hide();e:SetAutoFocus(false);e:Show();assert(not e:HasFocus());e:Hide();e:SetAutoFocus(true);e:Show();assert(e:HasFocus());e:SetText('hello');e:SetCursorPosition(3);e:HighlightText(1,3)").unwrap();
     let snap = sim.snapshot().unwrap();
     let e = snap.regions.iter().find(|r| r.widget == "EditBox").unwrap();
+    assert_eq!(e.visual.edit_range, Some((1, 3)));
     assert!(e.visual.edit_caret.is_some());
     assert_eq!(e.visual.edit_selection.len(), 1);
+}
+
+#[test]
+fn multiline_selection_uses_shared_layout_rows() {
+    let sim = Sim::new().unwrap();
+    sim.eval("e=CreateFrame('EditBox');e:SetSize(35,100);e:SetPoint('CENTER');e:SetMultiLine(true);e:SetText('first line and another line');e:SetFocus();e:HighlightText(0,-1)").unwrap();
+    let snap = sim.snapshot().unwrap();
+    let e = snap.regions.iter().find(|r| r.widget == "EditBox").unwrap();
+    assert!(
+        e.visual.edit_selection.len() > 1,
+        "selection must cover wrapped rows"
+    );
+    assert!(
+        e.visual
+            .edit_selection
+            .windows(2)
+            .all(|p| p[1][1] > p[0][1])
+    );
+}
+
+#[test]
+fn api_scripts_do_not_drain_deferred_host_work() {
+    let sim = Sim::new().unwrap();
+    sim.sim()
+        .ctx()
+        .queue(Box::new(|lua| lua.globals().set("deferred", true)));
+    sim.eval("local s=CreateFrame('Slider');s:SetValue(.5);assert(deferred==nil)")
+        .unwrap();
+    sim.eval("assert(deferred==true)").unwrap();
+}
+#[test]
+fn enabled_text_and_focus_transitions_complete_inside_the_call() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"local b=CreateFrame('Button');local n=0
+ b:SetScript('OnDisable',function() n=n+1 end);b:Disable();assert(n==1);b:Disable();assert(n==1)
+ b:SetScript('OnEnable',function() n=n+1 end);b:Enable();assert(n==2)
+ local e=CreateFrame('EditBox');local set=false;local changed=false;local lost=false
+ e:SetScript('OnTextSet',function() set=true end);e:SetScript('OnTextChanged',function() assert(set);changed=true end)
+ e:SetText('new');assert(set and changed)
+ e:SetFocus();e:SetScript('OnEditFocusLost',function() lost=true end);e:ClearFocus();assert(lost)
+ local s=CreateFrame('Slider');local range=false;s:SetScript('OnMinMaxChanged',function(_,lo,hi) range=lo==2 and hi==4 end)
+ s:SetMinMaxValues(2,4);assert(range)"#).unwrap();
 }

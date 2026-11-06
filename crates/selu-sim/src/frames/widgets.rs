@@ -834,6 +834,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             } else {
                 Some(crate::value_string(&v[0]))
             };
+            if r.kind == "EditBox" {
+                r.cursor_position = r.text.as_deref().unwrap_or("").len();
+                r.selection = (r.cursor_position, r.cursor_position);
+            }
             if !matches!(r.text_value, Value::LightUserData(_)) {
                 // Ordinary text already lives in Rust; retaining a second Lua
                 // string consumes one auxiliary-stack slot per text region.

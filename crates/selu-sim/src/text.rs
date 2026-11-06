@@ -30,6 +30,14 @@ pub struct GlyphMask {
     pub height: usize,
     pub alpha: Vec<u8>,
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextLine {
+    pub start: usize,
+    pub end: usize,
+    pub x: f64,
+    pub y: f64,
+    pub height: f64,
+}
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TextLayout {
     pub font_size: f64,
@@ -40,6 +48,8 @@ pub struct TextLayout {
     pub truncated: bool,
     pub placements: Vec<Placement>,
     pub masks: Vec<GlyphMask>,
+    #[serde(default)]
+    pub line_ranges: Vec<TextLine>,
 }
 #[derive(Clone)]
 enum Atom {
@@ -236,11 +246,15 @@ pub fn layout(
     let shaper = Shaper::new(face, style.size);
     let input = atoms(text, style);
     let mut rows: Vec<Vec<Atom>> = Vec::new();
+    let mut starts = Vec::new();
+    let mut row_start = 0;
     let mut row = Vec::new();
     let mut i = 0;
     while i < input.len() {
         if matches!(input[i], Atom::Char('\n', _)) {
+            starts.push(row_start);
             rows.push(std::mem::take(&mut row));
+            row_start = i + 1;
             i += 1;
             continue;
         }
@@ -265,11 +279,13 @@ pub fn layout(
         if !row.is_empty() {
             trim(&mut row);
             if !row.is_empty() {
+                starts.push(row_start);
                 rows.push(std::mem::take(&mut row));
             } else {
                 row.clear();
             }
         }
+        row_start = i;
         if !style.non_space_wrap {
             row.extend_from_slice(word);
             i = end;
@@ -292,11 +308,14 @@ pub fn layout(
             row.extend_from_slice(&word[start..start + count]);
             start += count;
             if start < word.len() {
+                starts.push(row_start);
                 rows.push(std::mem::take(&mut row));
+                row_start = i + start;
             }
         }
         i = end;
     }
+    starts.push(row_start);
     rows.push(row);
     let row_height = |row: &[Atom]| {
         row.iter().fold(line_height, |h, a| match a {
@@ -373,7 +392,7 @@ pub fn layout(
         ..Default::default()
     };
     let mut y = dy;
-    for row in rows {
+    for (row, start) in rows.into_iter().zip(starts) {
         let w = shaper.width(&row);
         out.width = out.width.max(w as f64);
         let dx = match style.justify_h.as_str() {
@@ -382,6 +401,13 @@ pub fn layout(
             _ => 0.0,
         };
         let h = row_height(&row);
+        out.line_ranges.push(TextLine {
+            start,
+            end: start + row.len(),
+            x: dx as f64,
+            y: y as f64,
+            height: h as f64,
+        });
         let (_, placements) = shaper.row(&row, true);
         for mut p in placements {
             p.x += dx;

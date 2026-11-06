@@ -481,7 +481,8 @@ StartMoving to select the moving frame. Screen clamps apply in physical pixels;
 anchor deltas are converted by effective scale. Disabled hover uses the explicit
 SetMotionScriptsWhileDisabled opt-in. EditBoxes retain autofocus policy, byte
 cursor and selected range; typing replaces the selection. Studio consumes core
-caret and selection geometry. Native multiline editing fidelity remains unverified.
+caret and selection geometry derived from the shared wrapped layout rows.
+Snapshots also expose the byte selection range. Native visual fidelity remains unverified.
 
 GameTooltip uses ordinary named left/right FontStrings and client tooltip
 background/border assets, so Studio renders the same child snapshots. Artwork

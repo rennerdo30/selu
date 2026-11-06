@@ -151,6 +151,8 @@ pub struct VisualStyle {
     pub edit_selection: Vec<[f64; 4]>,
     #[serde(default)]
     pub edit_caret: Option<[f64; 4]>,
+    #[serde(default)]
+    pub edit_range: Option<(usize, usize)>,
 }
 fn default_true() -> bool {
     true
@@ -180,6 +182,7 @@ impl Default for VisualStyle {
             text_scroll: (0.0, 0.0),
             edit_selection: vec![],
             edit_caret: None,
+            edit_range: None,
         }
     }
 }
