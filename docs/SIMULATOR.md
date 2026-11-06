@@ -320,7 +320,16 @@ filters understand Camelot's Mainline family and Classic family members.
 Each Blizzard source chunk has an error boundary; the receipt retains failures
 and the worker continues. The user's addon loads afterward, followed by the
 existing login sequence. Studio reports progress, counts, errors and wall time
-in the console. Reload rebuilds the default UI before the user's addon.
+in the console, plus the most frequently called manifest native stand-ins.
+Reload rebuilds the default UI before the user's addon.
+
+The synthetic profile exposes one visible General chat window and selects the
+first of Blizzard's own edit-mode presets through `EDIT_MODE_LAYOUTS_UPDATED`.
+It never reads the client's saved layouts. XML `relativeKey` anchors can walk
+anonymous parents and child members. Animation groups exist before OnLoad;
+Alpha and Translation use the existing simulator animation clock. Other
+animation types remain diagnostic notes. Initial XML visibility does not fire
+the instance's inherited visibility script before OnLoad.
 
 Persistent arena tables and method-lookup tables use owning registry keys with
 weak VM references, rather than Lua 5.1's bounded mlua auxiliary stack. Region
@@ -336,7 +345,7 @@ initialized successfully or that the default UI matches the client.
 
 Missing Lua files listed in a TOC produce `missing TOC file: <path>
 (continuing)` and loading proceeds. Existing files still undergo canonical
-sandbox validation; permission failures and unsupported XML remain errors.
+sandbox validation; permission failures and malformed XML remain errors.
 Historical addon-author reports describe missing TOC entries as logged load
 failures that do not stop loading ([Excessive load times](https://wowinterface.com/forums/archive/index.php/t-36339.html)).
 A [BfA beta report](https://www.wowinterface.com/forums/archive/index.php/https-/index.php/t-56283.html)
