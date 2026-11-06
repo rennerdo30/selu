@@ -12,7 +12,7 @@ pub(crate) struct ClassContext {
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
     instance: Type,
-    fields: BTreeMap<String, Type>,
+    fields: std::sync::Arc<BTreeMap<String, Type>>,
     statics: BTreeMap<String, Type>,
     constructor: Type,
     base: Option<String>,
@@ -21,9 +21,17 @@ pub struct ClassInfo {
 impl ClassContext {
     pub(crate) fn from_imports(module: &crate::ModuleBindings) -> Self {
         let mut ctx = Self::default();
+        let mut previous = None;
         for exports in module.imports.values() {
             for e in exports.values() {
-                ctx.infos.extend(e.classes.clone());
+                let identity = std::sync::Arc::as_ptr(&e.classes);
+                if previous != Some(identity) {
+                    // Preserve the original last-import-wins order, while each
+                    // module's shared final snapshot needs merging only once.
+                    ctx.infos
+                        .extend(e.classes.iter().map(|(k, v)| (k.clone(), v.clone())));
+                    previous = Some(identity);
+                }
             }
         }
         ctx
@@ -174,12 +182,12 @@ impl Ctx<'_> {
             };
             if let StmtKind::Class(c) = &s.kind {
                 let key = format!("{}@{}@{}", c.name, c.name_span.file, c.name_span.start);
-                let instance = Type::Class(key.clone(), Vec::new(), BTreeMap::new());
+                let instance = Type::Class(key.clone(), Vec::new(), Default::default());
                 self.classes.infos.insert(
                     key.clone(),
                     ClassInfo {
                         instance: instance.clone(),
-                        fields: BTreeMap::new(),
+                        fields: Default::default(),
                         statics: BTreeMap::new(),
                         base: None,
                         methods: Default::default(),
@@ -304,7 +312,7 @@ impl Ctx<'_> {
             bases.push(n.clone());
             bases.extend(parents.clone());
         }
-        let instance = Type::Class(key.clone(), bases, BTreeMap::new());
+        let instance = Type::Class(key.clone(), bases, Default::default());
         let empty = Type::Function {
             multiple_results: false,
             unspecified_callback: false,
@@ -378,7 +386,7 @@ impl Ctx<'_> {
                 if m.is_static {
                     i.statics.insert(n, t);
                 } else {
-                    i.fields.insert(n, t);
+                    std::sync::Arc::make_mut(&mut i.fields).insert(n, t);
                 }
             }
         }
@@ -446,7 +454,8 @@ impl Ctx<'_> {
                             if m.is_static {
                                 i.statics.insert(name.clone(), t.clone());
                             } else {
-                                i.fields.insert(name.clone(), t.clone());
+                                std::sync::Arc::make_mut(&mut i.fields)
+                                    .insert(name.clone(), t.clone());
                             }
                         }
                         if let Some(w) = want
@@ -486,7 +495,7 @@ impl Ctx<'_> {
                     if m.is_static {
                         i.statics.insert(name.clone(), sig);
                     } else {
-                        i.fields.insert(name.clone(), sig);
+                        std::sync::Arc::make_mut(&mut i.fields).insert(name.clone(), sig);
                     }
                 }
                 M::Constructor { params, body } => {

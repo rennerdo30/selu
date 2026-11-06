@@ -1,9 +1,4 @@
-//! Errors while typing. The real compiler checks the project: a background
-//! thread copies the project, with the editor's unsaved text, into
-//! `dist/.selu/check/` and runs `selu build` there, then parses its
-//! diagnostics. Slower than an in-process check, but exactly the errors
-//! `selu build` gives, across every module, with no second implementation.
-//! A language server (`selu-lsp`) can replace this with in-process checks.
+//! Check unsaved buffers using the check-only command and a private temporary copy.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -96,7 +91,14 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 fn run(job: &Job) -> Outcome {
-    let mirror = job.project.join("dist").join(".selu").join("check");
+    let mirror = std::env::temp_dir().join(format!(
+        "selu-check-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
     let failed = |message: String| Outcome {
         seq: job.seq,
         problems: vec![Problem {
@@ -110,7 +112,6 @@ fn run(job: &Job) -> Outcome {
         }],
         ok: false,
     };
-    let _ = std::fs::remove_dir_all(mirror.join("src"));
     if let Err(e) = copy_dir(&job.project, &mirror) {
         return failed(format!("cannot prepare the check folder: {e}"));
     }
@@ -124,18 +125,72 @@ fn run(job: &Job) -> Outcome {
         }
     }
     let mut cmd = std::process::Command::new(&job.selu);
-    cmd.arg("build").arg(&mirror).current_dir(&job.project);
+    cmd.arg("check").arg(&mirror).current_dir(&job.project);
     if let Some(t) = &job.target {
         cmd.arg("--target").arg(t);
     }
-    match cmd.output() {
+    let result = match bounded_output(&mut cmd) {
         Ok(out) => Outcome {
             seq: job.seq,
             problems: parse(&String::from_utf8_lossy(&out.stderr)),
             ok: out.status.success(),
         },
         Err(e) => failed(format!("cannot run {}: {e}", job.selu.display())),
+    };
+    let _ = std::fs::remove_dir_all(&mirror);
+    result
+}
+
+fn bounded_output(cmd: &mut std::process::Command) -> std::io::Result<std::process::Output> {
+    use std::{
+        io::{self, Read},
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    fn drain(mut pipe: impl Read) -> io::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    eprintln!("Studio check PID {}, timeout 60s", child.id());
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    // Both pipes must drain while the child runs, even if either stream
+    // exceeds its OS pipe capacity before the other produces any output.
+    let stdout = std::thread::spawn(move || drain(stdout));
+    let stderr = std::thread::spawn(move || drain(stderr));
+    let start = Instant::now();
+    let status = (|| {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
+            }
+            if start.elapsed() > Duration::from_secs(60) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "compiler check exceeded 60s",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    })();
+    if status.is_err() {
+        // Retain cleanup on timeout and on wait errors before joining readers.
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let stdout = stdout
+        .join()
+        .unwrap_or_else(|_| Err(io::Error::other("stdout reader panicked")));
+    let stderr = stderr
+        .join()
+        .unwrap_or_else(|_| Err(io::Error::other("stderr reader panicked")));
+    Ok(std::process::Output {
+        status: status?,
+        stdout: stdout?,
+        stderr: stderr?,
+    })
 }
 
 /// Parse `selu build`'s rendered diagnostics:
@@ -218,6 +273,26 @@ pub fn parse(stderr: &str) -> Vec<Problem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_copy_excludes_dist_and_warning_opens_real_source() {
+        let root = std::env::temp_dir().join(format!("selu-studio-copy-{}", std::process::id()));
+        let source = root.join("project");
+        let mirror = root.join("mirror");
+        std::fs::create_dir_all(source.join("src/ui")).unwrap();
+        std::fs::create_dir_all(source.join("dist/.selu/check/src")).unwrap();
+        std::fs::write(source.join("src/ui/orphan.selu"), "").unwrap();
+        std::fs::write(source.join("dist/.selu/check/src/ghost.selu"), "").unwrap();
+        copy_dir(&source, &mirror).unwrap();
+        assert!(mirror.join("src/ui/orphan.selu").exists());
+        assert!(!mirror.join("dist").exists());
+        let problems = parse(
+            "warning[SELU0404]: src/ui/orphan.selu is not reachable from src/main.selu\n  ┌─ ui/orphan.selu:1:1\n",
+        );
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].file.as_deref(), Some("src/ui/orphan.selu"));
+        assert!(source.join(problems[0].file.as_ref().unwrap()).is_file());
+    }
 
     #[test]
     fn parses_rendered_diagnostics() {

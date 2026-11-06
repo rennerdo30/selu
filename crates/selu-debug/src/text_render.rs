@@ -163,10 +163,12 @@ mod tests {
     #[test]
     fn painted_glyph_quads_are_the_simulator_positions() {
         let sim = selu_sim::Sim::new().unwrap();
-        sim.eval("local t=UIParent:CreateFontString();t:SetFont('fallback',20);t:SetScale(2);t:SetText('AVATAR');t:SetPoint('TOPLEFT')").unwrap();
+        sim.eval("local t=UIParent:CreateFontString();t:SetFont('fallback',20);t:SetSize(200,20);t:SetScale(2);t:SetText('AVATAR');t:SetPoint('TOPLEFT')").unwrap();
         let snapshot = sim.snapshot().unwrap();
         let region = snapshot.regions.last().unwrap();
         let layout = region.text_layout.as_ref().unwrap();
+        assert_eq!(layout.lines, 1, "an equal-height box must paint its line");
+        assert!(!layout.placements.is_empty());
         let ctx = egui::Context::default();
         ctx.begin_pass(Default::default());
         let painter = ctx.layer_painter(egui::LayerId::background());

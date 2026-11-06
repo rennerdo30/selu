@@ -155,6 +155,42 @@ impl Ctx<'_> {
                 return self.value(e);
             }
             for member in expected.unwrap().members() {
+                // Scalar literals have no speculative state or diagnostics.
+                // Select their arm before cloning the entire checking context.
+                let scalar = match (&e.kind, &member) {
+                    (_, member)
+                        if !matches!(
+                            member,
+                            Type::String
+                                | Type::Number
+                                | Type::Boolean
+                                | Type::Null
+                                | Type::StringLiteral(_)
+                                | Type::NumberLiteral(_)
+                                | Type::BooleanLiteral(_)
+                        ) =>
+                    {
+                        None
+                    }
+                    (ExprKind::Str(s), Type::StringLiteral(_)) => {
+                        Some(Type::StringLiteral(s.clone()))
+                    }
+                    (ExprKind::Number(s), Type::NumberLiteral(_)) => {
+                        Some(Type::NumberLiteral(s.clone()))
+                    }
+                    (ExprKind::Bool(b), Type::BooleanLiteral(_)) => Some(Type::BooleanLiteral(*b)),
+                    (ExprKind::Str(_), _) => Some(Type::String),
+                    (ExprKind::Number(_), _) => Some(Type::Number),
+                    (ExprKind::Bool(_), _) => Some(Type::Boolean),
+                    (ExprKind::Null, _) => Some(Type::Null),
+                    _ => None,
+                };
+                if let Some(scalar) = scalar {
+                    if scalar.assignable_to(&member) {
+                        return self.value_expected(e, Some(&member));
+                    }
+                    continue;
+                }
                 if let Some(t) = self.try_value_context(e, &member) {
                     return t;
                 }
@@ -255,6 +291,8 @@ impl Ctx<'_> {
         let mut diagnostics = Vec::new();
         let mut trial = Ctx {
             manifest: self.manifest,
+            index: self.index,
+            api_types: self.api_types,
             flow_info: self.flow_info.clone(),
             next_binding: self.next_binding,
             out: &mut diagnostics,

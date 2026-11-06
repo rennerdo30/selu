@@ -833,7 +833,17 @@ pub(crate) fn check_budget(ctx: &Ctx) -> mlua::Result<()> {
     }
 }
 pub(crate) fn flush_scripts(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
-    flush_queue(lua, ctx, &ctx.scripts)
+    // Detach siblings before calling Lua. A frame method invoked by a handler
+    // may synchronously drain newly queued transitions, but must not recurse
+    // into this batch's remaining siblings.
+    // Transitions queued by a handler run in a later batch of this flush.
+    loop {
+        let pending = std::mem::take(&mut *lock(&ctx.scripts));
+        if pending.is_empty() {
+            return Ok(());
+        }
+        flush_queue(lua, ctx, &shared(pending))?;
+    }
 }
 fn flush_queue(lua: &Lua, ctx: &Ctx, queue: &Shared<VecDeque<Pending>>) -> mlua::Result<()> {
     let mut error = None;

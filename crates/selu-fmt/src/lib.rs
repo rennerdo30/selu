@@ -119,12 +119,11 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, FormatError> {
         }
         let start = i;
         let start_line = line;
-        let kind;
-        if c == '/' && at(i + 1) == Some('/') {
+        let kind = if c == '/' && at(i + 1) == Some('/') {
             while i < n && chars[i].1 != '\n' {
                 i += 1;
             }
-            kind = Kind::LineComment;
+            Kind::LineComment
         } else if c == '/' && at(i + 1) == Some('*') {
             i += 2;
             loop {
@@ -146,7 +145,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, FormatError> {
                     Some(_) => i += 1,
                 }
             }
-            kind = Kind::BlockComment;
+            Kind::BlockComment
         } else if c == '"' || c == '\'' {
             i += 1;
             loop {
@@ -165,7 +164,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, FormatError> {
                     Some(_) => i += 1,
                 }
             }
-            kind = Kind::Str;
+            Kind::Str
         } else if c == '`' {
             // Template: verbatim up to the matching backtick, through
             // nested `${ ... }` (which may hold strings and templates).
@@ -219,7 +218,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, FormatError> {
                     Some(_) => i += 1,
                 }
             }
-            kind = Kind::Str;
+            Kind::Str
         } else if c.is_ascii_digit() || (c == '.' && at(i + 1).is_some_and(|d| d.is_ascii_digit()))
         {
             while let Some(d) = at(i) {
@@ -229,12 +228,12 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, FormatError> {
                     break;
                 }
             }
-            kind = Kind::Number;
+            Kind::Number
         } else if is_ident_start(c) {
             while at(i).is_some_and(is_ident) {
                 i += 1;
             }
-            kind = Kind::Word;
+            Kind::Word
         } else {
             let rest = &src[byte(i)..];
             let len = PUNCT
@@ -242,8 +241,8 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, FormatError> {
                 .find(|p| rest.starts_with(**p))
                 .map_or(1, |p| p.chars().count());
             i += len;
-            kind = Kind::Punct;
-        }
+            Kind::Punct
+        };
         out.push(Token {
             kind,
             text: src[byte(start)..byte(i)].to_string(),

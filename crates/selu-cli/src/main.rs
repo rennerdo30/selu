@@ -45,6 +45,14 @@ enum Command {
         #[arg(long)]
         manifest_dir: Option<PathBuf>,
     },
+    /// Check a project without generating Lua or build artifacts.
+    Check {
+        path: Option<PathBuf>,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        manifest_dir: Option<PathBuf>,
+    },
     /// Run *.test.selu scenarios in the simulator.
     Test {
         #[arg(long)]
@@ -119,6 +127,15 @@ fn main() -> ExitCode {
             target,
             manifest_dir,
         } => build(
+            path.as_deref().unwrap_or(Path::new(".")),
+            target.as_deref(),
+            manifest_dir.as_deref(),
+        ),
+        Command::Check {
+            path,
+            target,
+            manifest_dir,
+        } => selu_test::project::check_project(
             path.as_deref().unwrap_or(Path::new(".")),
             target.as_deref(),
             manifest_dir.as_deref(),

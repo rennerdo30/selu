@@ -10,6 +10,8 @@ pub(crate) fn error_type() -> Type {
             ("stack".into(), Type::optional(Type::String)),
             ("value".into(), Type::Unknown),
         ]
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>()
         .into(),
     )
 }

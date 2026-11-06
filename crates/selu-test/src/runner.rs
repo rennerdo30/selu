@@ -50,6 +50,11 @@ fn overlay(m: &mut selu_manifest::Manifest) {
         ),
         ("sim.reload", json!([]), json!([])),
         (
+            "sim.loadScenario",
+            json!([{"name":"path","type":"string"}]),
+            json!([]),
+        ),
+        (
             "sim.switchCharacter",
             json!([{"name":"character","type":"string"}]),
             json!([]),
@@ -658,6 +663,15 @@ fn install(
         })?,
     )?;
     let s = session.clone();
+    let scenario_session = session.clone();
+    sim.set(
+        "loadScenario",
+        lua.create_function(move |_, path: String| {
+            let state = selu_sim::world::Scenario::load(std::path::Path::new(&path))
+                .map_err(mlua::Error::runtime)?;
+            state.apply(scenario_session.borrow().sim())
+        })?,
+    )?;
     sim.set(
         "setUnit",
         lua.create_function(move |_, (token, unit): (String, mlua::Table)| {
@@ -677,6 +691,17 @@ fn install(
                     max_power: unit.get::<Option<u32>>("maxPower")?.unwrap_or(100),
                     auras: vec![],
                     combat: unit.get::<Option<bool>>("combat")?.unwrap_or(false),
+                    classification: unit
+                        .get::<Option<String>>("classification")?
+                        .unwrap_or_else(|| "normal".into()),
+                    creature_type: unit
+                        .get::<Option<String>>("creatureType")?
+                        .unwrap_or_else(|| "Beast".into()),
+                    reaction: unit.get::<Option<u8>>("reaction")?.unwrap_or(3),
+                    dead: unit.get::<Option<bool>>("dead")?.unwrap_or(false),
+                    guid: unit
+                        .get::<Option<String>>("guid")?
+                        .unwrap_or_else(|| format!("Creature-scenario-{token}")),
                 },
             )
         })?,
@@ -895,4 +920,32 @@ fn guard_game_apis(lua: &Lua, stale: Rc<std::cell::Cell<bool>>) -> mlua::Result<
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    #[test]
+    fn script_loads_studio_scenario() {
+        let session = Rc::new(RefCell::new(Session::new(Default::default()).unwrap()));
+        let lua = session.borrow().sim().lua().clone();
+        let registrations = Rc::new(RefCell::new(Registrations::default()));
+        let _bridge = BridgeLifetime(lua.clone(), registrations.clone());
+        install(&lua, session, registrations).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("selu-test-world-{}.toml", std::process::id()));
+        let state = selu_sim::world::Scenario {
+            money: 987,
+            ..Default::default()
+        };
+        assert!(!path.exists());
+        state.save(&path).unwrap();
+        lua.globals()
+            .set("scenario_path", path.to_string_lossy().as_ref())
+            .unwrap();
+        lua.load("sim.loadScenario(scenario_path); assert(GetMoney()==987)")
+            .exec()
+            .unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
 }

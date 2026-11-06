@@ -6,9 +6,9 @@ use crate::{
 use selu_diagnostics::Span;
 use selu_manifest::Manifest;
 use selu_syntax::{Expr, ExprKind, Stmt};
-pub(crate) struct TargetLowering {
-    pub manifest: Manifest,
-    pub universe: Manifest,
+pub(crate) struct TargetLowering<'a> {
+    pub manifest: &'a Manifest,
+    pub universe: &'a Manifest,
     pub shared: bool,
 }
 impl Lowerer<'_> {
@@ -101,7 +101,7 @@ impl Lowerer<'_> {
         let n = args[0].dotted_name()?;
         if !self.target.shared {
             return Some(LExpr::Bool(selu_check::targets::exists(
-                &self.target.manifest,
+                self.target.manifest,
                 &n,
             )));
         }
