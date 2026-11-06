@@ -2,6 +2,13 @@ use super::{arena::*, layout};
 use crate::core::{Ctx, DrawLayer, Strata, TextureFill};
 use mlua::{Function, IntoLuaMulti, Lua, MultiValue, Table, Value};
 use std::{cell::RefCell, rc::Rc};
+type CreateFrameArgs = (
+    Option<String>,
+    Option<String>,
+    Option<Table>,
+    Option<String>,
+    Option<i32>,
+);
 fn number(v: Option<&Value>, default: f64) -> f64 {
     match v {
         Some(Value::Number(n)) => *n,
@@ -86,14 +93,7 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
     lua.globals().set(
         "CreateFrame",
         lua.create_function(
-            move |lua,
-                  (kind, name, parent, templates, frame_id): (
-                Option<String>,
-                Option<String>,
-                Option<Table>,
-                Option<String>,
-                Option<i32>,
-            )| {
+            move |lua, (kind, name, parent, templates, frame_id): CreateFrameArgs| {
                 let mut kind = kind.unwrap_or_else(|| "Frame".into());
                 let mut templates = templates;
                 if let Some(resolve) = lua
@@ -1348,10 +1348,14 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 r.visual.wrap_modes[axis] = mode;
             }
             r.atlas_uv = None;
-            if !asset_available && !matches!(v.first(), None | Some(Value::Nil)) {
+            // Zero is the native empty/invalid FileDataID sentinel, not an asset.
+            let empty = matches!(v.first(), None | Some(Value::Nil))
+                || matches!(v.first(), Some(Value::Integer(0)))
+                || matches!(v.first(), Some(Value::Number(value)) if *value == 0.0);
+            if !asset_available && !empty {
                 ctx.not_simulated(&format!("unavailable texture: {s}"));
             }
-            r.texture = if matches!(v.first(), None | Some(Value::Nil)) {
+            r.texture = if empty {
                 None
             } else {
                 Some(TextureFill::File(if s.is_empty() {

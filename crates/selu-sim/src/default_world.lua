@@ -193,6 +193,18 @@ end
 function UnitPowerPercent(unit,powerType,unmodified,curve)
     return percent(UnitPower(unit,powerType) or 0,UnitPowerMax(unit,powerType) or 0,curve)
 end
+-- Native Lua host extensions consumed by AuraUtil and action-bar layout.
+-- LuaTableExtensionsDocumentation.lua specifies value equality across all keys.
+function table.contains(values, needle)
+    for _,value in pairs(values) do if value==needle then return true end end
+    return false
+end
+_G.table.contains=table.contains
+function string.join(separator,...)
+    return table.concat({...},separator)
+end
+_G.string.join=string.join
+_G.strjoin=string.join
 -- Native numeric extensions documented by LuaMathExtensionsDocumentation.lua.
 function math.clamp(value,minimum,maximum) return math.max(minimum,math.min(maximum,value)) end
 function math.saturate(value) return math.clamp(value,0,1) end

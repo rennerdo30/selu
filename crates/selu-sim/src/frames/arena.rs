@@ -114,6 +114,7 @@ pub struct Arena {
     pub dirty: bool,
     pub full_layout: bool,
     pub layout_batches: usize,
+    pub snapshot_batches: usize,
     pub styles_dirty: bool,
     pub dirty_regions: std::collections::HashSet<usize>,
     pub layout_dependencies: Vec<Vec<usize>>,
@@ -137,6 +138,20 @@ impl LayoutBatch {
 impl Drop for LayoutBatch {
     fn drop(&mut self) {
         self.0.borrow_mut().layout_batches -= 1;
+    }
+}
+/// Omit partial startup history without deferring geometry queried by login handlers.
+pub(crate) struct SnapshotBatch(Store);
+impl SnapshotBatch {
+    pub fn new(lua: &mlua::Lua) -> Self {
+        let store = store(lua);
+        store.borrow_mut().snapshot_batches += 1;
+        Self(store)
+    }
+}
+impl Drop for SnapshotBatch {
+    fn drop(&mut self) {
+        self.0.borrow_mut().snapshot_batches -= 1;
     }
 }
 pub fn store(lua: &mlua::Lua) -> Store {

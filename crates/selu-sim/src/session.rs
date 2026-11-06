@@ -949,9 +949,10 @@ impl Session {
         }
         self.logged_in = true;
         if self.default_ui_report.is_some() {
-            let _startup_layout = crate::frames::arena::LayoutBatch::new(&self.sim.lua);
+            let _startup_history = crate::frames::arena::SnapshotBatch::new(&self.sim.lua);
             for (event, mut args) in [
                 ("VARIABLES_LOADED", vec![]),
+                ("UPDATE_CHAT_WINDOWS", vec![]),
                 ("EDIT_MODE_LAYOUTS_UPDATED", vec![]),
                 ("PLAYER_LOGIN", vec![]),
                 (
@@ -1422,6 +1423,10 @@ impl Vm {
         if lock(&self.ctx.trace).enabled
             && crate::frames::arena::store(&self.lua)
                 .borrow()
+                .snapshot_batches
+                == 0
+            && crate::frames::arena::store(&self.lua)
+                .borrow()
                 .layout_batches
                 == 0
         {
@@ -1521,6 +1526,44 @@ impl std::ops::Deref for Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn blizzard_login_queries_live_geometry_and_allows_large_system_searches() {
+        let mut session = Session::new(SessionConfig::default()).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/default-ui");
+        session.load_default_ui(&source, |_| {}).unwrap();
+        session
+            .eval(
+                r#"
+            assert(table.contains({key='found'},'found'))
+            assert(not table.contains({key='found'},'missing'))
+            assert(string.join('|','HELPFUL','PLAYER')=='HELPFUL|PLAYER')
+            local texture=UIParent:CreateTexture()
+            texture:SetColorTexture(1,1,1,1); texture:SetTexture(0)
+            assert(texture:GetTexture()==nil)
+            local frame=CreateFrame('Frame',nil,UIParent)
+            frame:RegisterEvent('EDIT_MODE_LAYOUTS_UPDATED')
+            frame:SetScript('OnEvent',function(self)
+                self:SetSize(562,45)
+                self:SetPoint('BOTTOM',UIParent,'BOTTOM',0,10)
+                local x,y,w,h=self:GetRect()
+                assert(x and y==10 and w==562 and h==45,'login geometry was deferred')
+                local count=0
+                for i=1,10001 do securecallfunction(function() count=count+1 end) end
+                assert(count==10001)
+                LoginGeometryApplied=true
+            end)
+        "#,
+            )
+            .unwrap();
+        session.login().unwrap();
+        assert!(
+            session
+                .lua()
+                .globals()
+                .get::<bool>("LoginGeometryApplied")
+                .unwrap()
+        );
+    }
     #[test]
     fn blizzard_transition_errors_do_not_abort_unrelated_frame_apis() {
         let mut session = Session::new(SessionConfig::default()).unwrap();

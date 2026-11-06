@@ -835,11 +835,19 @@ pub fn dispatch<R>(
 /// Every script entry, including synchronous visibility and Lua-side timers,
 /// shares these limits. A small depth cap protects the native Rust/C stack.
 pub(crate) fn begin_callback(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
+    // Full Blizzard Edit Mode performs bounded linear searches over all registered
+    // systems for each raid-frame setting: more than 10,000 protected calls.
+    // Keep a finite ceiling; ordinary addon-only sessions retain their limit.
+    let callback_limit = if *lock(&ctx.tolerant_ui) {
+        100_000
+    } else {
+        10_000
+    };
     let (reason, new_failure) = {
         let mut b = lock(&ctx.budget);
         let reason = if b.exhausted {
             Some(b.failure.unwrap_or(BUDGET_ERROR))
-        } else if b.callbacks >= 10_000 {
+        } else if b.callbacks >= callback_limit {
             Some("dispatch callback budget exhausted")
         } else if b.callback_depth >= 32 {
             Some("script callbacks nested too deeply")
