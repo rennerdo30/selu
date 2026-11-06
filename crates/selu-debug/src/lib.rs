@@ -322,7 +322,7 @@ fn finish_default_ui_startup(
     session.advance_time(1.0 / 60.0);
     let errors = session.default_ui_startup_errors();
     let summary = format!(
-        "Default UI ready: {} addons, {} load errors, {} startup errors, {:.2}s total",
+        "Default UI startup completed: {} addons, {} load errors, {} startup errors, {:.2}s total",
         report.addons_loaded,
         report.errors.len(),
         errors.len(),

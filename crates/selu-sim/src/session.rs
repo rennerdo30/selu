@@ -564,6 +564,9 @@ impl Session {
                 .lua
                 .set_named_registry_value(&format!("selu:addon:{}", toc.name), ns.clone())?;
             for (name, source) in files {
+                if std::env::var_os("SELU_SIM_UI_LOAD_TRACE").is_some() {
+                    eprintln!("Default UI source: {}: {name}", toc.name);
+                }
                 let result = dispatch(&self.sim.lua, &self.sim.ctx, || {
                     core::call_lua::<()>(
                         &self.sim.lua,

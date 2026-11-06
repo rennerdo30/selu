@@ -85,7 +85,7 @@ So round 8 starts from compiling, tested code, not from prose:
    - `Session::new(SessionConfig { target, manifest, ui_size, seed })`.
    - `load_addon_dir(path)`: reads the `.toc` (any addon, not only Selu
      output; `## Interface`, `## SavedVariables`, `## SavedVariablesPerCharacter`,
-     file list, XML files listed as unsupported for now), runs the files in
+     file list, XML templates and includes), runs the files in
      order with `...` = addon name and table, then the boot sequence
      `ADDON_LOADED` (saved data loaded first), `PLAYER_LOGIN`,
      `PLAYER_ENTERING_WORLD`. Several addons can load into one session.
@@ -195,9 +195,8 @@ Refinements after Sol's second opinion (2026-11-04):
     `Name_Vanilla.toc`, ...) are chosen per target as the client does;
     `## Dependencies`/`## RequiredDeps` order loading; `## LoadOnDemand`
     addons load through `C_AddOns.LoadAddOn`. **XML files** listed in a
-    `.toc` are an explicit, visible "not supported yet" error in round 8 (a
-    later package parses `<Frame>`, templates, `<Script>` and `<Include>`,
-    reusing M3's XML reading); they are never skipped silently.
+    `.toc` load frames, templates, scripts and includes; unsupported elements
+    produce diagnostic notes. See the default UI implementation notes below.
 19. **Input and text.** Cursor coordinates are screen pixels with the origin
     at the bottom left, as `GetCursorPosition` returns them; addons divide by
     the effective scale as in the client. Mouse capture and keyboard focus

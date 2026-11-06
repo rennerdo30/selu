@@ -12,7 +12,8 @@ for _,name in ipairs({'GetBuildInfo','Mixin','CreateFromMixins','CopyTable','Get
     'UnitRace','UnitGUID','UnitIsUnit','UnitIsPlayer','UnitPlayerControlled','UnitIsConnected','UnitIsVisible','UnitSex',
     'UnitFactionGroup','HasFullControl','GetUnitName','GetSpecialization','UnitInParty','UnitInRaid','UnitPowerType',
     'GetPowerDisplayMod','GetZoneText','GetRealZoneText','GetSubZoneText','IsLoggedIn','IsPlayerInWorld',
-    'securecall','securecallfunction','secureexecuterange','UnitHealthPercent','UnitPowerPercent'}) do remember(_G,name,name) end
+    'securecall','securecallfunction','secureexecuterange','UnitHealthPercent','UnitPowerPercent',
+    'GetChatWindowInfo','GetChatWindowSavedPosition','GetChatWindowSavedDimensions'}) do remember(_G,name,name) end
 for namespace,keys in pairs({C_UnitAuras={'GetAuraSlots','GetAuraDataByIndex','GetAuraDataBySlot','GetAuraDataByAuraInstanceID','GetPlayerAuraBySpellID','GetUnitAuras'},
     C_CVar={'GetCVar','GetCVarBool','GetCVarNumber','SetCVar','AreCVarsLoaded','GetCVarDefault'}}) do
     for _,key in ipairs(keys) do remember(rawget(_G,namespace),key,namespace..'.'..key) end
@@ -78,6 +79,13 @@ function GetRealZoneText() return GetZoneText() end
 function GetSubZoneText() return 'Northshire Valley' end
 function IsLoggedIn() return true end
 function IsPlayerInWorld() return true end
+-- A new synthetic profile has one visible General window. Returning nil for
+-- unsaved geometry lets Blizzard's edit-mode presets choose its position.
+function GetChatWindowInfo(id)
+    return id==1 and 'General' or '',14,0,0,0,0.25,id==1,true,id==1,false
+end
+function GetChatWindowSavedPosition() return nil end
+function GetChatWindowSavedDimensions() return nil end
 function securecallfunction(fn,...) return __selu_secure_invoke(fn,...) end
 function securecall(fn,...)
     if type(fn)=='string' then fn=_G[fn] end
