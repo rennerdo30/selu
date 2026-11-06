@@ -403,6 +403,7 @@ pub struct Ctx {
     pub(crate) budget: Shared<Budget>,
     pub(crate) pending: Shared<VecDeque<Pending>>,
     pub(crate) scripts: Shared<VecDeque<Pending>>,
+    pub(crate) tolerant_ui: Shared<bool>,
     /// Nesting depth of [`dispatch`]; only the outermost resets and flushes.
     pub(crate) depth: Shared<u32>,
 }
@@ -429,6 +430,7 @@ impl Ctx {
             }),
             pending: shared(VecDeque::new()),
             scripts: shared(VecDeque::new()),
+            tolerant_ui: shared(false),
             depth: shared(0),
         }
     }
@@ -913,7 +915,11 @@ pub(crate) fn flush_scripts(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
         if pending.is_empty() {
             return Ok(());
         }
-        flush_queue(lua, ctx, &shared(pending))?;
+        if let Err(error) = flush_queue(lua, ctx, &shared(pending))
+            && (!*lock(&ctx.tolerant_ui) || lock(&ctx.budget).exhausted)
+        {
+            return Err(error);
+        }
     }
 }
 fn flush_queue(lua: &Lua, ctx: &Ctx, queue: &Shared<VecDeque<Pending>>) -> mlua::Result<()> {

@@ -428,6 +428,7 @@ impl Session {
         let start = std::time::Instant::now();
         let log_start = lock(&self.sim.logs).len();
         lock(&self.sim.state).tolerant_ui = true;
+        *lock(&self.sim.ctx.tolerant_ui) = true;
         self.sim
             .lua
             .set_app_data(crate::native_defaults::CallCounts::default());
@@ -1520,6 +1521,26 @@ impl std::ops::Deref for Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn blizzard_transition_errors_do_not_abort_unrelated_frame_apis() {
+        let mut session = Session::new(SessionConfig::default()).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/default-ui");
+        session.load_default_ui(&source, |_| {}).unwrap();
+        session.eval("local f=CreateFrame('Frame'); f:Hide(); f:SetScript('OnShow',function() error('synthetic Blizzard transition failure') end); f:Show(); TransitionContinued=true").unwrap();
+        assert!(
+            session
+                .lua()
+                .globals()
+                .get::<bool>("TransitionContinued")
+                .unwrap()
+        );
+        assert!(
+            session
+                .logs()
+                .iter()
+                .any(|line| line.contains("synthetic Blizzard transition failure"))
+        );
+    }
     #[test]
     fn default_ui_keeps_event_trace_without_partial_frame_snapshots() {
         let mut session = Session::new(SessionConfig {
