@@ -614,8 +614,8 @@ empty-world models respect no-result APIs such as UnitPowerBarTimerInfo,
 whose documented MayReturnNothing behavior terminates timer enumeration.
 
 `SELU_SIM_PROFILE=1` enables exclusive phase timings in development builds.
-Source construction and initial addon/login phases batch layout; trace event
-records remain available, while partial startup frame snapshots are omitted.
+Source construction batches layout; login handlers query live geometry. Trace
+event records remain available, while partial startup frame snapshots are omitted.
 Normal event snapshot history resumes after startup. Blizzard source execution
 uses bounded count-hook quanta; user addon instruction accounting remains
 precise, including coroutine resumes. Four bounded simulated frames settle
@@ -624,3 +624,18 @@ The worker reports loading progress, captured errors, top missing natives and
 elapsed time. The current visual/performance receipt is maintained separately
 under `E:/AgentData/reports/default-ui/`; passing focused tests does not imply
 complete HUD or native rendering fidelity.
+
+Blizzard Edit Mode performs more than 10,000 protected callbacks while searching
+registered systems for raid-frame settings. Default UI sessions allow 100,000
+callbacks per dispatch, with the existing instruction/depth limits; addon-only
+sessions retain the 10,000 callback limit. UPDATE_CHAT_WINDOWS initializes the
+synthetic profile after VARIABLES_LOADED. FontString line height uses the client
+font metrics. Model view insets retain their values but do not render a 3D model.
+
+The installed 70790 atlas metadata resolves micro-menu sprites to FileDataID
+4708813, but CASC reports that texture sheet is not installed locally. Such art
+remains a labelled placeholder. This differs from an unavailable atlas name and
+is not evidence that atlas metadata lookup failed. Full HUD acceptance remains
+open: private/forbidden partitions, missing native/world data, unwanted panels
+and unpositioned render regions still require stage-1 work. Later interaction
+and richer world scenarios do not replace those acceptance requirements.
