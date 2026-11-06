@@ -332,10 +332,20 @@ pub fn layout(
         let mut used = 0.0;
         let mut count = 0;
         for row in &rows {
-            used += row_height(row);
-            if used > h as f32 + 0.001 {
+            // Font metrics determine baseline advance, not whether the last
+            // line fits. WoW admits a nominal font-height line even when the
+            // face's ascent/descent and line gap exceed its em size. Inline
+            // textures still require their actual height.
+            let required = row
+                .iter()
+                .fold(style.size as f32, |height, atom| match atom {
+                    Atom::Icon(_, _, ih, _, _, _) => height.max(*ih),
+                    _ => height,
+                });
+            if used + required > h as f32 + 0.001 {
                 break;
             }
+            used += row_height(row);
             count += 1;
         }
         max_rows = max_rows.min(count);

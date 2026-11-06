@@ -139,3 +139,21 @@ fn enabled_text_and_focus_transitions_complete_inside_the_call() {
  local s=CreateFrame('Slider');local range=false;s:SetScript('OnMinMaxChanged',function(_,lo,hi) range=lo==2 and hi==4 end)
  s:SetMinMaxValues(2,4);assert(range)"#).unwrap();
 }
+
+#[test]
+fn many_sibling_visibility_hooks_are_ordered_and_synchronous() {
+    let sim = Sim::new().unwrap();
+    sim.eval(
+        r#"local parent=CreateFrame('Frame'); local seen={}
+ for i=1,500 do
+   local child=CreateFrame('Frame',nil,parent)
+   child:HookScript('OnHide',function(self) assert(not self:IsVisible()); seen[#seen+1]=i end)
+   child:HookScript('OnShow',function(self) assert(self:IsVisible()); seen[#seen+1]=i end)
+ end
+ parent:Hide(); assert(#seen==500)
+ for i=1,500 do assert(seen[i]==i) end
+ seen={}; parent:Show(); assert(#seen==500)
+ for i=1,500 do assert(seen[i]==i) end"#,
+    )
+    .unwrap();
+}

@@ -206,3 +206,43 @@ fn native_templates_work_without_inventing_untyped_globals() {
         assert(not pcall(function() UIParent:CreateFontString(nil,'OVERLAY','NotARealFontTemplate') end))
     "#).unwrap();
 }
+
+#[test]
+fn nominal_font_height_fits_equal_height_box() {
+    let fonts = FontBook::default();
+    let style = VisualStyle {
+        size: 12.0,
+        ..Default::default()
+    };
+    for height in [12.0, 15.0, 18.0] {
+        let layout = fonts.layout("Visible", &style, Some(200.0), Some(height));
+        assert_eq!(layout.lines, 1, "height {height}");
+        assert!(!layout.placements.is_empty());
+    }
+    let two_lines = fonts.layout("first\nsecond", &style, Some(200.0), None);
+    let required = f64::from(two_lines.line_height) + style.size;
+    assert_eq!(
+        fonts
+            .layout("first\nsecond", &style, Some(200.0), Some(required))
+            .lines,
+        2
+    );
+    assert_eq!(
+        fonts
+            .layout("first\nsecond", &style, Some(200.0), Some(required - 0.1))
+            .lines,
+        1
+    );
+    assert_eq!(
+        fonts
+            .layout("|Ticon:18:18|t", &style, Some(200.0), Some(12.0))
+            .lines,
+        0
+    );
+    assert_eq!(
+        fonts
+            .layout("Visible", &style, Some(200.0), Some(11.0))
+            .lines,
+        0
+    );
+}
