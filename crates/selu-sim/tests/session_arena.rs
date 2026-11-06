@@ -155,3 +155,37 @@ fn arena_callback_errors_keep_deterministic_host_rendering() {
     assert_eq!(x, y);
     assert_eq!(a.trace_since(0), b.trace_since(0));
 }
+
+#[test]
+fn captured_pointer_rendering_is_deterministic_with_and_without_default_ui() {
+    for default_ui in [false, true] {
+        let capture = || {
+            let mut session = Session::new(SessionConfig::default()).unwrap();
+            if default_ui {
+                let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/default-ui");
+                session.load_default_ui(&source, |_| {}).unwrap();
+            }
+            let first_print = session.prints().len();
+            let first_log = session.logs().len();
+            session.eval(r#"
+                print(tostring({}), tostring(function() end), tostring(coroutine.create(function() end)))
+                assert(tostring(setmetatable({}, {__metatable=false, __tostring=function() return 'custom' end}))=='custom')
+                C_Timer.After(0,function() error({}) end)
+                tostring=function() return 'clobbered' end
+            "#).unwrap();
+            session.advance_time(0.1);
+            let error = session.eval("error({})").unwrap_err().to_string();
+            let prints = session.prints()[first_print..].to_vec();
+            let logs = session.logs()[first_log..].to_vec();
+            assert_eq!(prints, ["table\tfunction\tthread"]);
+            assert!(
+                logs.iter()
+                    .any(|line| line.contains("callback error:") && line.contains("table"))
+            );
+            assert!(!error.contains("clobbered"));
+            (prints, logs, error)
+        };
+        assert_eq!(capture(), capture(), "default_ui={default_ui}");
+    }
+}

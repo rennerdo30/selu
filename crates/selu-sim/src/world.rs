@@ -263,18 +263,6 @@ fn valid_token(t: &str) -> bool {
             .is_some_and(|n| (1..=40).contains(&n))
 }
 pub(crate) fn install(lua: &Lua) -> SimResult<()> {
-    // Table::metatable bypasses __metatable, without exposing the table
-    // itself. Lua's native tostring still invokes the metamethod in Lua.
-    lua.globals().set(
-        "__selu_has_tostring",
-        lua.create_function(|_, table: Table| {
-            Ok(table
-                .metatable()
-                .map(|mt| mt.raw_get::<Value>("__tostring"))
-                .transpose()?
-                .is_some_and(|v| !matches!(v, Value::Nil)))
-        })?,
-    )?;
     crate::host_lua::load(lua,r#"
 __selu_world_units = {}; __selu_world_money = 0; __selu_world_bags = {}
 local units = __selu_world_units
@@ -340,15 +328,6 @@ end
 os = {time=time,date=date,clock=GetTime,difftime=function(a,b)return a-b end}
 -- No host filesystem, environment, process or native-module escape paths.
 io=nil; package=nil; require=nil; loadfile=nil; dofile=nil
-local native_tostring = tostring
-function tostring(value)
- local kind=type(value)
- if kind=='function' or kind=='thread' then return kind end
- if kind=='table' then
-  if not __selu_has_tostring(value) then return 'table' end
- end
- return native_tostring(value)
-end
 "#).exec()
 }
 

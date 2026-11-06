@@ -295,10 +295,15 @@ fn read_toc_target_client(
     };
     let flavoured = dir.join(format!("{name}_{suffix}.toc"));
     let family = dir.join(format!("{name}_Mainline.toc"));
+    let legacy = dir.join(format!("{name}_Vanilla.toc"));
     let path = if !suffix.is_empty() && flavoured.is_file() {
         flavoured
     } else if matches!(suffix, "Camelot" | "Mainline") && family.is_file() {
         family
+    } else if suffix == "Camelot" && legacy.is_file() {
+        // Existing Forever addons use Vanilla TOCs; prefer the current client
+        // suffixes when present, while preserving that legacy fallback.
+        legacy
     } else {
         dir.join(format!("{name}.toc"))
     };
@@ -395,6 +400,35 @@ pub(crate) fn read_files_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn forever_toc_fallback_preserves_current_and_legacy_suffixes() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir()
+            .join(format!("selu-toc-{unique}"))
+            .join("Demo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let files = [
+            "Demo.toc",
+            "Demo_Vanilla.toc",
+            "Demo_Mainline.toc",
+            "Demo_Camelot.toc",
+        ];
+        for file in files {
+            std::fs::write(dir.join(file), format!("## Title: {file}\n")).unwrap();
+        }
+        for file in files.into_iter().rev() {
+            for flavour in ["wowf", "forever"] {
+                let toc = read_toc_target(&dir, Some(&format!("{flavour}@test"))).unwrap();
+                assert_eq!(toc.get("Title"), Some(file));
+            }
+            std::fs::remove_file(dir.join(file)).unwrap();
+        }
+        std::fs::remove_dir(&dir).unwrap();
+        std::fs::remove_dir(dir.parent().unwrap()).unwrap();
+    }
     #[test]
     fn global_environment_directive_is_not_part_of_the_filename() {
         let toc = parse_toc_game(

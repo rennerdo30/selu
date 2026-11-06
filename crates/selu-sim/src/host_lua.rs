@@ -4,6 +4,34 @@ use mlua::{Chunk, Function, Lua, Table, Value};
 const ENV: &str = "selu.host_environment";
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
+    // Install simulator semantics before any helper captures the builtins.
+    // Keep the original primitives private, including the native metamethod call.
+    let has_tostring = lua.create_function(|_, table: Table| {
+        Ok(table
+            .metatable()
+            .map(|mt| mt.raw_get::<Value>("__tostring"))
+            .transpose()?
+            .is_some_and(|value| !value.is_nil()))
+    })?;
+    let tostring: Function = lua
+        .load(
+            r#"
+local native_tostring, type, has_tostring = ...
+return function(value)
+ local kind=type(value)
+ if kind=='function' or kind=='thread' then return kind end
+ if kind=='table' and not has_tostring(value) then return 'table' end
+ return native_tostring(value)
+end
+"#,
+        )
+        .set_name("=selu deterministic tostring")
+        .call((
+            globals.raw_get::<Function>("tostring")?,
+            globals.raw_get::<Function>("type")?,
+            has_tostring,
+        ))?;
+    globals.raw_set("tostring", tostring)?;
     let environment = lua.create_table()?;
     for name in [
         "assert",

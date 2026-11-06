@@ -341,12 +341,15 @@ mod tests {
     use super::*;
     #[test]
     fn full_width_signed_color_storage_preserves_argb_bits() {
-        let mut bytes=records(0,&[vec![1,0xffffd200]],&[]);
-        let at=244+2*4+24;
-        bytes[at+8..at+12].copy_from_slice(&5u32.to_le_bytes());
-        bytes[at+16..at+20].copy_from_slice(&32u32.to_le_bytes());
-        assert_eq!(Table::parse(&bytes).unwrap().value(0,1).unwrap(),0xffffd200);
-        bytes[at+16..at+20].copy_from_slice(&31u32.to_le_bytes());
+        let mut bytes = records(0, &[vec![1, 0xffffd200]], &[]);
+        let at = 244 + 2 * 4 + 24;
+        bytes[at + 8..at + 12].copy_from_slice(&5u32.to_le_bytes());
+        bytes[at + 16..at + 20].copy_from_slice(&32u32.to_le_bytes());
+        assert_eq!(
+            Table::parse(&bytes).unwrap().value(0, 1).unwrap(),
+            0xffffd200
+        );
+        bytes[at + 16..at + 20].copy_from_slice(&31u32.to_le_bytes());
         assert!(Table::parse(&bytes).is_err());
     }
     #[test]
