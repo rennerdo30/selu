@@ -92,14 +92,13 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
                 if let Some(resolve) = lua
                     .globals()
                     .raw_get::<Option<Function>>("__selu_xml_intrinsic")?
+                    && let Some(base) = resolve.call::<Option<String>>(kind.clone())?
                 {
-                    if let Some(base) = resolve.call::<Option<String>>(kind.clone())? {
-                        templates = Some(match templates {
-                            Some(names) => format!("{kind},{names}"),
-                            None => kind.clone(),
-                        });
-                        kind = base;
-                    }
+                    templates = Some(match templates {
+                        Some(names) => format!("{kind},{names}"),
+                        None => kind.clone(),
+                    });
+                    kind = base;
                 }
                 let t = create(lua, &ctx, &kind, name, parent)?;
                 crate::regions::templates(lua, &t, templates.as_deref())?;
@@ -291,6 +290,12 @@ pub fn create(
             "GetPushedTexture",
             "GetDisabledTexture",
             "SetDisabledTexture",
+            "SetFontString",
+            "GetFontString",
+            "SetNormalFontObject",
+            "SetHighlightFontObject",
+            "SetDisabledFontObject",
+            "SetFormattedText",
         ]) {
             let method = method.to_owned();
             let context = ctx.clone();
@@ -394,6 +399,108 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         ($x:expr) => {
             return $x.into_lua_multi(lua)
         };
+    }
+    if method == "SetFormattedText" {
+        let format = crate::host_lua::factory(
+            lua,
+            "selu.helper.format",
+            "return function(...) return string.format(...) end",
+        )?;
+        let text = format.call::<String>(MultiValue::from_vec(v.to_vec()))?;
+        return call(
+            lua,
+            ctx,
+            "SetText",
+            MultiValue::from_vec(vec![
+                Value::Table(t.clone()),
+                Value::String(lua.create_string(text)?),
+            ]),
+        );
+    }
+    if method == "GetFontString" {
+        out!(t.raw_get::<Value>("__selu_button_text")?);
+    }
+    if method == "SetFontString" {
+        t.raw_set(
+            "__selu_button_text",
+            v.first().cloned().unwrap_or(Value::Nil),
+        )?;
+        out!(());
+    }
+    if matches!(
+        method,
+        "SetNormalFontObject" | "SetHighlightFontObject" | "SetDisabledFontObject"
+    ) {
+        t.raw_set(
+            format!("__selu_{method}"),
+            v.first().cloned().unwrap_or(Value::Nil),
+        )?;
+        if method == "SetNormalFontObject"
+            && let Some(child) = t.raw_get::<Option<Table>>("__selu_button_text")?
+        {
+            call(
+                lua,
+                ctx,
+                "SetFontObject",
+                MultiValue::from_vec(vec![
+                    Value::Table(child),
+                    v.first().cloned().unwrap_or(Value::Nil),
+                ]),
+            )?;
+        }
+        out!(());
+    }
+    if method == "GetText"
+        && matches!(
+            a.borrow().regions[i].kind.as_str(),
+            "Button" | "CheckButton"
+        )
+        && let Some(child) = t.raw_get::<Option<Table>>("__selu_button_text")?
+    {
+        return call(
+            lua,
+            ctx,
+            "GetText",
+            MultiValue::from_vec(vec![Value::Table(child)]),
+        );
+    }
+    if method == "SetText"
+        && matches!(
+            a.borrow().regions[i].kind.as_str(),
+            "Button" | "CheckButton"
+        )
+    {
+        let child = if let Some(child) = t.raw_get::<Option<Table>>("__selu_button_text")? {
+            child
+        } else {
+            let child = create(lua, ctx, "FontString", None, Some(t.clone()))?;
+            call(
+                lua,
+                ctx,
+                "SetAllPoints",
+                MultiValue::from_vec(vec![Value::Table(child.clone()), Value::Table(t.clone())]),
+            )?;
+            t.raw_set("__selu_button_text", child.clone())?;
+            child
+        };
+        if let Some(font) = t.raw_get::<Option<Table>>("__selu_SetNormalFontObject")? {
+            call(
+                lua,
+                ctx,
+                "SetFontObject",
+                MultiValue::from_vec(vec![Value::Table(child.clone()), Value::Table(font)]),
+            )?;
+        }
+        call(
+            lua,
+            ctx,
+            "SetText",
+            MultiValue::from_vec(vec![
+                Value::Table(child),
+                v.first().cloned().unwrap_or(Value::Nil),
+            ]),
+        )?;
+        out!(());
     }
     if matches!(
         method,

@@ -23,6 +23,11 @@ pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
                 invalidate();self._parent=parent;self._font_explicit=false
             end
             function f:GetFontObject() return self._parent or self end
+            function f:CopyFontObject(source)
+                if type(source)=='string' then source=_G[source] end
+                self:SetFont(source:GetFont())
+                for _,key in ipairs({'TextColor','ShadowColor','ShadowOffset','JustifyH','JustifyV','Spacing'}) do self['Set'..key](self,source['Get'..key](source)) end
+            end
             for _,key in ipairs({"TextColor","ShadowColor","ShadowOffset","JustifyH","JustifyV","Spacing"}) do
                 f["Set"..key]=function(self,...) invalidate();self["_"..key]={...} end
                 f["Get"..key]=function(self)
@@ -276,14 +281,9 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
     // The locally installed GlobalStrings DB2 can be absent. These source-
     // documented localized string families get visible synthetic labels in
     // the opt-in default UI; other unknown globals still remain unknown.
-    if [
-        "HUD_EDIT_MODE_",
-        "ICON_TAG_RAID_TARGET_",
-        "CHAT_MSG_",
-        "SLASH_",
-    ]
-    .iter()
-    .any(|prefix| key.starts_with(prefix))
+    if ["HUD_EDIT_MODE_", "ICON_TAG_RAID_TARGET_", "CHAT_MSG_"]
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
         && lua
             .named_registry_value::<Option<bool>>("selu.default_ui_strings")?
             .unwrap_or(false)

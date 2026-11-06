@@ -83,44 +83,44 @@ pub(crate) fn value(
         "LuaFunctionReference" => Value::Function(lua.create_function(|_, _: MultiValue| Ok(()))?),
         _ => {
             let table = lua.create_table()?;
-            if depth < 8 {
-                if let Some(schema) = schemas.get(ty) {
-                    if schema.ty.as_deref() == Some("enum") {
-                        return Ok(Value::Number(0.0));
-                    }
-                    for parent in &schema.inherits {
-                        if let Value::Table(base) = value(lua, parent, schemas, ctx, depth + 1)? {
-                            for pair in base.pairs::<String, Value>() {
-                                let (key, v) = pair?;
-                                table.raw_set(key, v)?;
-                            }
+            if depth < 8
+                && let Some(schema) = schemas.get(ty)
+            {
+                if schema.ty.as_deref() == Some("enum") {
+                    return Ok(Value::Number(0.0));
+                }
+                for parent in &schema.inherits {
+                    if let Value::Table(base) = value(lua, parent, schemas, ctx, depth + 1)? {
+                        for pair in base.pairs::<String, Value>() {
+                            let (key, v) = pair?;
+                            table.raw_set(key, v)?;
                         }
                     }
-                    for field in &schema.fields {
-                        table.raw_set(
-                            field.name.as_str(),
-                            value(
-                                lua,
-                                field.ty.as_deref().unwrap_or("table"),
-                                schemas,
-                                ctx,
-                                depth + 1,
-                            )?,
-                        )?;
-                    }
-                    for method in &schema.methods {
-                        let returns = method.returns.clone();
-                        let schemas = schemas.clone();
-                        let ctx = ctx.clone();
-                        let name = format!("{ty}:{}", method.name);
-                        table.raw_set(
-                            method.name.as_str(),
-                            lua.create_function(move |lua, _: MultiValue| {
-                                ctx.not_simulated(&name);
-                                values(lua, &returns, &schemas, &ctx, depth + 1)
-                            })?,
-                        )?;
-                    }
+                }
+                for field in &schema.fields {
+                    table.raw_set(
+                        field.name.as_str(),
+                        value(
+                            lua,
+                            field.ty.as_deref().unwrap_or("table"),
+                            schemas,
+                            ctx,
+                            depth + 1,
+                        )?,
+                    )?;
+                }
+                for method in &schema.methods {
+                    let returns = method.returns.clone();
+                    let schemas = schemas.clone();
+                    let ctx = ctx.clone();
+                    let name = format!("{ty}:{}", method.name);
+                    table.raw_set(
+                        method.name.as_str(),
+                        lua.create_function(move |lua, _: MultiValue| {
+                            ctx.not_simulated(&name);
+                            values(lua, &returns, &schemas, &ctx, depth + 1)
+                        })?,
+                    )?;
                 }
             }
             Value::Table(table)

@@ -90,15 +90,19 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
         })?)?;
     }
     globals.raw_set("C_Texture", texture)?;
-    globals.raw_set(
-        "GetFrameMetatable",
-        lua.create_function(|lua, ()| {
-            let methods = lua.named_registry_value::<Table>("selu.methods.Frame")?;
-            let metatable = lua.create_table()?;
-            metatable.raw_set("__index", methods)?;
-            Ok(metatable)
-        })?,
-    )?;
+    for kind in ["Frame", "Button", "FontString", "Texture", "StatusBar"] {
+        globals.raw_set(
+            format!("Get{kind}Metatable"),
+            lua.create_function(move |lua, ()| {
+                let methods = lua
+                    .named_registry_value::<Table>(&format!("selu.methods.{kind}"))
+                    .or_else(|_| lua.named_registry_value::<Table>("selu.methods.Frame"))?;
+                let metatable = lua.create_table()?;
+                metatable.raw_set("__index", methods)?;
+                Ok(metatable)
+            })?,
+        )?;
+    }
     let storage = crate::frames::arena::store(lua)
         .borrow()
         .fonts

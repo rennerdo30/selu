@@ -207,6 +207,7 @@ pub fn parse_toc_game(name: &str, dir: &Path, text: &str, game: Option<&str>) ->
             "ExcludeLoadGameType",
             "AllowLoad",
             "AllowLoadEnvironment",
+            "LoadIntoEnvironment",
         ] {
             while let Some(start) = line
                 .to_ascii_lowercase()
@@ -220,6 +221,9 @@ pub fn parse_toc_game(name: &str, dir: &Path, text: &str, game: Option<&str>) ->
                         .split([',', ' '])
                         .any(|v| {
                             let v = v.trim();
+                            if directive == "LoadIntoEnvironment" {
+                                return true;
+                            }
                             if directive == "AllowLoadEnvironment" {
                                 return v.eq_ignore_ascii_case("global");
                             }
@@ -396,12 +400,16 @@ mod tests {
         let toc = parse_toc_game(
             "Demo",
             Path::new("Demo"),
-            "Shared\\EditModeManager.lua [AllowLoadEnvironment Global]\n[Game]\\EditModeUtil.lua [AllowLoadGameType camelot] [AllowLoadEnvironment Global]\nsecure.lua [AllowLoadEnvironment Secure]\n",
+            "Shared\\EditModeManager.lua [AllowLoadEnvironment Global]\n[Game]\\EditModeUtil.lua [AllowLoadGameType camelot] [AllowLoadEnvironment Global]\nsecure.lua [AllowLoadEnvironment Secure]\nNativeFrame.lua [LoadIntoEnvironment secure]\n",
             Some("camelot"),
         );
         assert_eq!(
             toc.files,
-            ["Shared/EditModeManager.lua", "[Game]/EditModeUtil.lua"]
+            [
+                "Shared/EditModeManager.lua",
+                "[Game]/EditModeUtil.lua",
+                "NativeFrame.lua"
+            ]
         );
     }
     #[test]

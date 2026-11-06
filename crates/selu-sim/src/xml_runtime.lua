@@ -232,6 +232,12 @@ apply=function(f,n,seen)
                 else note('animation element '..group.tag) end
             end
         elseif c.tag=='Frames' then for _,child in ipairs(c.children) do create(child,f) end
+        elseif c.tag=='ScrollChild' then
+            if c.children[1] then f:SetScrollChild(create(c.children[1],f)) end
+        elseif c.tag=='ButtonText' then f:SetFontString(create(c,f))
+        elseif c.tag=='NormalFont' or c.tag=='HighlightFont' or c.tag=='DisabledFont' then
+            local setter=f['Set'..c.tag..'Object']
+            if setter and b.style then setter(f,lookup(b.style)) end
         elseif c.tag=='Layers' then
             for _,layer in ipairs(c.children) do
                 for _,child in ipairs(layer.children) do create(child,f,layer.a.level or 'ARTWORK') end
@@ -255,7 +261,7 @@ create=function(n,parent,layer)
     local name=expand(a.name,parent)
     local f
     if n.tag=='Texture' or string.match(n.tag,'Texture$') then f=parent:CreateTexture(name,layer)
-    elseif n.tag=='FontString' then f=parent:CreateFontString(name,layer)
+    elseif n.tag=='FontString' or n.tag=='ButtonText' then f=parent:CreateFontString(name,layer)
     elseif n.tag=='Font' then f=CreateFont(name)
     else f=native(nativeKind(n.tag),name,parent) end
     apply(f,n,{})

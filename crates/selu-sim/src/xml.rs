@@ -165,6 +165,11 @@ const SUPPORTED: &[&str] = &[
     "PushedTexture",
     "DisabledTexture",
     "HighlightTexture",
+    "ScrollChild",
+    "ButtonText",
+    "NormalFont",
+    "HighlightFont",
+    "DisabledFont",
 ];
 
 #[cfg(test)]
@@ -258,6 +263,15 @@ mod tests {
             r#"<Ui><Frame name="Cycle" virtual="true" inherits="Cycle"/></Ui>"#,
         );
         assert!(sim.eval("CreateFrame('Frame',nil,nil,'Cycle')").is_err());
+    }
+    #[test]
+    fn scroll_children_and_button_text_are_real_regions() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Font name="DemoFont" font="Fonts/FRIZQT__.TTF"><FontHeight><AbsValue val="17"/></FontHeight></Font><ScrollFrame name="Root"><Size x="100" y="60"/><ScrollChild><Frame parentKey="ScrollChild"><Size x="100" y="200"/><Frames><Button parentKey="Button"><ButtonText parentKey="Text"/><NormalFont style="DemoFont"/></Button></Frames></Frame></ScrollChild></ScrollFrame></Ui>"#,
+        );
+        sim.eval("assert(Root:GetScrollChild()==Root.ScrollChild); local b=Root.ScrollChild.Button; assert(b:GetFontString()==b.Text); b:SetFormattedText('%s %d','Hello',7); assert(b.Text:GetText()=='Hello 7'); local _,size=b.Text:GetFont(); assert(size==17)").unwrap();
     }
     #[test]
     fn button_texture_slots_keep_xml_regions_and_lua_replacements() {

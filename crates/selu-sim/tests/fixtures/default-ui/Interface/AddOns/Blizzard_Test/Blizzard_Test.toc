@@ -1,4 +1,5 @@
 ## SavedVariables: SyntheticOnly
 broken.lua
+unrecognized.txt
 frames.xml
 after.lua

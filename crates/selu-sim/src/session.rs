@@ -567,14 +567,21 @@ impl Session {
         self.sim.lua.globals().raw_set("C_AddOns", api)?;
         for toc in addons {
             progress(&toc.name);
-            let files = match loader::read_files_client(&toc, &mut |s| report.notes.push(s), client)
-            {
-                Ok(files) => files,
-                Err(e) => {
-                    report.errors.push(e);
-                    continue;
+            // A bad input file must not discard every successfully read chunk
+            // in the addon. The native error handler allows later files to load.
+            let mut files = Vec::new();
+            for file in &toc.files {
+                let single = loader::Toc {
+                    name: toc.name.clone(),
+                    dir: toc.dir.clone(),
+                    metadata: Vec::new(),
+                    files: vec![file.clone()],
+                };
+                match loader::read_files_client(&single, &mut |s| report.notes.push(s), client) {
+                    Ok(chunks) => files.extend(chunks),
+                    Err(error) => report.errors.push(error),
                 }
-            };
+            }
             crate::fonts::register_addon_root(self.sim.lua(), &toc.dir)?;
             let ns = self.sim.lua.create_table()?;
             self.sim
@@ -841,6 +848,8 @@ impl Session {
     /// Load an addon folder through its `.toc` and fire `ADDON_LOADED`.
     /// Returns the addon name.
     pub fn load_addon_dir(&mut self, dir: &Path) -> SimResult<String> {
+        let _startup_layout = (!self.logged_in && self.default_ui_report.is_some())
+            .then(|| crate::frames::arena::LayoutBatch::new(&self.sim.lua));
         if self.config.manifest.is_none() && lock(&self.sim.state).checked_manifests.is_empty() {
             self.config.manifest = discover_manifest(&self.config, dir)?;
             if let Some(m) = &self.config.manifest {
@@ -939,6 +948,7 @@ impl Session {
         }
         self.logged_in = true;
         if self.default_ui_report.is_some() {
+            let _startup_layout = crate::frames::arena::LayoutBatch::new(&self.sim.lua);
             for (event, mut args) in [
                 ("VARIABLES_LOADED", vec![]),
                 ("EDIT_MODE_LAYOUTS_UPDATED", vec![]),
@@ -1514,8 +1524,19 @@ mod tests {
             .unwrap();
         assert_eq!(report.addons_loaded, 1);
         assert_eq!(progress, ["Blizzard_Test"]);
-        assert_eq!(report.errors.len(), 2);
-        assert!(report.errors[0].contains("synthetic Blizzard chunk failure"));
+        assert_eq!(report.errors.len(), 3);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.contains("synthetic Blizzard chunk failure"))
+        );
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.contains("unknown file type"))
+        );
         s.eval("assert(AfterBrokenBlizzardChunk); assert(SyntheticOnly==nil)")
             .unwrap();
         s.login().unwrap();

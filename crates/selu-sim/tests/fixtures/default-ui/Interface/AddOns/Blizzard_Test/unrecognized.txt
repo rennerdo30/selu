@@ -1,0 +1,1 @@
+Deliberately invalid TOC input type; later XML and Lua must still load.

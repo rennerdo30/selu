@@ -96,6 +96,13 @@ function GetChatWindowSavedDimensions() return nil end
 -- saved list. activeLayout is a Lua array index, not the zero-based preset enum.
 C_EditMode=C_EditMode or {}
 function C_EditMode.GetLayouts() return {activeLayout=1,layouts={}} end
+function C_EditMode.GetAccountSettings()
+    local settings={}
+    for name,setting in pairs(Enum.EditModeAccountSetting or {}) do
+        if type(setting)=='number' then settings[#settings+1]={setting=setting,value=name=='GridSpacing' and 32 or 0} end
+    end
+    return settings
+end
 function securecallfunction(fn,...) return __selu_secure_invoke(fn,...) end
 -- FrameScriptDocumentation.lua: delegates preserve argument/return values
 -- and execute in a protected context. Native taint itself remains unmodeled.
