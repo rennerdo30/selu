@@ -363,13 +363,13 @@ pub(crate) fn signature_for(m: &Manifest, name: &str, d: &Declaration) -> Type {
     }
     ty
 }
-fn widget_decl<'a>(m: &'a Manifest, name: &str) -> Option<&'a Declaration> {
+pub(crate) fn widget_decl<'a>(m: &'a Manifest, name: &str) -> Option<&'a Declaration> {
     m.widgets
         .iter()
         .find(|w| w.name == name)
         .or_else(|| m.widgets.iter().find(|w| w.name == format!("{name}API")))
 }
-fn widget(m: &Manifest, name: &str) -> Type {
+pub(crate) fn widget(m: &Manifest, name: &str) -> Type {
     if let Some(alias) = widget_decl(m, name)
         .and_then(|w| w.attributes.get("SeluAliasOf"))
         .and_then(|v| v.as_str())
@@ -401,6 +401,15 @@ fn method<'a>(
     }
     seen.push(widget.into());
     let w = widget_decl(m, widget)?;
+    // Runtime widget identity guards are available on the common object
+    // returned by GetParent. Reuse the documented reflection signatures,
+    // exposing no other frame methods until the guard proves a subtype.
+    if widget == "SimpleObjectAPI" && matches!(name, "IsObjectType" | "GetObjectType") {
+        return widget_decl(m, "SimpleFrameScriptObjectAPI")?
+            .methods
+            .iter()
+            .find(|f| f.name == name);
+    }
     w.methods
         .iter()
         .find(|f| f.name == name)

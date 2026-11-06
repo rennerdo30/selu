@@ -1,0 +1,1 @@
+export function render(value: string | number): string { return format("%s", value); }

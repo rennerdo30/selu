@@ -803,3 +803,35 @@ fn assignment_targets_emit_each_diagnostic_once() {
         assert_eq!(got, expected, "{suffix}: {:?}", checked.diagnostics);
     }
 }
+
+#[test]
+fn sg_wave1_contracts() {
+    for flavour in ["wow", "wowf"] {
+        for src in [
+            include_str!("fixtures/sg/w1-format-union/src/main.selu"),
+            include_str!("fixtures/sg/w1-font-object/src/main.selu"),
+            r#"function info(v: string | number) { C_Item.GetItemInfo(v); }"#,
+            r#"const b = CreateFrame("Button", null, null, "ContainerFrameItemButtonTemplate"); const bag: number = b.GetBagID();"#,
+            r#"StaticPopupDialogs.set("SG", {text: "test", OnShow: (self, data) => { if (typeof data == "table") { const original = data.itemGUID; if (typeof original == "string") { const guid: string = original; print(guid); } } }});"#,
+            r#"const p = readable(CreateFrame("Frame").GetParent()); if (p != null && readable(p.IsObjectType("Frame"))) { p.GetName(); p.GetID(); }"#,
+            r#"const p = readable(CreateFrame("Frame").GetParent()); if (p != null && readable(p.GetObjectType()) == "Frame") { p.GetName(); p.GetID(); }"#,
+            r#"hook("StaticPopup_Show", (which, text1, text2, data) => { if (typeof data == "table") { const field = data.itemGUID; if (typeof field == "string") { const guid: string = field; print(guid); } } });"#,
+        ] {
+            assert!(
+                codes(src, flavour).is_empty(),
+                "{flavour}: {src}: {:?}",
+                codes(src, flavour)
+            );
+        }
+        for src in [
+            r#"const b = CreateFrame("Button", null, null, "ContainerFrameItemButtonTemplate"); const bag: string = b.GetBagID();"#,
+            r#"const p = readable(CreateFrame("Frame").GetParent()); if (p != null) { const box = { p: p }; if (readable(box.p.IsObjectType("Frame"))) { print("effect"); box.p.GetID(); } }"#,
+            r#"const p = readable(CreateFrame("Frame").GetParent()); if (p != null && readable(p.IsObjectType("NotAWidget"))) { p.GetID(); }"#,
+            r#"hook("StaticPopup_Show", (which, text1, text2, data) => { if (typeof data == "table") { data.itemGUID = "bad"; } });"#,
+            include_str!("fixtures/sg/w1-popup-payload/src/main.selu"),
+            include_str!("fixtures/sg/w1-bag-method/src/main.selu"),
+        ] {
+            assert!(!codes(src, flavour).is_empty(), "unsound acceptance: {src}");
+        }
+    }
+}

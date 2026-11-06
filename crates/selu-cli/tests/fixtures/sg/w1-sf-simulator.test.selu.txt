@@ -1,0 +1,48 @@
+import { errorMoment, logStamp } from "../src/core/calendar";
+import { parseNumber } from "../src/core/native-services";
+import { GlowRegistry, glows } from "../src/core/glow";
+import { resolveKnownContainerSlot } from "../src/core/bags";
+import { safeNumber } from "../src/core/readability";
+
+describe("wave 1 SF native adapters", () => {
+    test("native numeric parser retains zero, exponents and invalid absence", () => {
+        expect(parseNumber("0")).toBe(0);
+        expect(parseNumber(" 12.5 ")).toBe(12.5);
+        expect(parseNumber("1e2")).toBe(100);
+        expect(parseNumber("not numeric")).toBeNull();
+        expect(format("%s %.1f %d", "sample", 1.25, 3)).toBe("sample 1.3 3");
+    });
+    test("native calendar stamp and epoch remain separate from the profiling clock", () => {
+        const moment = errorMoment();
+        expect(moment.stamp).toBe(date("%Y-%m-%d %H:%M:%S"));
+        expect(moment.clock).toBe(date("%H:%M:%S"));
+        expect(moment.seconds).toBe(time());
+        expect(logStamp()).toBe(moment.stamp);
+        const calendar = date("*t");
+        expect(calendar.month).toBeGreaterThan(0);
+        expect(calendar.month).toBeLessThan(13);
+    });
+    test("native Alpha glow is lazy, weakly owned and reused after stop", () => {
+        const button = CreateFrame("Button", "W1NativeGlow"); button.SetFrameLevel(7);
+        const registry = new GlowRegistry();
+        expect(registry.of(button)).toBeNull();
+        const visual = registry.ensure(button);
+        expect(visual != null).toBe(true);
+        if (visual == null) { throw new Error("native glow was refused"); }
+        expect(readable(visual.frame.IsShown())).toBe(false);
+        expect(readable(visual.frame.GetFrameLevel())).toBe(17);
+        expect(readable(visual.frame.GetParent())).toBe(button);
+        registry.show(button); expect(readable(visual.frame.IsShown())).toBe(true);
+        sim.advanceTime(0.25);
+        registry.hide(button); expect(readable(visual.frame.IsShown())).toBe(false);
+        expect(registry.ensure(button)).toBe(visual);
+        expect(glows.create != null).toBe(true);
+    });
+    test("typed known-bag slots preserve parent identity without unchecked traversal", () => {
+        const parent = CreateFrame("Frame", "ContainerFrameW1"); parent.SetID(4);
+        const button = CreateFrame("Button", null, parent); button.SetID(9);
+        expect(readable(button.GetParent())).toBe(parent);
+        expect(resolveKnownContainerSlot(button, 4)).toEqual({ bag: 4, slot: 9 });
+        const level = safeNumber(() => button.GetFrameLevel()); expect(level.ok).toBe(true);
+    });
+});

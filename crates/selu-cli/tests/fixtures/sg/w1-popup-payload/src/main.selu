@@ -1,0 +1,6 @@
+hook("StaticPopup_Show", (which, text1, text2, data) => {
+    if (typeof data == "table") { const guid: string? = data.itemGUID; print(guid); }
+});
+StaticPopupDialogs.set("W1_PROBE", { text: "probe", button1: "OK", OnShow: (self, data) => {
+    if (typeof data == "table") { const guid: string? = data.itemGUID; print(guid); }
+} });

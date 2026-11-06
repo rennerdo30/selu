@@ -533,3 +533,9 @@ flags remain numeric; mixed storage uses the sourced boolean/number scalar union
 OnClick down is nilable (ButtonGroup.lua:40-50), and motion/key payloads are opaque
 because truthiness or conversion followed by comparison does not prove their
 input scalar types. The existing v1-v8 digests and segments remain immutable.
+
+Extraction v10 connects XML Font globals to the documented SimpleFont identity
+and records the container item-button GetBagID return from ContainerFrame.lua
+(the mixin method returns bagID or the parent frame ID). The capability stays
+on the extracted mixin/template. Existing extraction revisions and their frozen
+digests remain immutable.

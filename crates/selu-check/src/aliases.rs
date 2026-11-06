@@ -506,6 +506,9 @@ impl Ctx<'_> {
                                             "string" => Type::String,
                                             "number" => Type::Number,
                                             "boolean" => Type::Boolean,
+                                            "table" if matches!(shape_of(t), Type::Opaque(_)) => {
+                                                Type::ApiOpaque("SeluOpaqueTable".into(), vec![])
+                                            }
                                             "table" => Type::Object(Default::default()),
                                             _ => t.clone(),
                                         })
@@ -569,6 +572,9 @@ impl Ctx<'_> {
                             "string" => Type::String,
                             "number" => Type::Number,
                             "boolean" => Type::Boolean,
+                            "table" if matches!(shape, Type::Opaque(_)) => {
+                                Type::ApiOpaque("SeluOpaqueTable".into(), vec![])
+                            }
                             "table" => Type::Object(Default::default()),
                             "function" => Type::Function {
                                 multiple_results: false,

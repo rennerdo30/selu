@@ -24,6 +24,7 @@ pub struct Region {
     pub shown: bool,
     pub strata: Strata,
     pub level: i32,
+    pub id: i32,
     pub layer: (DrawLayer, i8),
     pub points: Vec<Point>,
     pub rect: Option<Rect>,

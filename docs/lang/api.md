@@ -160,3 +160,26 @@ that omit it. The reviewed motion and key payloads have no evidenced scalar
 contract, so consumers must check them before using boolean/string operations.
 Popup flags follow stored native values: numeric flags are numbers, and fields
 with evidenced boolean and numeric values use their sourced scalar union.
+
+### Checked native object and payload guards
+
+A callback payload narrowed by `typeof value == "table"` permits field reads.
+Each field is another opaque value: snapshot it and test its runtime type before
+using it as a string, number or other checked value. Fields remain read-only;
+the table test establishes neither a writable schema nor a native round-trip
+capability for a field. This permits checking popup `data.itemGUID` first and
+retaining the original GUID precedence before trying another source.
+
+On a widget receiver, `readable(obj.IsObjectType("Frame"))` and
+`readable(obj.GetObjectType()) == "Frame"` establish Frame on the matching branch when Frame
+is a manifest-known subtype of the receiver. The identity methods retain their
+documented ObjectType secret policy; readable is necessary on these clients.
+The ordinary write and call
+invalidation rules apply. Unknown names and structural objects establish no
+widget identity. A readable parent therefore needs a non-null check followed
+by a widget guard before using frame-only methods.
+
+`GetBagID` belongs to the sourced `ContainerFrameItemButtonMixin`, reachable
+through `ContainerFrameItemButtonTemplate`; a plain Button has no such contract.
+Font globals and documented SimpleFont parameters share the documented font
+interface. The parameter remains specific to that interface.

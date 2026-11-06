@@ -1,0 +1,2 @@
+const parent = readable(CreateFrame("Frame").GetParent());
+if (parent != null) { print(parent.GetName()); print(readable(parent.GetID())); }

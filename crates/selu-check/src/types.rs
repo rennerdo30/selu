@@ -187,6 +187,7 @@ impl Type {
         fn visit(t: &Type, seen: &mut std::collections::HashSet<String>) -> bool {
             match t {
                 Type::Opaque(_) => true,
+                Type::ApiOpaque(name, _) if name == "SeluOpaqueTable" => true,
                 Type::Named(_, shape) if seen.insert(shape.key.clone()) => {
                     shape.get().is_some_and(|t| visit(&t, seen))
                 }
@@ -423,6 +424,9 @@ impl Type {
                         None => false,
                     }
             }),
+            (Type::Union(ts), target) => ts
+                .iter()
+                .all(|t| t.assignable_seen(target, &mut seen.clone())),
             (Type::ApiOpaque(_, members), target) if !members.is_empty() => {
                 members.iter().all(|t| t.assignable_seen(target, seen))
             }
@@ -436,9 +440,6 @@ impl Type {
             (Type::Secret(a), Type::Secret(b)) => a.assignable_seen(b, seen),
             (Type::Secret(_), _) => false,
             (t, Type::Secret(b)) => t.assignable_seen(b, seen),
-            (Type::Union(ts), target) => ts
-                .iter()
-                .all(|t| t.assignable_seen(target, &mut seen.clone())),
             (Type::Null, Type::Optional(_)) => true,
             (Type::Optional(a), Type::Optional(b)) => a.assignable_seen(b, seen),
             (t, Type::Optional(inner)) => t.assignable_seen(inner, seen),

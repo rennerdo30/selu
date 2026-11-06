@@ -20,6 +20,15 @@ impl Ctx<'_> {
             ExprKind::Member { object, name } => {
                 let receiver = self.value(object);
                 let members = receiver.members();
+                if members.iter().any(
+                    |t| matches!(t.operand_type(), Type::ApiOpaque(n, _) if n == "SeluOpaqueTable"),
+                ) {
+                    self.out.push(err(
+                        "SELU0355",
+                        "opaque table fields are read-only",
+                        &target.span,
+                    ));
+                }
                 let contexts: Vec<_> = members
                     .iter()
                     .map(|t| self.member(t, name, target))

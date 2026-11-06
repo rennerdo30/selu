@@ -1,0 +1,3 @@
+const button = CreateFrame("Button");
+const bag = button.GetBagID();
+UISpecialFrames.push("W1Probe");

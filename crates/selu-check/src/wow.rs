@@ -172,7 +172,7 @@ impl Ctx<'_> {
                 }
             }
         }
-        let expected = Type::Function {
+        let mut expected = Type::Function {
             multiple_results: false,
             unspecified_callback: false,
             api: Default::default(),
@@ -190,6 +190,34 @@ impl Ctx<'_> {
             },
             ret: Box::new(Type::Void),
         };
+        // A post-hook observes the native argument slots, including opaque
+        // round-trip payloads; it does not inherit permissive native inputs.
+        if n == "hook"
+            && args.len() == 2
+            && let ExprKind::Str(name) = &args[0].kind
+            && let Some(d) = self
+                .manifest
+                .function(name)
+                .and_then(|f| f.signature.as_ref())
+            && let Type::Function {
+                mut params,
+                api_semantics,
+                ..
+            } = crate::api::signature(self.manifest, d, 0)
+        {
+            for (index, opaque) in api_semantics.opaque_inputs {
+                if let Some(parameter) = params.get_mut(index) {
+                    *parameter = opaque;
+                }
+            }
+            if let Type::Function {
+                params: expected_params,
+                ..
+            } = &mut expected
+            {
+                *expected_params = params;
+            }
+        }
         let t = crate::shape_of(&self.value_expected(&args[last], Some(&expected)));
         if !matches!(t, Type::Function { .. } | Type::Error) {
             self.out.push(
