@@ -21,6 +21,8 @@ toml.workspace = true
 toml_edit = "0.25"
 # Explorer deletes go to the Recycle Bin.
 trash = "5"
+# Native folder picker for File > Open Project (MIT).
+rfd = "0.15"
 selu-fmt = { path = "../selu-fmt" }
 serde.workspace = true
 serde_json.workspace = true

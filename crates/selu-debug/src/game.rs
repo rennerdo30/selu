@@ -165,6 +165,9 @@ pub struct Settings {
     /// How Run in Game starts the client.
     #[serde(default)]
     pub launch: LaunchMode,
+    /// Projects opened in Studio, newest first.
+    #[serde(default)]
+    pub recent_projects: Vec<PathBuf>,
 }
 
 fn settings_path() -> Option<PathBuf> {

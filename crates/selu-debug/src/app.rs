@@ -115,6 +115,8 @@ pub struct Studio {
     textures: HashMap<String, Result<egui::TextureHandle, String>>,
     glyphs: crate::text_render::GlyphCache,
     game_settings: crate::game::Settings,
+    /// File > Open Project in progress: the background build's answer.
+    opening: Option<std::sync::mpsc::Receiver<(PathBuf, Result<(), String>)>>,
     game_clients: Vec<crate::game::Client>,
     game_scanned: bool,
     games_open: bool,
@@ -199,6 +201,7 @@ impl Studio {
             build: None,
             build_failed: false,
             game_settings: crate::game::Settings::load(),
+            opening: None,
             game_clients: Vec::new(),
             game_scanned: false,
             games_open: false,
@@ -1306,10 +1309,121 @@ impl Studio {
         }
     }
 
+    /// File > Open Project: pick a folder that contains `selu.toml`.
+    fn open_project_dialog(&mut self, ctx: &egui::Context) {
+        let mut dialog = rfd::FileDialog::new().set_title("Open Selu project");
+        if let Some(dir) = self.opts.project.as_ref().and_then(|p| p.parent()) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(dir) = dialog.pick_folder() {
+            self.open_project(dir, ctx);
+        }
+    }
+
+    /// Open another project: Studio restarts through `selu debug <dir>`, which
+    /// builds the project and passes the addon folder, as on the command line.
+    fn open_project(&mut self, dir: PathBuf, ctx: &egui::Context) {
+        if !dir.join("selu.toml").is_file() {
+            self.line(
+                LineKind::Error,
+                format!(
+                    "{} is not a Selu project: it has no selu.toml (create one with `selu new`)",
+                    dir.display()
+                ),
+            );
+            return;
+        }
+        let selu = self.opts.selu.clone().unwrap_or_else(|| {
+            // Studio started directly: use the selu next to selu-studio, else PATH.
+            std::env::current_exe()
+                .ok()
+                .and_then(|e| {
+                    e.parent()
+                        .map(|p| p.join(if cfg!(windows) { "selu.exe" } else { "selu" }))
+                })
+                .filter(|p| p.is_file())
+                .unwrap_or_else(|| PathBuf::from("selu"))
+        });
+        if self.opening.is_some() {
+            self.line(LineKind::Log, "a project is already being opened");
+            return;
+        }
+        self.line(
+            LineKind::Build,
+            format!("opening {} (building)...", dir.display()),
+        );
+        // Build first, off the UI thread: if it fails, this window stays open
+        // with the errors instead of closing into nothing.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        let target = dir.clone();
+        std::thread::spawn(move || {
+            let result = std::process::Command::new(&selu)
+                .arg("build")
+                .arg(&target)
+                .output()
+                .map_err(|e| format!("cannot start {}: {e}", selu.display()))
+                .and_then(|out| {
+                    if out.status.success() {
+                        Ok(())
+                    } else {
+                        let mut text = String::from_utf8_lossy(&out.stderr).into_owned();
+                        text.push_str(&String::from_utf8_lossy(&out.stdout));
+                        Err(format!(
+                            "{} does not build:\n{}",
+                            target.display(),
+                            text.trim_end()
+                        ))
+                    }
+                })
+                .and_then(|()| {
+                    std::process::Command::new(&selu)
+                        .arg("debug")
+                        .arg(&target)
+                        .spawn()
+                        .map(|_| ())
+                        .map_err(|e| format!("cannot start {} debug: {e}", selu.display()))
+                });
+            let _ = tx.send((target, result));
+            ctx.request_repaint();
+        });
+        self.opening = Some(rx);
+    }
+
+    /// Finish Open Project once the background build has answered.
+    fn poll_opening(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.opening else { return };
+        let Ok((dir, result)) = rx.try_recv() else {
+            return;
+        };
+        self.opening = None;
+        match result {
+            Ok(()) => {
+                let recent = &mut self.game_settings.recent_projects;
+                recent.retain(|p| p != &dir);
+                recent.insert(0, dir);
+                recent.truncate(10);
+                if let Err(e) = self.game_settings.save() {
+                    self.line(LineKind::Error, format!("cannot save recent projects: {e}"));
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Err(e) => {
+                for line in e.lines() {
+                    self.line(LineKind::Error, line.to_string());
+                }
+            }
+        }
+    }
+
     fn global_shortcuts(&mut self, ctx: &egui::Context) {
+        self.poll_opening(ctx);
         self.editor.shortcuts(ctx);
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Comma)) {
             self.open_settings();
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::O)) {
+            self.open_project_dialog(ctx);
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::F5)) {
             self.run_in_game();
@@ -1541,6 +1655,39 @@ impl Studio {
             ui.add_space(2.0);
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
+                    if ui
+                        .add(egui::Button::new("Open Project...").shortcut_text("Ctrl+O"))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.open_project_dialog(ui.ctx());
+                    }
+                    let recent: Vec<PathBuf> = self
+                        .game_settings
+                        .recent_projects
+                        .iter()
+                        .filter(|p| Some(*p) != self.opts.project.as_ref())
+                        .cloned()
+                        .collect();
+                    ui.add_enabled_ui(!recent.is_empty(), |ui| {
+                        ui.menu_button("Open Recent", |ui| {
+                            for dir in recent {
+                                let name = dir.file_name().map_or_else(
+                                    || dir.display().to_string(),
+                                    |n| n.to_string_lossy().into_owned(),
+                                );
+                                if ui
+                                    .button(name)
+                                    .on_hover_text(dir.display().to_string())
+                                    .clicked()
+                                {
+                                    ui.close();
+                                    self.open_project(dir, ui.ctx());
+                                }
+                            }
+                        });
+                    });
+                    ui.separator();
                     if ui
                         .add_enabled(
                             self.editor.has_project(),
