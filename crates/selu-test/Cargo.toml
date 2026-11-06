@@ -17,3 +17,5 @@ selu-check = { path = "../selu-check" }
 selu-lower = { path = "../selu-lower" }
 toml.workspace = true
 mlua = { version = "0.10", features = ["lua51", "vendored"] }
+
+selu-gamedata = { path = "../selu-gamedata" }

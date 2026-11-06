@@ -281,6 +281,7 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
         timing("test compile");
         let session = Rc::new(RefCell::new(
             Session::new(SessionConfig {
+                client_install: crate::client_assets::resolve(options, &manifest.target_string()),
                 target: Some(manifest.target_string()),
                 manifest: Some(manifest.clone()),
                 ..Default::default()

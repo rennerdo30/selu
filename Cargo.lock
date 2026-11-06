@@ -2714,6 +2714,7 @@ dependencies = [
  "mlua",
  "selu-check",
  "selu-diagnostics",
+ "selu-gamedata",
  "selu-lower",
  "selu-manifest",
  "selu-sim",

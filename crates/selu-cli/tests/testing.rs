@@ -810,3 +810,26 @@ fn review_real_native_failures_still_fail_the_owning_test() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[test]
+fn client_assets_opt_out_prevents_opening_explicit_invalid_install() {
+    let dir = project(
+        "client-assets-off",
+        "test(\"offline\", () => { expect(true).toBe(true); });",
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("test")
+        .arg(&dir)
+        .arg("--json")
+        .arg("--client-install")
+        .arg(dir.join("absent-install"))
+        .arg("--no-client-assets")
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("passed"));
+}

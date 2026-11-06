@@ -111,8 +111,8 @@ mod tests {
         sim.eval(
             r#"
             local f = CreateFrame("Frame")
-            f:SetMovable(true)
-            f:SetMovable(true)
+            f:SetCooldown(1, 2)
+            f:SetCooldown(1, 2)
             assert(f.missingAddonField == nil)
             assert(TotallyMadeUp == nil)
             assert(TotallyMadeUp == nil)
@@ -122,7 +122,7 @@ mod tests {
         let logs = sim.logs();
         assert_eq!(
             logs.iter()
-                .filter(|l| l.contains("Frame:SetMovable"))
+                .filter(|l| l.contains("Frame:SetCooldown"))
                 .count(),
             1,
             "{logs:?}"

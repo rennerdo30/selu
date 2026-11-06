@@ -208,7 +208,8 @@ fn click_rechecks_after_each_phase_and_delivers_order() {
 #[test]
 fn scaled_parent_drag_cursor_and_stop_button() {
     let s = Sim::new().unwrap();
-    s.eval("local p=CreateFrame('Frame','Panel');p:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',10,20);p:SetSize(100,100);p:SetScale(2);local b=CreateFrame('Button',nil,p);b:SetAllPoints(p);b:SetScript('OnDragStart',function(self,button) local x,y=GetCursorPosition();assert(x==30 and y==50 and button=='LeftButton');p:StartMoving() end);b:SetScript('OnDragStop',function(self,button) local x,y=GetCursorPosition();assert(x==50 and y==80 and button=='LeftButton');p:StopMovingOrSizing() end)").unwrap();
+    // Native prerequisites: Blizzard_SharedXML/Mainline/SharedUIPanelTemplates.lua:1526.
+    s.eval("local p=CreateFrame('Frame','Panel');p:SetMovable(true);p:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',10,20);p:SetSize(100,100);p:SetScale(2);local b=CreateFrame('Button',nil,p);b:SetAllPoints(p);b:RegisterForDrag('LeftButton');b:SetScript('OnDragStart',function(self,button) local x,y=GetCursorPosition();assert(x==30 and y==50 and button=='LeftButton');p:StartMoving() end);b:SetScript('OnDragStop',function(self,button) local x,y=GetCursorPosition();assert(x==50 and y==80 and button=='LeftButton');p:StopMovingOrSizing() end)").unwrap();
     s.drag((30., 50.), (50., 80.)).unwrap();
     s.eval("local x,y=Panel:GetRect();assert(x==20 and y==35)")
         .unwrap();

@@ -459,3 +459,48 @@ Sources: local read-only wow-ui-source
 `Blizzard_SharedXML/HybridScrollFrame.lua:263` (vertical scrolling starts at zero),
 and `Blizzard_SharedXML/NineSlice.lua:76` (horizontal tiling).
 Native tie-breaking and GPU filtering fidelity have not been measured in WoW.
+
+## SIM5 callback and input model
+
+API visibility (including inherited visibility), value, text, enabled and focus
+transitions use a separate script queue, drained after arena borrows are released
+and before the API returns. Deferred host work is not drained by this boundary.
+Both queues retain the same outer instruction/task/callback budgets and error
+custody. OnSizeChanged stays deferred to layout flush: synchronous native size
+notification has not been established, and the owner explicitly requires deferral
+until evidence establishes otherwise. Synchronous recursive scripts are bounded
+by the existing nesting limit and the next outer dispatch recovers.
+
+GetUnboundedStringWidth measures the complete text through the shared font
+backend without max-line or height truncation. The generated client API has no
+GetUnboundedStringHeight. Width semantics follow the
+[FontString reference](https://warcraft.wiki.gg/wiki/API:FontString_GetStringWidth).
+
+Host drag requires RegisterForDrag for OnDragStart/Stop and SetMovable for
+StartMoving to select the moving frame. Screen clamps apply in physical pixels;
+anchor deltas are converted by effective scale. Disabled hover uses the explicit
+SetMotionScriptsWhileDisabled opt-in. EditBoxes retain autofocus policy, byte
+cursor and selected range; typing replaces the selection. Studio consumes core
+caret and selection geometry derived from the shared wrapped layout rows.
+Snapshots also expose the byte selection range. Native visual fidelity remains unverified.
+
+GameTooltip uses ordinary named left/right FontStrings and client tooltip
+background/border assets, so Studio renders the same child snapshots. Artwork
+is read from the local install and never bundled. Tooltip methods used by the
+Toolkit port (SetOwner, SetText, AddLine, Show, Hide), plus ClearLines,
+AddDoubleLine and NumLines, are represented.
+
+The test CLI accepts --client-install and --no-client-assets, reads Studio's
+client-asset opt-out and install settings, and shares registry/common-root
+discovery with Studio. No detected install leaves sessions offline. Missing
+artwork remains unavailable, including deliberate calibration textures. Discovery
+reads the registry through bounded subprocesses and never starts a game.
+
+Source evidence: Blizzard generated SimpleSlider/SimpleEditBox/SimpleButton APIs;
+Blizzard_SharedXML/Shared/Slider/MinimalSlider.lua:126-141;
+Blizzard_SharedXML/Shared/InputBox/InputBoxTemplates.lua:243-250;
+Blizzard_SharedXML/Mainline/SharedUIPanelTemplates.lua:1526;
+Blizzard_SharedXML/Backdrop.lua:125-153. Timing evidence is the owner's SIM5
+client contract plus these source consumers; signatures alone do not prove native
+scheduling. The implementation receipt lists per-script evidence and limits at
+E:/AgentData/reports/selu-SIM5-report.md.

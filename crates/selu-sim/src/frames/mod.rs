@@ -79,6 +79,19 @@ impl RegionModel for LuaTableModel {
                         } else {
                             r.visual.uv
                         },
+                        edit_range: (r.kind == "EditBox").then_some(r.selection),
+                        edit_caret: if a.focus == Some(i) && r.kind == "EditBox" {
+                            edit_rects(&a, r, r.cursor_position, r.cursor_position)
+                                .into_iter()
+                                .next()
+                        } else {
+                            None
+                        },
+                        edit_selection: if r.kind == "EditBox" && r.selection.0 != r.selection.1 {
+                            edit_rects(&a, r, r.selection.0, r.selection.1)
+                        } else {
+                            vec![]
+                        },
                         font: r.font_path.clone(),
                         size: r.font_size * r.effective_scale,
                         flags: r.font_flags.clone(),
@@ -376,4 +389,52 @@ mod fidelity_tests {
         assert_eq!(label.visual.size, 18.0);
         assert_eq!(label.visual.color, [1.0, 0.0, 0.0, 1.0]);
     }
+}
+
+fn edit_rects(a: &arena::Arena, r: &arena::Region, start: usize, end: usize) -> Vec<[f64; 4]> {
+    let text = r.display_text().unwrap_or("");
+    let bytes: Vec<_> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let character = |byte: usize| bytes.partition_point(|p| *p < byte.min(text.len()));
+    let start = character(start);
+    let end = character(end);
+    let mut style = r.text_style();
+    style.max_lines = 0;
+    style.ellipsis = false;
+    let width = r.rect.map(|q| {
+        (q.width / r.effective_scale - r.visual.text_insets[0] - r.visual.text_insets[1]).max(0.0)
+    });
+    let layout = a.fonts.layout(text, &style, width, None);
+    style.wrap = false;
+    style.justify_h = "LEFT".into();
+    let mut out = Vec::new();
+    let caret_line = layout
+        .line_ranges
+        .iter()
+        .rposition(|line| line.start <= start)
+        .unwrap_or(0);
+    for (i, line) in layout.line_ranges.iter().enumerate() {
+        if start == end {
+            if i != caret_line {
+                continue;
+            }
+        } else if end <= line.start || start > line.end {
+            continue;
+        }
+        let line_start = line.start.min(bytes.len() - 1);
+        let left = start.clamp(line.start, line.end).min(bytes.len() - 1);
+        let right = end.clamp(line.start, line.end).min(bytes.len() - 1);
+        let measure = |n: usize| {
+            a.fonts
+                .layout(&text[bytes[line_start]..bytes[n]], &style, None, None)
+                .width
+        };
+        let x = measure(left);
+        let right = measure(right);
+        out.push([line.x + x, line.y, (right - x).max(1.0), line.height]);
+    }
+    out
 }

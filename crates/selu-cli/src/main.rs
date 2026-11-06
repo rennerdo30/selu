@@ -47,6 +47,10 @@ enum Command {
     },
     /// Run *.test.selu scenarios in the simulator.
     Test {
+        #[arg(long)]
+        client_install: Option<PathBuf>,
+        #[arg(long)]
+        no_client_assets: bool,
         path: Option<PathBuf>,
         #[arg(long)]
         manifest_dir: Option<PathBuf>,
@@ -132,6 +136,8 @@ fn main() -> ExitCode {
         }
         Command::Fmt { paths, check } => fmt(paths, *check),
         Command::Test {
+            client_install,
+            no_client_assets,
             path,
             manifest_dir,
             target,
@@ -139,6 +145,8 @@ fn main() -> ExitCode {
             strict,
             json,
         } => test(
+            client_install.clone(),
+            *no_client_assets,
             path.as_deref().unwrap_or(Path::new(".")),
             target.clone(),
             filter.clone(),
@@ -318,7 +326,10 @@ fn not_yet(cmd: &str, what: &str) -> ExitCode {
 /// `selu test` (docs/SIMULATOR.md decision 11). The runner lives in the
 /// `selu-test` crate; until package S4 lands it discovers test files and
 /// says that it can't run them yet.
+#[allow(clippy::too_many_arguments)]
 fn test(
+    client_install: Option<PathBuf>,
+    no_client_assets: bool,
     project_dir: &Path,
     target: Option<String>,
     filter: Option<String>,
@@ -327,6 +338,8 @@ fn test(
     manifest_dir: Option<PathBuf>,
 ) -> Result<(), ExitCode> {
     let options = selu_test::RunOptions {
+        client_install,
+        no_client_assets,
         manifest_dir,
         project_dir: project_dir.to_path_buf(),
         target,
