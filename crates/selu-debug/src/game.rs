@@ -147,9 +147,9 @@ pub fn battlenet_exe() -> Option<PathBuf> {
 }
 
 /// User settings for game testing, kept in `%APPDATA%\Selu\studio.toml`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
-    #[serde(default)]
+    #[serde(default = "default_ui_disabled")]
     pub disable_default_ui: bool,
     #[serde(default)]
     pub default_ui_source: Option<PathBuf>,
@@ -172,6 +172,25 @@ pub struct Settings {
     /// Projects opened in Studio, newest first.
     #[serde(default)]
     pub recent_projects: Vec<PathBuf>,
+}
+
+fn default_ui_disabled() -> bool {
+    true
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            disable_default_ui: true,
+            default_ui_source: None,
+            disable_client_assets: false,
+            client_install: None,
+            extra_roots: Vec::new(),
+            flavours: BTreeMap::new(),
+            chosen: BTreeMap::new(),
+            launch: LaunchMode::default(),
+            recent_projects: Vec::new(),
+        }
+    }
 }
 
 fn settings_path() -> Option<PathBuf> {
