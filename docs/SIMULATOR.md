@@ -380,9 +380,11 @@ Texture setter success is separate from availability. Modern SetTexture returns
 true even for invalid assets ([reference](https://warcraft.wiki.gg/wiki/API:TextureBase_SetTexture));
 GetTexture returns nil for invalid input ([reference](https://warcraft.wiki.gg/wiki/API:TextureBase_GetTexture)).
 The simulator retains requested texture names in snapshots so Studio can label
-unavailable assets. Addon media resolve as paths; client file-ID assignment and
-atlas data remain unavailable. Toolkit's WHITE8X8 calibration cannot pass until
-a client source exists. This is reported rather than fabricated.
+unavailable assets. Addon media resolve as paths. Offline sessions report client textures unavailable.
+With client storage enabled, extensionless texture names also try `.blp`.
+Forever 1.60.1.70790 stores `Interface/Buttons/WHITE8X8.blp` as FileDataID
+130871 (1228 bytes, decoded 8 by 8); it is not a synthesized engine texture.
+The local client-storage integration test covers its extensionless lookup.
 
 CreateColor implements the object methods from the read-only client source
 `Interface/AddOns/Blizzard_SharedXMLBase/Color.lua`. Texture gradients carry

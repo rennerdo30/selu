@@ -835,3 +835,24 @@ fn sg_wave1_contracts() {
         }
     }
 }
+
+#[test]
+fn sh_create_font_checked_result() {
+    for flavour in ["wow", "wowf"] {
+        assert!(
+            !codes(
+                r#"const fontAsNumber: number = CreateFont("W2InvalidFont");"#,
+                flavour
+            )
+            .is_empty()
+        );
+        assert!(
+            !codes(
+                r#"const font = CreateFont("W2UncheckedFont"); font.ThisMethodDoesNotExist();"#,
+                flavour
+            )
+            .is_empty()
+        );
+        assert!(codes(r#"const font = CreateFont("SHFont"); font.SetFont("Fonts/FRIZQT__.TTF", 12, ""); font.CopyFontObject(GameFontNormal);"#, flavour).is_empty());
+    }
+}
