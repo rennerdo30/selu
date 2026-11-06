@@ -511,7 +511,10 @@ pub(crate) fn forget_plain(ty: crate::Type) -> crate::Type {
             api_semantics.frame_factory = false;
             api_semantics.animation_factory = false;
             api_semantics.date_factory = false;
-            api_semantics.script_callbacks.clear();
+            for callback in api_semantics.script_callbacks.values_mut() {
+                *callback = callback.uncertain_callback();
+            }
+            api_semantics.opaque_inputs.clear();
             api_semantics.typed_return_tail = None;
             api_semantics.pure_callback = false;
             api_semantics.table_operation = None;

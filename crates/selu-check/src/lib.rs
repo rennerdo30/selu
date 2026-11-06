@@ -1525,6 +1525,7 @@ impl Ctx<'_> {
         let arg_types = self.function_arguments(args, callee_type);
         let specialized =
             self.table_signature(callee_type, arg_types.first(), arg_types.get(1), args.len());
+        let specialized = self.opaque_signature(&specialized, &arg_types);
         let callee_type = &specialized;
         self.types.set(callee.id, specialized.clone());
         if self.api_check_call(e, args, &arg_types, callee_type)

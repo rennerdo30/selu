@@ -503,7 +503,8 @@ The callbacks retain their receiver type, supported parameter types, and pinned
 file:line citations. OnMouseWheel, OnClick and OnEnter are reviewed at all six
 retained source pins. Retail and the Toolkit pin wowf@1.60.1.70790 also review OnLeave, OnAttributeChanged,
 OnShow/OnHide, OnKeyDown/OnKeyUp and OnUpdate. Unreviewed scripts preserve the
-existing LuaFunctionReference behavior. Unknown parameter types stay untyped.
+existing LuaFunctionReference behavior. Reviewed callback slots without type
+evidence become opaque under extraction v9.
 Native factories and callback facts intersect when function values join; mutable
 aliases lose facts that depend on native function identity.
 
@@ -517,3 +518,18 @@ Extraction v8 gives the documented CScriptObject name its SimpleObjectAPI
 interface identity. Frames and other objects inheriting that interface can be
 passed as CScriptObject; the sourced hierarchy secret result remains intact.
 The v6 and v7 segments and frozen digests remain immutable.
+
+
+Extraction v9 corrects the reviewed SF callback contracts and popup flag storage.
+`SeluOpaque` names an opaque callback slot rather than an unchecked declaration.
+`SeluOpaqueInput` records native round trips to the matching slot, while keeping
+ordinary arguments subject to the original native input signature. Native
+identity capabilities intersect at joins and are discarded for mutable aliases.
+The checker rejects opaque reads/annotations and untyped call laundering even
+when ordinary incomplete API signatures are advisory; see docs/lang/api.md.
+
+Popup flag field citations now point to stored assignments at each pin. Numeric
+flags remain numeric; mixed storage uses the sourced boolean/number scalar union.
+OnClick down is nilable (ButtonGroup.lua:40-50), and motion/key payloads are opaque
+because truthiness or conversion followed by comparison does not prove their
+input scalar types. The existing v1-v8 digests and segments remain immutable.

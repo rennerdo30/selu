@@ -73,8 +73,8 @@ has no role in assignability, joins or lowering.
 LuaFunctionReference is an unspecified callback signature: any function value is
 accepted, parameter context is untyped, and its arity/result are unrestricted.
 Non-functions are rejected; Nilable still permits null to clear SetScript.
-Follow-up outside T1: a data table keyed by script name could give OnShow `(self)`
-and OnEvent `(self, event, ...)` their own contextual signatures.
+Reviewed literal script names select sourced callback signatures. Unreviewed
+names retain the existing unspecified callback behavior.
 
 ## Incomplete client metadata: advisory API checking
 
@@ -113,3 +113,50 @@ callback requiring more arguments than the native signature guarantees remains
 SELU0481. Result-convention checks still apply. This rule applies to callback
 arguments of native APIs; ordinary Selu function assignment keeps its existing
 contract.
+
+
+## Opaque native callback payloads
+
+A reviewed callback slot with no evidenced payload type is `opaque<slot>` in
+checker diagnostics. This is a distinct internal type, not permissive Untyped
+and not a Selu annotation spelling. Declared CallbackType parameters whose
+types are missing or unresolved become opaque by default. `SeluOpaque` gives
+reviewed slots stable identities for sourced round trips. The existing policy
+for other incomplete API results and unspecified script signatures is unchanged.
+
+An opaque value may be ignored or kept in an inferred local. It cannot satisfy
+a concrete annotation or assignment, expose a field, or pass through an
+untyped/unknown annotation (including inside a container), or launder its type
+through an untyped call. These boundary
+violations are errors even with advisory API checking. A runtime `typeof`
+check proves the tested scalar type; `!= null` only removes possible absence,
+not the requirement to prove a scalar or object shape.
+
+```selu
+StaticPopupDialogs.set("TEST", {
+    OnShow: (self, data) => {
+        if (typeof data == "number") {
+            const count: number = data;
+        }
+        StaticPopup_Show("NEXT", null, null, data);
+    }
+});
+```
+
+The last call is a sourced round trip to the matching StaticPopup data slot.
+`SeluOpaqueInput` records such native input capabilities independently of API
+origin labels. Ordinary arguments still use that API's original parameter
+signature; this does not make other values valid for SetAttribute, for example.
+Extra unannotated callback parameters beyond a finite native signature infer
+null, rather than creating unchecked values; explicit defaults retain their
+ordinary inference. Different opaque slots cannot be substituted for each other. Immutable native
+function aliases keep proven capabilities; mutable function slots and uncertain
+function joins discard native input capabilities. Known script boundaries remain
+opaque through those aliases, while their receiver, scalar and arity promises
+are withheld. Use an immutable registration alias to retain precise context. Secret value policies remain independent.
+
+OnClick's down argument is `boolean?`, including Blizzard handler invocations
+that omit it. The reviewed motion and key payloads have no evidenced scalar
+contract, so consumers must check them before using boolean/string operations.
+Popup flags follow stored native values: numeric flags are numbers, and fields
+with evidenced boolean and numeric values use their sourced scalar union.

@@ -223,13 +223,13 @@ fn reviewed_scripts(m: &mut Manifest) {
         ),
         (
             "OnClick",
-            vec![("button", "string"), ("down", "bool")],
-            "Blizzard_ActionBar/Shared/ActionButton.lua:1335-1364; button == RightButton, not down",
+            vec![("button", "string"), ("down", "bool?")],
+            "Blizzard_ActionBar/Shared/ActionButton.lua:1335-1364; button == RightButton; Blizzard_SharedXML/ButtonGroup.lua:40-50 invokes saved handler without down",
         ),
         (
             "OnEnter",
-            vec![("motion", "bool")],
-            "Blizzard_RestrictedAddOnEnvironment/SecureHandlers.lua:292-305; Wrapped_OnEnter, if motion",
+            vec![("motion", "opaque:ScriptMotion")],
+            "Blizzard_RestrictedAddOnEnvironment/SecureHandlers.lua:292-305; Wrapped_OnEnter; truthiness/forwarding only, motion opaque",
         ),
     ];
     if matches!(
@@ -237,22 +237,26 @@ fn reviewed_scripts(m: &mut Manifest) {
         "18c6d677b605b312f3d813d498404631fb941977" | "eac30af597e5aaa43a60f6675ef5fdcea100375f"
     ) {
         definitions.extend([
-            ("OnLeave", vec![("motion", "bool")], "Blizzard_RestrictedAddOnEnvironment/SecureHandlers.lua:312-315; if motion"),
-            ("OnAttributeChanged", vec![("name", "string"), ("value", "")], "Blizzard_RestrictedAddOnEnvironment/SecureHandlers.lua:380-383; name:match; value untyped"),
+            ("OnLeave", vec![("motion", "opaque:ScriptMotion")], "Blizzard_RestrictedAddOnEnvironment/SecureHandlers.lua:312-325; truthiness/forwarding only, motion opaque"),
+            ("OnAttributeChanged", vec![("name", "string"), ("value", "opaque:ScriptAttributeValue")], "Blizzard_RestrictedAddOnEnvironment/SecureHandlers.lua:380-383; name:match; forwarded value opaque"),
             ("OnShow", vec![], "Blizzard_RestrictedAddOnEnvironment/SecureHandlers.lua:349; self wrapper"),
             ("OnHide", vec![], "Blizzard_RestrictedAddOnEnvironment/SecureHandlers.lua:349; self wrapper"),
-            ("OnKeyDown", vec![("key", "string")], "Blizzard_SharedXML/CustomBindingButtonMixin.lua:57-81; key == ESCAPE"),
-            ("OnKeyUp", vec![("key", "string")], "Blizzard_SharedXML/CustomBindingButtonMixin.lua:61-81; OnInput key == ESCAPE"),
+            ("OnKeyDown", vec![("key", "opaque:ScriptKey")], "Blizzard_SharedXML/CustomBindingButtonMixin.lua:57-81; BindingUtil.lua:66-67 conversion can return original input, key opaque"),
+            ("OnKeyUp", vec![("key", "opaque:ScriptKey")], "Blizzard_SharedXML/CustomBindingButtonMixin.lua:61-81; BindingUtil.lua:66-67 conversion can return original input, key opaque"),
             ("OnUpdate", vec![("elapsed", "number")], "Blizzard_SharedXML/Mainline/ModelFrameMixin.lua:126; UpdateRotation multiplies elapsedTime"),
         ]);
     }
     for (name, parameters, citation) in definitions {
         let mut args = vec![json!({"name":"self", "type":"CScriptObject"})];
-        args.extend(
-            parameters
-                .into_iter()
-                .map(|(name, ty)| json!({"name":name,"type":ty})),
-        );
+        args.extend(parameters.into_iter().map(|(name, ty)| {
+            if let Some(slot) = ty.strip_prefix("opaque:") {
+                json!({"name":name,"attributes":{"SeluOpaque":slot,"Nilable":true}})
+            } else if let Some(ty) = ty.strip_suffix('?') {
+                json!({"name":name,"type":ty,"attributes":{"Nilable":true}})
+            } else {
+                json!({"name":name,"type":ty})
+            }
+        }));
         let mut citation = if name == "OnClick" {
             citation.replace("1335-1364", &format!("{click_line}-{}", click_line + 29))
         } else {
@@ -267,6 +271,21 @@ fn reviewed_scripts(m: &mut Manifest) {
         scripts.insert(name.into(), json!({"name":name,"type":"CallbackType","arguments":args,"attributes":{"SeluSourceCitation":format!("{}: {citation}", source.commit)}}));
     }
     for widget in &mut m.widgets {
+        if widget.name == "SimpleFrameAPI" {
+            for method in &mut widget.methods {
+                if method.name == "SetAttribute" {
+                    for argument in &mut method.arguments {
+                        if argument.name == "value" {
+                            argument
+                                .attributes
+                                .insert("SeluOpaqueInput".into(), json!("ScriptAttributeValue"));
+                            argument.attributes.insert("Nilable".into(), json!(true));
+                            argument.attributes.insert("SeluSourceCitation".into(), json!(format!("{}: Blizzard_RestrictedAddOnEnvironment/SecureHandlers.lua:312-325,380-390; SetAttribute clears with nil; OnAttributeChanged forwards native attribute value", source.commit)));
+                        }
+                    }
+                }
+            }
+        }
         if widget.name != "SimpleScriptRegionAPI" {
             continue;
         }

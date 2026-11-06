@@ -325,7 +325,20 @@ impl Ctx<'_> {
                     Type::Function { params, rest, .. } => params.get(i).or(rest.as_deref()),
                     _ => None,
                 };
-                self.value_expected(e, expected)
+                let actual = self.value_expected(e, expected);
+                if matches!(callee, Type::Untyped) && actual.contains_opaque() {
+                    self.out.push(
+                        err(
+                            "SELU0335",
+                            "an untyped call cannot consume an opaque native payload",
+                            &e.span,
+                        )
+                        .with_help(
+                            "use a matching sourced native slot or narrow the payload with typeof",
+                        ),
+                    );
+                }
+                actual
             })
             .collect()
     }
@@ -344,6 +357,7 @@ impl Ctx<'_> {
         if let Some(Type::Function {
             params: context,
             rest,
+            api_semantics,
             ..
         }) = expected
         {
@@ -353,7 +367,15 @@ impl Ctx<'_> {
                         .get(i)
                         .or(rest.as_deref())
                         .cloned()
-                        .unwrap_or(Type::Untyped);
+                        .unwrap_or_else(|| {
+                            if api_semantics.native_callback && p.default.is_none() && !p.rest {
+                                // The finite native signature supplies no value
+                                // here. Do not manufacture an unchecked payload.
+                                Type::Null
+                            } else {
+                                Type::Untyped
+                            }
+                        });
                 }
             }
         }

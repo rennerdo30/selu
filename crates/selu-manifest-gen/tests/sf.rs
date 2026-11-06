@@ -64,7 +64,7 @@ fn popup_entry_shape() {
         !codes("const bad = { invented: true }; StaticPopupDialogs.set(\"TEST\", bad);").is_empty()
     );
     assert!(!codes("StaticPopupDialogs.set(\"TEST\", { invented: true });").is_empty());
-    assert!(codes("StaticPopupDialogs.set(\"TEST\", { text: \"Test\", button1: \"Yes\", timeout: 0, whileDead: true, hideOnEscape: true });").is_empty());
+    assert!(codes("StaticPopupDialogs.set(\"TEST\", { text: \"Test\", button1: \"Yes\", timeout: 0, whileDead: 1, hideOnEscape: true });").is_empty());
     assert!(!codes("StaticPopupDialogs.set(\"TEST\", { timeout: \"bad\" });").is_empty());
 }
 
@@ -81,8 +81,8 @@ fn sourced_animation_factories_and_parent() {
 #[test]
 fn sourced_script_parameters() {
     assert!(codes_on("CreateFrame(\"Frame\").HookScript(\"OnUpdate\", (self, elapsed) => { const n: number = elapsed; });", "forever", "wowf@1.60.1.70790").is_empty());
-    assert!(codes("CreateFrame(\"Frame\").HookScript(\"OnEnter\", (self, motion) => { const m: boolean = motion; });").is_empty());
-    assert!(codes("CreateFrame(\"Button\").SetScript(\"OnClick\", (self, button, down) => { const b: string = button; const d: boolean = down; });").is_empty());
+    assert!(codes("CreateFrame(\"Frame\").HookScript(\"OnEnter\", (self, motion) => { if (typeof motion == \"boolean\") { const m: boolean = motion; } });").is_empty());
+    assert!(codes("CreateFrame(\"Button\").SetScript(\"OnClick\", (self, button, down) => { const b: string = button; const d: boolean? = down; });").is_empty());
     assert!(
         codes("CreateFrame(\"Frame\").HookScript(\"OnUpdate\", (self, elapsed: string) => {});")
             .contains(&"SELU0481".into())
@@ -288,4 +288,235 @@ fn script_receiver_keeps_the_runtime_protection_check() {
     assert!(
         matches!(checked.types.get(callee.id), Some(selu_check::Type::Function { api_semantics, .. }) if api_semantics.protected)
     );
+}
+
+#[test]
+fn review_opaque_payload_cannot_acquire_a_concrete_type() {
+    for source in [
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { const p:{itemGUID:string}=value; const s:string=p.itemGUID; });"#,
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value:number) => {});"#,
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { const s = value.itemGUID; });"#,
+        r#"StaticPopupDialogs.set("TEST", { OnShow:(self,data) => { const n:number=data; } });"#,
+        r#"StaticPopupDialogs.set("TEST", { OnAccept:(self,data) => { const n:number=data; } });"#,
+        r#"StaticPopupDialogs.set("TEST", { OnHide:(self,data) => { const n:number=data; } });"#,
+        r#"StaticPopupDialogs.set("TEST", { OnCancel:(self,data) => { const n:number=data; } });"#,
+    ] {
+        assert!(
+            !codes(source).is_empty(),
+            "unsourced callback accepted: {source}"
+        );
+    }
+}
+
+#[test]
+fn review_popup_numeric_flags_follow_native_storage() {
+    for (family, target) in [
+        ("retail", "wow@12.1.5.70391"),
+        ("forever", "wowf@1.60.1.70790"),
+        ("classic", "wow_classic@5.5.4.70631"),
+        ("classic-era", "wow_classic_era@1.15.9.70576"),
+        ("classic-anniversary", "wow_anniversary@2.5.6.70577"),
+        ("classic-titan", "wow_classic_titan@3.80.2.70522"),
+    ] {
+        let result = codes_on(
+            r#"StaticPopupDialogs.set("COPY",{ hideOnEscape:1, multiple:1, whileDead:1 });"#,
+            family,
+            target,
+        );
+        assert!(result.is_empty(), "{target}: {result:?}");
+    }
+}
+
+#[test]
+fn review_popup_read_flags_cannot_claim_boolean_storage() {
+    assert!(!codes(r#"const popup = StaticPopupDialogs.get("GENERIC_CONFIRMATION"); if(popup != null) { const b:boolean?=popup.hideOnEscape; }"#).is_empty());
+}
+
+#[test]
+fn review_click_down_is_optional_and_scalar_claims_are_withheld() {
+    for source in [
+        r#"CreateFrame("Button").SetScript("OnClick", (self,button,down:boolean) => {});"#,
+        r#"CreateFrame("Frame").HookScript("OnEnter", (self,motion:boolean) => {});"#,
+        r#"CreateFrame("Frame").HookScript("OnLeave", (self,motion:boolean) => {});"#,
+        r#"CreateFrame("Frame").HookScript("OnKeyDown", (self,key:string) => {});"#,
+        r#"CreateFrame("Frame").HookScript("OnKeyUp", (self,key:string) => {});"#,
+    ] {
+        assert!(
+            !codes(source).is_empty(),
+            "unsupported scalar contract: {source}"
+        );
+    }
+}
+
+#[test]
+fn review_opaque_payloads_allow_ignoring_narrowing_and_matching_round_trips() {
+    for source in [
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", () => {});"#,
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { self.SetAttribute(name,value); });"#,
+        r#"StaticPopupDialogs.set("TEST", { OnAccept:() => {}, OnCancel:() => {}, OnShow:() => {}, OnHide:() => {} });"#,
+        r#"StaticPopupDialogs.set("TEST", { OnShow:(self,data) => { StaticPopup_Show("OTHER",null,null,data); } });"#,
+        r#"StaticPopup_Show("TEST",null,null,{itemGUID:"item:1"});"#,
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { if(typeof value == "number") { const n:number=value; math.abs(value); } if(value != null) { self.SetAttribute(name,value); } });"#,
+        r#"StaticPopupDialogs.set("TEST", { OnShow:(self,data) => { if(typeof data == "string") { const s:string=data; } if(typeof data == "boolean") { const b:boolean=data; } if(data != null && typeof data == "number") { const n:number=data; } } });"#,
+        r#"CreateFrame("Button").SetScript("OnClick", (self,button,down) => { const b:string=button; const d:boolean?=down; if(down != null) { const checked:boolean=down; } });"#,
+        r#"CreateFrame("Frame").HookScript("OnEnter", (self,motion) => { if(typeof motion == "boolean") { const b:boolean=motion; } });"#,
+        r#"CreateFrame("Frame").HookScript("OnKeyDown", (self,key) => { if(typeof key == "string") { const s:string=key; } });"#,
+    ] {
+        let result = codes(source);
+        assert!(result.is_empty(), "{source}: {result:?}");
+    }
+}
+
+#[test]
+fn review_opaque_payloads_cannot_escape_through_aliases_or_other_native_slots() {
+    for source in [
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { const alias=value; const n:number=alias; });"#,
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { if(value != null) { const n:number=value; } });"#,
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { const n:number=value ?? 0; });"#,
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { const n:unknown=value; });"#,
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { math.abs(value); });"#,
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged", (self,name,value) => { StaticPopup_Show("TEST",null,null,value); });"#,
+        r#"StaticPopupDialogs.set("TEST", { OnShow:(self,data) => { const x = true ? data : tonumber("1"); const n:number?=x; } });"#,
+        r#"function typed(self:Frame,name:string,value:number):void {} CreateFrame("Frame").HookScript("OnAttributeChanged",typed);"#,
+    ] {
+        let m = manifest_on("retail", "wow@12.1.5.70391");
+        let p = selu_syntax::parse("opaque.selu", source).unwrap();
+        let checked = selu_check::check_program(&p, &m);
+        assert!(
+            checked.has_errors(),
+            "opaque boundary was advisory or erased: {source}: {:?}",
+            checked.diagnostics
+        );
+    }
+}
+
+#[test]
+fn review_button_group_invocation_can_omit_down_and_preserves_false() {
+    let m = manifest_on("retail", "wow@12.1.5.70391");
+    let p=selu_syntax::parse("button-group.selu",r#"let missing = false; let observed:boolean?=null; const button=CreateFrame("Button"); button.SetScript("OnClick",(self,mouseButton,down)=>{ missing=down==null; observed=down; });"#).unwrap();
+    let checked = selu_check::check_program(&p, &m);
+    assert!(!checked.has_errors(), "{:?}", checked.diagnostics);
+    let generated = selu_lower::lower(&p, &m, &checked.types).lua;
+    let lua = mlua::Lua::new();
+    lua.set_memory_limit(32 * 1024 * 1024).unwrap();
+    lua.set_hook(
+        mlua::HookTriggers::new().every_nth_instruction(100_000),
+        |_, _| Err(mlua::Error::RuntimeError("instruction limit".into())),
+    );
+    let prefix = r#"local nativeButton={}; function nativeButton:SetScript(name,script) self[name]=script end; function nativeButton:GetScript(name) return self[name] end; function CreateFrame() return nativeButton end; "#;
+    let suffix = r#"local click=nativeButton:GetScript("OnClick"); click(nativeButton,"LeftButton"); local absent=missing and observed==nil; click(nativeButton,"LeftButton",false); return absent,missing,observed"#;
+    let result = lua
+        .load(format!("{prefix}\n{generated}\n{suffix}"))
+        .eval::<(bool, bool, bool)>()
+        .unwrap();
+    assert_eq!(result, (true, false, false));
+}
+
+#[test]
+fn review_opaque_round_trip_capabilities_preserve_ordinary_api_constraints() {
+    assert!(codes(r#"StaticPopupDialogs.set("TEST",{OnShow:(self,data)=>{const send=StaticPopup_Show;send("NEXT",null,null,data);}});"#).is_empty());
+    assert!(!codes(r#"StaticPopupDialogs.set("TEST",{OnShow:(self,data)=>{let send=StaticPopup_Show;send("NEXT",null,null,data);}});"#).is_empty());
+    assert!(!codes(r#"CreateFrame("Frame").SetAttribute("x",{invented:true});"#).is_empty());
+    assert!(codes(r#"CreateFrame("Frame").SetAttribute("x","text");"#).is_empty());
+    assert!(!codes(r#"StaticPopupDialogs.set("TEST",{OnShow:(self,data)=>{const box={value:data};const erased:unknown=box;}});"#).is_empty());
+    let mut m = manifest_on("retail", "wow@12.1.5.70391");
+    m.functions.push(
+        serde_json::from_value(
+            serde_json::json!({"name":"ExistingUntypedResult","evidence":"source"}),
+        )
+        .unwrap(),
+    );
+    let p = selu_syntax::parse(
+        "legacy-untyped.selu",
+        "const retained: number = ExistingUntypedResult();",
+    )
+    .unwrap();
+    assert!(
+        selu_check::check(&p, &m).is_empty(),
+        "unrelated legacy API result policy changed"
+    );
+}
+
+#[test]
+fn review_opaque_payloads_cannot_be_laundered_through_untyped_calls() {
+    let mut m = manifest_on("retail", "wow@12.1.5.70391");
+    m.functions.push(
+        serde_json::from_value(
+            serde_json::json!({"name":"ExistingUntypedResult","evidence":"source"}),
+        )
+        .unwrap(),
+    );
+    for source in [
+        r#"CreateFrame("Frame").HookScript("OnAttributeChanged",(self,name,value)=>{const n:number=ExistingUntypedResult(value);});"#,
+        r#"StaticPopupDialogs.set("TEST",{OnShow:(self,data)=>{const dynamic=ExistingUntypedResult();const n:number=dynamic(data);}});"#,
+    ] {
+        let p = selu_syntax::parse("untyped-call.selu", source).unwrap();
+        let checked = selu_check::check_program(&p, &m);
+        assert!(
+            checked.has_errors(),
+            "opaque laundered through unchecked call: {source}"
+        );
+    }
+}
+
+#[test]
+fn review_finite_callback_arity_does_not_create_untyped_extra_values() {
+    for source in [
+        r#"CreateFrame("Frame").SetScript("OnUpdate",(self,elapsed,extra)=>{const n:number=extra;});"#,
+        r#"StaticPopupDialogs.set("TEST",{OnShow:(self,data,extra)=>{const n:number=extra;}});"#,
+    ] {
+        assert!(
+            !codes(source).is_empty(),
+            "absent extra parameter was permissive: {source}"
+        );
+    }
+    assert!(codes(r#"StaticPopupDialogs.set("TEST",{OnShow:(self,data,extra)=>{const absent:null=extra;}});"#).is_empty());
+    assert!(codes(r#"StaticPopupDialogs.set("TEST",{OnShow:(self,data,extra=1)=>{const fallback:number=extra;}});"#).is_empty());
+}
+
+#[test]
+fn review_registration_aliases_cannot_erase_opaque_callback_boundaries() {
+    let mut m = manifest_on("retail", "wow@12.1.5.70391");
+    m.functions.push(
+        serde_json::from_value(
+            serde_json::json!({"name":"ExistingUntypedResult","evidence":"source"}),
+        )
+        .unwrap(),
+    );
+    for source in [
+        r#"const frame=CreateFrame("Frame");let register=frame.HookScript;register("OnAttributeChanged",(self,name,value)=>{const n:number=value;});"#,
+        r#"const frame=CreateFrame("Frame");const button=CreateFrame("Button");const register=true?frame.HookScript:button.HookScript;register("OnAttributeChanged",(self,name,value)=>{const n:number=value;});"#,
+        r#"const frame=CreateFrame("Frame");const erased:unknown=frame.HookScript;if(typeof erased=="function"){erased("OnAttributeChanged",(self,name,value)=>{const n:number=value;});}"#,
+        r#"const frame=CreateFrame("Frame");const register=true?frame.HookScript:(name,callback)=>{};register("OnAttributeChanged",(self,name,value)=>{const n:number=value;});"#,
+        r#"const frame=CreateFrame("Frame");const register=true?frame.HookScript:ExistingUntypedResult();register("OnAttributeChanged",(self,name,value)=>{const n:number=value;});"#,
+    ] {
+        let p = selu_syntax::parse("registration-alias.selu", source).unwrap();
+        let checked = selu_check::check_program(&p, &m);
+        assert!(
+            checked.has_errors(),
+            "registration alias erased the boundary: {source}: {:?}",
+            checked.diagnostics
+        );
+    }
+    assert!(codes(r#"const frame=CreateFrame("Frame");const register=frame.HookScript;register("OnAttributeChanged",(self,name,value)=>{if(typeof value=="number"){const n:number=value;}});"#).is_empty());
+    assert!(codes(r#"const frame=CreateFrame("Frame");let register=frame.HookScript;register("OnAttributeChanged",()=>{});"#).is_empty());
+    assert!(codes(r#"const frame=CreateFrame("Frame");let register=frame.HookScript;register("UnreviewedScript",(self,value)=>{const n:number=value;});"#).is_empty());
+}
+
+#[test]
+fn review_callback_slots_without_overlay_markers_are_opaque_too() {
+    let mut m = manifest_on("retail", "wow@12.1.5.70391");
+    m.tables.push(serde_json::from_value(serde_json::json!({"name":"SourcedCallbackFixture","type":"CallbackType","arguments":[{"name":"value","type":"MissingCallbackType","attributes":{"Nilable":true}}]})).unwrap());
+    m.functions.push(serde_json::from_value(serde_json::json!({"name":"RegisterCallbackFixture","evidence":"documented","signature":{"name":"RegisterCallbackFixture","type":"Function","arguments":[{"name":"callback","type":"SourcedCallbackFixture"}]}})).unwrap());
+    let p = selu_syntax::parse(
+        "callback-slot.selu",
+        "RegisterCallbackFixture((value)=>{ const n:number=value; });",
+    )
+    .unwrap();
+    assert!(
+        selu_check::check_program(&p, &m).has_errors(),
+        "undefined callback type manufactured a checked number"
+    );
+    let p=selu_syntax::parse("callback-slot.selu","RegisterCallbackFixture(()=>{}); RegisterCallbackFixture((value)=>{if(typeof value==\"number\"){const n:number=value;}});").unwrap();
+    assert!(selu_check::check(&p, &m).is_empty());
 }

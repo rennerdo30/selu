@@ -60,34 +60,40 @@ fn map(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         };
     }
     let name = d.ty.as_deref().unwrap_or("");
-    let t = primitive(name).unwrap_or_else(|| match name {
-        "Function" | "function" => signature(m, d, depth + 1),
-        "table" if d.attributes.contains_key("KeyType") => Type::Map(
-            Box::new(named(
-                m,
-                d.attributes
-                    .get("KeyType")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(""),
-                depth + 1,
-            )),
-            Box::new(named(
-                m,
-                d.attributes
-                    .get("InnerType")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(""),
-                depth + 1,
-            )),
-        ),
-        "table" => d
-            .attributes
-            .get("InnerType")
-            .and_then(|v| v.as_str())
-            .map(|n| Type::Array(Box::new(named(m, n, depth + 1))))
-            .unwrap_or(Type::Untyped),
-        n => named(m, n, depth + 1),
-    });
+    let t = d
+        .attributes
+        .get("SeluOpaque")
+        .and_then(|v| v.as_str())
+        .map(|slot| Type::Opaque(slot.into()))
+        .or_else(|| primitive(name))
+        .unwrap_or_else(|| match name {
+            "Function" | "function" => signature(m, d, depth + 1),
+            "table" if d.attributes.contains_key("KeyType") => Type::Map(
+                Box::new(named(
+                    m,
+                    d.attributes
+                        .get("KeyType")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                    depth + 1,
+                )),
+                Box::new(named(
+                    m,
+                    d.attributes
+                        .get("InnerType")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                    depth + 1,
+                )),
+            ),
+            "table" => d
+                .attributes
+                .get("InnerType")
+                .and_then(|v| v.as_str())
+                .map(|n| Type::Array(Box::new(named(m, n, depth + 1))))
+                .unwrap_or(Type::Untyped),
+            n => named(m, n, depth + 1),
+        });
     if flag(d, "Nilable") {
         Type::optional(t)
     } else {
@@ -205,6 +211,20 @@ pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     // not reject valid engine values based on a guessed nominal identity.
     Type::Untyped
 }
+fn argument_type(m: &Manifest, owner: &Declaration, argument: &Declaration, depth: usize) -> Type {
+    let mapped = map(m, argument, depth);
+    if owner.ty.as_deref() == Some("CallbackType") && mapped == Type::Untyped {
+        let opaque = Type::Opaque(format!("{}.{}", owner.name, argument.name));
+        if flag(argument, "Nilable") {
+            Type::optional(opaque)
+        } else {
+            opaque
+        }
+    } else {
+        mapped
+    }
+}
+
 pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
     let secret = crate::restrictions::secret_results(m, d);
     let mut returns: Vec<Type> = d
@@ -224,6 +244,23 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         multiple_results: d.ty.as_deref() != Some("CallbackType"),
         unspecified_callback: false,
         api_semantics: crate::types::ApiSemantics {
+            opaque_inputs: d
+                .arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| {
+                    let slot = argument.attributes.get("SeluOpaqueInput")?.as_str()?;
+                    let value = Type::Opaque(slot.into());
+                    Some((
+                        index,
+                        if flag(argument, "Nilable") {
+                            Type::optional(value)
+                        } else {
+                            value
+                        },
+                    ))
+                })
+                .collect(),
             untyped_return_tail: flag(d, "SeluUntypedReturnTail"),
             typed_return_tail: d
                 .attributes
@@ -302,13 +339,13 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
             .arguments
             .iter()
             .filter(|a| a.name != "...")
-            .map(|a| map(m, a, depth + 1))
+            .map(|a| argument_type(m, d, a, depth + 1))
             .collect(),
         rest: d
             .arguments
             .iter()
             .find(|a| a.name == "...")
-            .map(|a| Box::new(map(m, a, depth + 1))),
+            .map(|a| Box::new(argument_type(m, d, a, depth + 1))),
         ret: Box::new(Type::Tuple(returns)),
     }
 }
@@ -584,6 +621,7 @@ impl Ctx<'_> {
         self.types.set(callee.id, ty.clone());
         let ts = self.function_arguments(args, &ty);
         let ty = self.table_signature(&ty, ts.first(), ts.get(1), args.len());
+        let ty = self.opaque_signature(&ty, &ts);
         self.types.set(callee.id, ty.clone());
         self.api_check_call(e, args, &ts, &ty);
         let Type::Function { ret, .. } = &ty else {
@@ -808,6 +846,28 @@ impl Ctx<'_> {
         result
     }
 
+    /// A proven native round trip admits only the matching opaque slot. Ordinary
+    /// arguments still use the original input signature; this never widens it.
+    pub(crate) fn opaque_signature(&self, ty: &Type, arguments: &[Type]) -> Type {
+        let mut result = ty.clone();
+        if let Type::Function {
+            params,
+            api_semantics,
+            ..
+        } = &mut result
+        {
+            for (index, slot) in &api_semantics.opaque_inputs {
+                if arguments.get(*index).is_some_and(|argument| {
+                    argument.contains_opaque() && argument.assignable_to(slot)
+                }) && let Some(parameter) = params.get_mut(*index)
+                {
+                    *parameter = slot.clone();
+                }
+            }
+        }
+        result
+    }
+
     pub(crate) fn api_check_call(
         &mut self,
         e: &Expr,
@@ -885,14 +945,18 @@ impl Ctx<'_> {
                     .get(i)
                     .map(String::as_str)
                     .unwrap_or("...");
-                let diagnostic = self.api_diagnostic(
-                    "SELU0481",
-                    format!(
-                        "parameter `{parameter}` of `{}` on {} expects {p}, got {t}",
-                        origin.name, origin.target
-                    ),
-                    &arg.span,
+                let message = format!(
+                    "parameter `{parameter}` of `{}` on {} expects {p}, got {t}",
+                    origin.name, origin.target
                 );
+                // A known opaque boundary is a hard checking rule even when
+                // incomplete ordinary API signatures are advisory.
+                let diagnostic = if p.contains_opaque() || t.contains_opaque() {
+                    err("SELU0481", message, &arg.span)
+                        .with_help("ignore the payload, pass it to its matching native slot, or narrow it with typeof")
+                } else {
+                    self.api_diagnostic("SELU0481", message, &arg.span)
+                };
                 let diagnostic = if let Some(fix) = result_wrapper_fix(t, &p.non_null()) {
                     diagnostic.with_fix(fix)
                 } else {
