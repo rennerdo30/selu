@@ -160,7 +160,7 @@ impl Toc {
             .iter()
             .filter(|(k, _)| k.eq_ignore_ascii_case(key))
             .flat_map(|(_, v)| {
-                v.split(',')
+                v.split(|c: char| c == ',' || c.is_whitespace())
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
             })
@@ -179,7 +179,7 @@ pub fn parse_toc_game(name: &str, dir: &Path, text: &str, game: Option<&str>) ->
     for line in text.lines() {
         let mut line = line.trim().trim_start_matches('\u{feff}').to_string();
         let mut allowed = true;
-        for directive in ["AllowLoadGameType", "ExcludeLoadGameType"] {
+        for directive in ["AllowLoadGameType", "ExcludeLoadGameType", "AllowLoad"] {
             while let Some(start) = line.find(&format!("[{directive} ")) {
                 let Some(end) = line[start..].find(']').map(|i| start + i) else {
                     break;
@@ -189,14 +189,18 @@ pub fn parse_toc_game(name: &str, dir: &Path, text: &str, game: Option<&str>) ->
                         .split([',', ' '])
                         .any(|v| {
                             let v = v.trim();
+                            if directive == "AllowLoad" {
+                                return v.eq_ignore_ascii_case("game")
+                                    || v.eq_ignore_ascii_case("both");
+                            }
                             v == game
                                 || (v == "mainline" && game == "camelot")
                                 || (v == "classic" && !matches!(game, "mainline" | "camelot"))
                         });
-                    allowed &= if directive == "AllowLoadGameType" {
-                        matches
-                    } else {
+                    allowed &= if directive == "ExcludeLoadGameType" {
                         !matches
+                    } else {
+                        matches
                     };
                 }
                 line.replace_range(start..=end, "");
@@ -252,8 +256,11 @@ fn read_toc_target_client(
         _ => "",
     };
     let flavoured = dir.join(format!("{name}_{suffix}.toc"));
+    let family = dir.join(format!("{name}_Mainline.toc"));
     let path = if !suffix.is_empty() && flavoured.is_file() {
         flavoured
+    } else if matches!(suffix, "Camelot" | "Mainline") && family.is_file() {
+        family
     } else {
         dir.join(format!("{name}.toc"))
     };
@@ -350,6 +357,17 @@ pub(crate) fn read_files_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn load_context_filters_files_and_dependencies() {
+        let toc = parse_toc_game(
+            "Demo",
+            Path::new("Demo"),
+            "## Dep: GameDep [AllowLoad game]\n## Dep: GlueDep [AllowLoad glue]\ngame.xml [AllowLoad Game]\nglue.xml [AllowLoad Glue]\n",
+            Some("camelot"),
+        );
+        assert_eq!(toc.list("Dep"), ["GameDep"]);
+        assert_eq!(toc.files, ["game.xml"]);
+    }
 
     #[test]
     fn blizzard_game_filters_apply_to_files_and_dependencies() {

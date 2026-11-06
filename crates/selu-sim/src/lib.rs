@@ -24,6 +24,7 @@ pub mod core;
 pub mod fonts;
 pub mod frames;
 pub mod loader;
+mod native_defaults;
 mod xml;
 mod regions;
 pub mod saved;

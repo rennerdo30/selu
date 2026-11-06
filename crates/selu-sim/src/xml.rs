@@ -91,7 +91,7 @@ pub(crate) fn read_client(
         } else {
             for element in node.descendants().filter(|n| n.is_element()) {
                 let tag = element.tag_name().name();
-                if !SUPPORTED.contains(&tag) {
+                if !SUPPORTED.contains(&tag) && !element.parent_element().is_some_and(|p|p.tag_name().name()=="Scripts") {
                     diagnostic(format!("not simulated: XML element {tag}"));
                 }
             }
@@ -143,6 +143,8 @@ const SUPPORTED: &[&str] = &[
     "OnMouseDown",
     "OnMouseUp",
     "KeyValues",
+    "BarTexture",
+    "BarColor",
     "KeyValue",
     "FontFamily",
     "Member",
@@ -164,6 +166,12 @@ mod tests {
             sim.eval(&format!("__selu_xml_declare({})", encode(n, 0).unwrap()))
                 .unwrap();
         }
+    }
+    #[test]
+    fn nested_intrinsic_types_apply_before_instance_fields() {
+        let sim=crate::Sim::new().unwrap();
+        run(&sim,r#"<Ui><Frame name="NativeBase" intrinsic="true"><KeyValues><KeyValue key="base" type="number" value="1"/></KeyValues></Frame><NativeBase name="NativeDerived" intrinsic="true"><Size x="40" y="20"/></NativeBase><NativeDerived name="Instance"/></Ui>"#);
+        sim.eval("assert(Instance.base==1 and Instance:GetWidth()==40); local f=CreateFrame('NativeDerived'); assert(f.base==1 and f:GetWidth()==40 and f:GetObjectType()=='Frame')").unwrap();
     }
     #[test]
     fn templates_inherit_mixins_parent_keys_arrays_and_names() {

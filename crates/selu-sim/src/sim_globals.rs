@@ -79,6 +79,30 @@ fn json_value(lua: &Lua, value: &serde_json::Value) -> SimResult<Value> {
 pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx) -> SimResult<()> {
     let globals = lua.globals();
     let shapes: Table = globals.raw_get("__selu_global_shapes")?;
+    let enums = globals
+        .raw_get::<Option<Table>>("Enum")?
+        .unwrap_or(lua.create_table()?);
+    for declaration in &manifest.enums {
+        let table = enums
+            .raw_get::<Option<Table>>(declaration.name.as_str())?
+            .unwrap_or(lua.create_table()?);
+        for (key, value) in &declaration.values {
+            table.raw_set(key.as_str(), json_value(lua, value)?)?;
+        }
+        enums.raw_set(declaration.name.as_str(), table)?;
+    }
+    globals.raw_set("Enum", enums)?;
+    let mut schemas = std::collections::HashMap::new();
+    for schema in manifest.tables.iter().chain(&manifest.widgets) {
+        schemas.insert(schema.name.clone(), schema.clone());
+    }
+    for schema in &manifest.enums {
+        let mut schema = schema.clone();
+        schema.ty = Some("enum".into());
+        schemas.insert(format!("Enum.{}", schema.name), schema.clone());
+        schemas.insert(schema.name.clone(), schema);
+    }
+    let schemas = std::sync::Arc::new(schemas);
     // Native stand-ins use checked manifest return declarations. Existing
     // simulator implementations always win, including namespace members.
     for entry in manifest.functions.iter().filter(|f| f.available) {
@@ -102,43 +126,15 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
         if !owner.raw_get::<Value>(name)?.is_nil() {
             continue;
         }
-        let returns: Vec<_> = signature
-            .returns
-            .iter()
-            .map(|r| {
-                let ty = r.ty.as_deref().unwrap_or("").trim_end_matches('?');
-                if ty == "boolean" || ty == "bool" {
-                    'b'
-                } else if matches!(ty, "number" | "integer" | "float" | "double")
-                    || manifest.enums.iter().any(|e| e.name == ty)
-                {
-                    'n'
-                } else if matches!(ty, "string" | "cstring") {
-                    's'
-                } else if ty == "nil" || ty == "void" {
-                    'v'
-                } else {
-                    't'
-                }
-            })
-            .collect();
+        let returns = signature.returns.clone();
+        let schemas = schemas.clone();
         let context = ctx.clone();
         let full_name = entry.name.clone();
         owner.raw_set(
             name,
             lua.create_function(move |lua, _: mlua::MultiValue| {
                 context.not_simulated(&full_name);
-                let mut values = mlua::MultiValue::new();
-                for ty in &returns {
-                    values.push_back(match ty {
-                        'b' => Value::Boolean(false),
-                        'n' => Value::Number(0.0),
-                        's' => Value::String(lua.create_string("")?),
-                        'v' => Value::Nil,
-                        _ => Value::Table(lua.create_table()?),
-                    });
-                }
-                Ok(values)
+                crate::native_defaults::values(lua, &returns, &schemas, &context, 0)
             })?,
         )?;
     }
@@ -383,16 +379,23 @@ mod sg_tests {
             "../../../manifests/fixtures/forever-1.0.0.1000.json"
         ))
         .unwrap();
+        manifest.enums.push(
+            serde_json::from_value(
+                serde_json::json!({"name":"SyntheticEnum","values":{"Ready":7}}),
+            )
+            .unwrap(),
+        );
+        manifest.tables.push(serde_json::from_value(serde_json::json!({"name":"SyntheticRecord","fields":[{"name":"count","type":"number"}],"methods":[{"name":"Reset","returns":[{"name":"ok","type":"boolean"}]}]})).unwrap());
         manifest.functions.push(serde_json::from_value(serde_json::json!({
             "name":"C_Synthetic.Native","evidence":"verified",
-            "signature":{"name":"Native","returns":[{"name":"text","type":"string"},{"name":"flag","type":"boolean"},{"name":"count","type":"number"}]}
+            "signature":{"name":"Native","returns":[{"name":"text","type":"string"},{"name":"flag","type":"boolean"},{"name":"count","type":"number"},{"name":"record","type":"SyntheticRecord"}]}
         })).unwrap());
         let s = crate::Session::new(crate::SessionConfig {
             manifest: Some(manifest),
             ..Default::default()
         })
         .unwrap();
-        s.eval("for i=1,2 do local s,b,n=C_Synthetic.Native(); assert(s=='' and b==false and n==0) end").unwrap();
+        s.eval("assert(Enum.SyntheticEnum.Ready==7); for i=1,2 do local s,b,n,r=C_Synthetic.Native(); assert(s=='' and b==false and n==0); assert(r.count==0 and r:Reset()==false and r.undeclared==nil) end").unwrap();
         assert_eq!(
             s.logs()
                 .iter()

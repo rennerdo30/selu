@@ -298,6 +298,43 @@ The committed visual fixture is `crates/selu-sim/tests/fixtures/rendering`.
 
 ## SIM1: loading real addons
 
+### Default UI startup (SL-23)
+
+Studio's Game Installs settings include Default UI (enabled when the source is
+available for a wowf target) and a source checkout path. The initial source is
+`E:/Development/wow-ui-source`; it is read-only. Library sessions remain opt-in
+through `Session::load_default_ui`. With a configured client, TOC lists, TOCs,
+Lua and XML bytes prefer local CASC; unavailable entries fall back to the source
+checkout with a note. The checkout is still required for directory discovery
+and canonical path containment. Sources for other targets are not selected by
+switching that checkout's branch.
+
+XML parsing uses roxmltree 0.21.2 (MIT OR Apache-2.0). Includes retain source
+order and are bounded by canonical addon containment, a 64-file include depth,
+a 128-element nesting depth and a 16 MiB input limit. External entities are not
+enabled. Templates and intrinsic types belong only to the simulator VM; this
+does not add Lua interop or declarations to the Selu language.
+
+The loader promotes LoadFirst roots, traverses required dependencies, excludes
+glue-only roots, and leaves LoadOnDemand roots unloaded unless required. Game
+filters understand Camelot's Mainline family and Classic family members.
+Each Blizzard source chunk has an error boundary; the receipt retains failures
+and the worker continues. The user's addon loads afterward, followed by the
+existing login sequence. Studio reports progress, counts, errors and wall time
+in the console. Reload rebuilds the default UI before the user's addon.
+
+Persistent arena tables and method-lookup tables use owning registry keys with
+weak VM references, rather than Lua 5.1's bounded mlua auxiliary stack. Region
+clones share ownership; the final owner removes the registry key. Session
+replacement releases the old VM. No region destruction API is introduced.
+
+This remains an incomplete fidelity implementation: unsupported XML elements,
+missing templates/mixins and native APIs are reported. Roman FontFamily members
+are selected for the synthetic enUS world. Typed native stand-ins preserve
+primitive return shapes; record contents and native widget behavior need more
+simulation. A successful tolerant load is not proof that every Blizzard chunk
+initialized successfully or that the default UI matches the client.
+
 Missing Lua files listed in a TOC produce `missing TOC file: <path>
 (continuing)` and loading proceeds. Existing files still undergo canonical
 sandbox validation; permission failures and unsupported XML remain errors.

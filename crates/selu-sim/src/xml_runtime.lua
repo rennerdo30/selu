@@ -26,6 +26,14 @@ local function expand(s,p)
     return s and (string.gsub(s, '%$parent', function() return name or '' end))
 end
 local apply, create
+local function nativeKind(kind)
+    local seen={}
+    while intrinsic[kind] do
+        assert(not seen[kind],'XML intrinsic inheritance cycle: '..kind)
+        seen[kind]=true; kind=intrinsic[kind]
+    end
+    return kind
+end
 local function inherit(f,s,seen)
     for _,name in ipairs(names(s)) do
         if seen[name] then error('XML template inheritance cycle: '..name) end
@@ -49,10 +57,12 @@ local function script(f,n)
     if a.method then fn=function(self,...) return self[a.method](self,...) end
     elseif a['function'] then fn=lookup(a['function'])
     else
-        local args='self,...'
-        if n.tag=='OnEvent' then args='self,event,...'
-        elseif n.tag=='OnUpdate' then args='self,elapsed,...'
-        elseif n.tag=='OnClick' or n.tag=='OnMouseDown' or n.tag=='OnMouseUp' then args='self,button,...' end
+        local arguments={OnEvent='event',OnUpdate='elapsed',OnClick='button,down',
+            OnMouseDown='button',OnMouseUp='button',OnValueChanged='value,userInput',
+            OnSizeChanged='width,height',OnAttributeChanged='name,value',OnMouseWheel='delta',
+            OnKeyDown='key',OnKeyUp='key',OnChar='text',OnTextChanged='userInput',
+            OnCursorChanged='x,y,width,height',OnDragStart='button',OnDragStop='button'}
+        local args='self,'..(arguments[n.tag] and arguments[n.tag]..',' or '')..'...'
         fn=assert(loadstring('return function('..args..')\n'..n.text..'\nend', '@XML/'..n.tag))()
     end
     if not fn then note('script '..(a['function'] or n.tag)); return end
@@ -63,6 +73,10 @@ local function script(f,n)
     else f:SetScript(n.tag,fn) end
 end
 apply=function(f,n,seen)
+    if intrinsic[n.tag] then
+        assert(not seen[n.tag],'XML intrinsic inheritance cycle: '..n.tag)
+        seen[n.tag]=true; apply(f,templates[n.tag],seen); seen[n.tag]=nil
+    end
     inherit(f,n.a.inherits,seen)
     for _,key in ipairs({'mixin','secureMixin'}) do
         for _,name in ipairs(names(n.a[key])) do
@@ -78,6 +92,9 @@ apply=function(f,n,seen)
     if a.alpha then f:SetAlpha(tonumber(a.alpha)) end
     if a.scale then f:SetScale(tonumber(a.scale)) end
     if a.enableMouse then f:EnableMouse(a.enableMouse=='true') end
+    if a.minValue or a.maxValue then f:SetMinMaxValues(tonumber(a.minValue) or 0,tonumber(a.maxValue) or 1) end
+    if a.defaultValue then f:SetValue(tonumber(a.defaultValue)) end
+    if a.setAllPoints=='true' then f:SetAllPoints(f:GetParent()) end
     if a.text then f:SetText(lookup(a.text) or a.text) end
     if a.file then f:SetTexture(a.file) end
     if a.atlas then f:SetAtlas(a.atlas,a.useAtlasSize=='true') end
@@ -112,8 +129,10 @@ apply=function(f,n,seen)
             end
         elseif c.tag=='Color' then
             local r,g,bl,al=tonumber(b.r) or 1,tonumber(b.g) or 1,tonumber(b.b) or 1,tonumber(b.a) or 1
-            if n.tag=='FontString' then f:SetTextColor(r,g,bl,al) else f:SetVertexColor(r,g,bl,al) end
+            if n.tag=='FontString' or n.tag=='Font' then f:SetTextColor(r,g,bl,al) else f:SetVertexColor(r,g,bl,al) end
         elseif c.tag=='TexCoords' then f:SetTexCoord(tonumber(b.left) or 0,tonumber(b.right) or 1,tonumber(b.top) or 0,tonumber(b.bottom) or 1)
+        elseif c.tag=='BarTexture' then f:SetStatusBarTexture(create(c,f))
+        elseif c.tag=='BarColor' then f:SetStatusBarColor(tonumber(b.r) or 1,tonumber(b.g) or 1,tonumber(b.b) or 1,tonumber(b.a) or 1)
         elseif string.match(c.tag,'Texture$') then
             local texture=create(c,f)
             local setter=f['Set'..c.tag]; if setter then setter(f,texture) end
@@ -129,7 +148,7 @@ create=function(n,parent,layer)
     if n.tag=='Texture' or string.match(n.tag,'Texture$') then f=parent:CreateTexture(name,layer)
     elseif n.tag=='FontString' then f=parent:CreateFontString(name,layer)
     elseif n.tag=='Font' then f=CreateFont(name)
-    else f=native(intrinsic[n.tag] or n.tag,name,parent) end
+    else f=native(nativeKind(n.tag),name,parent) end
     if parent and a.parentKey then parent[a.parentKey]=f end
     if parent and a.parentArray then
         local array=parent[a.parentArray] or {}; parent[a.parentArray]=array; array[#array+1]=f
@@ -144,7 +163,7 @@ function __selu_xml_apply(f,s)
     inherit(f,s,{})
     local onload=f:GetScript('OnLoad'); if onload then onload(f) end
 end
-function __selu_xml_intrinsic(kind) return intrinsic[kind] end
+function __selu_xml_intrinsic(kind) if intrinsic[kind] then return nativeKind(kind) end end
 function __selu_xml_declare(n)
     if n.tag=='FontFamily' then
         for _,member in ipairs(n.children) do

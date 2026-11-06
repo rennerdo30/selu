@@ -193,6 +193,20 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
     }
     for i in 0..a.regions.len() {
         let r = &a.regions[i];
+        if let (Some(index), Some(mut rect)) = (r.status_texture, r.rect) {
+            let fraction = if r.max > r.min {
+                ((r.value - r.min) / (r.max - r.min)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            if r.orientation == "VERTICAL" {
+                rect.height *= fraction;
+            } else {
+                rect.width *= fraction;
+            }
+            a.regions[index].rect = Some(rect);
+        }
+        let r = &a.regions[i];
         if let (Some(index), Some(q)) = (r.thumb, r.rect) {
             let fraction = if r.max > r.min {
                 (r.value - r.min) / (r.max - r.min)

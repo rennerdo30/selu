@@ -111,6 +111,28 @@ pub fn create(
     name: Option<String>,
     parent: Option<Table>,
 ) -> mlua::Result<Table> {
+    let kind = [
+        "Frame",
+        "Button",
+        "CheckButton",
+        "EditBox",
+        "Slider",
+        "StatusBar",
+        "ScrollFrame",
+        "Minimap",
+        "GameTooltip",
+        "Model",
+        "PlayerModel",
+        "DressUpModel",
+        "SimpleHTML",
+        "Cooldown",
+        "Texture",
+        "FontString",
+        "MaskTexture",
+    ]
+    .into_iter()
+    .find(|candidate| candidate.eq_ignore_ascii_case(kind))
+    .unwrap_or(kind);
     let a = store(lua);
     let index = a.borrow().regions.len();
     let parent = parent.or_else(|| {
@@ -182,9 +204,15 @@ pub fn create(
         propagate_keyboard: false,
         wheel: false,
         thumb: None,
+        status_texture: None,
         step: 0.0,
         obey_step: false,
-        orientation: "VERTICAL".into(),
+        orientation: if kind == "StatusBar" {
+            "HORIZONTAL"
+        } else {
+            "VERTICAL"
+        }
+        .into(),
         movable: false,
         clamped: false,
         drag_buttons: vec![],
@@ -225,7 +253,14 @@ pub fn create(
         m
     } else {
         let m = lua.create_table()?;
-        for method in METHODS.split_whitespace() {
+        for method in METHODS.split_whitespace().chain([
+            "GetAttribute",
+            "SetAttribute",
+            "SetStatusBarTexture",
+            "GetStatusBarTexture",
+            "SetStatusBarColor",
+            "GetStatusBarColor",
+        ]) {
             let method = method.to_owned();
             let context = ctx.clone();
             m.set(
@@ -325,6 +360,29 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             Ok(())
         })?;
         out!(constructor.call::<Table>((t.clone(), note, translate))?);
+    }
+    if matches!(method, "GetAttribute" | "SetAttribute") {
+        let attributes = t
+            .raw_get::<Option<Table>>("__attributes")?
+            .unwrap_or(lua.create_table()?);
+        let name =
+            string(v.first()).ok_or_else(|| mlua::Error::runtime("attribute name expected"))?;
+        let old = attributes.raw_get::<Value>(name.as_str())?;
+        if method == "GetAttribute" {
+            out!(old);
+        }
+        let value = v.get(1).cloned().unwrap_or(Value::Nil);
+        attributes.raw_set(name.as_str(), value.clone())?;
+        t.raw_set("__attributes", attributes)?;
+        if old != value {
+            callback(
+                ctx,
+                t.clone(),
+                "OnAttributeChanged",
+                vec![Value::String(lua.create_string(name)?), value],
+            );
+        }
+        out!(());
     }
     if matches!(
         method,
@@ -431,11 +489,34 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         a.dirty_regions.insert(i);
         out!(());
     }
-    if method == "SetThumbTexture" {
+    if method == "SetStatusBarColor" || method == "GetStatusBarColor" {
+        let mut arena = a.borrow_mut();
+        if method == "GetStatusBarColor" {
+            let c = arena.regions[i].visual.tint;
+            out!((c[0], c[1], c[2], c[3]));
+        }
+        let color = [
+            number(v.first(), 1.0) as f32,
+            number(v.get(1), 1.0) as f32,
+            number(v.get(2), 1.0) as f32,
+            number(v.get(3), 1.0) as f32,
+        ];
+        arena.regions[i].visual.tint = color;
+        if let Some(child) = arena.regions[i].status_texture {
+            arena.regions[child].visual.tint = color;
+        }
+        out!(());
+    }
+    if matches!(method, "SetThumbTexture" | "SetStatusBarTexture") {
+        let status = method == "SetStatusBarTexture";
         let child = match v.first() {
             Some(Value::Table(child)) => child.clone(),
             _ => {
-                let existing = a.borrow().regions[i].thumb;
+                let existing = if status {
+                    a.borrow().regions[i].status_texture
+                } else {
+                    a.borrow().regions[i].thumb
+                };
                 let child = if let Some(index) = existing {
                     a.borrow().regions[index].table.get()
                 } else {
@@ -456,11 +537,23 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         let index = id(&child)?;
         let mut arena = a.borrow_mut();
         arena.regions[index].parent = Some(i);
-        arena.regions[i].thumb = Some(index);
+        if status {
+            arena.regions[i].status_texture = Some(index);
+            arena.regions[index].visual.tint = arena.regions[i].visual.tint;
+        } else {
+            arena.regions[i].thumb = Some(index);
+        }
         arena.dirty = true;
         arena.full_layout = true;
         layout::resolve(&mut arena, ctx);
         out!(());
+    }
+    if method == "GetStatusBarTexture" {
+        out!(
+            a.borrow().regions[i]
+                .status_texture
+                .map(|index| a.borrow().regions[index].table.get())
+        );
     }
     if method == "GetThumbTexture" {
         out!(

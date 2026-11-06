@@ -107,6 +107,7 @@ impl HostValue {
 }
 #[derive(Default)]
 struct VmState {
+    blizzard_loaded: HashSet<String>,
     loaded: Vec<PathBuf>,
     loading: HashSet<PathBuf>,
     commands: Vec<HostCommand>,
@@ -402,6 +403,7 @@ impl Session {
         mut progress: impl FnMut(&str),
     ) -> SimResult<crate::loader::DefaultUiReport> {
         let start = std::time::Instant::now();
+        let log_start = lock(&self.sim.logs).len();
         let build = self
             .config
             .manifest
@@ -445,6 +447,25 @@ impl Session {
         .map_err(runtime)?;
         report.notes.extend(source_notes);
         self.default_ui_source = Some(source.to_path_buf());
+        let api = self
+            .sim
+            .lua
+            .globals()
+            .raw_get::<Option<Table>>("C_AddOns")?
+            .unwrap_or(self.sim.lua.create_table()?);
+        let state = self.sim.state.clone();
+        let loaded = self.sim.lua.create_function(move |_, name: String| {
+            let state = lock(&state);
+            let loaded = state.blizzard_loaded.contains(&name)
+                || state
+                    .loaded
+                    .iter()
+                    .any(|p| p.file_name().is_some_and(|n| n == name.as_str()));
+            Ok((loaded, loaded))
+        })?;
+        api.raw_set("IsAddOnLoaded", loaded.clone())?;
+        self.sim.lua.globals().raw_set("IsAddOnLoaded", loaded)?;
+        self.sim.lua.globals().raw_set("C_AddOns", api)?;
         for toc in addons {
             progress(&toc.name);
             let files = match loader::read_files_client(&toc, &mut |s| report.notes.push(s), client)
@@ -457,6 +478,9 @@ impl Session {
             };
             crate::fonts::register_addon_root(self.sim.lua(), &toc.dir)?;
             let ns = self.sim.lua.create_table()?;
+            self.sim
+                .lua
+                .set_named_registry_value(&format!("selu:addon:{}", toc.name), ns.clone())?;
             for (name, source) in files {
                 let result = dispatch(&self.sim.lua, &self.sim.ctx, || {
                     core::call_lua::<()>(
@@ -470,6 +494,9 @@ impl Session {
                 }
             }
             report.addons_loaded += 1;
+            lock(&self.sim.state)
+                .blizzard_loaded
+                .insert(toc.name.clone());
             if let Err(error) = self.sim.fire(
                 "ADDON_LOADED",
                 vec![Value::String(self.sim.lua.create_string(&toc.name)?)],
@@ -478,6 +505,13 @@ impl Session {
             }
         }
         report.elapsed = start.elapsed();
+        for line in lock(&self.sim.logs).iter().skip(log_start) {
+            if line.starts_with("error:") || line.starts_with("callback error") {
+                report.errors.push(line.clone());
+            } else if line.starts_with("not simulated:") {
+                report.notes.push(line.clone());
+            }
+        }
         report.notes.sort();
         report.notes.dedup();
         Ok(report)
@@ -714,10 +748,18 @@ impl Session {
         let state = self.sim.state.clone();
         let config = self.config.clone();
         let saved = self.saved.clone();
-        let api: Table = self.sim.lua.create_table()?;
+        let api: Table = self
+            .sim
+            .lua
+            .globals()
+            .raw_get::<Option<Table>>("C_AddOns")?
+            .unwrap_or(self.sim.lua.create_table()?);
         api.set(
             "LoadAddOn",
             self.sim.lua.create_function(move |lua, name: String| {
+                if lock(&state).blizzard_loaded.contains(&name) {
+                    return Ok((Some(true), None));
+                }
                 let vm = Vm {
                     lua: lua.clone(),
                     ctx: ctx.clone(),

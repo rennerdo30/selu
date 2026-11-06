@@ -142,6 +142,28 @@ mod manifest;
 #[cfg(test)]
 mod tests {
     #[test]
+    fn status_bar_texture_tracks_value_and_colour() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("local f=CreateFrame('StatusBar','StatusFixture'); f:SetSize(100,20); f:SetPoint('CENTER'); f:SetMinMaxValues(0,100); f:SetStatusBarTexture('test.blp'); f:SetValue(25); f:SetStatusBarColor(0,1,0); assert(f:GetStatusBarTexture():GetParent()==f)").unwrap();
+        let snapshot = sim.snapshot().unwrap();
+        let texture = snapshot
+            .regions
+            .iter()
+            .find(|r| {
+                r.parent.is_some_and(|p| {
+                    snapshot.regions[p.index as usize].name.as_deref() == Some("StatusFixture")
+                })
+            })
+            .unwrap();
+        assert_eq!(texture.rect.unwrap().width, 25.0);
+        assert_eq!(texture.visual.tint, [0.0, 1.0, 0.0, 1.0]);
+    }
+    #[test]
+    fn uppercase_native_frames_keep_attribute_callbacks() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("local f=CreateFrame('FRAME'); assert(f:GetObjectType()=='Frame'); f:SetForbidden(); local n=0; f:SetScript('OnAttributeChanged',function(self,name,value) assert(name=='demo' and value==7); n=n+1 end); f:SetAttribute('demo',7); f:SetAttribute('demo',7); assert(f:GetAttribute('demo')==7 and n==1)").unwrap();
+    }
+    #[test]
     fn more_than_eight_thousand_regions_keep_identity_across_registry_ownership() {
         let sim = crate::Sim::new().unwrap();
         sim.eval("for i=1,8100 do local f=CreateFrame('Frame','RegistryFrame'..i); f.index=i end; assert(RegistryFrame8100.index==8100); assert(RegistryFrame1:GetName()=='RegistryFrame1')").unwrap();

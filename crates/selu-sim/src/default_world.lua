@@ -19,3 +19,4 @@ function GetRealZoneText() return GetZoneText() end
 function GetSubZoneText() return 'Northshire Valley' end
 function IsLoggedIn() return true end
 function IsPlayerInWorld() return true end
+function securecallfunction(fn,...) return fn(...) end

@@ -86,6 +86,7 @@ pub struct Region {
     pub propagate_keyboard: bool,
     pub wheel: bool,
     pub thumb: Option<usize>,
+    pub status_texture: Option<usize>,
     pub step: f64,
     pub obey_step: bool,
     pub orientation: String,
