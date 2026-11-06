@@ -30,6 +30,10 @@ pub enum Command {
     LoadDefaultUi {
         source: PathBuf,
     },
+    SeedSaved {
+        dir: PathBuf,
+        values: std::collections::BTreeMap<String, selu_sim::saved::SavedValue>,
+    },
     LoadAddon {
         dir: PathBuf,
     },
@@ -213,6 +217,10 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
                     })
                     .map_err(|e| e.to_string())
             }
+            Command::SeedSaved { dir, values } => session
+                .seed_saved(&dir, &values)
+                .map(|_| None)
+                .map_err(|e| e.to_string()),
             Command::LoadAddon { dir } => session
                 .load_addon_dir(&dir)
                 .map(|_| None)

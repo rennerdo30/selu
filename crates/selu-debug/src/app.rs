@@ -246,6 +246,18 @@ pub struct Studio {
     scenario_bag: String,
     scenario_bag_id: i32,
     scenario_status: String,
+    saved_choice: Vec<String>,
+    saved_lists: [Vec<String>; 3],
+    /// The WTF folder the account list was read from; a new folder rescans.
+    saved_scanned: Option<PathBuf>,
+    /// Why a saved-variables list is empty, shown under the pickers.
+    saved_scan_note: String,
+    saved_status: String,
+    saved_identity: Option<(String, String)>,
+    saved_seed: Option<(
+        PathBuf,
+        std::collections::BTreeMap<String, selu_sim::saved::SavedValue>,
+    )>,
     side: Side,
     side_open: bool,
     panel_open: bool,
@@ -335,6 +347,13 @@ impl Studio {
             scenario_bag: String::new(),
             scenario_bag_id: 0,
             scenario_status: String::new(),
+            saved_choice: vec![String::new(); 3],
+            saved_lists: Default::default(),
+            saved_scanned: None,
+            saved_scan_note: String::new(),
+            saved_status: String::new(),
+            saved_identity: None,
+            saved_seed: None,
             side: if std::env::var_os("SELU_STUDIO_SCENARIO").is_some() {
                 Side::Scenario
             } else if opts_project.is_some() {
@@ -1482,6 +1501,12 @@ impl Studio {
                 .unwrap_or_else(|| PathBuf::from("selu"))
         });
         // The project's own targets and lock decide what to build and load.
+        self.saved_seed = None;
+        self.saved_identity = None;
+        self.saved_choice = vec![String::new(); 3];
+        self.saved_lists = Default::default();
+        self.saved_scanned = None;
+        self.saved_status.clear();
         self.opts.project = Some(dir.clone());
         self.opts.selu = Some(selu);
         self.opts.target = None;
@@ -1573,11 +1598,26 @@ impl Studio {
             client_install: self.opts.client_install.clone(),
             manifest: self.opts.manifest.clone(),
             target: self.opts.target.clone(),
+            character: self
+                .saved_identity
+                .as_ref()
+                .map(|v| v.0.clone())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| SessionConfig::default().character),
+            realm: self
+                .saved_identity
+                .as_ref()
+                .map(|v| v.1.clone())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| SessionConfig::default().realm),
             trace: true,
             ..SessionConfig::default()
         });
         self.in_flight = 0;
         self.snapshot = None;
+        if let Some((dir, values)) = self.saved_seed.clone() {
+            self.send(Command::SeedSaved { dir, values });
+        }
         self.queue_default_ui();
         for dir in self.opts.addons.clone() {
             self.send(Command::LoadAddon { dir });
@@ -2195,7 +2235,173 @@ impl Studio {
         );
     }
 
+    fn wtf_root(&self) -> Option<PathBuf> {
+        if !self.game_settings.wtf_override.trim().is_empty() {
+            return Some(PathBuf::from(self.game_settings.wtf_override.trim()));
+        }
+        let root = self.opts.client_install.as_ref()?;
+        if root
+            .file_name()
+            .and_then(|s| s.to_str())
+            .and_then(crate::game::flavour_of)
+            .is_some()
+        {
+            return Some(root.join("WTF"));
+        }
+        let target = self
+            .opts
+            .manifest
+            .as_ref()
+            .map(selu_manifest::Manifest::target_string)
+            .or_else(|| self.opts.target.clone())?;
+        let product = target.split('@').next()?;
+        // The product folder (`_retail_`, `_forever_`, ...) under the install.
+        let mut folders: Vec<PathBuf> = std::fs::read_dir(root)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|s| s.to_str())
+                    .and_then(crate::game::flavour_of)
+                    == Some(product)
+            })
+            .collect();
+        folders.sort();
+        Some(folders.into_iter().next()?.join("WTF"))
+    }
+    fn saved_ui(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Saved variables", |ui| {
+            ui.label("WTF folder override (blank uses configured client)");
+            if ui
+                .text_edit_singleline(&mut self.game_settings.wtf_override)
+                .lost_focus()
+            {
+                let _ = self.game_settings.save();
+            }
+            if ui.button("Clear").clicked() {
+                self.saved_seed = None;
+                self.saved_identity = None;
+                self.saved_status = "Empty saved data".into();
+                self.restart_session();
+            }
+            let Some(root) = self.wtf_root() else {
+                ui.label("Configure a client install or WTF override.");
+                return;
+            };
+            ui.label(root.display().to_string());
+            let project = self
+                .opts
+                .project
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let rescan = ui.button("Rescan accounts").clicked();
+            if rescan || self.saved_scanned.as_ref() != Some(&root) {
+                self.saved_scanned = Some(root.clone());
+                if let Some(choice) = self
+                    .game_settings
+                    .saved_choices
+                    .get(&project)
+                    .filter(|v| v.len() == 3)
+                {
+                    self.saved_choice = choice.clone();
+                }
+                let accounts = root.join("Account");
+                self.saved_lists = Default::default();
+                self.saved_scan_note.clear();
+                match saved_dirs(&accounts) {
+                    Ok(list) if list.is_empty() => {
+                        self.saved_scan_note = format!(
+                            "No accounts in {}. Log in once with this client so WoW creates it.",
+                            accounts.display()
+                        );
+                    }
+                    Ok(list) => self.saved_lists[0] = list,
+                    Err(e) => self.saved_scan_note = e,
+                }
+                // A remembered choice that no longer exists is dropped.
+                for i in 0..3 {
+                    let known = self.saved_lists[i].contains(&self.saved_choice[i]);
+                    if !known {
+                        for j in i..3 {
+                            self.saved_choice[j].clear();
+                        }
+                        break;
+                    }
+                    if i < 2 {
+                        let mut path = accounts.clone();
+                        for c in &self.saved_choice[..=i] {
+                            path.push(c);
+                        }
+                        self.saved_lists[i + 1] = saved_dirs(&path).unwrap_or_default();
+                    }
+                }
+            }
+            for (i, label) in ["Account", "Realm", "Character"].iter().enumerate() {
+                let before = self.saved_choice[i].clone();
+                egui::ComboBox::from_id_salt(label)
+                    .selected_text(format!("{label}: {}", self.saved_choice[i]))
+                    .show_ui(ui, |ui| {
+                        for name in &self.saved_lists[i] {
+                            ui.selectable_value(&mut self.saved_choice[i], name.clone(), name);
+                        }
+                    });
+                if before != self.saved_choice[i] && i < 2 {
+                    for j in i + 1..3 {
+                        self.saved_choice[j].clear();
+                        self.saved_lists[j].clear();
+                    }
+                    let mut path = root.join("Account");
+                    for j in 0..=i {
+                        path.push(&self.saved_choice[j]);
+                    }
+                    self.saved_lists[i + 1] = saved_dirs(&path).unwrap_or_default();
+                }
+            }
+            if !self.saved_scan_note.is_empty() {
+                ui.label(egui::RichText::new(&self.saved_scan_note).color(palette::MUTED));
+            }
+            if ui
+                .add_enabled(!self.saved_choice[0].is_empty(), egui::Button::new("Load"))
+                .clicked()
+            {
+                if let Some(dir) = self.opts.addons.first().cloned() {
+                    match selu_sim::loader::read_toc_target(&dir, self.opts.target.as_deref()) {
+                        Ok(toc) => {
+                            let result = selu_sim::wtf::load(
+                                &root,
+                                &self.saved_choice[0],
+                                &self.saved_choice[1],
+                                &self.saved_choice[2],
+                                &toc,
+                            );
+                            self.saved_status = format!(
+                                "Loaded: {}\n{}",
+                                result.values.keys().cloned().collect::<Vec<_>>().join(", "),
+                                result.warnings.join("\n")
+                            );
+                            self.saved_seed = Some((dir, result.values));
+                            self.saved_identity =
+                                Some((self.saved_choice[2].clone(), self.saved_choice[1].clone()));
+                            self.game_settings
+                                .saved_choices
+                                .insert(project, self.saved_choice.clone());
+                            let _ = self.game_settings.save();
+                            self.restart_session();
+                        }
+                        Err(e) => self.saved_status = e,
+                    }
+                } else {
+                    self.saved_status = "Build the open project first.".into();
+                }
+            }
+            ui.label(&self.saved_status);
+        });
+    }
+
     fn scenario_ui(&mut self, ui: &mut egui::Ui) {
+        self.saved_ui(ui);
         caption(ui, "Scenario");
         let mut apply = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -3583,6 +3789,30 @@ mod tests {
     use selu_sim::RegionId;
 
     #[test]
+    fn saved_folder_choices_use_fixture_tree() {
+        let root = std::env::temp_dir().join(format!("studio-sl29-{}", std::process::id()));
+        for part in ["Account/B", "Account/A", "Account/SavedVariables"] {
+            std::fs::create_dir_all(root.join(part)).unwrap();
+        }
+        assert_eq!(saved_dirs(&root.join("Account")).unwrap(), ["A", "B"]);
+        assert!(
+            saved_dirs(&root.join("Missing"))
+                .unwrap_err()
+                .contains("Missing")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        let mut settings = crate::game::Settings::default();
+        settings.wtf_override = "fixture/WTF".into();
+        settings.saved_choices.insert(
+            "fixture-project".into(),
+            vec!["A".into(), "Realm".into(), "Hero".into()],
+        );
+        let encoded = toml::to_string(&settings).unwrap();
+        let decoded: crate::game::Settings = toml::from_str(&encoded).unwrap();
+        assert_eq!(settings, decoded);
+    }
+
+    #[test]
     fn event_args_parse_from_words_or_json() {
         assert_eq!(
             parse_args("player 42 true nil \"x\""),
@@ -3722,4 +3952,19 @@ mod open_project_tests {
         assert_eq!(find_project(&empty), None);
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+/// The subfolders of a WTF account/realm folder, sorted; an unreadable
+/// folder says why.
+fn saved_dirs(path: &Path) -> Result<Vec<String>, String> {
+    let entries =
+        std::fs::read_dir(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    let mut names: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|s| s != "SavedVariables")
+        .collect();
+    names.sort();
+    Ok(names)
 }

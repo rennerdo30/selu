@@ -396,7 +396,8 @@ nil. The former no-op tests now probe an actual known unmodelled method,
 Tooltip ownership is stateful. The native Minimap global has an explicitly
 sourced widget shape from Blizzard's
 [Minimap.xml](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_Minimap/Mainline/Minimap.xml);
-map imagery is not simulated. Hook callbacks retain registry keys rather than
+it is 198x198 at the top right, where the default UI puts it, so minimap
+buttons show on screen. Map imagery is not simulated. Hook callbacks retain registry keys rather than
 auxiliary-stack function references, preserving error routing and flush order.
 
 SIM1 also seeds a deterministic simulated player from the session character
@@ -639,3 +640,21 @@ is not evidence that atlas metadata lookup failed. Full HUD acceptance remains
 open: private/forbidden partitions, missing native/world data, unwanted panels
 and unpositioned render regions still require stage-1 work. Later interaction
 and richer world scenarios do not replace those acceptance requirements.
+
+### Import SavedVariables in Studio
+
+In Scenario > Saved variables, set the WTF folder override if needed, then
+choose account and realm/character, and Load. The account list is read when the
+section opens or the folder changes (Rescan accounts reads it again); an empty or
+unreadable `Account` folder is explained under the pickers. The default is the
+configured install's product folder (`_retail_`, `_forever_`, etc.) plus `WTF`.
+Build the project first so its TOC is available. Studio remembers the selection
+per project in its own settings. Load restarts and seeds the declared values
+before addon loading; Clear restarts with empty saved data.
+
+Imports are read-only data parsing, never Lua execution. Only TOC SavedVariables
+and SavedVariablesPerCharacter names are imported. Skipped names, missing files
+and names, and file:line parse errors appear below the controls. A malformed file
+is skipped as a whole. Config.wtf and CVars are outside this feature. Logout and
+reload never write to the game install. Non-finite numbers are parsed but refused
+by the existing session saved-data validator.

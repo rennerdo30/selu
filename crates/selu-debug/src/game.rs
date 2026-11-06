@@ -154,6 +154,10 @@ pub struct Settings {
     #[serde(default)]
     pub default_ui_source: Option<PathBuf>,
     #[serde(default)]
+    pub wtf_override: String,
+    #[serde(default)]
+    pub saved_choices: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
     pub disable_client_assets: bool,
     #[serde(default)]
     pub client_install: Option<PathBuf>,
@@ -182,6 +186,8 @@ impl Default for Settings {
         Self {
             disable_default_ui: true,
             default_ui_source: None,
+            wtf_override: String::new(),
+            saved_choices: BTreeMap::new(),
             disable_client_assets: false,
             client_install: None,
             extra_roots: Vec::new(),
