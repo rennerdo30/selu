@@ -992,6 +992,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 x: 0.0,
                 y: 0.0,
             }];
+            a.dirty_regions.insert(c);
         }
         a.regions[i].scroll_child = child;
     }

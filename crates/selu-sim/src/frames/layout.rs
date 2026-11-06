@@ -24,14 +24,48 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
         return;
     }
     let _profile = crate::profile::Span::new("layout.resolve");
-    for (index, r) in a.regions.iter_mut().enumerate() {
-        if !a.full_layout
-            && !a.styles_dirty
-            && !a.dirty_regions.is_empty()
-            && !a.dirty_regions.contains(&index)
-        {
-            continue;
+    let previous_count = a.layout_dependencies.len();
+    a.layout_dependencies.resize_with(a.regions.len(), Vec::new);
+    a.layout_dependents
+        .resize_with(a.regions.len(), Default::default);
+    let mut structural = if a.full_layout {
+        (0..a.regions.len()).collect::<Vec<_>>()
+    } else {
+        a.dirty_regions
+            .iter()
+            .copied()
+            .chain(previous_count..a.regions.len())
+            .collect()
+    };
+    structural.sort_unstable();
+    structural.dedup();
+    for index in structural {
+        let region = &a.regions[index];
+        let mut dependencies = region
+            .parent
+            .into_iter()
+            .chain(region.points.iter().map(|point| point.relative))
+            .filter(|relative| *relative < a.regions.len())
+            .collect::<Vec<_>>();
+        dependencies.sort_unstable();
+        dependencies.dedup();
+        if a.layout_dependencies[index] != dependencies {
+            for relative in &a.layout_dependencies[index] {
+                a.layout_dependents[*relative].remove(&index);
+            }
+            for relative in &dependencies {
+                a.layout_dependents[*relative].insert(index);
+            }
+            a.layout_dependencies[index] = dependencies;
         }
+    }
+    let style_regions = if a.full_layout || a.styles_dirty || a.dirty_regions.is_empty() {
+        (0..a.regions.len()).collect::<Vec<_>>()
+    } else {
+        a.dirty_regions.iter().copied().collect()
+    };
+    for index in style_regions {
+        let r = &mut a.regions[index];
         let original_style = r.visual.clone();
         let mut object = r
             .table
@@ -148,49 +182,51 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
         }
     }
     a.styles_dirty = false;
-    let before = a
-        .regions
-        .iter()
-        .map(|r| (r.visible, r.rect, r.effective_scale))
-        .collect::<Vec<_>>();
     // Seed the dependency closure from mutations; external bulk invalidations
     // (root resize, input, font roots) retain conservative full resolution.
     let mut changed = vec![a.full_layout || a.dirty_regions.is_empty(); a.regions.len()];
-    for i in a.dirty_regions.drain() {
-        changed[i] = true;
+    let mut active = if changed.first() == Some(&true) {
+        (0..a.regions.len()).collect::<Vec<_>>()
+    } else {
+        a.dirty_regions.iter().copied().collect()
+    };
+    a.dirty_regions.clear();
+    for index in &active {
+        changed[*index] = true;
     }
-    loop {
-        let mut more = false;
-        for (i, r) in a.regions.iter().enumerate() {
-            if !changed[i]
-                && (r.parent.is_some_and(|p| changed[p])
-                    || r.points
-                        .iter()
-                        .any(|p| changed.get(p.relative).copied().unwrap_or(true)))
-            {
-                changed[i] = true;
-                more = true;
+    let mut cursor = 0;
+    while cursor < active.len() {
+        for dependent in &a.layout_dependents[active[cursor]] {
+            if !changed[*dependent] {
+                changed[*dependent] = true;
+                active.push(*dependent);
             }
         }
-        if !more {
-            break;
-        }
+        cursor += 1;
     }
+    active.sort_unstable();
+    let before = active
+        .iter()
+        .map(|index| {
+            let r = &a.regions[*index];
+            (r.visible, r.rect, r.effective_scale)
+        })
+        .collect::<Vec<_>>();
     let mut inherited = changed
         .iter()
         .map(|v| if *v { 0u8 } else { 2 })
         .collect::<Vec<_>>();
-    for i in 0..a.regions.len() {
+    for &i in &active {
         inherit(i, a, &mut inherited, ctx);
     }
     let mut marks = changed
         .iter()
         .map(|v| if *v { 0u8 } else { 2 })
         .collect::<Vec<_>>();
-    for i in 0..a.regions.len() {
+    for &i in &active {
         visit(i, a, &mut marks, ctx);
     }
-    for i in 0..a.regions.len() {
+    for &i in &active {
         let r = &a.regions[i];
         if let (Some(index), Some(mut rect)) = (r.status_texture, r.rect) {
             let fraction = if r.max > r.min {
@@ -237,8 +273,8 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
     }
     a.dirty = false;
     a.full_layout = false;
-    for (i, r) in a.regions.iter().enumerate() {
-        let (visible, rect, old_scale) = before[i];
+    for (&i, &(visible, rect, old_scale)) in active.iter().zip(&before) {
+        let r = &a.regions[i];
         if visible != r.visible {
             super::widgets::callback(
                 ctx,
@@ -261,13 +297,15 @@ pub fn resolve(a: &mut Arena, ctx: &Ctx) {
             );
         }
     }
-    let auto_focus = a
-        .regions
+    let auto_focus = active
         .iter()
-        .enumerate()
+        .zip(&before)
         .rev()
-        .find(|(i, r)| r.kind == "EditBox" && r.auto_focus && r.visible && !before[*i].0)
-        .map(|(i, _)| i);
+        .find(|(i, before)| {
+            let r = &a.regions[**i];
+            r.kind == "EditBox" && r.auto_focus && r.visible && !before.0
+        })
+        .map(|(i, _)| *i);
     if let Some(i) = auto_focus {
         focus(a, ctx, Some(i));
     }

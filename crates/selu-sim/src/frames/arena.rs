@@ -116,6 +116,8 @@ pub struct Arena {
     pub layout_batches: usize,
     pub styles_dirty: bool,
     pub dirty_regions: std::collections::HashSet<usize>,
+    pub layout_dependencies: Vec<Vec<usize>>,
+    pub layout_dependents: Vec<std::collections::HashSet<usize>>,
     pub cursor: (f64, f64),
     pub hover: Option<usize>,
     pub focus: Option<usize>,

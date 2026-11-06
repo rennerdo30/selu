@@ -359,6 +359,11 @@ pub fn configure_ui_size(lua: &Lua, size: (f64, f64)) -> mlua::Result<()> {
 mod fidelity_tests {
     use crate::Sim;
     #[test]
+    fn moving_scroll_content_between_parents_refreshes_anchor_dependencies() {
+        let sim = Sim::new().unwrap();
+        sim.eval("local v=CreateFrame('ScrollFrame'); v:SetSize(100,50); v:SetPoint('BOTTOMLEFT',20,30); local c=CreateFrame('Frame',nil,UIParent); c:SetSize(200,150); c:SetPoint('BOTTOMLEFT',500,500); assert(c:GetLeft()==500); v:SetScrollChild(c); assert(c:GetLeft()==20 and c:GetTop()==80); v:SetPoint('BOTTOMLEFT',60,70); assert(c:GetLeft()==60 and c:GetTop()==120); v:SetHorizontalScroll(10); assert(c:GetLeft()==50)").unwrap();
+    }
+    #[test]
     fn scaled_rect_provides_physical_extents_for_blizzard_layout_frames() {
         let sim = Sim::new().unwrap();
         sim.eval("local f=CreateFrame('Frame'); f:SetSize(30,20); f:SetScale(2); f:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',10,15); local l,b,w,h=f:GetScaledRect(); assert(l==20 and b==30 and w==60 and h==40); local x,y,a,z=f:GetRect(); assert(x==10 and y==15 and a==30 and z==20); local unpositioned=CreateFrame('Frame'); assert(unpositioned:GetScaledRect()==nil)").unwrap();

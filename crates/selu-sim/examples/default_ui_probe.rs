@@ -199,6 +199,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session.eval("__probe_original_pcall=pcall; local original=pcall; pcall=function(...) local function finish(ok,...) if not ok then print('CAUGHT '..tostring((...))) end; return ok,... end; return finish(original(...)) end")?;
     }
     session.login()?;
+    if let Err(error)=session.eval(r#"local f=MainActionBar; local m=EditModeManagerFrame; print('HUDMETA',f.system,f.systemIndex,f.numButtonsShowable,f.noSpacers,f.actionButtons and #f.actionButtons,f.shownButtonContainers and #f.shownButtonContainers,m.layoutInfo and m.layoutInfo.activeLayout); if m.GetActiveLayoutSystemInfo then local s=m:GetActiveLayoutSystemInfo(f.system,f.systemIndex); print('HUDMETA system',s and s.system,s and s.systemIndex,s and #s.settings) end; for i=1,f:GetNumPoints() do local p,r,rp,x,y=f:GetPoint(i); print('HUDMETA point',p,r and r:GetName(),rp,x,y) end"#) {eprintln!("HUD diagnostic: {error}");}
     if std::env::var_os("SELU_SIM_PROFILE_PCALL").is_some() {
         session.eval("pcall=__probe_original_pcall; __probe_original_pcall=nil")?;
     }
@@ -240,7 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for line in session
         .prints()
         .iter()
-        .filter(|line| line.contains("CAUGHT"))
+        .filter(|line| line.contains("CAUGHT") || line.contains("HUDMETA"))
     {
         println!("{line}");
     }
