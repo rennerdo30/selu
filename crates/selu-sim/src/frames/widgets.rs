@@ -158,6 +158,13 @@ pub fn create(
         level_explicit: false,
         mouse: matches!(kind, "Button" | "CheckButton" | "EditBox" | "Slider"),
         enabled: true,
+        keyboard: kind == "EditBox",
+        propagate_keyboard: false,
+        wheel: false,
+        thumb: None,
+        step: 0.0,
+        obey_step: false,
+        orientation: "VERTICAL".into(),
         moving: false,
         checked: false,
         value: 0.0,
@@ -246,7 +253,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
+const METHODS: &str = "SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText SetFont GetFont GetStringWidth GetStringHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript HasScript RegisterEvent UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     if !ctx
         .stale_sources
@@ -388,8 +395,80 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         a.dirty_regions.insert(i);
         out!(());
     }
+    if method == "SetThumbTexture" {
+        let child = match v.first() {
+            Some(Value::Table(child)) => child.clone(),
+            _ => {
+                let existing = a.borrow().regions[i].thumb;
+                let child = if let Some(index) = existing {
+                    a.borrow().regions[index].table.clone()
+                } else {
+                    create(lua, ctx, "Texture", None, Some(t.clone()))?
+                };
+                call(
+                    lua,
+                    ctx,
+                    "SetTexture",
+                    MultiValue::from_vec(vec![
+                        Value::Table(child.clone()),
+                        v.first().cloned().unwrap_or(Value::Nil),
+                    ]),
+                )?;
+                child
+            }
+        };
+        let index = id(&child)?;
+        let mut arena = a.borrow_mut();
+        arena.regions[index].parent = Some(i);
+        arena.regions[i].thumb = Some(index);
+        arena.dirty = true;
+        arena.full_layout = true;
+        layout::resolve(&mut arena, ctx);
+        out!(());
+    }
+    if method == "GetThumbTexture" {
+        out!(
+            a.borrow().regions[i]
+                .thumb
+                .map(|index| a.borrow().regions[index].table.clone())
+        );
+    }
     if method == "GetFontObject" {
         out!(t.raw_get::<Value>("__font_object")?);
+    }
+    if matches!(method, "GetTextColor" | "GetShadowColor" | "GetVertexColor") {
+        let key = match method {
+            "GetTextColor" => "_TextColor",
+            "GetShadowColor" => "_ShadowColor",
+            _ => "_VertexColor",
+        };
+        let mut object = Some(t.clone());
+        for _ in 0..64 {
+            let Some(current) = object else { break };
+            if let Some(color) = current.raw_get::<Option<Table>>(key)? {
+                out!((
+                    color.raw_get::<f64>(1)?,
+                    color.raw_get::<f64>(2)?,
+                    color.raw_get::<f64>(3)?,
+                    color.raw_get::<f64>(4).unwrap_or(1.0)
+                ));
+            }
+            if current.raw_get::<Option<Table>>("_parent")?.is_none()
+                && let Some(defaults) = current.raw_get::<Option<Table>>("_defaults")?
+                && let Some(color) =
+                    defaults.raw_get::<Option<Table>>(key.trim_start_matches('_'))?
+            {
+                out!((
+                    color.raw_get::<f64>(1)?,
+                    color.raw_get::<f64>(2)?,
+                    color.raw_get::<f64>(3)?,
+                    color.raw_get::<f64>(4).unwrap_or(1.0)
+                ));
+            }
+            object = current
+                .raw_get::<Option<Table>>("__font_object")?
+                .or(current.raw_get::<Option<Table>>("_parent")?);
+        }
     }
     layout::resolve(&mut a.borrow_mut(), ctx);
     let old = a.borrow().regions[i].clone();
@@ -544,6 +623,20 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "SetBlendMode" => r.visual.blend = s,
         "SetShadowOffset" => r.visual.shadow_offset = (n, number(v.get(1), 0.0)),
         "SetTextColor" | "SetVertexColor" | "SetShadowColor" => {
+            let key = match method {
+                "SetTextColor" => "_TextColor",
+                "SetShadowColor" => "_ShadowColor",
+                _ => "_VertexColor",
+            };
+            t.raw_set(
+                key,
+                lua.create_sequence_from([
+                    n,
+                    number(v.get(1), 1.0),
+                    number(v.get(2), 1.0),
+                    number(v.get(3), 1.0),
+                ])?,
+            )?;
             let color = [
                 n as f32,
                 number(v.get(1), 1.0) as f32,
@@ -675,6 +768,31 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "IsShown" => out!(r.shown),
         "IsVisible" => out!(r.visible),
         "IsProtected" => out!(t.raw_get::<Option<bool>>("__protected")?.unwrap_or(false)),
+        "EnableKeyboard" => r.keyboard = boolean(v.first()),
+        "IsKeyboardEnabled" => out!(r.keyboard),
+        "SetPropagateKeyboardInput" => r.propagate_keyboard = boolean(v.first()),
+        "GetPropagateKeyboardInput" => out!(r.propagate_keyboard),
+        "EnableMouseWheel" => r.wheel = boolean(v.first()),
+        "IsMouseWheelEnabled" => out!(r.wheel),
+        "GetTextColor" | "GetShadowColor" | "GetVertexColor" => {
+            let c = match method {
+                "GetTextColor" => r.visual.color,
+                "GetShadowColor" => r.visual.shadow,
+                _ => r.visual.tint,
+            };
+            out!((c[0], c[1], c[2], c[3]));
+        }
+        "SetOrientation" => {
+            if s != "HORIZONTAL" && s != "VERTICAL" {
+                return Err(mlua::Error::runtime("invalid orientation"));
+            }
+            r.orientation = s;
+        }
+        "GetOrientation" => out!(r.orientation.clone()),
+        "SetValueStep" => r.step = n.max(0.0),
+        "GetValueStep" => out!(r.step),
+        "SetObeyStepOnDrag" => r.obey_step = boolean(v.first()),
+        "GetObeyStepOnDrag" => out!(r.obey_step),
         "EnableMouse" => r.mouse = boolean(v.first()),
         "IsMouseEnabled" => out!(r.mouse),
         "Enable" => r.enabled = true,
@@ -722,7 +840,18 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             r.font_flags = string(v.get(2)).unwrap_or_default();
         }
         "GetFont" => out!((r.font_path.clone(), r.font_size, r.font_flags.clone())),
+        "SetHorizTile" => r.visual.tile[0] = boolean(v.first()),
+        "SetVertTile" => r.visual.tile[1] = boolean(v.first()),
+        "GetHorizTile" => out!(r.visual.tile[0]),
+        "GetVertTile" => out!(r.visual.tile[1]),
         "SetTexture" => {
+            for axis in 0..2 {
+                let mode = string(v.get(axis + 1)).unwrap_or("CLAMP".into());
+                if !matches!(mode.as_str(), "CLAMP" | "REPEAT" | "MIRROR") {
+                    return Err(mlua::Error::runtime("invalid texture wrap mode"));
+                }
+                r.visual.wrap_modes[axis] = mode;
+            }
             r.atlas_uv = None;
             if !asset_available && !matches!(v.first(), None | Some(Value::Nil)) {
                 ctx.not_simulated(&format!("unavailable texture: {s}"));
@@ -900,6 +1029,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "SetMinMaxValues" => {
             r.min = n;
             r.max = number(v.get(1), 1.0).max(n);
+            r.value = r.value.clamp(r.min, r.max);
         }
         "GetMinMaxValues" => out!((r.min, r.max)),
         "StartMoving" => {
@@ -973,7 +1103,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             ctx,
             t.clone(),
             "OnValueChanged",
-            vec![Value::Number(new.value), Value::Boolean(false)],
+            vec![
+                Value::Number(new.value),
+                Value::Boolean(method == "SetValue" && boolean(v.get(1))),
+            ],
         );
     }
     for (changed, name, value) in [

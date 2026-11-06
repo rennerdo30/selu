@@ -428,3 +428,34 @@ full member. Unsupported phase-1 table layouts and encrypted/missing local
 content remain explicit unavailable placeholders. Atlas metadata is cached.
 Nine-slice rendering, atlas tiling and filter/wrap overrides remain fidelity
 limits of the existing renderer.
+
+
+## SIM4 widgets
+
+Texture snapshots retain horizontal/vertical tiling and independent SetTexture
+wrap modes. Studio splits textured quads at sampler boundaries for CLAMP,
+REPEAT and MIRROR; tiling uses image pixel dimensions. Geometry is bounded to
+512 sampler boundaries per axis. Filter overrides and atlas tiling remain
+outside this implementation.
+
+FontString colour getters retain Lua numeric precision, including inherited
+font-object colours; snapshot colours remain render floats. Keyboard enabling,
+propagation and wheel enabling are stateful. Host `key` dispatches topmost
+visible enabled keyboard frames until propagation stops. Disabled or hidden
+EditBoxes reject text and Enter input. Host `wheel` dispatches OnMouseWheel;
+the installed script owns value-changing policy.
+
+Sliders reclamp when ranges change and suppress unchanged-value callbacks.
+SetValue's second argument controls OnValueChanged's user-input flag. Host drag
+uses the thumb's travel span and rounds to the nearest range-relative step
+when obey-step-on-drag is enabled. Horizontal minimum is left; vertical minimum
+is top. Thumb textures are ordinary child regions in snapshots and Studio.
+
+Sources: local read-only wow-ui-source
+`Interface/AddOns/Blizzard_APIDocumentationGenerated/SimpleSliderAPIDocumentation.lua`
+(SetValue's treatAsMouseEvent, step/orientation/thumb methods),
+`SimpleTextureBaseAPIDocumentation.lua` (wrap arguments and tile methods),
+`Blizzard_SharedXML/Shared/Slider/MinimalSlider.lua:6` (explicit obey-step policy),
+`Blizzard_SharedXML/HybridScrollFrame.lua:263` (vertical scrolling starts at zero),
+and `Blizzard_SharedXML/NineSlice.lua:76` (horizontal tiling).
+Native tie-breaking and GPU filtering fidelity have not been measured in WoW.

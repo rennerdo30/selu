@@ -1,0 +1,8 @@
+local s=CreateFrame('Slider','SIM4Horizontal',UIParent)
+s:SetSize(400,30);s:SetPoint('CENTER',UIParent,'CENTER',0,40);s:SetOrientation('HORIZONTAL');s:SetMinMaxValues(0,100);s:SetValue(65)
+local track=s:CreateTexture(nil,'BACKGROUND');track:SetAllPoints();track:SetColorTexture(.15,.2,.3,1)
+local thumb=s:CreateTexture(nil,'OVERLAY');thumb:SetSize(24,36);thumb:SetColorTexture(1,.7,.1,1);s:SetThumbTexture(thumb)
+local v=CreateFrame('Slider','SIM4Vertical',UIParent);v:SetSize(30,200);v:SetPoint('CENTER',UIParent,'CENTER',260,0);v:SetMinMaxValues(0,100);v:SetValue(25)
+local vt=v:CreateTexture(nil,'BACKGROUND');vt:SetAllPoints();vt:SetColorTexture(.15,.2,.3,1)
+local t=v:CreateTexture(nil,'OVERLAY');t:SetSize(36,24);t:SetColorTexture(.3,.8,1,1);v:SetThumbTexture(t)
+local tile=UIParent:CreateTexture('SIM4Tile','ARTWORK');tile:SetSize(400,80);tile:SetPoint('CENTER',UIParent,'CENTER',0,-60);tile:SetTexture('Interface/AddOns/sim4/checker.tga','REPEAT','MIRROR');tile:SetHorizTile(true);tile:SetVertTile(true)
