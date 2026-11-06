@@ -137,7 +137,15 @@ apply=function(f,n,seen)
         end
     end
     local a=n.a
-    if a.hidden=='true' then f:Hide() end
+    if a.hidden~=nil then
+        -- This is the initial XML state, before the instance's OnLoad.
+        -- Inherited visibility scripts must not observe a half-built frame.
+        local event=a.hidden=='true' and 'OnHide' or 'OnShow'
+        local previous=f:GetScript(event); f:SetScript(event,nil)
+        local ok,err=pcall(function() if a.hidden=='true' then f:Hide() else f:Show() end end)
+        f:SetScript(event,previous)
+        if not ok then error(err,0) end
+    end
     if a.frameStrata then f:SetFrameStrata(a.frameStrata) end
     if a.frameLevel then f:SetFrameLevel(tonumber(a.frameLevel)) end
     if a.alpha then f:SetAlpha(tonumber(a.alpha)) end

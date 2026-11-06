@@ -205,6 +205,15 @@ mod tests {
         sim.eval("assert(Root:GetID()==17 and Root:GetWidth()==80); assert(Root.value==7); assert(Root:Answer()==42); assert(Root.Button==RootButton); assert(Root.buttons[1]==RootButton); assert(RootButton:GetParent()==Root); local f=CreateFrame('Frame','FromLua',nil,'Nested'); assert(f.Button==FromLuaButton)").unwrap();
     }
     #[test]
+    fn initial_hidden_attribute_does_not_fire_inherited_onhide() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="Base" virtual="true"><Scripts><OnHide>HiddenDuringCreation=true</OnHide></Scripts></Frame><Frame name="Root" inherits="Base" hidden="true"/></Ui>"#,
+        );
+        sim.eval("assert(not Root:IsShown() and not HiddenDuringCreation); Root:Show(); Root:Hide(); assert(HiddenDuringCreation)").unwrap();
+    }
+    #[test]
     fn animation_groups_are_available_to_frame_onload() {
         let sim = crate::Sim::new().unwrap();
         run(
