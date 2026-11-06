@@ -2216,19 +2216,20 @@ impl Studio {
             .map(selu_manifest::Manifest::target_string)
             .or_else(|| self.opts.target.clone())?;
         let product = target.split('@').next()?;
-        let folder = match product {
-            "wow" | "retail" => "_retail_",
-            "wowf" | "forever" => "_forever_",
-            "wowt" => "_ptr_",
-            "wowxptr" => "_xptr_",
-            "wow_beta" => "_beta_",
-            "wow_classic" => "_classic_",
-            "wow_classic_era" => "_classic_era_",
-            "wow_anniversary" => "_anniversary_",
-            "wow_classic_titan" => "_titan_",
-            _ => return None,
-        };
-        Some(root.join(folder).join("WTF"))
+        // The product folder (`_retail_`, `_forever_`, ...) under the install.
+        let mut folders: Vec<PathBuf> = std::fs::read_dir(root)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|s| s.to_str())
+                    .and_then(crate::game::flavour_of)
+                    == Some(product)
+            })
+            .collect();
+        folders.sort();
+        Some(folders.into_iter().next()?.join("WTF"))
     }
     fn saved_ui(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Saved variables", |ui| {
