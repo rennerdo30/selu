@@ -196,14 +196,16 @@ mod tests {
             &sim,
             r#"<Ui>
           <Frame name="Base" virtual="true"><Size x="80" y="20"/></Frame>
+          <Frame name="SelectionTemplate" virtual="true" parentKey="Selection" parentArray="selections"/>
           <Frame name="Other" virtual="true"><KeyValues><KeyValue key="value" type="number" value="7"/></KeyValues></Frame>
           <Frame name="Nested" virtual="true" inherits="Base,Other" mixin="DemoMixin">
-            <Frames><Button name="$parentButton" parentKey="Button" parentArray="buttons"/></Frames>
+            <Frames><Button name="$parentButton" parentKey="Button" parentArray="buttons"/><Frame inherits="SelectionTemplate"/></Frames>
           </Frame>
           <Frame name="Root" inherits="Nested" id="17"/>
         </Ui>"#,
         );
         sim.eval("assert(Root:GetID()==17 and Root:GetWidth()==80); assert(Root.value==7); assert(Root:Answer()==42); assert(Root.Button==RootButton); assert(Root.buttons[1]==RootButton); assert(RootButton:GetParent()==Root); local f=CreateFrame('Frame','FromLua',nil,'Nested'); assert(f.Button==FromLuaButton)").unwrap();
+        sim.eval("assert(Root.Selection and Root.Selection:GetParent()==Root); assert(#Root.selections==1 and Root.selections[1]==Root.Selection)").unwrap();
     }
     #[test]
     fn intrinsic_constructors_and_postcall_handlers_survive_normal_scripts() {
@@ -256,6 +258,15 @@ mod tests {
             r#"<Ui><Frame name="Cycle" virtual="true" inherits="Cycle"/></Ui>"#,
         );
         assert!(sim.eval("CreateFrame('Frame',nil,nil,'Cycle')").is_err());
+    }
+    #[test]
+    fn button_texture_slots_keep_xml_regions_and_lua_replacements() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Button name="Root"><Size x="80" y="30"/><Anchors><Anchor point="CENTER"/></Anchors><NormalTexture parentKey="Art" file="Interface/Buttons/WHITE8X8"/><HighlightTexture parentKey="Highlight" file="Interface/Buttons/WHITE8X8"/></Button></Ui>"#,
+        );
+        sim.eval("assert(Root:GetNormalTexture()==Root.Art); assert(Root:GetHighlightTexture()==Root.Highlight); assert(not Root.Highlight:IsShown()); Root:SetNormalTexture('Interface/Buttons/WHITE8X8'); assert(Root:GetNormalTexture()==Root.Art and Root.Art:IsShown()); Root:SetNormalTexture(nil); assert(Root:GetNormalTexture()==nil and not Root.Art:IsShown())").unwrap();
     }
     #[test]
     fn utf8_and_multiline_scripts_survive_encoding() {

@@ -1,0 +1,457 @@
+{
+  "AccountStoreConsts": {
+    "KegLegRenownCurrencyID": 2814,
+    "PlunderstormPlunderCurrencyID": 3139,
+    "PlunderstormStoreFrontID": 1,
+    "WowhackStoreFrontID": 3
+  },
+  "AuctionConstants": {
+    "DEFAULT_AUCTION_PRICE_MULTIPLIER": 1.5
+  },
+  "CAAConstants": {
+    "CAADebuffSelfAlertDefault": 0,
+    "CAAEnabledDefault": false,
+    "CAAFrequencyDefault": 0,
+    "CAAFrequencyMax": 10,
+    "CAAFrequencyMin": -10,
+    "CAAInterruptCastDefault": 0,
+    "CAAInterruptCastSuccessDefault": 0,
+    "CAAMinCastTimeDefault": 1.5,
+    "CAAMinCastTimeMax": 5,
+    "CAAMinCastTimeMin": 0,
+    "CAAMinCastTimeStep": 0.5,
+    "CAAPartyHealthPercentDefault": 0,
+    "CAAPlayerCastFormatDefault": 4,
+    "CAAPlayerCastModeDefault": 0,
+    "CAAPlayerHealthFormatDefault": 1,
+    "CAAPlayerHealthPercentDefault": 0,
+    "CAAPlayerResourceFormatDefault": 1,
+    "CAAPlayerResourcePercentDefault": 0,
+    "CAAPulsePlayerHealthPercentDefault": 0,
+    "CAASamePercentThrottleTime": 10,
+    "CAASampleTextThrottleTime": 1,
+    "CAASayCombatEndDefault": true,
+    "CAASayCombatStartDefault": true,
+    "CAASayIfTargetedDefault": 1,
+    "CAASayYourDebuffsDefault": true,
+    "CAASayYourDebuffsFormatDefault": 0,
+    "CAASayYourDebuffsMinDurationDefault": 1.5,
+    "CAASayYourDebuffsMinDurationMax": 5,
+    "CAASayYourDebuffsMinDurationMin": 0,
+    "CAASayYourDebuffsMinDurationStep": 0.5,
+    "CAATargetCastFormatDefault": 0,
+    "CAATargetCastModeDefault": 0,
+    "CAATargetDeathBehaviorDefault": 0,
+    "CAATargetHealthFormatDefault": 3,
+    "CAATargetHealthPercentDefault": 2,
+    "CAATargetNameDefault": true,
+    "CAAThrottleDefault": 0,
+    "CAAThrottleMax": 5,
+    "CAAThrottleMin": 0,
+    "CAAThrottleStep": 0.5,
+    "CAAVoiceDefault": 0
+  },
+  "CalendarGetEventTypeConstants": {
+    "DEFAULT_CALENDAR_GET_EVENT_TYPE": 0
+  },
+  "Callings": {
+    "MaxCallings": 3
+  },
+  "CatalogShopVirtualCurrencyConstants": {},
+  "CharCustomizationConstants": {
+    "CHAR_CUSTOMIZE_CUSTOM_DISPLAY_OPTION_FIRST": 5,
+    "CHAR_CUSTOMIZE_CUSTOM_DISPLAY_OPTION_LAST": 8,
+    "NAME_RESERVATION_DAYS": 30,
+    "NUM_CUSTOM_DISPLAY": 4
+  },
+  "CharacterNameSeparatorConsts": {},
+  "ChatFrameConstants": {
+    "MaxCharacterNameBytes": 305,
+    "MaxChatChannels": 20,
+    "MaxChatWindows": 10
+  },
+  "CombatLogMessageLimits": {
+    "CombatLogDefaultMessageLimit": 300,
+    "CombatLogMaximumMessageLimit": 1000
+  },
+  "CombatLogObjectMasks": {
+    "COMBATLOG_OBJECT_AFFILIATION_MASK": 15,
+    "COMBATLOG_OBJECT_CONTROL_MASK": 768,
+    "COMBATLOG_OBJECT_REACTION_MASK": 240,
+    "COMBATLOG_OBJECT_SPECIAL_MASK": -65536,
+    "COMBATLOG_OBJECT_TYPE_MASK": 64512
+  },
+  "CombatLogObjectTargetMasks": {
+    "COMBATLOG_OBJECT_RAID_MASK": -1,
+    "COMBATLOG_OBJECT_RAID_TARGET_MASK": 255
+  },
+  "ContentTrackingConsts": {
+    "MaxTrackedAchievements": 10,
+    "MaxTrackedCollectableSources": 15
+  },
+  "CooldownFrameDefaults": {
+    "COOLDOWN_DEFAULT_BLING_DURATION_MS": 1000,
+    "COOLDOWN_DEFAULT_COUNTDOWN_ABBREV_THRESHOLD_MS": 120000,
+    "COOLDOWN_DEFAULT_COUNTDOWN_MILLISECOND_THRESHOLD_MS": 0,
+    "COOLDOWN_DEFAULT_COUNTDOWN_MINIMUM_DURATION_MS": 2000,
+    "COOLDOWN_DEFAULT_USE_AURA_DISPLAY_TIME": false
+  },
+  "CooldownViewerUIConstants": {
+    "COOLDOWN_VIEWER_CATEGORY_SET_SIZE": 16,
+    "COOLDOWN_VIEWER_COMBAT_POTION_ICON_FID": 134737,
+    "COOLDOWN_VIEWER_HEALTHSTONE_ICON_FID": 538745,
+    "COOLDOWN_VIEWER_HEALTH_POTION_ICON_FID": 134834,
+    "COOLDOWN_VIEWER_LINKED_SPELLS_SIZE": 4,
+    "COOLDOWN_VIEWER_SPEC_AGNOSTIC_PARENT_ID": 0
+  },
+  "CraftingOrderConsts": {
+    "MAX_CRAFTING_ORDER_FAVORITE_RECIPES": 100,
+    "NPC_CRAFTING_ORDER_NUM_SUPPORTED_REWARDS": 2
+  },
+  "CurrencyConsts": {
+    "ACCOUNT_WIDE_HONOR_CURRENCY_ID": 1585,
+    "ACCOUNT_WIDE_HONOR_LEVEL_CURRENCY_ID": 1586,
+    "ARTIFACT_KNOWLEDGE_CURRENCY_ID": 1171,
+    "CLASSIC_ARENA_POINTS_CURRENCY_ID": 1900,
+    "CLASSIC_CONQUEST_CURRENCY_ID": 390,
+    "CLASSIC_HONOR_CURRENCY_ID": 1901,
+    "CONQUEST_ARENA_AND_BG_META_CURRENCY_ID": 483,
+    "CONQUEST_ARENA_META_CURRENCY_ID": 483,
+    "CONQUEST_ASHRAN_META_CURRENCY_ID": 692,
+    "CONQUEST_BG_META_CURRENCY_ID": 484,
+    "CONQUEST_CURRENCY_ID": 1602,
+    "CONQUEST_POINTS_CURRENCY_ID": 390,
+    "CONQUEST_RATED_BG_META_CURRENCY_ID": 484,
+    "CURRENCY_ID_PERKS_PROGRAM_DISPLAY_INFO": 2032,
+    "CURRENCY_ID_RENOWN": 1822,
+    "CURRENCY_ID_RENOWN_KYRIAN": 1829,
+    "CURRENCY_ID_RENOWN_LEGACY": 3485,
+    "CURRENCY_ID_RENOWN_NECROLORD": 1832,
+    "CURRENCY_ID_RENOWN_NIGHT_FAE": 1831,
+    "CURRENCY_ID_RENOWN_PVP_RANK": 3473,
+    "CURRENCY_ID_RENOWN_VENTHYR": 1830,
+    "CURRENCY_ID_RESERVOIR_ANIMA": 1813,
+    "CURRENCY_ID_WILLING_SOUL": 1810,
+    "CURRENCY_WALLET_TYPE_WOWMONEY": 0,
+    "DRAGON_ISLES_SUPPLIES_CURRENCY_ID": 2003,
+    "ECHOES_OF_NYALOTHA_CURRENCY_ID": 1803,
+    "HONOR_CURRENCY_ID": 1792,
+    "HONOR_PER_CURRENCY": 10,
+    "IMMEDIATE_CURRENCY_WALLET_ITEM_ID": 276637,
+    "MAX_CURRENCY_QUANTITY": 100000000,
+    "PLAYER_CURRENCY_CLIENT_FLAGS": 12,
+    "PVP_CURRENCY_CONQUEST_ALLIANCE_INV_ICON": 463448,
+    "PVP_CURRENCY_CONQUEST_HORDE_INV_ICON": 463449,
+    "PVP_CURRENCY_HONOR_ALLIANCE_INV_ICON": 463450,
+    "PVP_CURRENCY_HONOR_HORDE_INV_ICON": 463451,
+    "QUESTIONMARK_INV_ICON": 134400,
+    "WAR_RESOURCES_CURRENCY_ID": 1560
+  },
+  "DeathRecapConsts": {
+    "SWING_DAMAGE_SPELL_ID": 88163
+  },
+  "DelvesConsts": {
+    "DELVES_COMPANION_BRANN_CREATURE_ID": 210759,
+    "DELVES_COMPANION_INFO_SELECTION_CHARACTER_DATA_ELEMENT_ID": 13,
+    "DELVES_COMPANION_TOOLTIP_WIDGET_SET_ID": 1331,
+    "DELVES_COMPANION_VALEERA_CREATURE_ID": 248567,
+    "DELVES_MIN_PLAYER_LEVEL_CONTENT_TUNING_ID": 2677,
+    "DELVES_NORMAL_KEY_CURRENCY_ID": 3028
+  },
+  "EditModeConsts": {
+    "EditModeDefaultGridSpacing": 100,
+    "EditModeMaxGridSpacing": 300,
+    "EditModeMaxLayoutsPerType": 5,
+    "EditModeMinGridSpacing": 20
+  },
+  "EditModeLayoutConsts_Mainline": {
+    "EditModeDefaultLayout": 0
+  },
+  "EncodingLimits": {
+    "EncodingDecompressSizeLimit": 104857600,
+    "EncodingStackSizeLimit": 100
+  },
+  "EncounterTimelineEventConstants": {
+    "ENCOUNTER_TIMELINE_INVALID_EVENT": 0,
+    "ENCOUNTER_TIMELINE_RESERVED_EVENT_COUNT": 40
+  },
+  "EncounterTimelineIconMasks": {
+    "EncounterTimelineNoIcons": 0,
+    "EncounterTimelineDeadlyIcons": 1,
+    "EncounterTimelineEnrageIcons": 2,
+    "EncounterTimelineDispelIcons": 124,
+    "EncounterTimelineOtherIcons": 127,
+    "EncounterTimelineTankAlertIcons": 128,
+    "EncounterTimelineHealerAlertIcons": 256,
+    "EncounterTimelineDamageAlertIcons": 512,
+    "EncounterTimelineRoleIcons": 896,
+    "EncounterTimelineAllIcons": 1023
+  },
+  "EventScheduler": {
+    "SCHEDULED_EVENT_FUTURE_LIMIT": 12,
+    "SCHEDULED_EVENT_PAST_LIMIT_SECONDS": 3600,
+    "SCHEDULED_EVENT_REMINDER_DEAD_SECONDS": 10,
+    "SCHEDULED_EVENT_REMINDER_WARNING_SECONDS": 300
+  },
+  "GamepadActionBarConstants": {
+    "GAMEPAD_ACTION_BAR_PAGE_UNIT_SPECIAL_PAGE_INDEX": 4,
+    "NUM_GAMEPAD_STANCE_ACTION_BARS": 5,
+    "NUM_GROUPS_PER_GAMEPAD_ACTION_BAR": 2,
+    "NUM_PAGEABLE_BARS_IN_GAMEPAD_ACTION_BAR_PAGE_UNIT": 4,
+    "NUM_PAGEABLE_SLOTS_PER_GAMEPAD_ACTION_BAR_PAGE_UNIT": 96,
+    "NUM_PAGEABLE_SLOTS_PER_GAMEPAD_ACTION_BAR_PAGE_UNIT_STANDARD_PAGE": 32,
+    "NUM_PAGES_PER_GAMEPAD_ACTION_BAR_PAGE_UNIT": 4,
+    "NUM_RESERVED_SLOTS_PER_GAMEPAD_ACTION_BAR_PAGE_UNIT": 4,
+    "NUM_SLOTS_PER_GAMEPAD_ACTION_BAR": 8,
+    "NUM_SLOTS_PER_GAMEPAD_ACTION_BAR_GROUP": 4,
+    "NUM_STANDARD_PAGES_PER_GAMEPAD_ACTION_BAR_PAGE_UNIT": 3
+  },
+  "GroupBuffUIConstants": {
+    "GROUP_BUFF_ITEM_LIST_SIZE": 16
+  },
+  "HousingCatalogConsts": {
+    "HOUSING_CATALOG_ALL_CATEGORY_ID": 18,
+    "HOUSING_CATALOG_DECOR_MODELSCENEID_DEFAULT": 1317,
+    "HOUSING_CATALOG_FEATURED_CATEGORY_ID": 17
+  },
+  "HousingConsts": {
+    "BlueprintNameMaxCharacters": 50,
+    "BlueprintNameMinCharacters": 3,
+    "HOUSING_BLUEPRINTS_MAX_BACKUPS_PER_BNET_ACCOUNT": 10,
+    "HOUSING_BLUEPRINTS_MAX_PER_BNET_ACCOUNT": 50,
+    "NeighborhoodNameMaxCharacters": 50,
+    "NeighborhoodNameMinCharacters": 3
+  },
+  "ITEM_WEAPON_SUBCLASSConstants": {
+    "ITEM_WEAPON_SUBCLASS_IS2HWEAPON_MASK": 1049954,
+    "ITEM_WEAPON_SUBCLASS_ISMAINHANDWEAPON_NONRANGED_MASK": 1091571,
+    "ITEM_WEAPON_SUBCLASS_ISRANGEDWEAPON_MASK": 851980,
+    "ITEM_WEAPON_SUBCLASS_ISTWOHANDEDRANGEDWEAPON_MASK": 262156,
+    "ITEM_WEAPON_SUBCLASS_MASK": 2097151,
+    "ITEM_WEAPON_SUBCLASS_NONE": -1,
+    "ITEM_WEAPON_SUBCLASS_USES2HANDS_MASK": 1312110
+  },
+  "ITEM_WEAPON_SUBCLASSConstants_PostMists": {
+    "ITEM_WEAPON_SUBCLASS_ISTITANSGRIPWEAPON_MASK": 1378
+  },
+  "InventoryConstants": {
+    "MAX_TRANSACTION_BANK_TABS": 9,
+    "NumAccountBankSlots": 9,
+    "NumBagSlots": 4,
+    "NumCharacterBankSlots": 9,
+    "NumReagentBagSlots": 1
+  },
+  "ItemConsts": {
+    "CASTER_WEAPON_DAMAGE_REDUCTION_DIVISOR_WITH_FLAG": 3,
+    "CASTER_WEAPON_SPELL_HEALING_DAMAGE_MULT_WITH_FLAG": 1.2530000209808,
+    "CASTER_WEAPON_SPELL_HEALING_MULT_WITH_FLAG": 3.7599999904633,
+    "CASTER_WEAPON_SPELL_POWER_MULT_WITH_FLAG": 2,
+    "CURRENT_ARTIFACT_POWERS_VERSION": 1,
+    "CURRENT_ITEM_SAVE_VERSION": 2,
+    "DEFAULT_ARTIFACT_POWERS_VERSION": 1,
+    "DEFAULT_ITEM_SAVE_VERSION": 2,
+    "DEFAULT_RETENTION": 7,
+    "INVALID_BANK_TAB_SLOT": 255,
+    "MAXIMUM_QUEST_ITEM_LOOT_PRIORITY_VALUES": 16,
+    "MAX_LOOT_OBJECT_ITEMS": 31,
+    "NUM_ITEM_ENCHANTMENT_SOCKETS": 3,
+    "NUM_PROFESSION_PROP_POINTS_CATEGORIES": 2,
+    "NUM_RAND_PROP_POINTS_CATEGORIES": 5
+  },
+  "ItemConsts_Mainline": {
+    "HWM_SQUISH_ERA_PLAYER_DATA_ACCOUNT_ELEMENT_ID": 212
+  },
+  "LFGConstsExposed": {
+    "GROUP_FINDER_MAX_ACTIVITY_CAPACITY": 16
+  },
+  "LFG_ROLEConstants": {
+    "LFG_ROLE_ANY": 3,
+    "LFG_ROLE_NO_ROLE": -1
+  },
+  "LegacyConsts": {
+    "LEGACY_DEFAULT_CATEGORY_DRUID": 15577,
+    "LEGACY_DEFAULT_CATEGORY_HUNTER": 15578,
+    "LEGACY_DEFAULT_CATEGORY_MAGE": 15579,
+    "LEGACY_DEFAULT_CATEGORY_PALADIN": 15580,
+    "LEGACY_DEFAULT_CATEGORY_PRIEST": 15581,
+    "LEGACY_DEFAULT_CATEGORY_ROGUE": 15582,
+    "LEGACY_DEFAULT_CATEGORY_SHAMAN": 15583,
+    "LEGACY_DEFAULT_CATEGORY_WARLOCK": 15584,
+    "LEGACY_DEFAULT_CATEGORY_WARRIOR": 15585,
+    "LEGACY_POINTS_TRAIT_CURRENCY_ID": 4225,
+    "LEGACY_REWARD_TRACK_FACTION_ID": 2802,
+    "LEGACY_TREE_ADVENTURE_ID": 1188,
+    "LEGACY_TREE_ADVENTURE_TALENTED_NODE_ID": 110298,
+    "LEGACY_TREE_PROFESSIONS_ID": 1187,
+    "LEGACY_TREE_PROGRESSION_ID": 1189
+  },
+  "LevelConstsExposed": {
+    "MIN_ACHIEVEMENT_LEVEL": 10,
+    "MIN_RES_SICKNESS_LEVEL": 10,
+    "MIN_TALENT_LEVEL": 10
+  },
+  "LootConsts": {
+    "MasterLootQualityThreshold": 4
+  },
+  "LossOfControlConsts": {
+    "LOSS_OF_CONTROL_ACTIVE_INDEX": 1
+  },
+  "MacroConsts": {
+    "MAX_ACCOUNT_MACROS": 120,
+    "MAX_CHARACTER_MACROS": 30
+  },
+  "MajorFactionsConsts": {
+    "PLUNDERSTORM_MAJOR_FACTION_ID": 2593,
+    "PVP_RANK_POINTS_FACTION_ID": 2800,
+    "WORLD_STATE_RAPID_RENOWN_CAP_10_0": 20851,
+    "WORLD_STATE_RENOWN_CAP_10_0": 19735
+  },
+  "MoneyFormattingConstants": {
+    "GOLD_REWARD_THRESHOLD_TO_HIDE_COPPER": 10
+  },
+  "MountDynamicFlightConsts": {
+    "TRAIT_SYSTEM_ID": 1,
+    "TREE_ID": 672
+  },
+  "PartyCountdownConstants": {
+    "MaxCountdownSeconds": 3600
+  },
+  "PetBattleConsts": {
+    "SUMMON_RANDOM_FAVORITE_BATTLEPET_SPELL_ID": 243819
+  },
+  "PetConsts": {
+    "DEFAULT_PET_PERSONALITY": 1,
+    "EXTRA_PET_STABLE_SLOT": -1,
+    "MAX_NUM_PET_SLOTS": 25,
+    "MAX_STABLE_SLOTS": 2,
+    "MAX_SUMMONABLE_HUNTER_PETS": 1,
+    "NUM_PET_SLOTS_HUNTER": 3,
+    "NUM_PET_SLOTS_THAT_NEED_LEARNED_SPELL": 1,
+    "PET_XP_LEVEL_MODIFIER": 0.25,
+    "STABLED_PETS_FIRST_SLOT_INDEX": 1
+  },
+  "ProfessionConsts": {
+    "CLASSIC_PROFESSION_PARENT_TIER_INDEX": 4,
+    "CRAFTING_ORDER_CLAIM_DURATION": 1800,
+    "CRAFTING_ORDER_CURRENCY_WALLET_ITEM_ID": 262724,
+    "CRAFTING_ORDER_ITEM_RETENTION": 30,
+    "MAX_CRAFTING_REAGENT_SLOTS": 12,
+    "NUM_PRIMARY_PROFESSIONS": 2,
+    "PUBLIC_CRAFTING_ORDER_STALE_THRESHOLD": 14400,
+    "RUNEFORGING_ROOT_CATEGORY_ID": 210,
+    "RUNEFORGING_SKILL_LINE_ID": 960
+  },
+  "PvpInfoConsts": {
+    "MAX_PVP_LOCK_LIST_MAP": 2,
+    "MaxPlayersPerInstance": 80
+  },
+  "QuestConsts": {
+    "QUEST_INFO_DUNGEON_ID": 81,
+    "QUEST_INFO_ELITE_ID": 1,
+    "QUEST_INFO_PVP_ID": 41,
+    "QUEST_INFO_RAID_ID": 62
+  },
+  "QuestLogConsts": {
+    "MAXIMUM_NUM_QUESTS_LOG_CAN_ACCEPT": 40
+  },
+  "QuestWatchConsts": {
+    "MAX_QUEST_WATCHES": 25,
+    "MAX_WORLD_QUEST_WATCHES_AUTOMATIC": 1,
+    "MAX_WORLD_QUEST_WATCHES_MANUAL": 5
+  },
+  "RaidMarkerConsts": {
+    "MAX_RAID_MARKERS": 8,
+    "MAX_RAID_TARGETS_RESTRICTED": 8,
+    "MAX_RAID_TARGETS_USER": 8,
+    "MAX_VALID_RAID_TARGETS": 16
+  },
+  "RecentAlliesConsts": {
+    "PIN_EXPIRATION_WARNING_DAYS": 5
+  },
+  "SpellBookSpellIDs": {
+    "SPELL_ID_DISMISS_PET": 2641
+  },
+  "SpellCooldownConsts": {
+    "COMBAT_POTION_CATEGORY": 4,
+    "GLOBAL_RECOVERY_CATEGORY": 133,
+    "HEALTHSTONE_CATEGORY": 1711,
+    "HEALTH_POTION_CATEGORY": 30
+  },
+  "TTSConstants": {
+    "TTSRateDefault": 0,
+    "TTSRateMax": 10,
+    "TTSRateMin": -10,
+    "TTSVolumeDefault": 100,
+    "TTSVolumeMax": 100,
+    "TTSVolumeMin": 0
+  },
+  "TalentConsts": {
+    "NumTalentColumns": 3
+  },
+  "TalentTierConstants": {
+    "MAX_TALENT_TIERS": 7
+  },
+  "TieredEntranceConsts": {
+    "TIERED_ENTRANCE_INFO_WORLD_TIER_DIFFICULTY_CHARACTER_ELEMENT_ID": 522,
+    "TIERED_ENTRANCE_TIER_SCORE_VALUE_MAP_ID": 3,
+    "TIERED_ENTRANCE_TIER_SCORE_VALUE_PLAYER_CONDITION_ID": 6,
+    "TIERED_ENTRANCE_TIER_SCORE_VALUE_TIER_LEVEL": 1
+  },
+  "TimerunningConsts": {
+    "TIMERUNNING_ITEM_CTR": 2905,
+    "TIMERUNNING_LEGION_ARTIFACT_CTR": 4579,
+    "TIMERUNNING_SEASON_LEGION": 2,
+    "TIMERUNNING_SEASON_NONE": 0,
+    "TIMERUNNING_SEASON_PANDARIA": 1
+  },
+  "TraitConsts": {
+    "COMMIT_COMBAT_TRAIT_CONFIG_CHANGES_SPELL_ID": 384255,
+    "INSPECT_TRAIT_CONFIG_ID": -1,
+    "MAX_COMBAT_TRAIT_CONFIGS": 40,
+    "STARTER_BUILD_TRAIT_CONFIG_ID": -2,
+    "VIEW_TRAIT_CONFIG_ID": -3
+  },
+  "Transmog": {
+    "MainHandTransmogIsIndividualWeapon": -1,
+    "MainHandTransmogIsPairedWeapon": 0,
+    "NoTransmogID": 0
+  },
+  "TransmogOutfitDataConsts": {
+    "CLEAR_TRANSMOG_OUTFIT_MANUAL_SPELL_ID": 1247917,
+    "EQUIP_TRANSMOG_OUTFIT_MANUAL_SPELL_ID": 1247613,
+    "TRANSMOG_OUTFIT_SLOT_NONE": -1
+  },
+  "UICharacterClasses": {
+    "Warrior": 1,
+    "Paladin": 2,
+    "Hunter": 3,
+    "Rogue": 4,
+    "Priest": 5,
+    "DeathKnight": 6,
+    "Shaman": 7,
+    "Mage": 8,
+    "Warlock": 9,
+    "Monk": 10,
+    "Druid": 11,
+    "DemonHunter": 12,
+    "Evoker": 13
+  },
+  "UnitAuraUIConstants": {
+    "GROUP_BUFF_VISUAL_ALERT_LIST_SIZE": 128,
+    "HIDDEN_GROUP_BUFF_LIST_SIZE": 128
+  },
+  "UnitEventConstants": {
+    "MAX_UNIT_TOKENS_IN_EVENT": 4
+  },
+  "UnitPowerSpellIDs": {
+    "COLLAPSING_STAR_PASSIVE_SPELL_ID": 1221167,
+    "COLLAPSING_STAR_SPELL_ID": 1221150,
+    "DARK_HEART_SPELL_ID": 1225789,
+    "SILENCE_THE_WHISPERS_SPELL_ID": 1227702,
+    "VOID_METAMORPHOSIS_SPELL_ID": 1217607
+  },
+  "WeeklyRewardsConsts": {
+    "ABORT_ITEM_RETENTION_DAYS": 15,
+    "WEEKLY_REWARD_ITEM_RETENTION_DAYS": 15
+  }
+}

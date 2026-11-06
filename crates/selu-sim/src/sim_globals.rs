@@ -273,6 +273,26 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
 pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
     let _profile = crate::profile::Span::new("globals.lookup");
     let globals = lua.globals();
+    // The locally installed GlobalStrings DB2 can be absent. These source-
+    // documented localized string families get visible synthetic labels in
+    // the opt-in default UI; other unknown globals still remain unknown.
+    if [
+        "HUD_EDIT_MODE_",
+        "ICON_TAG_RAID_TARGET_",
+        "CHAT_MSG_",
+        "SLASH_",
+    ]
+    .iter()
+    .any(|prefix| key.starts_with(prefix))
+        && lua
+            .named_registry_value::<Option<bool>>("selu.default_ui_strings")?
+            .unwrap_or(false)
+    {
+        ctx.not_simulated(&format!("localized client string: {key}"));
+        let value = Value::String(lua.create_string(key.replace('_', " "))?);
+        globals.raw_set(key, value.clone())?;
+        return Ok(Some(value));
+    }
     let shapes: Table = globals.raw_get("__selu_global_shapes")?;
     // Native Minimap exists in Blizzard_Minimap/Minimap.xml even when an
     // extraction revision has no typed global record for it.

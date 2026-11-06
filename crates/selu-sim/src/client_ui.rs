@@ -2,6 +2,7 @@
 use mlua::{Lua, Table, Value};
 pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
     let globals = lua.globals();
+    lua.set_named_registry_value("selu.default_ui_strings", true)?;
     // Native enum fields absent from generated API docs. Observed Forever
     // client export: Ketho/BlizzardInterfaceResources, commit
     // d1ee569878094270c0ad8d8b00de0762158fd578, Resources/LuaEnum.lua.
@@ -24,6 +25,35 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
         enums.raw_set(name, table)?;
     }
     globals.raw_set("Enum", enums)?;
+    let constants = globals
+        .raw_get::<Option<Table>>("Constants")?
+        .unwrap_or(lua.create_table()?);
+    let observed: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, serde_json::Value>,
+    > = serde_json::from_str(include_str!("native_ui_constants.json"))
+        .map_err(mlua::Error::external)?;
+    for (name, fields) in observed {
+        let table = constants
+            .raw_get::<Option<Table>>(name.as_str())?
+            .unwrap_or(lua.create_table()?);
+        for (key, value) in fields {
+            if table.raw_get::<Value>(key.as_str())?.is_nil() {
+                let value = match value {
+                    serde_json::Value::Bool(value) => Value::Boolean(value),
+                    serde_json::Value::Number(value) => Value::Number(
+                        value
+                            .as_f64()
+                            .ok_or_else(|| mlua::Error::runtime("invalid observed constant"))?,
+                    ),
+                    _ => return Err(mlua::Error::runtime("non-primitive observed constant")),
+                };
+                table.raw_set(key, value)?;
+            }
+        }
+        constants.raw_set(name, table)?;
+    }
+    globals.raw_set("Constants", constants)?;
     let texture = globals
         .raw_get::<Option<Table>>("C_Texture")?
         .unwrap_or(lua.create_table()?);
@@ -60,6 +90,15 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
         })?)?;
     }
     globals.raw_set("C_Texture", texture)?;
+    globals.raw_set(
+        "GetFrameMetatable",
+        lua.create_function(|lua, ()| {
+            let methods = lua.named_registry_value::<Table>("selu.methods.Frame")?;
+            let metatable = lua.create_table()?;
+            metatable.raw_set("__index", methods)?;
+            Ok(metatable)
+        })?,
+    )?;
     let storage = crate::frames::arena::store(lua)
         .borrow()
         .fonts
@@ -90,7 +129,7 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
                             for (key, shift) in [("r", 16), ("g", 8), ("b", 0), ("a", 24)] {
                                 rgba.raw_set(key, f64::from((argb >> shift) & 255) / 255.0)?;
                             }
-                        entry.raw_set("color", rgba)?;
+                            entry.raw_set("color", rgba)?;
                             result.raw_set(index + 1, entry)?;
                         }
                         Ok(result)

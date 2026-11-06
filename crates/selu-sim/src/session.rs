@@ -422,17 +422,7 @@ impl Session {
     ) -> SimResult<crate::loader::DefaultUiReport> {
         let _profile = crate::profile::Span::new("startup.unattributed");
         let _layout_batch = crate::frames::arena::LayoutBatch::new(&self.sim.lua);
-        let _bootstrap_budget = if cfg!(debug_assertions)
-            && std::env::var_os("SELU_SIM_PROFILE_COARSE_HOOKS").is_some()
-        {
-            eprintln!("SELU_SIM_PROFILE_COARSE_HOOKS active: Blizzard startup only");
-            Some(core::BlizzardBootstrapBudget::new(
-                &self.sim.lua,
-                &self.sim.ctx,
-            ))
-        } else {
-            None
-        };
+        let _bootstrap_budget = core::BlizzardBootstrapBudget::new(&self.sim.lua, &self.sim.ctx);
         let gc_pause = crate::profile::GcPause::new(&self.sim.lua);
         eprintln!("Default UI layout transaction: active; resolves after source construction");
         let start = std::time::Instant::now();

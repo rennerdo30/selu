@@ -163,6 +163,15 @@ apply=function(f,n,seen)
         end
     end
     local a=n.a
+    if a.parentKey or a.parentArray then
+        local parent=f:GetParent()
+        if parent and a.parentKey then parent[a.parentKey]=f end
+        if parent and a.parentArray then
+            local array=parent[a.parentArray] or {}; parent[a.parentArray]=array
+            local found=false; for _,child in ipairs(array) do if child==f then found=true; break end end
+            if not found then array[#array+1]=f end
+        end
+    end
     if a.hidden~=nil then
         -- This is the initial XML state, before the instance's OnLoad.
         -- Inherited visibility scripts must not observe a half-built frame.
@@ -249,10 +258,6 @@ create=function(n,parent,layer)
     elseif n.tag=='FontString' then f=parent:CreateFontString(name,layer)
     elseif n.tag=='Font' then f=CreateFont(name)
     else f=native(nativeKind(n.tag),name,parent) end
-    if parent and a.parentKey then parent[a.parentKey]=f end
-    if parent and a.parentArray then
-        local array=parent[a.parentArray] or {}; parent[a.parentArray]=array; array[#array+1]=f
-    end
     apply(f,n,{})
     if n.tag~='Texture' and n.tag~='FontString' and n.tag~='Font' then
         local onload=f:GetScript('OnLoad'); if onload then invoke(onload,f) end

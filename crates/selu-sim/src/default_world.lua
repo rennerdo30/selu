@@ -43,6 +43,7 @@ function CopyTable(source)
 end
 function GetCurrentEnvironment() return _G end
 function GetGlobalEnvironment() return _G end
+function debuglocals() return '' end
 function issecure() return true end
 if version then
     function GetBuildInfo() return version,tostring(build),'',interface end

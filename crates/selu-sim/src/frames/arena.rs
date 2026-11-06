@@ -38,7 +38,7 @@ impl RegionTable {
         self.get().raw_get(key)
     }
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Point {
     pub point: String,
     pub relative: usize,

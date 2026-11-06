@@ -286,6 +286,11 @@ pub fn create(
             "GetStatusBarTexture",
             "SetStatusBarColor",
             "GetStatusBarColor",
+            "GetNormalTexture",
+            "GetHighlightTexture",
+            "GetPushedTexture",
+            "GetDisabledTexture",
+            "SetDisabledTexture",
         ]) {
             let method = method.to_owned();
             let context = ctx.clone();
@@ -389,6 +394,72 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         ($x:expr) => {
             return $x.into_lua_multi(lua)
         };
+    }
+    if matches!(
+        method,
+        "SetNormalTexture"
+            | "GetNormalTexture"
+            | "SetHighlightTexture"
+            | "GetHighlightTexture"
+            | "SetPushedTexture"
+            | "GetPushedTexture"
+            | "SetDisabledTexture"
+            | "GetDisabledTexture"
+    ) {
+        let key = format!("__selu_{}", &method[3..]);
+        let previous = t.raw_get::<Option<Table>>(key.as_str())?;
+        if method.starts_with("Get") {
+            out!(previous);
+        }
+        let child = match v.first() {
+            Some(Value::Table(child)) => Some(child.clone()),
+            Some(Value::String(_) | Value::Integer(_) | Value::Number(_)) => {
+                let child = if let Some(child) = previous.clone() {
+                    child
+                } else {
+                    create(lua, ctx, "Texture", None, Some(t.clone()))?
+                };
+                call(
+                    lua,
+                    ctx,
+                    "SetTexture",
+                    MultiValue::from_vec(vec![Value::Table(child.clone()), v[0].clone()]),
+                )?;
+                call(
+                    lua,
+                    ctx,
+                    "SetAllPoints",
+                    MultiValue::from_vec(vec![
+                        Value::Table(child.clone()),
+                        Value::Table(t.clone()),
+                    ]),
+                )?;
+                Some(child)
+            }
+            _ => None,
+        };
+        if let Some(previous) = previous {
+            call(
+                lua,
+                ctx,
+                "Hide",
+                MultiValue::from_vec(vec![Value::Table(previous)]),
+            )?;
+        }
+        if let Some(child) = &child {
+            call(
+                lua,
+                ctx,
+                if method == "SetNormalTexture" {
+                    "Show"
+                } else {
+                    "Hide"
+                },
+                MultiValue::from_vec(vec![Value::Table(child.clone())]),
+            )?;
+        }
+        t.raw_set(key, child)?;
+        out!(());
     }
     if method == "CreateAnimationGroup" {
         let constructor = crate::host_lua::factory(
@@ -1305,20 +1376,47 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             }
         }
         "HasFocus" => out!(a.focus == Some(i)),
-        _ => ctx.not_simulated(&format!("{}:{method}", r.kind)),
+        _ => {
+            ctx.not_simulated(&format!("{}:{method}", r.kind));
+            out!(());
+        }
     }
-    if (method == "SetAtlas" && boolean(v.get(1)))
-        || !matches!(
-            method,
-            "SetTexture"
-                | "SetAtlas"
-                | "SetColorTexture"
-                | "SetGradient"
-                | "SetGradientAlpha"
-                | "SetTexCoord"
-                | "SetVertexColor"
-                | "SetBlendMode"
-        )
+    let r = &a.regions[i];
+    let geometry_changed = old.parent != r.parent
+        || old.width != r.width
+        || old.height != r.height
+        || old.scale != r.scale
+        || old.alpha != r.alpha
+        || old.shown != r.shown
+        || old.strata != r.strata
+        || old.level != r.level
+        || old.points != r.points
+        || old.font_path != r.font_path
+        || old.font_size != r.font_size
+        || old.font_flags != r.font_flags
+        || old.text != r.text
+        || old.text_value != r.text_value
+        || old.visual != r.visual
+        || old.font_overrides != r.font_overrides
+        || old.scroll != r.scroll
+        || old.value != r.value
+        || old.min != r.min
+        || old.max != r.max
+        || old.orientation != r.orientation
+        || old.scroll_child != r.scroll_child;
+    if geometry_changed
+        && ((method == "SetAtlas" && boolean(v.get(1)))
+            || !matches!(
+                method,
+                "SetTexture"
+                    | "SetAtlas"
+                    | "SetColorTexture"
+                    | "SetGradient"
+                    | "SetGradientAlpha"
+                    | "SetTexCoord"
+                    | "SetVertexColor"
+                    | "SetBlendMode"
+            ))
     {
         a.dirty = true;
         a.dirty_regions.insert(i);
