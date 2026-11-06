@@ -735,6 +735,15 @@ pub(crate) fn source_signature(
     file: &str,
 ) -> selu_manifest::Declaration {
     let mut d = crate::xml::declaration(qualified.rsplit('.').next().unwrap(), "Function", file);
+    // ContainerFrame.lua's item-button mixin returns bagID or its parent's
+    // numeric frame ID. This capability belongs to the mixin, never Button.
+    let container_bag_id = qualified == "ContainerFrameItemButtonMixin.GetBagID"
+        && file.ends_with("ContainerFrame.lua")
+        && body
+            .to_string()
+            .split_whitespace()
+            .collect::<String>()
+            .contains("returnself.bagIDorself:GetParent():GetID()");
     let mut annotations = BTreeMap::new();
     let mut returns = Vec::new();
     for line in prefix
@@ -785,6 +794,9 @@ pub(crate) fn source_signature(
             d.attributes
                 .insert("SeluUntypedReturnTail".into(), true.into());
         }
+    }
+    if container_bag_id {
+        returns = vec!["number".into()];
     }
     returns.reverse();
     for ty in returns {

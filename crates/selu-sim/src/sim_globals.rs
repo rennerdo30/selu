@@ -183,6 +183,29 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
 }
 
 pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
+    lua.load(
+        r#"
+        format = string.format
+        function strtrim(text, chars)
+            chars = chars or "%s"
+            return (text:gsub("^["..chars.."]+", ""):gsub("["..chars.."]+$", ""))
+        end
+        function strjoin(separator, ...) return table.concat({...}, separator) end
+        function strsplit(separator, text, limit)
+            local result, start = {}, 1
+            while not limit or #result < limit - 1 do
+                local first, last = string.find(text, separator, start, true)
+                if not first then break end
+                result[#result+1] = string.sub(text, start, first-1)
+                start = last+1
+                if separator == "" then break end
+            end
+            result[#result+1] = string.sub(text, start)
+            return unpack(result)
+        end
+    "#,
+    )
+    .exec()?;
     // Client contract: Blizzard_SharedXMLBase/Color.lua. Runtime objects only;
     // public typing remains owned by the manifest.
     lua.load(r#"
@@ -291,4 +314,26 @@ pub fn configure_screen(lua: &Lua, size: (f64, f64)) -> SimResult<()> {
     "#,
     )
     .exec()
+}
+
+#[cfg(test)]
+mod sg_tests {
+    #[test]
+    fn wow_string_aliases_and_frame_ids() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval(
+            r#"
+            assert(format == string.format)
+            assert(format('%.1f', 1.26) == '1.3')
+            assert(format('%s %.1f %d', 'sample', 1.25, 3) == string.format('%s %.1f %d', 'sample', 1.25, 3))
+            assert(strtrim('  hello  ') == 'hello')
+            assert(strjoin(':', 'a', 2, 'b') == 'a:2:b')
+            local a,b,c = strsplit(':','a::c'); assert(a=='a' and b=='' and c=='c')
+            local a,b = strsplit(':','a:b:c',2); assert(a=='a' and b=='b:c')
+            local f=CreateFrame('Frame'); local b=CreateFrame('Button',nil,f)
+            f:SetID(4); b:SetID(9); assert(f:GetID()==4 and b:GetID()==9)
+        "#,
+        )
+        .unwrap();
+    }
 }

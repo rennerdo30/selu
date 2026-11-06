@@ -1047,7 +1047,77 @@ impl Ctx<'_> {
     }
 
     /// What a true or false condition says about optional names.
+    fn widget_narrowings(&self, e: &Expr) -> Option<(Narrowings, Narrowings)> {
+        if let ExprKind::Call { callee, args } = &e.kind
+            && matches!(&callee.kind, ExprKind::Ident(n) if n == "readable")
+            && self.lookup("readable").is_none()
+            && args.len() == 1
+        {
+            return self.widget_narrowings(&args[0]);
+        }
+        let (call, tag, equal) = match &e.kind {
+            ExprKind::Call { callee, args } if args.len() == 1 => {
+                let ExprKind::Member { name, .. } = &callee.kind else {
+                    return None;
+                };
+                if name != "IsObjectType" {
+                    return None;
+                }
+                (callee.as_ref(), &args[0], true)
+            }
+            ExprKind::Binary { op, left, right } if op == "==" || op == "!=" => {
+                let (call, tag) = if matches!(left.kind, ExprKind::Call { .. }) {
+                    (left, right)
+                } else {
+                    (right, left)
+                };
+                let call = if let ExprKind::Call { callee, args } = &call.kind
+                    && matches!(&callee.kind, ExprKind::Ident(n) if n == "readable")
+                    && self.lookup("readable").is_none()
+                    && args.len() == 1
+                {
+                    &args[0]
+                } else {
+                    call
+                };
+                let ExprKind::Call { callee, args } = &call.kind else {
+                    return None;
+                };
+                let ExprKind::Member { name, .. } = &callee.kind else {
+                    return None;
+                };
+                if name != "GetObjectType" || !args.is_empty() {
+                    return None;
+                }
+                (callee.as_ref(), tag.as_ref(), op == "==")
+            }
+            _ => return None,
+        };
+        let ExprKind::Member { object, .. } = &call.kind else {
+            return None;
+        };
+        let ExprKind::Str(name) = &tag.kind else {
+            return None;
+        };
+        let source = self.checked_access_type(object)?;
+        if !matches!(shape_of(&source), Type::Widget(..))
+            || api::widget_decl(self.manifest, name).is_none()
+        {
+            return None;
+        }
+        let target = api::widget(self.manifest, name);
+        // A guard can only select a subtype of the receiver's declared hierarchy.
+        if !target.assignable_to(&source) {
+            return None;
+        }
+        let yes = vec![(self.access_key(object)?, target)];
+        Some(if equal { (yes, vec![]) } else { (vec![], yes) })
+    }
+
     fn narrowings(&self, e: &Expr) -> (Narrowings, Narrowings) {
+        if let Some(n) = self.widget_narrowings(e) {
+            return n;
+        }
         if let Some(n) = self.alias_narrowings(e) {
             return n;
         }
@@ -1176,6 +1246,9 @@ impl Ctx<'_> {
         if let Type::Union(ts) = &shaped {
             let members: Vec<_> = ts.iter().map(|t| self.member(t, name, object)).collect();
             return Type::Union(members);
+        }
+        if matches!(&shaped, Type::ApiOpaque(n, ts) if n == "SeluOpaqueTable" && ts.is_empty()) {
+            return Type::Opaque("UnprovenTableField".into());
         }
         let t = &shaped;
         if let Some(t) = self.target_member(t, name, object) {

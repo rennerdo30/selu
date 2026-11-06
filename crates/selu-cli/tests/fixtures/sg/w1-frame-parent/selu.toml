@@ -1,0 +1,5 @@
+[addon]
+name="W1NativeGap"
+targets=["wowf"]
+[build]
+strict_api=true
