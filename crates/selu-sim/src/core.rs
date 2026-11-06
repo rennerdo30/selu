@@ -836,8 +836,14 @@ pub(crate) fn flush_scripts(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
     // Detach siblings before calling Lua. A frame method invoked by a handler
     // may synchronously drain newly queued transitions, but must not recurse
     // into this batch's remaining siblings.
-    let batch = shared(std::mem::take(&mut *lock(&ctx.scripts)));
-    flush_queue(lua, ctx, &batch)
+    // Transitions queued by a handler run in a later batch of this flush.
+    loop {
+        let pending = std::mem::take(&mut *lock(&ctx.scripts));
+        if pending.is_empty() {
+            return Ok(());
+        }
+        flush_queue(lua, ctx, &shared(pending))?;
+    }
 }
 fn flush_queue(lua: &Lua, ctx: &Ctx, queue: &Shared<VecDeque<Pending>>) -> mlua::Result<()> {
     let mut error = None;
