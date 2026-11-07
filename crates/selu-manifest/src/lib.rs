@@ -354,7 +354,7 @@ pub fn base_product(product: &str) -> &str {
 /// [`ClientUi`] for a product (code or transitional alias) at a client major
 /// version. Classic products follow the expansion their build replays, so a
 /// channel that moves to the next expansion needs no code change. `None` when
-/// the product is unknown, or a Classic product's version is not known.
+/// the product or its expansion is unknown.
 pub fn client_ui(product_or_alias: &str, major: Option<u32>) -> Option<ClientUi> {
     const fn ui(
         game_type: &'static str,
@@ -381,11 +381,14 @@ pub fn client_ui(product_or_alias: &str, major: Option<u32>) -> Option<ClientUi>
             &["Camelot", "Mainline", "Vanilla"],
         ),
         "wow_classic" | "wow_classic_era" | "wow_anniversary" | "wow_classic_titan" => {
-            let major = match (product, major) {
-                (_, Some(major)) => major,
-                ("wow_classic_era", None) => 1,
-                _ => return None,
-            };
+            // Without a build, each channel's current expansion (2026-11):
+            // the build, when known, always decides.
+            let major = major.unwrap_or(match product {
+                "wow_classic_era" => 1,
+                "wow_anniversary" => 2,
+                "wow_classic_titan" => 3,
+                _ => 5,
+            });
             match major {
                 1 => ui("vanilla", "Vanilla", "Classic", &["Vanilla", "Classic"]),
                 2 => ui("tbc", "TBC", "Classic", &["TBC", "BCC", "Classic"]),
@@ -622,8 +625,10 @@ mod tests {
             ui("wow_classic_beta@5.5.5.1"),
             Some(("mists", "Mists", "Mists"))
         );
-        // A Classic channel without a build cannot know its expansion.
-        assert_eq!(ui("wow_classic"), None);
+        // Without a build, a Classic channel uses its current expansion.
+        assert_eq!(ui("wow_classic"), Some(("mists", "Mists", "Mists")));
+        assert_eq!(ui("classic-anniversary@test"), Some(("tbc", "TBC", "TBC")));
+        assert_eq!(ui("wow_classic@9.0.0.1"), None);
         assert_eq!(ui("unknown@1.0.0.1"), None);
         for (_, product) in SOURCE_BRANCHES {
             let major = if product.starts_with("wow_") {
