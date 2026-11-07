@@ -34,7 +34,14 @@ fn eligible(sim: &Sim, i: usize) -> bool {
     let r = &a.regions[i];
     r.visible && r.enabled && r.mouse_click && a.capture == Some(i)
 }
-fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool, wheel: bool) -> Option<usize> {
+fn hit_motion(
+    sim: &Sim,
+    x: f64,
+    y: f64,
+    motion: bool,
+    wheel: bool,
+    button: Option<&str>,
+) -> Option<usize> {
     let a = store(sim.lua());
     let mut a = a.borrow_mut();
     layout::resolve(&mut a, sim.ctx());
@@ -43,6 +50,7 @@ fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool, wheel: bool) -> Option<us
         .enumerate()
         .filter(|(index, r)| {
             r.visible
+                && button.is_none_or(|button| !r.pass_through_buttons.iter().any(|b| b == button))
                 && ((if motion {
                     r.mouse_motion
                 } else {
@@ -62,14 +70,14 @@ fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool, wheel: bool) -> Option<us
         .max_by_key(|(i, r)| (r.strata, r.level, r.layer, *i))
         .map(|(i, _)| i)
 }
-fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
-    hit_motion(sim, x, y, false, false)
+fn hit(sim: &Sim, x: f64, y: f64, button: &str) -> Option<usize> {
+    hit_motion(sim, x, y, false, false, Some(button))
 }
 impl crate::session::Vm {
     pub fn hover(&self, x: f64, y: f64) -> SimResult<Option<RegionId>> {
         dispatch(self.lua(), self.ctx(), || {
             self.move_pointer((x, y))?;
-            let target = hit_motion(self, x, y, true, false);
+            let target = hit_motion(self, x, y, true, false, None);
             let a = store(self.lua());
             let mut a = a.borrow_mut();
             let old = a.hover;
@@ -116,7 +124,7 @@ impl crate::session::Vm {
             crate::core::flush(self.lua(), self.ctx());
             let a = store(self.lua());
             let target = if down {
-                let target = hit(self, x, y);
+                let target = hit(self, x, y, button);
                 {
                     let mut a = a.borrow_mut();
                     a.capture = target;
@@ -143,7 +151,17 @@ impl crate::session::Vm {
                     crate::core::flush(self.lua(), self.ctx());
                 }
                 let value = Value::String(self.lua().create_string(button)?);
-                if down || eligible(self, i) {
+                let suffix = if down { "Down" } else { "Up" };
+                let mouse_registered =
+                    a.borrow().regions[i]
+                        .mouse_buttons
+                        .as_ref()
+                        .is_none_or(|buttons| {
+                            buttons.iter().any(|b| {
+                                b == &format!("{button}{suffix}") || b == &format!("Any{suffix}")
+                            })
+                        });
+                if mouse_registered && (down || eligible(self, i)) {
                     invoke(
                         self,
                         i,
@@ -154,7 +172,6 @@ impl crate::session::Vm {
                 if !down && a.borrow().dragging {
                     invoke(self, i, "OnDragStop", vec![value.clone()])?;
                 }
-                let suffix = if down { "Down" } else { "Up" };
                 let registered = a.borrow().regions[i]
                     .click_buttons
                     .iter()
@@ -162,7 +179,7 @@ impl crate::session::Vm {
                 if !a.borrow().dragging
                     && eligible(self, i)
                     && registered
-                    && (down || hit(self, x, y) == Some(i))
+                    && (down || hit(self, x, y, button) == Some(i))
                 {
                     {
                         let mut a = a.borrow_mut();
@@ -311,7 +328,7 @@ impl crate::session::Vm {
     /// Deliver wheel motion; scripts own the policy for changing slider values.
     pub fn wheel(&self, x: f64, y: f64, delta: f64) -> SimResult<()> {
         dispatch(self.lua(), self.ctx(), || {
-            let mut target = hit_motion(self, x, y, false, true);
+            let mut target = hit_motion(self, x, y, false, true, None);
             while let Some(i) = target {
                 let a = store(self.lua());
                 let arena = a.borrow();

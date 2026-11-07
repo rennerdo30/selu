@@ -1,5 +1,27 @@
 use selu_sim::Sim;
 #[test]
+fn native_mouse_registration_and_pass_through_are_independent_of_clicks() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"hits={};
+        back=CreateFrame('Button');back:SetSize(100,100);back:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT');back:SetFrameLevel(1)
+        front=CreateFrame('Button');front:SetSize(100,100);front:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT');front:SetFrameLevel(2)
+        for _,frame in ipairs({back,front}) do frame:RegisterForClicks('AnyUp');frame:SetScript('OnClick',function(self,button) hits[#hits+1]=(self==front and 'front:' or 'back:')..button end) end
+        front:SetPassThroughButtons('RightButton');front:RegisterForMouse('LeftButtonDown');downs=0;ups=0
+        front:SetScript('OnMouseDown',function()downs=downs+1 end);front:SetScript('OnMouseUp',function()ups=ups+1 end)"#).unwrap();
+    sim.click(10., 10., "LeftButton").unwrap();
+    sim.click(10., 10., "RightButton").unwrap();
+    sim.eval("assert(hits[1]=='front:LeftButton' and hits[2]=='back:RightButton');assert(downs==1 and ups==0);front:SetPassThroughButtons();front:RegisterForMouse('AnyUp')").unwrap();
+    sim.click(10., 10., "RightButton").unwrap();
+    sim.eval("assert(hits[3]=='front:RightButton' and downs==1 and ups==1)")
+        .unwrap();
+}
+
+#[test]
+fn native_parent_keys_bind_to_the_current_parent_without_fabricating_one() {
+    let sim = Sim::new().unwrap();
+    sim.eval("local root=CreateFrame('Frame');assert(root:GetParent()==nil);local child=CreateFrame('Frame',nil,root);child:SetParentKey('First');assert(root.First==child and child:GetParentKey()=='First');child:SetParentKey('Second');assert(root.First==nil and root.Second==child);child:ClearParentKey();assert(root.Second==nil and child:GetParentKey()==nil)").unwrap();
+}
+#[test]
 fn api_callbacks_finish_before_return() {
     let sim = Sim::new().unwrap();
     sim.eval(

@@ -1,5 +1,10 @@
 use selu_sim::Sim;
 #[test]
+fn native_map_widgets_keep_configuration_without_painting_fake_map_data() {
+    let sim = Sim::new().unwrap();
+    sim.eval("local blob=CreateFrame('QuestPOIFrame');blob:SetMapID(37);assert(blob:GetMapID()==37);blob:SetFillTexture('self-written-fixture');blob:DrawNone();local frame=CreateFrame('Frame');assert(frame.GetMapID==nil);local units=CreateFrame('UnitPositionFrame');units:SetUiMapID(37);assert(units:GetUiMapID()==37);units:SetPlayerPingScale(2);assert(units:GetPlayerPingScale()==2);units:SetPlayerPingTexture(0,'self-written-fixture',16,16);units:ClearUnits();units:AddUnit('player','self-written-fixture',16,16);units:FinalizeUnits();assert(units:GetMouseOverUnits()==nil)").unwrap();
+}
+#[test]
 fn masks_attach_once_remove_and_reach_the_renderer() {
     let sim = Sim::new().unwrap();
     sim.eval("local t=UIParent:CreateTexture('MaskedPaint');local m=UIParent:CreateMaskTexture('PaintMask'); t:AddMaskTexture(m);t:AddMaskTexture(m)").unwrap();

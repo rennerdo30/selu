@@ -62,6 +62,7 @@ fn core_loads_real_common_frames_and_records_startup() {
     if let Some(dir) = std::env::var_os("SELU_CORE_AUDIT_DIR") {
         let dir = std::path::PathBuf::from(dir);
         std::fs::write(dir.join("runtime.log"), s.logs().join("\n")).unwrap();
+        std::fs::write(dir.join("prints.log"), s.prints().join("\n")).unwrap();
         std::fs::write(
             dir.join("snapshot.json"),
             serde_json::to_vec(&s.snapshot().unwrap()).unwrap(),
@@ -114,6 +115,32 @@ fn core_loads_real_common_frames_and_records_startup() {
         .ok()
         .is_none_or(|t| t.split('@').next() == Some("wowf"))
     {
+        s.eval("assert(IsAddOnLoaded('Blizzard_WorldMap') and IsAddOnLoaded('Blizzard_ObjectiveTracker'));assert(WorldMapFrame.GetMapID and QuestMapFrame:GetParent()==WorldMapFrame);assert(ObjectiveTrackerFrame.Header)").unwrap();
+        s.eval("ToggleWorldMap();assert(WorldMapFrame:IsShown())")
+            .unwrap();
+        s.advance_time(4. / 60.);
+        s.eval("HideUIPanel(WorldMapFrame);assert(not WorldMapFrame:IsShown())")
+            .unwrap();
+        s.advance_time(1. / 60.);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(
+            s.default_ui_startup_errors().is_empty(),
+            "{:?}",
+            s.default_ui_startup_errors()
+        );
+        if toolkit.is_some() {
+            let namespace = s.addon_namespace("RennersAddons").unwrap();
+            let errors: mlua::Table = namespace.raw_get("ErrorLog").unwrap();
+            assert_eq!(errors.raw_len(), 0, "toolkit captured errors");
+            assert!(
+                s.prints().iter().all(|line| !line
+                    .contains("ObjectiveTrackerFrame.Header is missing")
+                    && !line.contains("world map is not available")
+                    && !line.contains("an error was logged")),
+                "{:?}",
+                s.prints()
+            );
+        }
         s.eval("for _,key in ipairs({'ENABLE_PING_SOUNDS','ENABLE_GAMEPAD_UI','ENABLE_SCREEN_NARRATOR','SETTINGS_PLAYER_MAP_COORDS','SHOW_SILHOUETTE_OPTION','SOCIAL_LOCATION_VISIBILITY_SETTING','ENABLE_PINGS','ENABLE_COOLDOWN_VIEWER','UNIT_NAMEPLATES_FRIENDLY_PLAYER_SHOW_ONLY_NAME','BINDING_HEADER_PING_SYSTEM'}) do assert(type(_G[key])=='string',key) end;assert(type(NUM_LE_LFG_CATEGORYS)=='number' and NUM_LE_LFG_CATEGORYS>0);assert(LE_LFG_CATEGORY_LFD>=1 and LE_LFG_CATEGORY_LFD<=NUM_LE_LFG_CATEGORYS)").unwrap();
         assert!(
             s.default_ui_startup_errors()
@@ -126,7 +153,7 @@ fn core_loads_real_common_frames_and_records_startup() {
 }
 #[test]
 #[ignore = "requires the five locally installed client products via SELU_CLIENT_INSTALL"]
-fn installed_products_ship_the_combat_log_dependency() {
+fn installed_products_ship_core_services_or_report_the_family_difference() {
     let root = std::env::var_os("SELU_CLIENT_INSTALL").unwrap();
     for product in [
         "wow",
@@ -151,5 +178,38 @@ fn installed_products_ship_the_combat_log_dependency() {
             storage.build.version,
             bytes.len()
         );
+        for addon in selu_sim::loader::CORE_UI_ADDONS {
+            let prefix = format!("Interface/AddOns/{addon}/");
+            let paths = list
+                .lines()
+                .map(|s| s.trim().replace('\\', "/"))
+                .filter(|p| p.starts_with(&prefix))
+                .collect::<Vec<_>>();
+            if paths.is_empty() {
+                eprintln!("CORE_SERVICE {product} {addon}: not a separate addon in this client");
+                assert!(!matches!(
+                    *addon,
+                    "Blizzard_WorldMap" | "Blizzard_UnitFrame"
+                ));
+            } else {
+                let target = format!("{product}@{}", storage.build.version);
+                let ui = selu_manifest::client_ui_for_target(&target).unwrap();
+                let selected = ui
+                    .toc_suffixes
+                    .iter()
+                    .find_map(|suffix| {
+                        paths
+                            .iter()
+                            .find(|p| p.ends_with(&format!("/{addon}_{suffix}.toc")))
+                    })
+                    .or_else(|| paths.iter().find(|p| p.ends_with(&format!("/{addon}.toc"))))
+                    .unwrap_or(&paths[0]);
+                assert!(
+                    !storage.read_path(selected).unwrap().is_empty(),
+                    "{product}: {selected}"
+                );
+                eprintln!("CORE_SERVICE {product} {addon}: installed");
+            }
+        }
     }
 }

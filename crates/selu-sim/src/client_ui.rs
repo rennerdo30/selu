@@ -1,6 +1,7 @@
 //! Read-only client metadata required by Blizzard's own UI initialization.
 use mlua::{Lua, Table, Value};
 pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
+    crate::map_world::install(lua, ctx)?;
     crate::text::install_format(lua)?;
     let globals = lua.globals();
     let cvar_ctx = ctx.clone();
@@ -26,6 +27,7 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
             Some("C_QuestSession"),
         ),
         ("GetMaxBattlefieldID", "count", None),
+        ("GetNumBattlefieldFlagPositions", "count", None),
         ("C_LFGList.GetApplications", "list", Some("C_LFGList")),
         (
             "GetNumSpecializations",

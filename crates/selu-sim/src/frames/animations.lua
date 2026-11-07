@@ -12,7 +12,7 @@ return function(target, note, translate)
     function g:IsPaused() return self.state=="paused" end
     function g:IsStopped() return self.state=="stopped" end
     function g:CreateAnimation(kind)
-        if kind~="Alpha" and kind~="Translation" then note("Animation:"..tostring(kind));return nil end
+        if kind~="Animation" and kind~="Alpha" and kind~="Translation" then note("Animation:"..tostring(kind));return nil end
         local a={kind=kind,x=0,y=0,duration=0,delay=0,finishDelay=0,order=1,from=0,to=1,smoothing="NONE",target=target}
         function a:SetDuration(v) assert(v>=0);self.duration=v end
         function a:GetDuration() return self.duration end
@@ -33,6 +33,16 @@ return function(target, note, translate)
         function a:SetTarget(v) self.target=v end
         function a:GetTarget() return self.target end
         function a:GetParent() return g end
+        function a:GetProgress()
+            if self.duration==0 then return g.state=="playing" and 1 or 0 end
+            local p=math.max(0,math.min(1,(g.elapsed-self.delay)/self.duration))
+            return g.reverse and 1-p or p
+        end
+        function a:GetSmoothProgress()
+            local p=self:GetProgress()
+            if self.smoothing=="IN" then return p*p elseif self.smoothing=="OUT" then return 1-(1-p)^2 elseif self.smoothing=="IN_OUT" then return p*p*(3-2*p) end
+            return p
+        end
         table.insert(self.animations,a);return a
     end
     function g:GetDuration()
@@ -74,7 +84,7 @@ return function(target, note, translate)
             for _,a in ipairs(g.animations) do if a.order==order and time>=start then
                 local p=a.duration==0 and 1 or math.max(0,math.min(1,(time-start-a.delay)/a.duration))
                 if a.smoothing=="IN" then p=p*p elseif a.smoothing=="OUT" then p=1-(1-p)^2 elseif a.smoothing=="IN_OUT" then p=p*p*(3-2*p) end
-                if a.kind=="Alpha" then a.target:SetAlpha(a.from+(a.to-a.from)*p) else translate(a.target,a.x*p,a.y*p) end
+                if a.kind=="Alpha" then a.target:SetAlpha(a.from+(a.to-a.from)*p) elseif a.kind=="Translation" then translate(a.target,a.x*p,a.y*p) end
             end end
             start=start+orders[order]
         end

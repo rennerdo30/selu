@@ -334,13 +334,6 @@ pub fn create(
     .unwrap_or(kind);
     let a = store(lua);
     let index = a.borrow().regions.len();
-    let parent = parent.or_else(|| {
-        lua.globals()
-            .raw_get::<Option<Table>>("UIParent")
-            .ok()
-            .flatten()
-            .filter(|table| id(table).is_ok())
-    });
     let pid = parent.as_ref().map(id).transpose()?;
     let name = name.map(|s| {
         s.replace(
@@ -400,6 +393,8 @@ pub fn create(
         level_explicit: false,
         mouse: matches!(kind, "Button" | "CheckButton" | "EditBox" | "Slider"),
         mouse_click: matches!(kind, "Button" | "CheckButton" | "EditBox" | "Slider"),
+        pass_through_buttons: Vec::new(),
+        mouse_buttons: None,
         mouse_motion: matches!(kind, "Button" | "CheckButton" | "EditBox" | "Slider"),
         enabled: true,
         button_state: "NORMAL",
@@ -522,6 +517,14 @@ pub fn create(
                 "GetRotation",
                 "SetPortraitZoom",
             ]) {
+                if method == "GetMapID"
+                    && !matches!(
+                        kind,
+                        "QuestPOIFrame" | "ScenarioPOIFrame" | "ArchaeologyDigSiteFrame"
+                    )
+                {
+                    continue;
+                }
                 let method = method.to_owned();
                 let context = ctx.clone();
                 m.set(
@@ -628,7 +631,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected IsForbidden SetForbidden SetText GetText ClearText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript GetWindow SetWindow GetButtonState SetButtonState HasScript RegisterEvent IsEventRegistered UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled SetMouseClickEnabled SetMouseMotionEnabled IsMouseClickEnabled IsMouseMotionEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
+const METHODS: &str = "UpdateMouseOverTooltip DrawNone DrawAll DrawBlob GetMapID ClearUnits AddUnit FinalizeUnits GetMouseOverUnits StartPlayerPing StopPlayerPing GetUiMapID GetPlayerPingScale RegisterForMouse SetParentKey ClearParentKey GetParentKey SetPlayerPingTexture SetUiMapID SetPlayerPingScale SetUnitColor SetFillTexture SetBorderTexture SetFillAlpha SetBorderAlpha SetBorderScalar SetQuestID SetMapID SetPassThroughButtons SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected IsForbidden SetForbidden SetText GetText ClearText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript GetWindow SetWindow GetButtonState SetButtonState HasScript RegisterEvent IsEventRegistered UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled SetMouseClickEnabled SetMouseMotionEnabled IsMouseClickEnabled IsMouseMotionEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     let _profile = crate::profile::Span::new("frames.methods");
     if !ctx
@@ -648,6 +651,144 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     let i = id(t)?;
     let v = &args[1..];
     let a = store(lua);
+    if method == "UpdateMouseOverTooltip" {
+        return (Value::Nil, 0).into_lua_multi(lua);
+    }
+    if method == "GetMapID" {
+        return t
+            .raw_get::<Option<f64>>("__selu_blob_SetMapID")?
+            .unwrap_or(0.)
+            .into_lua_multi(lua);
+    }
+    if matches!(method, "DrawNone" | "DrawAll" | "DrawBlob") {
+        if method == "DrawBlob" {
+            let blobs = t
+                .raw_get::<Option<Table>>("__selu_draw_blobs")?
+                .unwrap_or(lua.create_table()?);
+            if let Some(key) = v.first() {
+                blobs.raw_set(key.clone(), boolean(v.get(1)))?;
+            }
+            t.raw_set("__selu_draw_blobs", blobs)?;
+        } else {
+            t.raw_set("__selu_draw_blobs", lua.create_table()?)?;
+            t.raw_set("__selu_draw_all_blobs", method == "DrawAll")?;
+        }
+        ctx.not_simulated("native map blob geometry");
+        return ().into_lua_multi(lua);
+    }
+    if matches!(
+        method,
+        "AddUnit"
+            | "ClearUnits"
+            | "FinalizeUnits"
+            | "GetMouseOverUnits"
+            | "StartPlayerPing"
+            | "StopPlayerPing"
+    ) {
+        match method {
+            "ClearUnits" => t.raw_set("__selu_position_units", lua.create_table()?)?,
+            "AddUnit" => {
+                let units = t
+                    .raw_get::<Option<Table>>("__selu_position_units")?
+                    .unwrap_or(lua.create_table()?);
+                if let Some(unit) = v.first() {
+                    units.raw_set(unit.clone(), lua.create_sequence_from(v.iter().cloned())?)?;
+                }
+                t.raw_set("__selu_position_units", units)?;
+            }
+            "StartPlayerPing" | "StopPlayerPing" => {
+                t.raw_set("__selu_player_ping", method == "StartPlayerPing")?
+            }
+            _ => {}
+        }
+        // No terrain coordinates are available to paint or hit-test units.
+        ctx.not_simulated("native unit-position map rendering");
+        return ().into_lua_multi(lua);
+    }
+    if matches!(method, "GetUiMapID" | "GetPlayerPingScale") {
+        let setter = if method == "GetUiMapID" {
+            "SetUiMapID"
+        } else {
+            "SetPlayerPingScale"
+        };
+        let values = t.raw_get::<Option<Table>>(format!("__selu_unit_position_{setter}"))?;
+        return values
+            .map(|values| values.raw_get::<f64>(1))
+            .transpose()?
+            .unwrap_or(if method == "GetUiMapID" { 0. } else { 1. })
+            .into_lua_multi(lua);
+    }
+    if matches!(method, "SetParentKey" | "ClearParentKey" | "GetParentKey") {
+        let old = t.raw_get::<Option<String>>("__selu_parent_key")?;
+        if method == "GetParentKey" {
+            return old.into_lua_multi(lua);
+        }
+        if let Some(parent) = a.borrow().regions[i].parent {
+            let parent = a.borrow().regions[parent].table.get();
+            if let Some(old) = old {
+                if parent.raw_get::<Value>(old.as_str())? == Value::Table(t.clone()) {
+                    parent.raw_set(old, Value::Nil)?
+                }
+            }
+            if method == "SetParentKey" {
+                let Some(Value::String(key)) = v.first() else {
+                    return Err(mlua::Error::runtime("parent key string expected"));
+                };
+                parent.raw_set(key.clone(), t.clone())?;
+            }
+        }
+        t.raw_set(
+            "__selu_parent_key",
+            if method == "SetParentKey" {
+                v.first().cloned().unwrap_or(Value::Nil)
+            } else {
+                Value::Nil
+            },
+        )?;
+        return ().into_lua_multi(lua);
+    }
+    if matches!(
+        method,
+        "SetPlayerPingTexture" | "SetUiMapID" | "SetPlayerPingScale" | "SetUnitColor"
+    ) {
+        let key = format!("__selu_unit_position_{method}");
+        let values = lua.create_sequence_from(v.iter().cloned())?;
+        if matches!(method, "SetPlayerPingTexture" | "SetUnitColor") {
+            let entries = t
+                .raw_get::<Option<Table>>(key.as_str())?
+                .unwrap_or(lua.create_table()?);
+            entries.raw_set(
+                v.first()
+                    .cloned()
+                    .unwrap_or(Value::String(lua.create_string("")?)),
+                values,
+            )?;
+            t.raw_set(key, entries)?;
+        } else {
+            t.raw_set(key, values)?;
+        }
+        ctx.not_simulated("native unit-position map rendering");
+        return ().into_lua_multi(lua);
+    }
+    if matches!(
+        method,
+        "SetFillTexture"
+            | "SetBorderTexture"
+            | "SetFillAlpha"
+            | "SetBorderAlpha"
+            | "SetBorderScalar"
+            | "SetQuestID"
+            | "SetMapID"
+    ) {
+        // Native blob configuration. The empty world has no quest polygons;
+        // retain configuration without manufacturing any map geometry/art.
+        t.raw_set(
+            format!("__selu_blob_{method}"),
+            v.first().cloned().unwrap_or(Value::Nil),
+        )?;
+        ctx.not_simulated("native map blob geometry");
+        return ().into_lua_multi(lua);
+    }
     if matches!(method, "SetRotation" | "GetRotation" | "SetPortraitZoom") {
         let property = if method.ends_with("Rotation") {
             "__selu_rotation"
@@ -940,11 +1081,17 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         );
     }
     if method == "SetFormattedText" {
-        let format = crate::host_lua::factory(
-            lua,
-            "selu.helper.format",
-            "return function(...) return string.format(...) end",
-        )?;
+        let format = if let Some(format) =
+            lua.named_registry_value::<Option<Function>>("selu.client_format")?
+        {
+            format
+        } else {
+            crate::host_lua::factory(
+                lua,
+                "selu.helper.format",
+                "return function(...) return string.format(...) end",
+            )?
+        };
         let text = format.call::<String>(MultiValue::from_vec(v.to_vec()))?;
         return call(
             lua,
@@ -1819,6 +1966,15 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         }
         "EnableKeyboard" => r.keyboard = boolean(v.first()),
         "IsKeyboardEnabled" => out!(r.keyboard),
+        "SetPassThroughButtons" => {
+            r.pass_through_buttons = v
+                .iter()
+                .filter_map(|value| match value {
+                    Value::String(s) => Some(s.to_string_lossy()),
+                    _ => None,
+                })
+                .collect();
+        }
         "SetPropagateKeyboardInput" => r.propagate_keyboard = boolean(v.first()),
         "GetPropagateKeyboardInput" => out!(r.propagate_keyboard),
         "EnableMouseWheel" => r.wheel = boolean(v.first()),
@@ -2113,6 +2269,9 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "IsClampedToScreen" => out!(r.clamped),
         "SetDesaturated" => r.visual.desaturated = boolean(v.first()),
         "IsDesaturated" => out!(r.visual.desaturated),
+        "RegisterForMouse" => {
+            r.mouse_buttons = Some(v.iter().filter_map(|v| string(Some(v))).collect())
+        }
         "RegisterForClicks" => r.click_buttons = v.iter().filter_map(|v| string(Some(v))).collect(),
         "RegisterForDrag" => r.drag_buttons = v.iter().filter_map(|v| string(Some(v))).collect(),
         "SetMotionScriptsWhileDisabled" => r.motion_disabled = boolean(v.first()),

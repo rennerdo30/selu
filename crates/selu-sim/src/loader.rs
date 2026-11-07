@@ -10,14 +10,20 @@ use std::path::{Path, PathBuf};
 /// TOC dependencies and the client's shared-library pass are resolved below.
 /// Blizzard addons whose frames addons most often touch. Each product's own
 /// `ui-toc-list.txt` and TOCs supply their dependencies and files. Checked
-/// 2026-11-07: the base roots ship in the installed wow, wowf, wow_classic,
-/// wow_classic_era and wow_anniversary clients. A root a product lacks is
-/// reported as missing, never stood in for.
+/// Root availability comes from each client's own TOCs. Modern clients split
+/// aura, map and tracker services into separate addons; Classic clients keep
+/// some of them in FrameXML. Absent built-in roots are noted, never stood in for.
 /// Bag buttons and queue status complete implicit action-bar/Edit Mode
 /// dependencies; their own TOCs select product-specific files.
 /// Combat Log supplies the filter defaults that the chat configuration reads
 /// during login, even before its panel is opened.
+/// Bootstrap order also supplies implicit dependencies: map mixins before
+/// providers, panel registration before settings, unit/raid frames before
+/// UIWidgets, and the content tracker before its first login refresh.
 pub const CORE_UI_ADDONS: &[&str] = &[
+    "Blizzard_AuraContainer",
+    "Blizzard_MapCanvas",
+    "Blizzard_UIParentPanelManager",
     "Blizzard_UIParent",
     "Blizzard_GameTooltip",
     "Blizzard_Minimap",
@@ -25,6 +31,12 @@ pub const CORE_UI_ADDONS: &[&str] = &[
     "Blizzard_CombatLog",
     "Blizzard_MainMenuBarBagButtons",
     "Blizzard_QueueStatusFrame",
+    "Blizzard_UnitFrame",
+    "Blizzard_CompactRaidFrames",
+    "Blizzard_SplashFrame",
+    "Blizzard_WorldMap",
+    "Blizzard_ObjectiveTracker",
+    "Blizzard_ContentTracking",
 ];
 
 pub(crate) fn read_ui_text(
@@ -250,6 +262,17 @@ pub(crate) fn default_ui_order_client(
             );
         }
     }
+    // A partial environment has explicit bootstrap roots: retain their order
+    // for implicit dependencies that the complete game pass normally supplies.
+    // Required TOC dependencies still precede each root; secure roots go first.
+    if let Some(roots) = roots {
+        names = roots
+            .iter()
+            .filter(|n| all.contains_key(*n))
+            .cloned()
+            .collect();
+        names.sort_by_key(|n| all[n].get("UseSecureEnvironment") != Some("1"));
+    }
     for name in names {
         if roots.map_or_else(
             || all[&name].get("LoadOnDemand") != Some("1"),
@@ -268,9 +291,16 @@ pub(crate) fn default_ui_order_client(
     if let Some(roots) = roots {
         for name in roots {
             if !all.contains_key(name) {
-                report
-                    .errors
-                    .push(format!("missing Blizzard Core root: {name}"));
+                let message = format!("missing Blizzard Core root for this client: {name}");
+                if CORE_UI_ADDONS.contains(&name.as_str()) {
+                    // Split addon services differ between client families.
+                    // Keep the unavailable root visible without manufacturing
+                    // its UI or reporting a file-load failure for an addon
+                    // this client does not ship. Custom roots remain errors.
+                    report.notes.push(message);
+                } else {
+                    report.errors.push(message);
+                }
             }
         }
     }
@@ -526,6 +556,53 @@ pub(crate) fn read_files_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn core_bootstrap_roots_preserve_order_and_resolve_required_dependencies() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("selu-core-order-{unique}"));
+        std::fs::create_dir_all(root.join("Interface/AddOns")).unwrap();
+        let mut list = String::new();
+        // Client discovery order intentionally differs from bootstrap order.
+        for (name, metadata) in [
+            ("Consumer", "## Dep: Required\n"),
+            ("Required", ""),
+            ("Bootstrap", ""),
+            ("Secure", "## UseSecureEnvironment: 1\n"),
+        ] {
+            let dir = root.join("Interface/AddOns").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("{name}.toc")), metadata).unwrap();
+            list.push_str(&format!("Interface/AddOns/{name}/{name}.toc\n"));
+        }
+        std::fs::write(root.join("Interface/ui-toc-list.txt"), list).unwrap();
+        let roots = ["Bootstrap", "Consumer", "Secure"].map(str::to_owned);
+        let (order, report) = default_ui_order_client(&root, None, None, Some(&roots)).unwrap();
+        assert!(report.errors.is_empty());
+        assert_eq!(
+            order
+                .iter()
+                .map(|toc| toc.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Secure", "Bootstrap", "Required", "Consumer"]
+        );
+        let missing = [
+            "Blizzard_ObjectiveTracker".to_owned(),
+            "CustomMissing".to_owned(),
+        ];
+        let (_, report) = default_ui_order_client(&root, None, None, Some(&missing)).unwrap();
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|note| note.contains("Blizzard_ObjectiveTracker"))
+        );
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].contains("CustomMissing"));
+        // Retain self-written fixture for diagnosis; no recursive deletion.
+    }
     #[test]
     fn addon_game_types_filter_whole_packages() {
         let toc = |metadata| parse_toc("Demo", Path::new("Demo"), metadata);

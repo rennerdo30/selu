@@ -205,7 +205,17 @@ local function animationGroup(frame,node)
         table.insert(frame[a.parentArray],group)
     end
     if a.name then _G[expand(a.name,frame)]=group end
-    if a.looping then group:SetLooping(a.looping) end
+    local seen={}
+    local function configure(node)
+    assert(not seen[node],'XML animation inheritance cycle');seen[node]=true
+    for _,name in ipairs(names(node.a.inherits)) do
+        if templates[name] then configure(templates[name]) else note('template '..name) end
+    end
+    for _,name in ipairs(names(node.a.mixin)) do
+        local mixin=lookup(name)
+        if type(mixin)=='table' then for key,value in pairs(mixin) do group[key]=value end else note('mixin '..name) end
+    end
+    if node.a.looping then group:SetLooping(node.a.looping) end
     for _,child in ipairs(node.children) do
         if child.tag=='Scripts' then
             for _,s in ipairs(child.children) do script(group,s) end
@@ -231,6 +241,9 @@ local function animationGroup(frame,node)
             end
         end
     end
+    seen[node]=nil
+    end
+    configure(node)
 end
 local childHandlers={}
 childHandlers['Size']=function(f,c,n,seen)
@@ -363,7 +376,7 @@ apply=function(f,n,seen)
     local a=n.a
     if a.parentKey or a.parentArray then
         local parent=f:GetParent()
-        if parent and a.parentKey then parent[a.parentKey]=f end
+        if parent and a.parentKey then f:SetParentKey(a.parentKey) end
         if parent and a.parentArray then
             local array=parent[a.parentArray] or {}; parent[a.parentArray]=array
             local found=false; for _,child in ipairs(array) do if child==f then found=true; break end end

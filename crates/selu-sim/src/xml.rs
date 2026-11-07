@@ -370,6 +370,18 @@ mod tests {
         );
     }
     #[test]
+    fn animation_group_templates_mixins_and_base_animation_progress() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("TimingMixin={Init=function(self) self.Clock:SetDuration(2) end}")
+            .unwrap();
+        run(
+            &sim,
+            r#"<Ui><AnimationGroup name="TimingBase" virtual="true" mixin="TimingMixin"><Animation parentKey="Clock"/></AnimationGroup><AnimationGroup name="TimingDerived" virtual="true" inherits="TimingBase" looping="BOUNCE"/><Frame name="TimingRoot"><Animations><AnimationGroup parentKey="Timer" inherits="TimingDerived"/></Animations><Scripts><OnLoad>self.Timer:Init();self.Timer:Play()</OnLoad></Scripts></Frame></Ui>"#,
+        );
+        sim.advance_time(0.5);
+        sim.eval("assert(TimingRoot.Timer:GetLooping()=='BOUNCE');assert(math.abs(TimingRoot.Timer.Clock:GetSmoothProgress()-.25)<.001)").unwrap();
+    }
+    #[test]
     fn relative_keys_anchor_to_anonymous_parent_members() {
         let sim = crate::Sim::new().unwrap();
         run(

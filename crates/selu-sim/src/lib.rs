@@ -31,6 +31,7 @@ mod host_lua;
 pub mod interface_text;
 mod legacy;
 pub mod loader;
+mod map_world;
 mod native_defaults;
 mod native_stdlib;
 pub mod profile;

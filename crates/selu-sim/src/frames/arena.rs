@@ -85,6 +85,8 @@ pub struct Region {
     pub mouse: bool,
     pub mouse_click: bool,
     pub mouse_motion: bool,
+    pub pass_through_buttons: Vec<String>,
+    pub mouse_buttons: Option<Vec<String>>,
     pub enabled: bool,
     pub button_state: &'static str,
     pub button_state_locked: bool,

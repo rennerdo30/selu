@@ -638,6 +638,11 @@ fn declaration(node: &Node) -> Option<selu_manifest::Declaration> {
     if let Some(Node::Text(mixin)) = fields.get("Mixin") {
         data["attributes"]["Mixin"] = mixin.as_str().into();
     }
+    for key in ["Nilable", "MayReturnNothing"] {
+        if let Some(Node::Bool(value)) = fields.get(key) {
+            data["attributes"][key] = (*value).into();
+        }
+    }
     for (source, dest) in [
         ("Fields", "fields"),
         ("Returns", "returns"),
@@ -858,12 +863,35 @@ fn install_natives(lua: &Lua, ctx: &crate::Ctx, data: &Metadata) -> mlua::Result
             continue;
         }
         let name = path.clone();
-        let returns = function.returns.clone();
+        let returns = function
+            .returns
+            .iter()
+            .cloned()
+            .map(|mut result| {
+                if result
+                    .attributes
+                    .get("Nilable")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                {
+                    result.ty = Some("nil".into());
+                }
+                result
+            })
+            .collect::<Vec<_>>();
+        let may_return_nothing = function
+            .attributes
+            .get("MayReturnNothing")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
         let schemas = schemas.clone();
         let context = ctx.clone();
         let native = lua.create_function(move |lua, _: mlua::MultiValue| {
             crate::native_defaults::record(lua, &name);
             context.not_simulated(&name);
+            if may_return_nothing {
+                return Ok(mlua::MultiValue::new());
+            }
             crate::native_defaults::values(lua, &returns, &schemas, &context, 0)
         })?;
         standins.raw_set(path.as_str(), native.clone())?;
@@ -1018,6 +1046,20 @@ fn apply(lua: &Lua, ctx: &crate::Ctx, data: &Metadata) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runtime_nullable_and_empty_returns_preserve_existing_providers() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        s.eval("C_OptionalFixture={Custom=function()return 19 end}")
+            .unwrap();
+        let mut data = Metadata::default();
+        data.read(r#"local fixture={Name="OptionalFixture",Type="System",Namespace="C_OptionalFixture",Functions={
+            {Name="Read",Type="Function",Returns={{Name="id",Type="number",Nilable=true}}},
+            {Name="Maybe",Type="Function",MayReturnNothing=true,Returns={{Name="info",Type="number"}}},
+            {Name="Custom",Type="Function",Returns={{Name="id",Type="number",Nilable=true}}}
+        }}"#);
+        install_natives(s.lua(), s.ctx(), &data).unwrap();
+        s.eval("assert(C_OptionalFixture.Read()==nil);assert(select('#',C_OptionalFixture.Maybe())==0);assert(C_OptionalFixture.Custom()==19)").unwrap();
+    }
     #[test]
     fn runtime_documentation_supplies_private_natives_and_real_record_mixins() {
         let s = crate::Session::new(Default::default()).unwrap();

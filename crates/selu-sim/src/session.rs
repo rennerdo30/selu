@@ -483,6 +483,12 @@ impl Session {
             .lua
             .set_app_data(crate::native_defaults::CallCounts::default());
         crate::native_stdlib::install(&self.sim.lua)?;
+        if let Some(manifest) = &self.config.manifest {
+            crate::sim_globals::use_client_lua(&self.sim.lua, manifest)?;
+        }
+        for manifest in lock(&self.sim.state).checked_manifests.values() {
+            crate::sim_globals::use_client_lua(&self.sim.lua, manifest)?;
+        }
         crate::ui_metadata::install(
             &self.sim.lua,
             &self.sim.ctx,
@@ -726,7 +732,14 @@ impl Session {
                             self.sim
                                 .lua
                                 .load(&source)
-                                .set_name(&name)
+                                .set_name(
+                                    std::path::Path::new(&name)
+                                        .strip_prefix(&toc.dir)
+                                        .map(|p| p.to_string_lossy())
+                                        .unwrap_or_else(|_| {
+                                            std::borrow::Cow::Borrowed(name.as_str())
+                                        }),
+                                )
                                 .set_environment(environment.clone())
                                 .into_function()?
                         },

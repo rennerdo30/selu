@@ -1,6 +1,49 @@
 use crate::{Ctx, SimResult};
 use mlua::{Lua, Table, Value};
 
+fn lua_defined(entry: &selu_manifest::FunctionEntry) -> bool {
+    entry
+        .provenance
+        .as_ref()
+        .is_some_and(|source| source.kind == "defined")
+}
+
+/// Real UI mode executes client Lua helpers. Remove only our own manifest
+/// stand-ins, preserving native providers and functions installed by addons.
+pub(crate) fn use_client_lua(lua: &Lua, manifest: &selu_manifest::Manifest) -> SimResult<()> {
+    lua.set_named_registry_value("selu.client_lua", true)?;
+    let globals = lua.globals();
+    let standins: Table = globals.raw_get("__selu_native_standins")?;
+    let shapes: Table = globals.raw_get("__selu_global_shapes")?;
+    for entry in manifest.functions.iter().filter(|entry| lua_defined(entry)) {
+        let parts = entry.name.split('.').collect::<Vec<_>>();
+        let mut owner = globals.clone();
+        let mut ancestors = Vec::new();
+        for part in &parts[..parts.len() - 1] {
+            let Value::Table(child) = owner.raw_get::<Value>(*part)? else {
+                break;
+            };
+            ancestors.push((owner, *part, child.clone()));
+            owner = child;
+        }
+        let key = parts[parts.len() - 1];
+        let current = owner.raw_get::<Value>(key)?;
+        let expected = standins.raw_get::<Value>(entry.name.as_str())?;
+        if !expected.is_nil() && current == expected {
+            owner.raw_set(key, Value::Nil)?;
+            standins.raw_set(entry.name.as_str(), Value::Nil)?;
+            for (parent, key, child) in ancestors.into_iter().rev() {
+                if child.pairs::<Value, Value>().next().is_some() {
+                    break;
+                }
+                parent.raw_set(key, Value::Nil)?;
+            }
+        }
+        shapes.raw_set(entry.name.as_str(), Value::Nil)?;
+    }
+    Ok(())
+}
+
 /// Single construction boundary for SIM2's visual font model.
 pub fn create_font(lua: &Lua, name: &str) -> SimResult<Table> {
     let constructor: mlua::Function = crate::host_lua::factory(
@@ -183,7 +226,14 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
     let schemas = std::sync::Arc::new(schemas);
     // Native stand-ins use checked manifest return declarations. Existing
     // simulator implementations always win, including namespace members.
-    for entry in manifest.functions.iter().filter(|f| f.available) {
+    let client_lua = lua
+        .named_registry_value::<Option<bool>>("selu.client_lua")?
+        .unwrap_or(false);
+    for entry in manifest
+        .functions
+        .iter()
+        .filter(|f| f.available && !(client_lua && lua_defined(f)))
+    {
         let Some(signature) = &entry.signature else {
             continue;
         };
@@ -220,7 +270,7 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
     for function in manifest
         .functions
         .iter()
-        .filter(|f| f.available && !f.name.contains('.'))
+        .filter(|f| f.available && !f.name.contains('.') && !(client_lua && lua_defined(f)))
     {
         shapes.raw_set(function.name.as_str(), "function")?;
     }
@@ -354,7 +404,19 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
             Value::Boolean(false)
         }
         "Font" | "font" => Value::Table(create_font(lua, key)?),
-        "Table" | "table" => Value::Table(lua.create_table()?),
+        "Table" | "table" => {
+            // A typed Lua global is not a native object. During real UI
+            // loading its absence detects an unloaded optional addon; an
+            // empty table would make that feature check spuriously succeed.
+            if lua
+                .named_registry_value::<Option<bool>>("selu.default_ui_strings")?
+                .unwrap_or(false)
+            {
+                ctx.not_simulated(&format!("unloaded client Lua table: {key}"));
+                return Ok(None);
+            }
+            Value::Table(lua.create_table()?)
+        }
         ty if ty.starts_with("widget:")
             || matches!(
                 ty,
@@ -393,11 +455,13 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
         function strsplit(separator, text, limit)
             local result, start = {}, 1
             while not limit or #result < limit - 1 do
-                local first, last = string.find(text, separator, start, true)
+                local first
+                for index=start,#text do
+                    if string.find(separator,string.sub(text,index,index),1,true) then first=index;break end
+                end
                 if not first then break end
                 result[#result+1] = string.sub(text, start, first-1)
-                start = last+1
-                if separator == "" then break end
+                start = first+1
             end
             result[#result+1] = string.sub(text, start)
             return unpack(result)
@@ -405,6 +469,10 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
     "#,
     )
     .exec()?;
+    lua.globals().raw_get::<mlua::Table>("string")?.raw_set(
+        "split",
+        lua.globals().raw_get::<mlua::Function>("strsplit")?,
+    )?;
     // Client contract: Blizzard_SharedXMLBase/Color.lua. Runtime objects only;
     // public typing remains owned by the manifest.
     crate::host_lua::load(lua,r#"
@@ -519,6 +587,38 @@ pub fn configure_screen(lua: &Lua, size: (f64, f64)) -> SimResult<()> {
 #[cfg(test)]
 mod sg_tests {
     #[test]
+    fn client_lua_removes_only_its_own_placeholder_functions() {
+        let mut manifest: selu_manifest::Manifest = serde_json::from_str(include_str!(
+            "../../../manifests/fixtures/forever-1.0.0.1000.json"
+        ))
+        .unwrap();
+        for (name, kind) in [
+            ("FixtureMixin.Initialize", "defined"),
+            ("OptionalFixture", "defined"),
+            ("ReplacedFixture", "defined"),
+            ("C_Fixture.Native", "native"),
+        ] {
+            manifest.functions.push(serde_json::from_value(serde_json::json!({"name":name,"evidence":"verified","source":{"file":"fixture.lua","kind":kind},"signature":{"name":name,"returns":[]}})).unwrap());
+        }
+        let session = crate::Session::new(crate::SessionConfig {
+            manifest: Some(manifest.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        session.eval("assert(type(FixtureMixin.Initialize)=='function' and type(OptionalFixture)=='function');ReplacedFixture=function()return 17 end").unwrap();
+        super::use_client_lua(session.lua(), &manifest).unwrap();
+        // No recreation through manifest-shaped globals or later installs.
+        super::install_manifest(session.lua(), &manifest, session.ctx()).unwrap();
+        session.eval("assert(FixtureMixin==nil and OptionalFixture==nil);assert(ReplacedFixture()==17);assert(type(C_Fixture.Native)=='function')").unwrap();
+        session
+            .lua()
+            .set_named_registry_value("selu.default_ui_strings", true)
+            .unwrap();
+        session
+            .eval("__selu_global_shapes.AbsentFixtureMixin='table';assert(AbsentFixtureMixin==nil)")
+            .unwrap();
+    }
+    #[test]
     fn native_defaults_follow_manifest_returns_and_log_once() {
         let mut manifest: selu_manifest::Manifest = serde_json::from_str(include_str!(
             "../../../manifests/fixtures/forever-1.0.0.1000.json"
@@ -562,6 +662,8 @@ mod sg_tests {
             assert(strjoin(':', 'a', 2, 'b') == 'a:2:b')
             local a,b,c = strsplit(':','a::c'); assert(a=='a' and b=='' and c=='c')
             local a,b = strsplit(':','a:b:c',2); assert(a=='a' and b=='b:c')
+            local a,b,c,d = string.split('| ', 'A| B C');assert(a=='A' and b=='' and c=='B' and d=='C')
+            local a,b = string.split('| ', 'A|B C',2);assert(a=='A' and b=='B C')
             local f=CreateFrame('Frame'); local b=CreateFrame('Button',nil,f)
             f:SetID(4); b:SetID(9); assert(f:GetID()==4 and b:GetID()==9)
         "#,

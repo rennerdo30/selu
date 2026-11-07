@@ -919,15 +919,17 @@ errors with a known project file and line appear in the clickable Problems list.
 ### Lean Core environment (SL-31)
 
 The default root list is defined once in crates/selu-sim/src/loader.rs as
-CORE_UI_ADDONS: Blizzard_UIParent, Blizzard_GameTooltip, Blizzard_Minimap,
-Blizzard_ChatFrameBase, Blizzard_CombatLog, Blizzard_MainMenuBarBagButtons and Blizzard_QueueStatusFrame.
+CORE_UI_ADDONS. It includes UIParent, tooltips, minimap, chat, Combat Log,
+bag buttons, queue status, World Map, objective/content tracking, and the real
+unit/raid frames, aura and panel services required by those systems.
 The last two complete dependencies used implicitly by the action-bar and Edit
 Mode code pulled in by the minimap: bag topology and group-finder anchoring.
 Studio exposes an override list in Run > Game Installs. Required TOC dependencies
-and the native shared-library pass use the same loader and ordering as Full;
-no named-frame substitutes are installed. Root lists survive reload. Basic
-unit frames are not an additional Core root: dependency size and startup cost
-take priority here. Missing source leaves the environment unavailable rather
+and the native shared-library pass use the same loader as Full. Core roots
+retain their bootstrap order (secure roots first), with required dependencies
+before each root. This supplies implicit map/panel/widget dependencies which
+the complete UI normally has already loaded. No named-frame substitutes are
+installed. Root lists survive reload. Missing source leaves the environment unavailable rather
 than manufacturing frames. No required dependency is excluded merely to hide
 its errors. Missing client localization uses synthetic labels, while
 undocumented legacy aliases use simulator identities as described below.
@@ -938,10 +940,28 @@ the measured client. Localized positional formatting (`%1$s`, `%2$d`) reorders
 arguments before delegating conversion to Lua's native formatter. Secure method
 calls preserve the receiver, return values and captured-error boundary.
 
-Core still leaves World Map outside its roots. A dependency probe adds four
-addons but reaches additional map-canvas input gaps; it does not yet complete
-the quest-map initialization. No required TOC dependency is removed to suppress
-an error. Full remains the mode for developing against that system.
+World Map and objective tracking are real Core roots. World Map ships under
+the same addon name in the five installed client products checked locally.
+Classic-family clients do not ship a separate Blizzard_ObjectiveTracker;
+their older quest-watch UI stays owned by their own FrameXML. Unavailable
+built-in roots are reported as notes; unavailable custom roots remain errors.
+No required TOC dependency is removed to suppress an error.
+
+Map terrain, polygons and points of interest are not yet decoded from the
+client's database. The synthetic world supplies one untextured canvas sized
+to its viewport, with a once-only note; no client map IDs, texture IDs or map
+tables are shipped or borrowed from another product. Runtime documentation
+retains nullable and empty-return flags for native fallback construction.
+Native unit-position/blob configuration
+is retained, but those widgets do not paint world geometry yet.
+
+Real UI mode removes only simulator manifest stand-ins for Lua-defined helpers;
+it preserves implemented natives and addon replacements. An unloaded optional
+Lua mixin/helper stays nil, allowing Blizzard's own availability checks to work.
+None mode retains its existing manifest simulation behavior. Animation-group
+template inheritance applies mixins and base animation progress. Native mouse
+registration, per-button pass-through and parent-key assignment use shared
+widget/input state, including Studio's preview.
 
 Text markup resolves `|cnNAME:text|r` through the selected client's GlobalColor
 table. Hex colors, reset markers, hyperlink labels, inline texture and atlas

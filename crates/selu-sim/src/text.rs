@@ -45,6 +45,7 @@ pub(crate) fn install_format(lua: &mlua::Lua) -> mlua::Result<()> {
     lua.globals()
         .raw_get::<mlua::Table>("string")?
         .raw_set("format", formatter.clone())?;
+    lua.set_named_registry_value("selu.client_format", formatter.clone())?;
     lua.globals().raw_set("format", formatter)
 }
 
@@ -619,6 +620,12 @@ mod markup_tests {
         let s = crate::Session::new(Default::default()).unwrap();
         install_format(s.lua()).unwrap();
         s.eval("assert(string.format('%2$s/%1$03d/%2$s',7,'two')=='two/007/two');assert(format('%3$s','one',nil,'three')=='three');assert(format('%%1$s %1$s','literal')=='%1$s literal');assert(format('%04d %.2f',7,1.25)=='0007 1.25');assert(not pcall(format,'%1$d','invalid'));table={};string={};assert(format('%2$s/%1$d',7,'two')=='two/7')").unwrap();
+    }
+    #[test]
+    fn formatted_widget_text_uses_the_captured_client_formatter() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        install_format(s.lua()).unwrap();
+        s.eval("local label=UIParent:CreateFontString();label:SetFormattedText('%2$s %1$03d',7,'sample');assert(label:GetText()=='sample 007');table={};string={};label:SetFormattedText('%2$s %1$d',8,'sample');assert(label:GetText()=='sample 8')").unwrap();
     }
     fn plain(a: &[Atom]) -> String {
         a.iter()
