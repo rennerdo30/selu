@@ -15,7 +15,9 @@ pub mod blp;
 pub struct Storage {
     pub build: BuildInfo,
     root_entry_count: usize,
-    content_keys: HashMap<u32, [u8; 16]>,
+    /// Every enUS content key a file has, in root order. A file can have
+    /// several variants (platform or content flags); only some are installed.
+    content_keys: HashMap<u32, Vec<[u8; 16]>>,
     index: CascIndex,
     encoding: EncodingFile,
     data: PathBuf,
@@ -66,7 +68,10 @@ impl Storage {
         let mut content_keys = HashMap::new();
         for (id, entry) in root.iter_all() {
             if entry.locale_flags.matches(LocaleFlags::EN_US) {
-                content_keys.entry(id).or_insert(entry.ckey);
+                let keys: &mut Vec<[u8; 16]> = content_keys.entry(id).or_default();
+                if !keys.contains(&entry.ckey) {
+                    keys.push(entry.ckey);
+                }
             }
         }
         let mut names = HashMap::new();
@@ -115,33 +120,44 @@ impl Storage {
     /// Availability from this immutable local index; payload integrity is still
     /// checked by read(). Does not download or decode candidate texture sheets.
     pub fn has_local_file(&self, id: u32) -> bool {
-        let Some(ckey) = self.content_keys.get(&id) else {
+        let Some(keys) = self.content_keys.get(&id) else {
             return false;
         };
-        self.cache.join(hex::encode(ckey)).is_file()
-            || self.encoding.find_ekey(ckey).is_some_and(|entry| {
-                entry.ekeys.iter().any(|ekey| {
-                    self.index
-                        .find(ekey)
-                        .is_some_and(|entry| local_entry_present(&self.data, entry, ekey))
+        keys.iter().any(|ckey| {
+            self.cache.join(hex::encode(ckey)).is_file()
+                || self.encoding.find_ekey(ckey).is_some_and(|entry| {
+                    entry.ekeys.iter().any(|ekey| {
+                        self.index
+                            .find(ekey)
+                            .is_some_and(|entry| local_entry_present(&self.data, entry, ekey))
+                    })
                 })
-            })
+        })
     }
     pub fn read(&self, id: u32) -> Result<Vec<u8>> {
-        let ckey = self
+        let keys = self
             .content_keys
             .get(&id)
             .ok_or("FileDataID absent for enUS")?;
+        // The first variant that is installed locally is the one the client
+        // on this machine uses.
+        for ckey in keys {
+            if let Some(bytes) = self.read_content(ckey)? {
+                return Ok(bytes);
+            }
+        }
+        Err("file not installed locally".into())
+    }
+    fn read_content(&self, ckey: &[u8; 16]) -> Result<Option<Vec<u8>>> {
         let cache = self.cache.join(hex::encode(ckey));
         if let Ok(bytes) = std::fs::read(&cache)
             && Md5::digest(&bytes).as_slice() == ckey
         {
-            return Ok(bytes);
+            return Ok(Some(bytes));
         }
-        let enc = self
-            .encoding
-            .find_ekey(ckey)
-            .ok_or("content absent locally")?;
+        let Some(enc) = self.encoding.find_ekey(ckey) else {
+            return Ok(None);
+        };
         for ekey in &enc.ekeys {
             if let Some(e) = self.index.find(ekey) {
                 let result = read_entry(&self.data, e.archive_number, e.archive_offset, e.size);
@@ -151,11 +167,11 @@ impl Storage {
                     }
                     std::fs::create_dir_all(&self.cache)?;
                     std::fs::write(&cache, &bytes)?;
-                    return Ok(bytes);
+                    return Ok(Some(bytes));
                 }
             }
         }
-        Err("file not installed locally".into())
+        Ok(None)
     }
 }
 fn index_names<'a>(
@@ -196,25 +212,71 @@ fn local_entry_present(data: &Path, entry: &IndexEntry, ekey: &[u8; 16]) -> bool
         file.seek(SeekFrom::Start(entry.archive_offset))?;
         let mut header = [0u8; 34];
         file.read_exact(&mut header)?;
-        Ok(header[..16].iter().rev().eq(ekey.iter()) && &header[30..] == b"BLTE")
+        // Usual layout: the 30-byte entry header (reversed key first), then
+        // BLTE. Some entries in current clients are indexed at the BLTE data
+        // itself, with the header in front of it; the caller's MD5 check of
+        // the decoded content decides.
+        Ok(
+            (header[..16].iter().rev().eq(ekey.iter()) && &header[30..] == b"BLTE")
+                || &header[..4] == b"BLTE",
+        )
     };
     check().unwrap_or(false)
 }
 fn read_entry(data: &Path, archive: u32, offset: u64, size: u32) -> Result<Vec<u8>> {
-    if !(30..=268_435_456).contains(&size) {
+    if !(8..=268_435_456).contains(&size) {
         return Err("invalid or oversized CASC entry".into());
     }
     let mut file = std::fs::File::open(data.join(format!("data.{archive:03}")))?;
-    file.seek(SeekFrom::Start(
-        offset.checked_add(30).ok_or("offset overflow")?,
-    ))?;
-    let mut bytes = vec![0; size as usize - 30];
+    // See local_entry_present: an entry is indexed either at its header or
+    // at its BLTE data.
+    file.seek(SeekFrom::Start(offset))?;
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic)?;
+    // Indexed at the data, the size covers the BLTE data alone.
+    let (start, len) = if &magic == b"BLTE" {
+        (offset, size as usize)
+    } else {
+        let len = (size as usize)
+            .checked_sub(30)
+            .ok_or("invalid or oversized CASC entry")?;
+        (offset.checked_add(30).ok_or("offset overflow")?, len)
+    };
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = vec![0; len];
     file.read_exact(&mut bytes)?;
     decode_blte(&bytes)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn entries_indexed_at_their_blte_data_are_read() {
+        // Current clients index some entries at the BLTE data itself, with
+        // the 30-byte header (key zeroed) in front; the size is the data's.
+        let root = std::env::temp_dir().join(format!("selu-entry-data-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut bytes = vec![0u8; 30];
+        bytes.extend_from_slice(b"BLTE\0\0\0\0Nhello");
+        std::fs::write(root.join("data.000"), &bytes).unwrap();
+        let entry = IndexEntry {
+            archive_number: 0,
+            archive_offset: 30,
+            size: 14,
+        };
+        assert!(
+            !local_entry_present(&root, &entry, &[7; 16]),
+            "shorter than a header"
+        );
+        assert_eq!(read_entry(&root, 0, 30, 14).unwrap(), b"hello");
+        // The usual layout still reads after the header.
+        let mut usual = vec![0u8; 30];
+        usual.extend_from_slice(b"BLTE\0\0\0\0Nworld");
+        std::fs::write(root.join("data.001"), &usual).unwrap();
+        assert_eq!(read_entry(&root, 1, 0, 44).unwrap(), b"world");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn availability_rejects_prefix_collisions_and_truncated_entries() {
         let root = std::env::temp_dir().join(format!("selu-entry-{}", std::process::id()));

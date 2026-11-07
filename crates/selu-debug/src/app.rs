@@ -164,20 +164,39 @@ fn addon_manifest(
         })
         .collect();
     let all = selu_manifest::load_manifest_dir(manifests).ok()?;
-    all.iter()
-        .filter(|m| !m.fixture && interfaces.contains(&m.interface))
-        .max_by_key(|m| m.build)
-        .or_else(|| {
-            fallback
-                .and_then(|t| selu_manifest::TargetSpec::parse(t).ok())
-                .and_then(|spec| selu_manifest::resolve(&spec, &all).ok())
-        })
-        .or_else(|| {
-            all.iter()
-                .filter(|m| !m.fixture && selu_manifest::product(&m.flavour) == "wowf")
-                .max_by_key(|m| m.build)
-        })
-        .cloned()
+    let fallback = fallback
+        .and_then(|t| selu_manifest::TargetSpec::parse(t).ok())
+        .and_then(|spec| selu_manifest::resolve(&spec, &all).ok());
+    pick_plain_target(&all, &interfaces, fallback).cloned()
+}
+
+/// The manifest a plain addon runs against, from its TOC `## Interface:`
+/// numbers (in the author's order). An exact interface match wins; when the
+/// Studio setting's product is among the matches it is preferred, otherwise
+/// the first listed interface decides. Without an exact match the setting
+/// decides, then the nearest interface of the first listed number. No
+/// product is assumed.
+fn pick_plain_target<'a>(
+    all: &'a [selu_manifest::Manifest],
+    interfaces: &[u32],
+    fallback: Option<&'a selu_manifest::Manifest>,
+) -> Option<&'a selu_manifest::Manifest> {
+    let real = || all.iter().filter(|m| !m.fixture);
+    let newest = |interface: u32| {
+        real()
+            .filter(|m| m.interface == interface)
+            .max_by_key(|m| m.build)
+    };
+    if let Some(preferred) = fallback.filter(|f| interfaces.contains(&f.interface)) {
+        return Some(preferred);
+    }
+    if let Some(found) = interfaces.iter().find_map(|i| newest(*i)) {
+        return Some(found);
+    }
+    fallback.or_else(|| {
+        let first = *interfaces.first()?;
+        real().min_by_key(|m| (m.interface.abs_diff(first), std::cmp::Reverse(m.build)))
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1654,9 +1673,11 @@ impl Studio {
                     self.game_settings.core_ui_addons=roots.split([',',' ']).filter(|s|!s.is_empty()).map(str::to_owned).collect();
                     changed=true;
                 }
-                let mut source=self.game_settings.default_ui_source.as_ref().map(|p|p.display().to_string()).unwrap_or_else(|| "E:/Development/wow-ui-source".into());
+                ui.label("Blizzard UI source checkout (optional; the installed client is used first, and a checkout only when its branch matches the product)");
+                let mut source=self.game_settings.default_ui_source.as_ref().map(|p|p.display().to_string()).unwrap_or_default();
                 if ui.text_edit_singleline(&mut source).changed() {
-                    self.game_settings.default_ui_source=Some(PathBuf::from(source.trim())); changed=true;
+                    self.game_settings.default_ui_source = if source.trim().is_empty() { None } else { Some(PathBuf::from(source.trim())) };
+                    changed=true;
                 }
                 changed |= ui.checkbox(&mut self.game_settings.disable_client_assets, "Disable client fonts and art").changed();
                 let mut root = self.game_settings.client_install.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
@@ -1912,22 +1933,24 @@ impl Studio {
         if self.game_settings.ui_mode == crate::game::UiMode::None {
             return;
         }
-        let source = self
-            .game_settings
-            .default_ui_source
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("E:/Development/wow-ui-source"));
         let target = self
             .opts
             .manifest
             .as_ref()
             .map(selu_manifest::Manifest::target_string)
             .or_else(|| self.opts.target.clone());
-        if source.join("Interface/ui-toc-list.txt").is_file()
-            && target
-                .as_deref()
-                .is_some_and(|s| s.split('@').next() == Some("wowf"))
-        {
+        let Some(target) = target else {
+            return;
+        };
+        let (source, skipped) = crate::game::ui_source(
+            self.game_settings.default_ui_source.as_deref(),
+            self.opts.client_install.as_deref(),
+            &target,
+        );
+        if let Some(note) = skipped {
+            self.line(LineKind::Error, note);
+        }
+        if let Some(source) = source {
             if self.game_settings.ui_mode == crate::game::UiMode::Core {
                 self.send(Command::LoadCoreUi {
                     source,
@@ -2546,20 +2569,7 @@ impl Studio {
             .map(selu_manifest::Manifest::target_string)
             .or_else(|| self.opts.target.clone())?;
         let product = target.split('@').next()?;
-        // The product folder (`_retail_`, `_forever_`, ...) under the install.
-        let mut folders: Vec<PathBuf> = std::fs::read_dir(root)
-            .ok()?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.file_name()
-                    .and_then(|s| s.to_str())
-                    .and_then(crate::game::flavour_of)
-                    == Some(product)
-            })
-            .collect();
-        folders.sort();
-        Some(folders.into_iter().next()?.join("WTF"))
+        Some(crate::game::product_folder(root, product)?.join("WTF"))
     }
     fn saved_ui(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Saved variables", |ui| {
@@ -4486,6 +4496,44 @@ mod sim4_texture_tests {
 #[cfg(test)]
 mod open_project_tests {
     use super::find_project;
+
+    #[test]
+    fn plain_addon_target_follows_interface_numbers_not_one_product() {
+        use super::*;
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../manifests/fixtures/forever-1.0.0.1000.json");
+        let base = selu_manifest::load_manifest(&fixture).unwrap();
+        let make = |flavour: &str, interface: u32, build: &str| {
+            let mut m = base.clone();
+            m.fixture = false;
+            m.flavour = flavour.into();
+            m.interface = interface;
+            m.build = selu_manifest::Build::parse(build).unwrap();
+            m
+        };
+        let all = vec![
+            make("wow", 120005, "12.0.5.1"),
+            make("wowf", 16001, "1.60.1.1"),
+            make("wow_classic_era", 11508, "1.15.8.1"),
+            make("wow_classic", 50504, "5.5.4.1"),
+        ];
+        let pick = |interfaces: &[u32], fallback: Option<usize>| {
+            pick_plain_target(&all, interfaces, fallback.map(|i| &all[i]))
+                .map(|m| m.flavour.clone())
+        };
+        // The first listed interface decides; no product is assumed.
+        assert_eq!(
+            pick(&[11508, 16001], None).as_deref(),
+            Some("wow_classic_era")
+        );
+        assert_eq!(pick(&[50504], None).as_deref(), Some("wow_classic"));
+        // The Studio setting wins when its product is among the matches.
+        assert_eq!(pick(&[11508, 16001], Some(1)).as_deref(), Some("wowf"));
+        // Without an exact match: the setting, else the nearest interface.
+        assert_eq!(pick(&[11509], Some(3)).as_deref(), Some("wow_classic"));
+        assert_eq!(pick(&[120007], None).as_deref(), Some("wow"));
+        assert_eq!(pick(&[], None), None);
+    }
 
     #[test]
     fn plain_addon_discovery_target_load_error_and_saved_edit_reload() {

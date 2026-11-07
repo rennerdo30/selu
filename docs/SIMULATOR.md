@@ -299,14 +299,34 @@ The committed visual fixture is `crates/selu-sim/tests/fixtures/rendering`.
 
 ### Default UI startup (SL-23)
 
-Studio's Game Installs settings offer None, Core (default), Full, and a
-source checkout path. The initial source is
-`E:/Development/wow-ui-source`; it is read-only. Library sessions remain opt-in
-through `Session::load_default_ui`. With a configured client, TOC lists, TOCs,
-Lua and XML bytes prefer local CASC; unavailable entries fall back to the source
-checkout with a note. The checkout is still required for directory discovery
-and canonical path containment. Sources for other targets are not selected by
-switching that checkout's branch.
+Studio's Game Installs settings offer None, Core (default), Full, and an
+optional source checkout path. Library sessions remain opt-in through
+`Session::load_default_ui`.
+
+Every product works the same way (SL-32). The session's own installed client
+is the source: Studio passes the product's client folder (`_retail_`,
+`_classic_era_`, ...) as the UI root, and the TOC list, TOCs, Lua and XML are
+read from that client's CASC storage, so no checkout is needed. Paths that
+exist only inside the client are normalized lexically
+(`loader::ui_path`/`ui_dir`). A configured checkout is used only when the
+product's client is not installed, and only when its branch (read from
+`.git/HEAD`, never by running git) is the product's branch in
+`selu_manifest::SOURCE_BRANCHES`; otherwise Studio says why it loads no
+Blizzard UI. There is no built-in default path.
+
+TOC suffixes, the `AllowLoadGameType` token and the `[Game]`/`[Family]` folder
+names come from one table, `selu_manifest::client_ui`, for every product and
+its PTR/beta channels. Classic products follow the expansion their build
+replays (1 Vanilla, 2 TBC, 3 Wrath, 4 Cata, 5 Mists, each falling back to
+`_Classic`), so the session uses its manifest's exact build
+(`SessionConfig::toc_target`).
+
+Checked 2026-11-07, headless Core with a probe addon, read-only, on every
+installed client: wow (58 Blizzard addons), wowf (62), wow_classic (40),
+wow_classic_era (37) and wow_anniversary (37) each provide `Minimap`,
+`DEFAULT_CHAT_FRAME` and `GameTooltip` from their own Blizzard code. The
+remaining load errors are simulator engine gaps, highest in the Classic
+products.
 
 XML parsing uses roxmltree 0.21.2 (MIT OR Apache-2.0). Includes retain source
 order and are bounded by canonical addon containment, a 64-file include depth,
@@ -580,8 +600,8 @@ item IDs per slot, not inventory metadata or item stack counts.
 
 Studio offers **None**, **Core** (default), and **Full** Blizzard UI modes. None loads no Blizzard addons; Core loads real Blizzard addon roots and their required TOC dependencies; Full loads the complete default UI. CLI `selu test` and simulator Sessions remain None unless explicitly loaded.
 To enable it, open Studio's **Run > Game installs...** window, enable
-**Core** or **Full**, and set the UI source checkout
-and client install paths there. Changing the UI mode, roots or source restarts the project session.
+**Core** or **Full**, and set the client install path there (a source
+checkout is optional; see "Default UI startup"). Changing the UI mode, roots or source restarts the project session.
 The install root contains `.build.info`; the source root contains `Interface`.
 Keep **Disable client fonts and art** unchecked for client-backed rendering.
 
@@ -617,9 +637,7 @@ not the slower development build. The launcher itself does not select a Cargo
 profile: `SELU_STUDIO` overrides the sibling binary, with PATH as a fallback.
 
 An explicitly enabled session loads Blizzard's external Lua/XML before the
-user addon. Local CASC files take precedence over the configured read-only
-source checkout; missing locally installed files fall back with notes. The
-tested source is Forever 1.60.1.70790, matching the installed wowf client.
+user addon, from the product's own client (see "Default UI startup").
 Neither source nor game folders are modified. SavedVariables are not read.
 
 The simulator implements native state, widget behavior, events and layout.

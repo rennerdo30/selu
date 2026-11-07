@@ -26,7 +26,8 @@ enum Command {
     Gamedata {
         #[arg(long)]
         install: PathBuf,
-        #[arg(long, default_value = "wowf")]
+        /// TACT product code of the client to read, e.g. `wow` or `wow_classic_era`.
+        #[arg(long)]
         product: String,
         #[arg(long)]
         listfile: Option<PathBuf>,

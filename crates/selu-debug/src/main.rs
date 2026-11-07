@@ -239,10 +239,12 @@ fn main() -> ExitCode {
         };
     }
 
-    let supports_ui = target
-        .as_deref()
-        .or_else(|| manifest.as_ref().map(|m| m.flavour.as_str()))
-        .is_some_and(|t| t.split('@').next() == Some("wowf"));
+    let ui_target = target.clone().or_else(|| {
+        manifest
+            .as_ref()
+            .map(selu_manifest::Manifest::target_string)
+    });
+    let ui_install = client_install.clone();
     let worker = Worker::spawn(SessionConfig {
         client_install,
         manifest,
@@ -263,11 +265,18 @@ fn main() -> ExitCode {
         let _ = out.flush();
     };
     let settings = game::Settings::load();
-    let source = settings
-        .default_ui_source
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("E:/Development/wow-ui-source"));
-    if supports_ui && source.join("Interface/ui-toc-list.txt").is_file() {
+    let (source, skipped) = match (&ui_target, settings.ui_mode) {
+        (Some(target), mode) if mode != game::UiMode::None => game::ui_source(
+            settings.default_ui_source.as_deref(),
+            ui_install.as_deref(),
+            target,
+        ),
+        _ => (None, None),
+    };
+    if let Some(note) = skipped {
+        eprintln!("selu-studio: {note}");
+    }
+    if let Some(source) = source {
         match settings.ui_mode {
             game::UiMode::None => {}
             game::UiMode::Core => emit(

@@ -70,6 +70,81 @@ pub fn flavour_of(folder: &str) -> Option<&'static str> {
     }
 }
 
+/// The client folder (`_retail_`, `_forever_`, ...) of a product inside an
+/// install root, if that product is installed there.
+pub fn product_folder(install: &Path, product: &str) -> Option<PathBuf> {
+    let product = selu_manifest::product(product);
+    let mut found: Vec<PathBuf> = std::fs::read_dir(install)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name().and_then(|n| n.to_str()).and_then(flavour_of) == Some(product)
+        })
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
+/// The branch a source checkout has checked out, read from its `.git/HEAD`
+/// (a worktree's `.git` file points at its own HEAD). Never runs git.
+pub fn checkout_branch(checkout: &Path) -> Option<String> {
+    let git = checkout.join(".git");
+    let head = if git.is_file() {
+        let pointer = std::fs::read_to_string(&git).ok()?;
+        let dir = PathBuf::from(pointer.trim().strip_prefix("gitdir:")?.trim());
+        let dir = if dir.is_absolute() {
+            dir
+        } else {
+            checkout.join(dir)
+        };
+        std::fs::read_to_string(dir.join("HEAD")).ok()?
+    } else {
+        std::fs::read_to_string(git.join("HEAD")).ok()?
+    };
+    head.trim()
+        .strip_prefix("ref: refs/heads/")
+        .map(str::to_owned)
+}
+
+/// Where a session for `target` reads Blizzard's interface code.
+///
+/// The product's installed client comes first: its files are read from CASC,
+/// so every product works without a checkout. A configured source checkout is
+/// used only when the client is not available and the checkout's branch is
+/// the product's branch. The second value explains a skipped checkout.
+pub fn ui_source(
+    configured: Option<&Path>,
+    install: Option<&Path>,
+    target: &str,
+) -> (Option<PathBuf>, Option<String>) {
+    let product = selu_manifest::product(target.split('@').next().unwrap_or(""));
+    if let Some(folder) = install.and_then(|root| product_folder(root, product)) {
+        return (Some(folder), None);
+    }
+    let Some(checkout) = configured.filter(|p| p.join("Interface/ui-toc-list.txt").is_file())
+    else {
+        return (
+            None,
+            Some(format!(
+                "no Blizzard UI for {product}: the client is not installed and no source checkout is configured"
+            )),
+        );
+    };
+    let wanted = selu_manifest::source_branch(product);
+    match (checkout_branch(checkout), wanted) {
+        (Some(branch), Some(wanted)) if branch != wanted => (
+            None,
+            Some(format!(
+                "Blizzard UI source {} is on branch {branch}, but {product} needs {wanted}; not loading it",
+                checkout.display()
+            )),
+        ),
+        _ => (Some(checkout.to_path_buf()), None),
+    }
+}
+
 /// Blizzard TACT product for a known client folder.
 pub fn product_code(folder: &str) -> Option<String> {
     flavour_of(folder).map(String::from)
@@ -591,6 +666,43 @@ mod tests {
         }
         std::fs::create_dir_all(root.join("Data")).unwrap();
         root
+    }
+
+    #[test]
+    fn ui_source_prefers_the_products_client_then_a_matching_checkout() {
+        let root = fake_install("ui-source");
+        // Installed products read Blizzard's UI from their own client folder.
+        let (source, note) = ui_source(None, Some(&root), "wow@12.0.5.1");
+        assert_eq!(source, Some(root.join("_retail_")));
+        assert!(note.is_none());
+        let (source, _) = ui_source(None, Some(&root), "wow_classic_era@1.15.8.1");
+        assert_eq!(source, Some(root.join("_classic_era_")));
+        // A checkout is used only when its branch is the product's branch.
+        let checkout = root.join("wow-ui-source");
+        std::fs::create_dir_all(checkout.join("Interface")).unwrap();
+        std::fs::write(checkout.join("Interface/ui-toc-list.txt"), "").unwrap();
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::write(
+            checkout.join(".git/HEAD"),
+            "ref: refs/heads/forever
+",
+        )
+        .unwrap();
+        assert_eq!(checkout_branch(&checkout).as_deref(), Some("forever"));
+        let (source, note) = ui_source(Some(&checkout), Some(&root), "wowf@1.60.1.1");
+        assert_eq!(
+            source,
+            Some(checkout.clone()),
+            "wowf is not installed in the fake root"
+        );
+        assert!(note.is_none());
+        let (source, note) = ui_source(Some(&checkout), None, "wow_anniversary@2.5.5.1");
+        assert_eq!(source, None);
+        assert!(note.unwrap().contains("classic_anniversary"));
+        let (source, note) = ui_source(None, None, "wow_classic@5.5.4.1");
+        assert_eq!(source, None);
+        assert!(note.is_some());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

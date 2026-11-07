@@ -51,9 +51,8 @@ pub(crate) fn read_client(
     client: Option<(&selu_gamedata::Storage, &Path)>,
 ) -> Result<(), String> {
     let _profile = crate::profile::Span::new("xml.read_parse_encode");
-    let path = path
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let path =
+        crate::loader::ui_path(path, client).map_err(|e| format!("{}: {e}", path.display()))?;
     if !path.starts_with(root) {
         return Err(format!(
             "XML include escapes addon folder: {}",
@@ -63,7 +62,7 @@ pub(crate) fn read_client(
     if stack.len() >= 64 || stack.contains(&path) {
         return Err(format!("XML include cycle/depth: {}", path.display()));
     }
-    if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 16 * 1024 * 1024) {
         return Err(format!("XML input too large: {}", path.display()));
     }
     let source = crate::loader::read_ui_text(&path, client, diagnostic)?;

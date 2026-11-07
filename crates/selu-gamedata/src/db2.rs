@@ -21,6 +21,12 @@ pub struct Atlas {
     pub tiles_horizontally: bool,
     pub tiles_vertically: bool,
 }
+/// FileDataIDs are assigned once by Blizzard and shared by every product.
+/// Checked 2026-11-07 against the installed wow, wowf, wow_classic,
+/// wow_classic_era and wow_anniversary clients: where a client's root still
+/// names `DBFilesClient/<table>.db2` (the Classic clients), the name resolves
+/// to these IDs; retail and Forever roots carry no names for these tables, so
+/// the ID is the only lookup there.
 pub const TABLES: [(&str, u32); 3] = [
     ("UiTextureAtlas", 897470),
     ("UiTextureAtlasMember", 897532),

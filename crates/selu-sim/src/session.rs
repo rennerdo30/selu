@@ -140,6 +140,18 @@ pub struct SessionConfig {
     pub character: String,
 }
 
+impl SessionConfig {
+    /// The `product@build` used to pick TOC files and game types: the
+    /// manifest's exact build when known, so a Classic channel resolves to
+    /// the expansion its build replays, else the configured target.
+    pub fn toc_target(&self) -> Option<String> {
+        self.manifest
+            .as_ref()
+            .map(selu_manifest::Manifest::target_string)
+            .or_else(|| self.target.clone())
+    }
+}
+
 impl Default for SessionConfig {
     fn default() -> Self {
         SessionConfig {
@@ -301,7 +313,7 @@ fn load_dynamic(
     saved: &crate::saved::SavedSnapshot,
 ) -> SimResult<String> {
     let dir = dir.canonicalize().map_err(|e| runtime(e.to_string()))?;
-    let toc = loader::read_toc_target(&dir, config.target.as_deref()).map_err(runtime)?;
+    let toc = loader::read_toc_target(&dir, config.toc_target().as_deref()).map_err(runtime)?;
     {
         let mut state = lock(&vm.state);
         if state.loading.contains(&dir) {
@@ -582,9 +594,10 @@ impl Session {
                 .map(|storage| storage.build.build_key.as_str()),
         );
         let client = storage.as_deref().map(|s| (s, source_root.as_path()));
+        let toc_target = self.config.toc_target();
         let (addons, mut report) = loader::default_ui_order_client(
             &source_root,
-            self.config.target.as_deref(),
+            toc_target.as_deref(),
             storage.as_deref(),
             roots,
         )
@@ -639,7 +652,11 @@ impl Session {
                     Err(error) => report.errors.push(error),
                 }
             }
-            crate::fonts::register_addon_root(self.sim.lua(), &toc.dir)?;
+            // Art of an addon read from the client resolves through client
+            // storage; only a folder on disk is an extra asset root.
+            if toc.dir.is_dir() {
+                crate::fonts::register_addon_root(self.sim.lua(), &toc.dir)?;
+            }
             let ns = self.sim.lua.create_table()?;
             let imported = modules.clone();
             let module_prefix = toc.name.clone();
@@ -875,7 +892,8 @@ impl Session {
         if !lock(&self.sim.state).loaded.is_empty() {
             return Err(runtime("saved fixtures must precede addon loading".into()));
         }
-        let toc = loader::read_toc_target(dir, self.config.target.as_deref()).map_err(runtime)?;
+        let toc =
+            loader::read_toc_target(dir, self.config.toc_target().as_deref()).map_err(runtime)?;
         let names: HashSet<_> = toc
             .list("SavedVariables")
             .into_iter()
@@ -1007,7 +1025,7 @@ impl Session {
         config: &SessionConfig,
         saved: &crate::saved::SavedSnapshot,
     ) -> SimResult<String> {
-        let toc = loader::read_toc_target(dir, config.target.as_deref()).map_err(runtime)?;
+        let toc = loader::read_toc_target(dir, config.toc_target().as_deref()).map_err(runtime)?;
         for name in toc
             .list("SavedVariables")
             .into_iter()
@@ -1157,8 +1175,8 @@ impl Session {
         self.sim.fire("PLAYER_LOGOUT", vec![])?;
         let mut saved = self.saved.clone();
         for dir in &addons {
-            let toc =
-                loader::read_toc_target(dir, self.config.target.as_deref()).map_err(runtime)?;
+            let toc = loader::read_toc_target(dir, self.config.toc_target().as_deref())
+                .map_err(runtime)?;
             for name in toc
                 .list("SavedVariables")
                 .into_iter()
