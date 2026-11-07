@@ -44,6 +44,7 @@ fn core_loads_real_common_frames_and_records_startup() {
         s.load_addon_dir(std::path::Path::new(path)).unwrap();
     }
     s.login().unwrap();
+    s.eval("if C_QuestSession then assert(C_QuestSession.GetSessionBeginDetails()==nil) end;if QuestSessionManager then assert(not QuestSessionManager.StartDialog:IsShown()) end").unwrap();
     for _ in 0..4 {
         s.advance_time(1. / 60.);
     }
@@ -60,6 +61,7 @@ fn core_loads_real_common_frames_and_records_startup() {
     }
     if let Some(dir) = std::env::var_os("SELU_CORE_AUDIT_DIR") {
         let dir = std::path::PathBuf::from(dir);
+        std::fs::write(dir.join("runtime.log"), s.logs().join("\n")).unwrap();
         std::fs::write(
             dir.join("snapshot.json"),
             serde_json::to_vec(&s.snapshot().unwrap()).unwrap(),

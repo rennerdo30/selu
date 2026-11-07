@@ -245,38 +245,47 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
             Ok(list)
         })?,
     )?;
-    let ctx = ctx.clone();
-    lua.globals().set(
-        "CreateFrame",
-        lua.create_function(
-            move |lua, (kind, name, parent, templates, frame_id): CreateFrameArgs| {
-                let mut kind = kind.unwrap_or_else(|| "Frame".into());
-                let mut templates = templates;
-                if let Some(resolve) = lua
-                    .globals()
-                    .raw_get::<Option<Function>>("__selu_xml_intrinsic")?
-                    && let Some(base) = resolve.call::<Option<String>>(kind.clone())?
-                {
-                    templates = Some(match templates {
-                        Some(names) => format!("{kind},{names}"),
-                        None => kind.clone(),
-                    });
-                    kind = base;
-                }
-                let t = create(lua, &ctx, &kind, name, parent)?;
-                if let Some(frame_id) = frame_id {
-                    store(lua).borrow_mut().regions[id(&t)?].id = frame_id;
-                }
-                crate::regions::templates(lua, &t, templates.as_deref())?;
-                if templates.as_deref().is_some_and(|s| s.contains("Secure")) {
-                    ctx.not_simulated("secure templates");
-                }
-                let registry: Table = lua.globals().get("__selu_sim_frames")?;
-                registry.raw_set(registry.raw_len() + 1, t.clone())?;
-                Ok(t)
+    for forbidden in [false, true] {
+        let ctx = ctx.clone();
+        lua.globals().set(
+            if forbidden {
+                "CreateForbiddenFrame"
+            } else {
+                "CreateFrame"
             },
-        )?,
-    )?;
+            lua.create_function(
+                move |lua, (kind, name, parent, templates, frame_id): CreateFrameArgs| {
+                    let mut kind = kind.unwrap_or_else(|| "Frame".into());
+                    let mut templates = templates;
+                    if let Some(resolve) = lua
+                        .globals()
+                        .raw_get::<Option<Function>>("__selu_xml_intrinsic")?
+                        && let Some(base) = resolve.call::<Option<String>>(kind.clone())?
+                    {
+                        templates = Some(match templates {
+                            Some(names) => format!("{kind},{names}"),
+                            None => kind.clone(),
+                        });
+                        kind = base;
+                    }
+                    let t = create(lua, &ctx, &kind, name, parent)?;
+                    if forbidden {
+                        t.raw_set("__forbidden", true)?;
+                    }
+                    if let Some(frame_id) = frame_id {
+                        store(lua).borrow_mut().regions[id(&t)?].id = frame_id;
+                    }
+                    crate::regions::templates(lua, &t, templates.as_deref())?;
+                    if templates.as_deref().is_some_and(|s| s.contains("Secure")) {
+                        ctx.not_simulated("secure templates");
+                    }
+                    let registry: Table = lua.globals().get("__selu_sim_frames")?;
+                    registry.raw_set(registry.raw_len() + 1, t.clone())?;
+                    Ok(t)
+                },
+            )?,
+        )?;
+    }
     lua.globals().set(
         "GetCursorPosition",
         lua.create_function(|lua, ()| Ok(store(lua).borrow().cursor))?,
@@ -390,6 +399,8 @@ pub fn create(
         id: 0,
         level_explicit: false,
         mouse: matches!(kind, "Button" | "CheckButton" | "EditBox" | "Slider"),
+        mouse_click: matches!(kind, "Button" | "CheckButton" | "EditBox" | "Slider"),
+        mouse_motion: matches!(kind, "Button" | "CheckButton" | "EditBox" | "Slider"),
         enabled: true,
         button_state: "NORMAL",
         button_state_locked: false,
@@ -545,7 +556,14 @@ pub fn create(
         let widget = kind.to_owned();
         fallback_mt.set(
             "__index",
-            lua.create_function(move |lua, (_, key): (Table, String)| {
+            lua.create_function(move |lua, (_, key): (Table, Value)| {
+                let Value::String(key) = key else {
+                    return Ok(Value::Nil);
+                };
+                let Ok(key) = key.to_str() else {
+                    return Ok(Value::Nil);
+                };
+                let key = key.to_owned();
                 let _profile = crate::profile::Span::new("frames.method_lookup");
                 let catalog = lua.app_data_ref::<super::MethodCatalog>();
                 let fallback = super::missing_method(
@@ -610,7 +628,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected SetText GetText ClearText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript GetWindow SetWindow GetButtonState SetButtonState HasScript RegisterEvent IsEventRegistered UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
+const METHODS: &str = "SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected IsForbidden SetForbidden SetText GetText ClearText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript GetWindow SetWindow GetButtonState SetButtonState HasScript RegisterEvent IsEventRegistered UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled SetMouseClickEnabled SetMouseMotionEnabled IsMouseClickEnabled IsMouseMotionEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     let _profile = crate::profile::Span::new("frames.methods");
     if !ctx
@@ -1778,6 +1796,27 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "IsShown" => out!(r.shown),
         "IsVisible" => out!(r.visible),
         "IsProtected" => out!(t.raw_get::<Option<bool>>("__protected")?.unwrap_or(false)),
+        "SetForbidden" => t.raw_set("__forbidden", true)?,
+        "IsForbidden" => {
+            let mut current = Some(i);
+            let mut forbidden = false;
+            for _ in 0..a.regions.len() {
+                let Some(index) = current else {
+                    break;
+                };
+                if a.regions[index]
+                    .table
+                    .get()
+                    .raw_get::<Option<bool>>("__forbidden")?
+                    .unwrap_or(false)
+                {
+                    forbidden = true;
+                    break;
+                }
+                current = a.regions[index].parent;
+            }
+            out!(forbidden)
+        }
         "EnableKeyboard" => r.keyboard = boolean(v.first()),
         "IsKeyboardEnabled" => out!(r.keyboard),
         "SetPropagateKeyboardInput" => r.propagate_keyboard = boolean(v.first()),
@@ -1803,7 +1842,21 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "GetValueStep" => out!(r.step),
         "SetObeyStepOnDrag" => r.obey_step = boolean(v.first()),
         "GetObeyStepOnDrag" => out!(r.obey_step),
-        "EnableMouse" => r.mouse = boolean(v.first()),
+        "EnableMouse" => {
+            r.mouse = boolean(v.first());
+            r.mouse_click = r.mouse;
+            r.mouse_motion = r.mouse;
+        }
+        "SetMouseClickEnabled" => {
+            r.mouse_click = boolean(v.first());
+            r.mouse = r.mouse_click || r.mouse_motion;
+        }
+        "SetMouseMotionEnabled" => {
+            r.mouse_motion = boolean(v.first());
+            r.mouse = r.mouse_click || r.mouse_motion;
+        }
+        "IsMouseClickEnabled" => out!(r.mouse_click),
+        "IsMouseMotionEnabled" => out!(r.mouse_motion),
         "IsMouseEnabled" => out!(r.mouse),
         "Enable" => r.enabled = true,
         "Disable" => r.enabled = false,

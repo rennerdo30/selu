@@ -275,6 +275,9 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
     // The locally installed GlobalStrings DB2 can be absent. These source-
     // documented localized string families get visible synthetic labels in
     // the opt-in default UI; other unknown globals still remain unknown.
+    let shape = globals
+        .raw_get::<Table>("__selu_global_shapes")?
+        .raw_get::<Option<String>>(key)?;
     let known_string = globals
         .raw_get::<Option<Table>>("__selu_string_tags")?
         .is_some_and(|tags| tags.raw_get::<bool>(key).unwrap_or(false))
@@ -282,15 +285,27 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
             .raw_get::<Table>("__selu_global_shapes")?
             .raw_get::<Option<String>>(key)?
             .is_some_and(|shape| shape == "string");
-    if (known_string
-        || [
-            "HUD_EDIT_MODE_",
-            "ICON_TAG_RAID_TARGET_",
-            "CHAT_MSG_",
-            "PROMPT_",
-        ]
+    let localized_family = ["ERR_", "OPTIONS_MENU_", "OPTION_TOOLTIP_"]
         .iter()
-        .any(|prefix| key.starts_with(prefix)))
+        .any(|p| key.starts_with(p))
+        || ["_LABEL", "_TEXT", "_TOOLTIP", "_DESCRIPTION"]
+            .iter()
+            .any(|s| key.ends_with(s));
+    let numeric_family = ["LE_", "NUM_", "MAX_", "MIN_"]
+        .iter()
+        .any(|p| key.starts_with(p));
+    if !numeric_family
+        && shape.as_deref().is_none_or(|s| s == "string")
+        && (known_string
+            || localized_family
+            || [
+                "HUD_EDIT_MODE_",
+                "ICON_TAG_RAID_TARGET_",
+                "CHAT_MSG_",
+                "PROMPT_",
+            ]
+            .iter()
+            .any(|prefix| key.starts_with(prefix)))
         && lua
             .named_registry_value::<Option<bool>>("selu.synthetic_strings")?
             .unwrap_or(false)

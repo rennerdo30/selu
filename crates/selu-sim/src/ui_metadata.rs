@@ -22,6 +22,284 @@ enum Token {
     Number(f64),
     Mark(u8),
 }
+/// Missing localization is data, not an excuse to synthesize every uppercase
+/// global. Learn references only at explicit string-consuming source sites.
+pub(crate) fn register_text_refs(lua: &Lua, source: &str) -> mlua::Result<()> {
+    if !lua
+        .named_registry_value::<Option<bool>>("selu.synthetic_strings")?
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    let tags = lua
+        .globals()
+        .raw_get::<Option<Table>>("__selu_string_tags")?
+        .unwrap_or(lua.create_table()?);
+    let token = tokens(source);
+    let candidate = |s: &str| {
+        s.contains('_')
+            && s.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+            && !["LE_", "NUM_", "MAX_", "MIN_"]
+                .iter()
+                .any(|p| s.starts_with(p))
+    };
+    for window in token.windows(3) {
+        let key = match window {
+            [Token::Word(method), Token::Mark(b'('), Token::Word(key)]
+                if string_consumer(method) =>
+            {
+                Some(key)
+            }
+            [Token::Word(key), Token::Mark(b':'), Token::Word(method)]
+                if ["format", "gsub", "sub", "lower", "upper", "match", "find"]
+                    .contains(&method.as_str()) =>
+            {
+                Some(key)
+            }
+            [Token::Word(field), Token::Mark(b'='), Token::Word(key)]
+                if ["text", "label", "title", "tooltip", "description"]
+                    .contains(&field.as_str()) =>
+            {
+                Some(key)
+            }
+            _ => None,
+        };
+        if let Some(key) = key.filter(|k| candidate(k)) {
+            tags.raw_set(key.as_str(), true)?;
+        }
+    }
+    for key in helper_string_refs(&token) {
+        if candidate(&key) {
+            tags.raw_set(key, true)?;
+        }
+    }
+    lua.globals().raw_set("__selu_string_tags", tags)
+}
+fn string_consumer(name: &str) -> bool {
+    [
+        "format",
+        "SetText",
+        "SetFormattedText",
+        "WrapTextInColorCode",
+        "WrapTextInColor",
+        "strlower",
+        "strupper",
+        "strtrim",
+        "strlen",
+        "strmatch",
+        "strsub",
+        "strfind",
+        "lower",
+        "upper",
+        "gsub",
+    ]
+    .contains(&name)
+}
+fn block_delta(token: &Token) -> i32 {
+    match token {
+        Token::Word(w) if ["function", "if", "do", "repeat"].contains(&w.as_str()) => 1,
+        Token::Word(w) if ["end", "until"].contains(&w.as_str()) => -1,
+        _ => 0,
+    }
+}
+struct TextHelper {
+    name: String,
+    method: bool,
+    params: Vec<String>,
+    begin: usize,
+    end: usize,
+    strings: std::collections::BTreeSet<usize>,
+}
+/// Propagate explicit string use through unambiguous helpers in the same Lua
+/// file. This handles local wrappers without maintaining a list of UI names.
+fn helper_string_refs(t: &[Token]) -> Vec<String> {
+    let mut functions = Vec::<TextHelper>::new();
+    for i in 0..t.len() {
+        if !matches!(&t[i],Token::Word(w) if w=="function") {
+            continue;
+        }
+        let mut at = i + 1;
+        let mut name = String::new();
+        let mut method = false;
+        while let Some(Token::Word(w)) = t.get(at) {
+            name = w.clone();
+            at += 1;
+            if matches!(t.get(at), Some(Token::Mark(b'.' | b':'))) {
+                method = matches!(t.get(at), Some(Token::Mark(b':')));
+                at += 1;
+            } else {
+                break;
+            }
+        }
+        if name.is_empty() || !matches!(t.get(at), Some(Token::Mark(b'('))) {
+            continue;
+        }
+        at += 1;
+        let mut params = Vec::new();
+        while let Some(token) = t.get(at) {
+            if matches!(token, Token::Mark(b')')) {
+                at += 1;
+                break;
+            }
+            if let Token::Word(p) = token {
+                params.push(p.clone());
+            }
+            at += 1;
+        }
+        let begin = at;
+        let mut depth = 1;
+        while at < t.len() {
+            depth += block_delta(&t[at]);
+            if depth == 0 {
+                break;
+            }
+            at += 1;
+        }
+        functions.push(TextHelper {
+            name,
+            method,
+            params,
+            begin,
+            end: at,
+            strings: Default::default(),
+        });
+    }
+    let owner = |at: usize| {
+        functions
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.begin <= at && at < f.end)
+            .min_by_key(|(_, f)| f.end - f.begin)
+            .map(|(i, _)| i)
+    };
+    let mut uses = Vec::<(usize, String)>::new();
+    for (at, w) in t.windows(3).enumerate() {
+        match w {
+            [Token::Word(f), Token::Mark(b'('), Token::Word(p)] if string_consumer(f) => {
+                uses.push((at, p.clone()))
+            }
+            [Token::Word(p), Token::Mark(b':'), Token::Word(f)]
+                if ["format", "gsub", "sub", "lower", "upper", "match", "find"]
+                    .contains(&f.as_str()) =>
+            {
+                uses.push((at, p.clone()))
+            }
+            _ => {}
+        }
+    }
+    let owners: Vec<_> = uses.iter().map(|(at, _)| owner(*at)).collect();
+    let mut aliases = Vec::new();
+    // Trace a local's simple assignment or conditional alternatives when the
+    // local is explicitly used as text. Do not inspect numeric expressions or
+    // guess a type from a variable's spelling.
+    for ((at, name), scope) in uses.iter().zip(&owners) {
+        let begin = scope.map_or(0, |i| functions[i].begin);
+        if let Some(assignment) = (begin..*at).rev().find(
+            |&i| matches!((&t[i],t.get(i+1)),(Token::Word(w),Some(Token::Mark(b'='))) if w==name),
+        ) {
+            let mut pos = assignment + 2;
+            let mut conditional = false;
+            while pos < *at
+                && !matches!(&t[pos], Token::Mark(b';'))
+                && !matches!(&t[pos],Token::Word(w) if w=="return")
+            {
+                if matches!(&t[pos],Token::Word(w) if w=="and" || w=="or")
+                    && let Some(Token::Word(value)) = t.get(pos + 1)
+                {
+                    conditional = true;
+                    aliases.push(value.clone());
+                }
+                pos += 1;
+            }
+            // The condition itself is not text. Only a bare assignment or the
+            // selected alternatives have the local's string requirement.
+            if !conditional
+                && pos == assignment + 3
+                && let Token::Word(value) = &t[assignment + 2]
+            {
+                aliases.push(value.clone());
+            }
+        }
+    }
+    let mut calls = Vec::new();
+    for (at, w) in t.windows(2).enumerate() {
+        let [Token::Word(name), Token::Mark(b'(')] = w else {
+            continue;
+        };
+        let method = at > 0 && matches!(t[at - 1], Token::Mark(b':'));
+        let matching: Vec<_> = functions
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.name == *name && f.method == method)
+            .map(|(i, _)| i)
+            .collect();
+        if matching.len() != 1 {
+            continue;
+        }
+        let mut args = Vec::new();
+        let mut start = at + 2;
+        let mut pos = start;
+        let (mut nested, mut block) = (0i32, 0i32);
+        while pos < t.len() {
+            let token = &t[pos];
+            if nested == 0 && block == 0 && matches!(token, Token::Mark(b',' | b')')) {
+                args.push(if pos == start + 1 {
+                    match &t[start] {
+                        Token::Word(p) => Some(p.clone()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                });
+                start = pos + 1;
+                if matches!(token, Token::Mark(b')')) {
+                    break;
+                }
+            }
+            match token {
+                Token::Mark(b'(' | b'{' | b'[') => nested += 1,
+                Token::Mark(b')' | b'}' | b']') => nested -= 1,
+                _ => {}
+            }
+            block += block_delta(token);
+            pos += 1;
+        }
+        calls.push((matching[0], owner(at), args));
+    }
+    for ((_, param), owner) in uses.iter().zip(owners) {
+        if let Some(i) = owner
+            && let Some(p) = functions[i].params.iter().position(|p| p == param)
+        {
+            functions[i].strings.insert(p);
+        }
+    }
+    let mut globals = aliases;
+    for _ in 0..8 {
+        let mut changed = false;
+        for (callee, caller, args) in &calls {
+            let strings: Vec<_> = functions[*callee].strings.iter().copied().collect();
+            for slot in strings {
+                let Some(Some(arg)) = args.get(slot) else {
+                    continue;
+                };
+                if let Some(caller) = caller
+                    && let Some(param) = functions[*caller].params.iter().position(|p| p == arg)
+                {
+                    changed |= functions[*caller].strings.insert(param);
+                } else {
+                    globals.push(arg.clone());
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    globals.sort();
+    globals.dedup();
+    globals
+}
 
 fn long_literal(source: &str, start: usize) -> Option<(usize, usize, usize)> {
     let b = source.as_bytes();
@@ -892,5 +1170,22 @@ mod tests {
                 .unwrap();
             s.eval("assert(Constants.Options.Expression==nil)").unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod string_use_tests {
+    #[test]
+    fn source_string_uses_allow_labels_but_never_legacy_or_typed_numbers() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        s.lua()
+            .set_named_registry_value("selu.synthetic_strings", true)
+            .unwrap();
+        super::register_text_refs(s.lua(),"format(SELF_FORMAT); f:SetText(SELF_CAPTION); local x=SELF_PATTERN:gsub('a','b'); local d={tooltip=SELF_TOOLTIP, count=SELF_NUMBER}; -- format(COMMENT_ONLY)\n local s='format(STRING_LITERAL_ONLY)'; format(LE_UNKNOWN_VALUE)").unwrap();
+        super::register_text_refs(s.lua(),"local function clean(s) return s:gsub('a','b') end; local function wrap(v) return clean(v) end; wrap(SELF_WRAPPED); function M:AddCommand(cmd,callback) cmd=string.lower(cmd) end; t:AddCommand(SELF_COMMAND,function() local a,b=1,2 end); local function numeric(name) return math.max(name,1) end;numeric(SELF_UNKNOWN_NUMBER)").unwrap();
+        s.eval("assert(SELF_WRAPPED=='SELF WRAPPED' and SELF_COMMAND=='SELF COMMAND');assert(SELF_UNKNOWN_NUMBER==nil)").unwrap();
+        super::register_text_refs(s.lua(),"local function description(flag) local body=SELF_FLAG and SELF_SHORT_BODY or SELF_LONG_BODY; return body:format(1) end; color:WrapTextInColorCode(SELF_COLORED)").unwrap();
+        s.eval("assert(SELF_SHORT_BODY=='SELF SHORT BODY' and SELF_LONG_BODY=='SELF LONG BODY' and SELF_COLORED=='SELF COLORED' and SELF_FLAG==nil)").unwrap();
+        s.eval("assert(SELF_FORMAT=='SELF FORMAT' and SELF_CAPTION=='SELF CAPTION' and SELF_PATTERN=='SELF PATTERN' and SELF_TOOLTIP=='SELF TOOLTIP');assert(SELF_NUMBER==nil and LE_UNKNOWN_VALUE==nil and COMMENT_ONLY==nil and STRING_LITERAL_ONLY==nil);__selu_global_shapes.TYPED_LABEL='number';assert(TYPED_LABEL==0)").unwrap();
     }
 }

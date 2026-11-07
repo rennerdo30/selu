@@ -133,8 +133,8 @@ if version then
 end
 local cvars={uiScale='1',useUiScale='0',scriptErrors='0',cameraFov='90',statusText='1',statusTextDisplay='BOTH',
     ActionButtonUseKeyDown='1',chatStyle='classic',chatMouseScroll='1',nameplateShowEnemies='0',
-    minimapZoom='0',rotateMinimap='0',showTutorials='0'}
-function GetCVar(name) return cvars[name] or '0' end
+    minimapZoom='0',rotateMinimap='0',showTutorials='0',textLocale=GetLocale()}
+function GetCVar(name) if cvars[name]==nil then __selu_unknown_cvar(name) end; return cvars[name] or '0' end
 function GetCVarBool(name) return GetCVar(name)=='1' end
 function GetCVarNumber(name) return tonumber(GetCVar(name)) or 0 end
 function SetCVar(name,value) cvars[name]=tostring(value) end
@@ -142,7 +142,7 @@ C_CVar=C_CVar or {}
 C_CVar.GetCVar=GetCVar; C_CVar.GetCVarBool=GetCVarBool
 C_CVar.GetCVarNumber=GetCVarNumber; C_CVar.SetCVar=SetCVar
 function C_CVar.AreCVarsLoaded() return true end
-function C_CVar.GetCVarDefault(name) return cvars[name] or '0' end
+function C_CVar.GetCVarDefault(name) return GetCVar(name) end
 function UnitRace(unit) if unit=='player' then return 'Human','Human',1 end end
 function UnitEffectiveLevel(unit) return UnitLevel(unit) end
 -- UnitDocumentation marks this MayReturnNothing. The fake world has no

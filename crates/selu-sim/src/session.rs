@@ -697,6 +697,7 @@ impl Session {
                 if std::env::var_os("SELU_SIM_UI_LOAD_TRACE").is_some() {
                     eprintln!("Default UI source: {}: {name}", toc.name);
                 }
+                crate::ui_metadata::register_text_refs(&self.sim.lua, &source)?;
                 let result = dispatch(&self.sim.lua, &self.sim.ctx, || {
                     core::call_lua::<Value>(
                         &self.sim.lua,
@@ -1404,7 +1405,14 @@ impl Vm {
             let warned = warned.clone();
             mt.set(
                 "__index",
-                lua.create_function(move |lua, (_t, key): (Value, String)| {
+                lua.create_function(move |lua, (_t, key): (Value, Value)| {
+                    let Value::String(key) = key else {
+                        return Ok(Value::Nil);
+                    };
+                    let Ok(key) = key.to_str() else {
+                        return Ok(Value::Nil);
+                    };
+                    let key = key.to_owned();
                     let names: Table = lua.globals().raw_get("__selu_saved_names")?;
                     if names
                         .raw_get::<Option<bool>>(key.as_str())?

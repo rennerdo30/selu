@@ -32,7 +32,7 @@ fn eligible(sim: &Sim, i: usize) -> bool {
     let mut a = a.borrow_mut();
     layout::resolve(&mut a, sim.ctx());
     let r = &a.regions[i];
-    r.visible && r.enabled && r.mouse && a.capture == Some(i)
+    r.visible && r.enabled && r.mouse_click && a.capture == Some(i)
 }
 fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool, wheel: bool) -> Option<usize> {
     let a = store(sim.lua());
@@ -43,7 +43,11 @@ fn hit_motion(sim: &Sim, x: f64, y: f64, motion: bool, wheel: bool) -> Option<us
         .enumerate()
         .filter(|(index, r)| {
             r.visible
-                && (r.mouse || (wheel && r.wheel))
+                && ((if motion {
+                    r.mouse_motion
+                } else {
+                    r.mouse_click
+                }) || (wheel && r.wheel))
                 && (r.enabled || (motion && r.motion_disabled))
                 && r.rect.is_some_and(|q| {
                     x >= q.left

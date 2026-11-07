@@ -932,6 +932,28 @@ than manufacturing frames. No required dependency is excluded merely to hide
 its errors; absent localization and legacy native constants can still abort
 settings, community and queue initialization.
 
+Core still leaves World Map outside its roots. A dependency probe adds four
+addons but reaches additional map-canvas input gaps; it does not yet complete
+the quest-map initialization. No required TOC dependency is removed to suppress
+an error. Full remains the mode for developing against that system.
+
+Text markup resolves `|cnNAME:text|r` through the selected client's GlobalColor
+table. Hex colors, reset markers, hyperlink labels, inline texture and atlas
+icons, escaped pipes and `|n` line breaks are decoded; unresolved atlas markup
+is stripped. Unknown named colors use the surrounding text color. Borrowed
+interface text can lack product-specific tags: explicit string-consuming sites
+in the runtime Lua source identify additional synthetic labels, including local
+string wrappers. Numeric legacy globals are never inferred from these sites.
+
+The empty account has no store purchases or preferred play-setting features.
+There is no pending quest-session invitation. Forbidden-frame creation uses
+the regular template loader and records forbidden status, including inheritance
+from a forbidden parent; secure execution and taint enforcement remain limited.
+Locale enumeration exposes the known current locale name; its unavailable
+numeric identifier remains nil with a once-only note. Legacy `LE_*` and
+`NUM_LE_*` values remain unknown when the user's client data does not supply
+them, so related LFG and game-error initialization can still fail.
+
 The client-backed core_ui integration test uses SELU_DEFAULT_UI_SOURCE and SELU_CLIENT_INSTALL and records elapsed startup. Run it separately with --ignored --test-threads=1. Full interaction tests still explicitly request Full. Neither test reads account data or starts the game.
 
 Texture mask attachments survive snapshots. Studio does not paint MaskTexture

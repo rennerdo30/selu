@@ -2,6 +2,14 @@
 use mlua::{Lua, Table, Value};
 pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
     let globals = lua.globals();
+    let cvar_ctx = ctx.clone();
+    globals.raw_set(
+        "__selu_unknown_cvar",
+        lua.create_function(move |_, name: String| {
+            cvar_ctx.not_simulated(&format!("CVar: {name}"));
+            Ok(())
+        })?,
+    )?;
     // The baseline has no guild, queued battlegrounds, learned specializations,
     // pets, or equipped Azerite item. These are empty world collections, not
     // client constants or UI policies. Preserve any richer native provider.
@@ -11,6 +19,11 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
         // No resurrection is pending in the baseline world. An empty string
         // is truthy in Lua and incorrectly opens a dialog at login.
         ("ResurrectGetOfferer", "empty", None),
+        (
+            "C_QuestSession.GetSessionBeginDetails",
+            "empty",
+            Some("C_QuestSession"),
+        ),
         ("GetMaxBattlefieldID", "count", None),
         (
             "GetNumSpecializations",
@@ -44,6 +57,43 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
             "empty",
             Some("C_Club"),
         ),
+        (
+            "C_AccountServices.GetPreferredPlaySettingsFeatures",
+            "features",
+            Some("C_Club"),
+        ),
+        (
+            "C_StoreSecure.GetPurchaseList",
+            "list",
+            Some("C_CatalogShop"),
+        ),
+        (
+            "C_StoreSecure.HasPurchaseList",
+            "true",
+            Some("C_CatalogShop"),
+        ),
+        (
+            "C_StoreSecure.HasPurchaseInProgress",
+            "false",
+            Some("C_CatalogShop"),
+        ),
+        ("C_StoreSecure.IsAvailable", "false", Some("C_CatalogShop")),
+        (
+            "C_StoreSecure.GetProductGroups",
+            "list",
+            Some("C_CatalogShop"),
+        ),
+        ("C_StoreSecure.GetProducts", "list", Some("C_CatalogShop")),
+        (
+            "C_StoreSecure.GetFailureInfo",
+            "empty",
+            Some("C_CatalogShop"),
+        ),
+        (
+            "C_StoreSecure.GetCurrencyInfo",
+            "empty",
+            Some("C_CatalogShop"),
+        ),
     ] {
         // Use the selected client's capabilities rather than making modern
         // systems appear on products whose documentation lacks them.
@@ -73,15 +123,40 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
         let context = ctx.clone();
         owner.raw_set(
             key,
-            lua.create_function(move |_, _: mlua::MultiValue| {
+            lua.create_function(move |lua, _: mlua::MultiValue| {
                 context.not_simulated(path);
                 Ok(match shape {
                     "count" => mlua::MultiValue::from_vec(vec![Value::Integer(0)]),
                     "roles" => mlua::MultiValue::from_vec(vec![Value::Boolean(false); 3]),
+                    "features" => mlua::MultiValue::from_vec(vec![Value::Boolean(false); 2]),
+                    "list" => mlua::MultiValue::from_vec(vec![Value::Table(lua.create_table()?)]),
+                    "true" => mlua::MultiValue::from_vec(vec![Value::Boolean(true)]),
+                    "false" => mlua::MultiValue::from_vec(vec![Value::Boolean(false)]),
                     _ => mlua::MultiValue::new(),
                 })
             })?,
         )?;
+    }
+    for name in ["GetAvailableLocaleInfo", "GetAvailableLocales"] {
+        let existing = globals.raw_get::<Value>(name)?;
+        let standin = standins
+            .as_ref()
+            .map(|s| s.raw_get::<Value>(name))
+            .transpose()?
+            .unwrap_or(Value::Nil);
+        if !existing.is_nil() && existing != standin {
+            continue;
+        }
+        let context = ctx.clone();
+        globals.raw_set(name,lua.create_function(move |lua,_:mlua::MultiValue| {
+            let locale=lua.globals().get::<mlua::Function>("GetLocale")?.call::<String>(())?;
+            if name=="GetAvailableLocales" { return Ok(Value::String(lua.create_string(locale)?)); }
+            context.not_simulated("locale identifiers unavailable; returning the current locale name with an unknown localeId");
+            let info=lua.create_table()?; info.raw_set("localeName",locale)?;
+            // A locale ID is client data. Leave it unknown rather than inventing
+            // a number; callers can still display the known current locale.
+            Ok(Value::Table(lua.create_sequence_from([info])?))
+        })?)?;
     }
     lua.set_named_registry_value("selu.default_ui_strings", true)?;
     let logging = globals
@@ -171,6 +246,10 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
         })();
         match colors {
             Ok(colors) => {
+                crate::frames::arena::store(lua)
+                    .borrow_mut()
+                    .fonts
+                    .set_colors(&colors);
                 let namespace = globals.raw_get::<Table>("C_UIColor")?;
                 namespace.raw_set(
                     "GetColors",
@@ -416,5 +495,25 @@ mod tests {
         s.eval("assert(f:GetAlpha()>.4 and f:GetAlpha()<.6);g:Restart();assert(g:IsPlaying() and plays==2)").unwrap();
         s.advance_time(0.1);
         s.eval("assert(f:GetAlpha()<.2)").unwrap();
+    }
+
+    #[test]
+    fn empty_store_and_locale_results_preserve_unknown_client_identifiers() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        s.eval(
+            "C_CatalogShop={};C_Club={};C_QuestSession={};function GetLocale() return 'zzZZ' end",
+        )
+        .unwrap();
+        super::install(s.lua(), s.sim().ctx()).unwrap();
+        s.eval("assert(C_QuestSession.GetSessionBeginDetails()==nil)")
+            .unwrap();
+        s.eval("assert(C_StoreSecure.HasPurchaseList());assert(not C_StoreSecure.HasPurchaseInProgress() and not C_StoreSecure.IsAvailable());assert(next(C_StoreSecure.GetPurchaseList())==nil);assert(C_StoreSecure.GetCurrencyInfo()==nil and C_StoreSecure.GetFailureInfo()==nil);local a,b=C_AccountServices.GetPreferredPlaySettingsFeatures();assert(a==false and b==false);local info=GetAvailableLocaleInfo();assert(#info==1 and info[1].localeName=='zzZZ' and info[1].localeId==nil);assert(GetAvailableLocales()=='zzZZ');GetAvailableLocaleInfo()").unwrap();
+        assert_eq!(
+            s.logs()
+                .iter()
+                .filter(|s| s.contains("locale identifiers unavailable"))
+                .count(),
+            1
+        );
     }
 }

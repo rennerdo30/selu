@@ -368,3 +368,29 @@ fn silent_attribute_assignment_updates_state_without_invoking_scripts() {
     let s = selu_sim::Session::new(Default::default()).unwrap();
     s.eval("f=CreateFrame('Frame');calls=0;f:SetScript('OnAttributeChanged',function()calls=calls+1 end);f:SetAttributeNoHandler('area','left');assert(f:GetAttribute('area')=='left' and calls==0);f:SetAttribute('area','right');assert(calls==1)").unwrap();
 }
+
+#[test]
+fn missing_non_string_global_and_widget_keys_keep_lua_table_semantics() {
+    let s = selu_sim::Session::new(Default::default()).unwrap();
+    s.eval("local key={};assert(_G[key]==nil and _G[false]==nil and _G[7]==nil);local f=CreateFrame('Frame');assert(f[key]==nil and f[false]==nil and f[7]==nil)").unwrap();
+}
+
+#[test]
+fn mouse_motion_and_click_can_be_enabled_independently() {
+    let s = selu_sim::Session::new(Default::default()).unwrap();
+    s.eval("f=CreateFrame('Button');f:SetSize(40,40);f:SetPoint('BOTTOMLEFT',UIParent,'BOTTOMLEFT',20,20);entered=0;clicked=0;f:SetScript('OnEnter',function()entered=entered+1 end);f:SetScript('OnClick',function()clicked=clicked+1 end);f:SetMouseClickEnabled(false);assert(not f:IsMouseClickEnabled() and f:IsMouseMotionEnabled())").unwrap();
+    s.hover(30., 30.).unwrap();
+    s.mouse_down(30., 30., "LeftButton").unwrap();
+    s.mouse_up(30., 30., "LeftButton").unwrap();
+    s.eval("assert(entered==1 and clicked==0);f:SetMouseClickEnabled(true);f:SetMouseMotionEnabled(false);assert(f:IsMouseClickEnabled() and not f:IsMouseMotionEnabled())").unwrap();
+    s.hover(-1., -1.).unwrap();
+    s.hover(30., 30.).unwrap();
+    s.mouse_down(30., 30., "LeftButton").unwrap();
+    s.mouse_up(30., 30., "LeftButton").unwrap();
+    s.eval("assert(entered==1 and clicked==1);f:EnableMouse(false);assert(not f:IsMouseClickEnabled() and not f:IsMouseMotionEnabled())").unwrap();
+}
+#[test]
+fn forbidden_constructor_and_parent_status_follow_regular_frames() {
+    let s = selu_sim::Session::new(Default::default()).unwrap();
+    s.eval("local f=CreateForbiddenFrame('Frame','ForbiddenFixture');assert(f:IsForbidden());local c=CreateFrame('Button',nil,f);assert(c:IsForbidden());c:SetParent(UIParent);assert(not c:IsForbidden());c:SetForbidden();assert(c:IsForbidden());assert(f:GetName()=='ForbiddenFixture' and f:GetObjectType()=='Frame')").unwrap();
+}

@@ -83,6 +83,8 @@ pub struct Region {
     pub strata_explicit: bool,
     pub level_explicit: bool,
     pub mouse: bool,
+    pub mouse_click: bool,
+    pub mouse_motion: bool,
     pub enabled: bool,
     pub button_state: &'static str,
     pub button_state_locked: bool,

@@ -13,8 +13,16 @@ pub struct FontBook {
     faces: RefCell<HashMap<String, FontArc>>,
     layouts: RefCell<HashMap<String, crate::text::TextLayout>>,
     asset_presence: RefCell<HashMap<String, bool>>,
+    named_colors: HashMap<String, u32>,
 }
 impl FontBook {
+    pub(crate) fn set_colors(&mut self, colors: &[(String, u32)]) {
+        self.named_colors = colors.iter().cloned().collect();
+        self.layouts.get_mut().clear();
+    }
+    pub(crate) fn color(&self, name: &str) -> Option<u32> {
+        self.named_colors.get(name).copied()
+    }
     pub fn open_client(&mut self, root: &std::path::Path, product: &str) -> Result<(), String> {
         self.open_client_with_keys(root, product, None)
     }
@@ -28,6 +36,7 @@ impl FontBook {
         self.faces.get_mut().clear();
         self.layouts.get_mut().clear();
         self.asset_presence.get_mut().clear();
+        self.named_colors.clear();
         Ok(())
     }
 
@@ -70,7 +79,14 @@ impl FontBook {
         if let Some(layout) = self.layouts.borrow().get(&key) {
             return layout.clone();
         }
-        let layout = crate::text::layout(&self.face(&style.font), text, style, width, height);
+        let layout = crate::text::layout_with_resources(
+            &self.face(&style.font),
+            text,
+            style,
+            width,
+            height,
+            Some(self),
+        );
         let mut cache = self.layouts.borrow_mut();
         if cache.len() >= 2048 {
             cache.clear();

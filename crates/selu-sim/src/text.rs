@@ -61,11 +61,31 @@ impl Atom {
         matches!(self, Self::Char(c, _) if c.is_whitespace())
     }
 }
-fn atoms(text: &str, style: &VisualStyle) -> Vec<Atom> {
+fn rgba(v: u32) -> [f32; 4] {
+    [
+        ((v >> 16) & 255) as f32 / 255.,
+        ((v >> 8) & 255) as f32 / 255.,
+        (v & 255) as f32 / 255.,
+        (v >> 24) as f32 / 255.,
+    ]
+}
+fn atoms(text: &str, style: &VisualStyle, resources: Option<&crate::fonts::FontBook>) -> Vec<Atom> {
     let mut result = Vec::new();
     let mut color = style.color;
     let mut rest = text;
     while !rest.is_empty() {
+        if let Some(tail) = rest.strip_prefix("|cn") {
+            if let Some(end) = tail.find(':') {
+                color = resources
+                    .and_then(|r| r.color(&tail[..end]))
+                    .map(rgba)
+                    .unwrap_or(style.color);
+                rest = &tail[end + 1..];
+            } else {
+                rest = "";
+            }
+            continue;
+        }
         if let Some(tail) = rest.strip_prefix("|c")
             && tail.len() >= 8
             && tail.is_char_boundary(8)
@@ -95,10 +115,48 @@ fn atoms(text: &str, style: &VisualStyle) -> Vec<Atom> {
             rest = tail;
             continue;
         }
+        if let Some(tail) = rest.strip_prefix("|n") {
+            result.push(Atom::Char('\n', color));
+            rest = tail;
+            continue;
+        }
+        if let Some(tail) = rest.strip_prefix("|A") {
+            if let Some(end) = tail.find("|a") {
+                let fields: Vec<_> = tail[..end].trim_start_matches(':').split(':').collect();
+                if let Some(atlas) = resources.and_then(|r| r.assets.atlas(fields[0])) {
+                    let number = |i: usize, default: f32| {
+                        fields
+                            .get(i)
+                            .and_then(|s| s.parse::<f32>().ok())
+                            .filter(|v| v.is_finite())
+                            .unwrap_or(default)
+                    };
+                    let h = number(1, 0.);
+                    let w = number(2, 0.);
+                    result.push(Atom::Icon(
+                        atlas.file_data_id.to_string(),
+                        if w > 0. { w } else { atlas.width as f32 },
+                        if h > 0. { h } else { atlas.height as f32 },
+                        number(3, 0.),
+                        number(4, 0.),
+                        [
+                            atlas.left as f32 / atlas.sheet_width as f32,
+                            atlas.right as f32 / atlas.sheet_width as f32,
+                            atlas.top as f32 / atlas.sheet_height as f32,
+                            atlas.bottom as f32 / atlas.sheet_height as f32,
+                        ],
+                    ));
+                }
+                rest = &tail[end + 2..];
+            } else {
+                rest = "";
+            }
+            continue;
+        }
         if let Some(tail) = rest.strip_prefix("|T")
             && let Some(end) = tail.find("|t")
         {
-            let fields: Vec<_> = tail[..end].split(':').collect();
+            let fields: Vec<_> = tail[..end].trim_start_matches(':').split(':').collect();
             let number = |i: usize, default: f32| {
                 fields
                     .get(i)
@@ -135,6 +193,13 @@ fn atoms(text: &str, style: &VisualStyle) -> Vec<Atom> {
         if let Some(tail) = rest.strip_prefix("||") {
             result.push(Atom::Char('|', color));
             rest = tail;
+            continue;
+        }
+        if rest.starts_with("|H") || rest.starts_with("|T") {
+            break;
+        }
+        if ["|c", "|a", "|t"].iter().any(|p| rest.starts_with(p)) {
+            rest = &rest[2..];
             continue;
         }
         let c = rest.chars().next().unwrap();
@@ -236,6 +301,16 @@ pub fn layout(
     box_width: Option<f64>,
     box_height: Option<f64>,
 ) -> TextLayout {
+    layout_with_resources(face, text, style, box_width, box_height, None)
+}
+pub(crate) fn layout_with_resources(
+    face: &FontArc,
+    text: &str,
+    style: &VisualStyle,
+    box_width: Option<f64>,
+    box_height: Option<f64>,
+    resources: Option<&crate::fonts::FontBook>,
+) -> TextLayout {
     let font = face.clone().into_scaled(pixel_scale(face, style.size));
     let line_height =
         (font.ascent() - font.descent() + font.line_gap() + style.spacing as f32).max(1.0);
@@ -244,7 +319,7 @@ pub fn layout(
         .map(|w| w as f32)
         .unwrap_or(f32::INFINITY);
     let shaper = Shaper::new(face, style.size);
-    let input = atoms(text, style);
+    let input = atoms(text, style, resources);
     let mut rows: Vec<Vec<Atom>> = Vec::new();
     let mut starts = Vec::new();
     let mut row_start = 0;
@@ -490,4 +565,81 @@ pub(crate) fn expected_fallback(text: &str, size: f32) -> (f64, f64) {
         ((face.ascent_unscaled() - face.descent_unscaled() + face.line_gap_unscaled()) * size
             / units) as f64,
     )
+}
+
+#[cfg(test)]
+mod markup_tests {
+    use super::*;
+    fn plain(a: &[Atom]) -> String {
+        a.iter()
+            .filter_map(|a| {
+                if let Atom::Char(c, _) = a {
+                    Some(*c)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+    #[test]
+    fn markup_controls_never_become_visible_glyphs() {
+        let mut book = crate::fonts::FontBook::default();
+        book.set_colors(&[("SELF_WRITTEN_COLOR".into(), 0xff336699)]);
+        let style = VisualStyle::default();
+        let a = atoms(
+            "|cnSELF_WRITTEN_COLOR:abc|r|cffff0000R|r|Hitem:123|h[link]|h|n|Tself-art:8:9|t|A:self-missing:8:9|a||",
+            &style,
+            Some(&book),
+        );
+        assert_eq!(plain(&a), "abcR[link]\n|");
+        assert!(matches!(a[0],Atom::Char('a',c) if c==rgba(0xff336699)));
+        assert!(matches!(a[3],Atom::Char('R',c) if c==[1.,0.,0.,1.]));
+        assert!(
+            matches!(a.iter().find(|a|matches!(a,Atom::Icon(..))),Some(Atom::Icon(p,w,h,..)) if p=="self-art" && *w==9. && *h==8.)
+        );
+        assert_eq!(plain(&atoms("|cnUNKNOWN_COLOR:X|rY", &style, None)), "XY");
+        assert!(
+            matches!(atoms("|cnUNKNOWN_COLOR:X",&style,None)[0],Atom::Char('X',c) if c==style.color)
+        );
+        for s in ["|cnmalformed", "|Hmissing", "|Tmissing", "|Amissing"] {
+            assert!(atoms(s, &style, None).is_empty());
+        }
+        assert_eq!(plain(&atoms("||cnliteral", &style, None)), "|cnliteral");
+    }
+    #[test]
+    #[ignore = "requires SELU_CLIENT_INSTALL"]
+    fn client_named_colors_and_atlas_markup_use_runtime_data() {
+        let s = crate::Session::new(crate::SessionConfig {
+            target: Some("wowf".into()),
+            client_install: Some(std::env::var_os("SELU_CLIENT_INSTALL").unwrap().into()),
+            ..Default::default()
+        })
+        .unwrap();
+        s.eval("C_UIColor={}").unwrap();
+        crate::client_ui::install(s.lua(), s.sim().ctx()).unwrap();
+        let store = crate::frames::arena::store(s.lua());
+        let a = store.borrow();
+        let storage = a.fonts.assets.client_storage().unwrap();
+        let bytes = storage.read(4328468).unwrap();
+        let table = selu_gamedata::db2::Table::parse(&bytes).unwrap();
+        let key = table.text(0, 0).unwrap();
+        let expected = rgba(table.value(0, 1).unwrap());
+        let layout = a.fonts.layout(
+            &format!("|cn{key}:X|r"),
+            &VisualStyle::default(),
+            None,
+            None,
+        );
+        assert_eq!(layout.placements[0].color, expected);
+        let atlas = a.fonts.assets.atlas("UI-Character-Info-Title").unwrap();
+        let layout = a.fonts.layout(
+            "|A:UI-Character-Info-Title:10:20|a",
+            &VisualStyle::default(),
+            None,
+            None,
+        );
+        assert!(
+            matches!(&layout.placements[0].content,Content::Texture{path,width,height,..} if path==&atlas.file_data_id.to_string() && *width==20. && *height==10.)
+        );
+    }
 }
