@@ -929,8 +929,8 @@ no named-frame substitutes are installed. Root lists survive reload. Basic
 unit frames are not an additional Core root: dependency size and startup cost
 take priority here. Missing source leaves the environment unavailable rather
 than manufacturing frames. No required dependency is excluded merely to hide
-its errors; absent localization and legacy native constants can still abort
-settings, community and queue initialization.
+its errors. Missing client localization uses synthetic labels, while
+undocumented legacy aliases use simulator identities as described below.
 
 Combat Log is included because the chat configuration initializes its filter
 defaults at login. It adds three addons through required TOC dependencies in
@@ -947,18 +947,35 @@ Text markup resolves `|cnNAME:text|r` through the selected client's GlobalColor
 table. Hex colors, reset markers, hyperlink labels, inline texture and atlas
 icons, escaped pipes and `|n` line breaks are decoded; unresolved atlas markup
 is stripped. Unknown named colors use the surrounding text color. Borrowed
-interface text can lack product-specific tags: explicit string-consuming sites
-in the runtime Lua source identify additional synthetic labels, including local
-string wrappers. Numeric legacy globals are never inferred from these sites.
+interface text can lack product-specific tags. The loader reads source text
+roles before running addons: string consumers, helper label/text arguments and
+typed-variable names identify additional synthetic labels across files.
+Declared numeric/boolean values and field/index projections retain their types.
+Numeric legacy globals are never inferred as text.
 
 The empty account has no store purchases or preferred play-setting features.
 There is no pending quest-session invitation. Forbidden-frame creation uses
 the regular template loader and records forbidden status, including inheritance
 from a forbidden parent; secure execution and taint enforcement remain limited.
 Locale enumeration exposes the known current locale name; its unavailable
-numeric identifier remains nil with a once-only note. Legacy `LE_*` and
-`NUM_LE_*` values remain unknown when the user's client data does not supply
-them, so related LFG and game-error initialization can still fail.
+numeric identifier remains nil with a once-only note. Pending LFG applications
+and pet battle queues are empty. Binding enumeration reads registered XML
+binding bodies, headers and assigned keys; it never reads account bindings.
+
+Undocumented `LE_*` globals share a session identity catalog with undocumented
+`Enum` members and typed native return values. Own-client enum values win.
+Unknown aliases receive stable synthetic identities with once-only notes;
+these are simulator behavior, not copied client numbers. Source references
+register counted families before Lua runs. Their synthetic identities are
+dense, and each `NUM_LE_*` returns the number of distinct assigned identities
+in that family, including later assignments. Spelling normalization connects
+legacy aliases to enum members (including the legacy ERR abbreviation).
+Synthetic identities do not claim the client's undocumented ordering or bit
+mask meanings. None mode installs no legacy catalog.
+
+Ordered `table.removevalue` compacts the array and returns the removed count.
+This allows Blizzard's pools to remove released frames before their Lua
+accessors are invalidated, rather than keeping stale entries in active lists.
 
 The client-backed core_ui integration test uses SELU_DEFAULT_UI_SOURCE and SELU_CLIENT_INSTALL and records elapsed startup. Run it separately with --ignored --test-threads=1. Full interaction tests still explicitly request Full. Neither test reads account data or starts the game.
 

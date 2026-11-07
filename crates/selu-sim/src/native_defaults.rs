@@ -104,11 +104,6 @@ pub(crate) fn value(
                         let enums: mlua::Table = lua.globals().get("Enum")?;
                         let name = ty.strip_prefix("Enum.").unwrap_or(ty);
                         let enumeration: mlua::Table = enums.get(name)?;
-                        if schema.values.is_empty()
-                            && let Some(value) = crate::legacy::native(lua, name)
-                        {
-                            return Ok(Value::Integer(value));
-                        }
                         // A typed stand-in has no world-specific semantic choice.
                         // Select a declared member deterministically, through the
                         // same runtime lookup used by UI code, never its exported

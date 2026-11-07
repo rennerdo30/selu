@@ -51,6 +51,9 @@ fn count_prefix<'a>(key: &str, names: impl Iterator<Item = &'a String>) -> Strin
 }
 impl Catalog {
     fn assign(&mut self, key: &str) -> i64 {
+        self.assign_in(key, None)
+    }
+    fn assign_in(&mut self, key: &str, scope: Option<&str>) -> i64 {
         let key = normalized(key);
         if let Some(value) = self.values.get(&key) {
             return *value;
@@ -58,7 +61,12 @@ impl Catalog {
         let family = self
             .families
             .keys()
-            .filter(|prefix| key.starts_with(prefix.as_str()) && key.len() > prefix.len())
+            .filter(|prefix| {
+                scope.map_or_else(
+                    || key.starts_with(prefix.as_str()) && key.len() > prefix.len(),
+                    |s| prefix.as_str() == s,
+                )
+            })
             .max_by_key(|s| s.len())
             .cloned();
         let mut value = if family.is_some() { 1 } else { hash(&key) };
@@ -69,7 +77,10 @@ impl Catalog {
             value += if family.is_some() { 1 } else { -1 };
         }
         for (family, members) in &mut self.families {
-            if key.starts_with(family.as_str()) && key.len() > family.len() {
+            if scope.map_or_else(
+                || key.starts_with(family.as_str()) && key.len() > family.len(),
+                |s| family == s,
+            ) {
                 members.insert(value);
             }
         }
@@ -109,7 +120,7 @@ pub(crate) fn prepare(lua: &Lua, names: Vec<String>) -> mlua::Result<()> {
                         .insert((table.clone(), member.clone()), value);
                     let key = normalized(&format!("LE_{table}_{member}"));
                     for (family, members) in &mut catalog.families {
-                        if key.starts_with(family.as_str()) && key.len() > family.len() {
+                        if normalized(&format!("LE_{table}")) == *family {
                             members.insert(value);
                         }
                     }
@@ -161,26 +172,21 @@ pub(crate) fn enum_member(lua: &Lua, table: &str, member: &str) -> Option<i64> {
         return Some(*value);
     }
     let key = normalized(&format!("LE_{table}_{member}"));
-    let mut value = catalog.assign(&key);
+    let scope = normalized(&format!("LE_{table}"));
+    let mut value = catalog.assign_in(&key, Some(&scope));
     if catalog
         .enum_values
         .iter()
         .any(|((owner, _), v)| owner == table && *v == value)
     {
-        let counted = catalog
-            .families
-            .keys()
-            .any(|family| key.starts_with(family));
+        let counted = catalog.families.contains_key(&scope);
         value = if counted {
             1
         } else {
             hash(&format!("{table}:{member}"))
         };
         while if counted {
-            catalog
-                .families
-                .iter()
-                .any(|(family, members)| key.starts_with(family) && members.contains(&value))
+            catalog.families[&scope].contains(&value)
         } else {
             catalog.values.values().any(|v| *v == value)
         } {
@@ -190,7 +196,7 @@ pub(crate) fn enum_member(lua: &Lua, table: &str, member: &str) -> Option<i64> {
             .values
             .insert(format!("!enum:{table}:{member}"), value);
         for (family, members) in &mut catalog.families {
-            if key.starts_with(family) {
+            if family == &scope {
                 members.insert(value);
             }
         }
@@ -204,6 +210,18 @@ pub(crate) fn native(lua: &Lua, ty: &str) -> Option<i64> {
         "LE_{}",
         ty.trim_start_matches("Enum.").trim_start_matches("LE_")
     ));
+    if let Some(value) = catalog
+        .enum_values
+        .iter()
+        .filter(|((table, _), _)| normalized(&format!("LE_{table}")) == wanted)
+        .map(|(_, value)| *value)
+        .min()
+    {
+        return Some(value);
+    }
+    if let Some(members) = catalog.families.get(&wanted) {
+        return members.first().copied();
+    }
     catalog
         .values
         .range(wanted.clone()..)
@@ -253,7 +271,7 @@ mod tests {
     #[test]
     fn documented_values_and_non_counted_unknowns_remain_stable() {
         let s = crate::Session::new(Default::default()).unwrap();
-        s.eval("Enum={SelfFamily={First=1}};LE_SELF_DEFINED=23")
+        s.eval("Enum={SelfFamily={First=1},SelfFamilyOther={Other=2}};LE_SELF_DEFINED=23")
             .unwrap();
         super::prepare(
             s.lua(),
@@ -265,6 +283,8 @@ mod tests {
         )
         .unwrap();
         s.eval("assert(LE_SELF_FAMILY_FIRST==1 and LE_SELF_FAMILY_SECOND==2 and NUM_LE_SELF_FAMILYS==2 and LE_SELF_DEFINED==23);local first=LE_SELF_UNDOCUMENTED;assert(first==LE_SELF_UNDOCUMENTED and first~=LE_SELF_OTHER)").unwrap();
+        super::enum_member(s.lua(), "SelfFamilyOther", "Next").unwrap();
+        s.eval("assert(NUM_LE_SELF_FAMILYS==2)").unwrap();
         assert_eq!(
             s.logs()
                 .iter()
