@@ -39,3 +39,33 @@ Don't start a work package, or widen one, unless the owner asked for it. If a
 package would be your own idea (for example from a portability estimate or a
 spec section), describe it and ask first. Never present it as already
 decided.
+
+## Every WoW product (owner, 2026-11-07)
+
+Selu, the simulator and Studio support every World of Warcraft product
+(`wow`, `wowf`, `wow_classic`, `wow_classic_era`, `wow_anniversary`,
+`wow_classic_titan`, and their PTR and beta channels). Never assume one product.
+
+- Product-specific values (TOC suffixes, game types, Blizzard addon lists,
+  enums, constants, file IDs, folder names) come from one table per concern,
+  covering every product, or from the session's own client and build at
+  runtime.
+- No Forever-only (or any single-product) defaults, fallbacks or lists in
+  non-test code. A single addon may still target one product (the toolkit
+  port targets `wowf`); the tools may not.
+- No personal paths (for example `E:/Development/...`) as defaults in code.
+
+## Blizzard content (owner, 2026-11-07)
+
+Blizzard's Lua, XML, art, fonts and game data are read at runtime from the
+user's own installation (or their local source checkout). Never commit or
+redistribute them, or data exported from them, for the simulator. Test
+fixtures are self-written. Screenshots with client art stay local.
+
+## The simulator runs Blizzard's UI, never a copy of it (owner, 2026-11-07)
+
+The simulated default UI comes from executing Blizzard's own Lua and XML and
+rendering the result. Never write Rust or Lua that names a Blizzard frame,
+template or button to show, hide, place, label or restyle it. Fix the
+simulated engine instead (native API results, events, widget behaviour,
+layout). Blizzard object names may appear in tests that check results.
