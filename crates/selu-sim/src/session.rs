@@ -646,6 +646,8 @@ impl Session {
         self.sim.lua.globals().raw_set("IsAddOnLoaded", loaded)?;
         self.sim.lua.globals().raw_set("C_AddOns", api)?;
         let modules = self.sim.lua.create_table()?;
+        let mut prepared = Vec::with_capacity(addons.len());
+        let mut legacy_names = Vec::new();
         for toc in addons {
             progress(&toc.name);
             // A bad input file must not discard every successfully read chunk
@@ -663,6 +665,20 @@ impl Session {
                     Err(error) => report.errors.push(error),
                 }
             }
+            for (name, source) in &files {
+                // This is the simulator's own repeated bootstrap, not a
+                // client localization/legacy declaration site.
+                if name != "@selu/xml-runtime" {
+                    legacy_names.extend(crate::ui_metadata::register_text_refs(
+                        &self.sim.lua,
+                        source,
+                    )?);
+                }
+            }
+            prepared.push((toc, files));
+        }
+        crate::legacy::prepare(&self.sim.lua, legacy_names)?;
+        for (toc, files) in prepared {
             // Art of an addon read from the client resolves through client
             // storage; only a folder on disk is an extra asset root.
             if toc.dir.is_dir() {
@@ -697,7 +713,6 @@ impl Session {
                 if std::env::var_os("SELU_SIM_UI_LOAD_TRACE").is_some() {
                     eprintln!("Default UI source: {}: {name}", toc.name);
                 }
-                crate::ui_metadata::register_text_refs(&self.sim.lua, &source)?;
                 let result = dispatch(&self.sim.lua, &self.sim.ctx, || {
                     core::call_lua::<Value>(
                         &self.sim.lua,

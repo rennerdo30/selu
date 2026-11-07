@@ -26,6 +26,7 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
             Some("C_QuestSession"),
         ),
         ("GetMaxBattlefieldID", "count", None),
+        ("C_LFGList.GetApplications", "list", Some("C_LFGList")),
         (
             "GetNumSpecializations",
             "count",
@@ -42,6 +43,11 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
             Some("C_PetBattles"),
         ),
         ("C_PetBattles.GetAllStates", "empty", Some("C_PetBattles")),
+        (
+            "C_PetBattles.GetPVPMatchmakingInfo",
+            "empty",
+            Some("C_PetBattles"),
+        ),
         ("C_LFGList.GetAvailableRoles", "roles", Some("C_LFGList")),
         (
             "C_AzeriteItem.FindActiveAzeriteItem",

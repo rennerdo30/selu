@@ -271,6 +271,9 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
 
 pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
     let _profile = crate::profile::Span::new("globals.lookup");
+    if let Some(value) = crate::legacy::global(lua, key, ctx)? {
+        return Ok(Some(value));
+    }
     let globals = lua.globals();
     // The locally installed GlobalStrings DB2 can be absent. These source-
     // documented localized string families get visible synthetic labels in
@@ -285,9 +288,19 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
             .raw_get::<Table>("__selu_global_shapes")?
             .raw_get::<Option<String>>(key)?
             .is_some_and(|shape| shape == "string");
-    let localized_family = ["ERR_", "OPTIONS_MENU_", "OPTION_TOOLTIP_"]
-        .iter()
-        .any(|p| key.starts_with(p))
+    let localized_family = [
+        "ERR_",
+        "OPTIONS_MENU_",
+        "OPTION_TOOLTIP_",
+        "ENABLE_",
+        "SHOW_",
+        "SETTINGS_",
+        "SOCIAL_",
+        "BINDING_HEADER_",
+        "UNIT_NAMEPLATES_",
+    ]
+    .iter()
+    .any(|p| key.starts_with(p))
         || ["_LABEL", "_TEXT", "_TOOLTIP", "_DESCRIPTION"]
             .iter()
             .any(|s| key.ends_with(s));

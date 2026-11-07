@@ -86,7 +86,67 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
             run(lua, &action, !up.unwrap_or(false))
         })?,
     )?;
+    globals.raw_set(
+        "GetNumBindings",
+        lua.create_function(|lua, ()| Ok(binding_order(lua)?.raw_len()))?,
+    )?;
+    globals.raw_set(
+        "GetBinding",
+        lua.create_function(|lua, index: usize| {
+            let order = binding_order(lua)?;
+            let Some(action) = order.raw_get::<Option<String>>(index)? else {
+                return Ok((None, None, None, None));
+            };
+            let actions = lua.named_registry_value::<Table>("selu.binding_actions")?;
+            let header = actions
+                .raw_get::<Table>(action.as_str())?
+                .raw_get::<Option<String>>("header")?;
+            let keys = lua.named_registry_value::<Table>("selu.binding_keys")?;
+            let mut bound = Vec::new();
+            for pair in keys.pairs::<String, String>() {
+                let (key, value) = pair?;
+                if value == action {
+                    bound.push(key);
+                }
+            }
+            bound.sort();
+            Ok((
+                Some(action),
+                header,
+                bound.first().cloned(),
+                bound.get(1).cloned(),
+            ))
+        })?,
+    )?;
+    globals.raw_set(
+        "GetBindingCategoryName",
+        lua.create_function(|lua, header: String| {
+            Ok(lua
+                .globals()
+                .get::<Option<String>>(header.as_str())?
+                .unwrap_or(header))
+        })?,
+    )?;
     Ok(())
+}
+
+fn binding_order(lua: &Lua) -> mlua::Result<Table> {
+    let actions = lua.named_registry_value::<Table>("selu.binding_actions")?;
+    let mut names = actions
+        .pairs::<String, mlua::Value>()
+        .map(|entry| entry.map(|(name, _)| name))
+        .collect::<mlua::Result<Vec<_>>>()?;
+    names.sort();
+    lua.create_sequence_from(names)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn binding_enumeration_uses_registered_bodies_and_assigned_keys() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        s.eval("assert(GetNumBindings()==0);__selu_binding_actions.SELF_ACTION={header='SELF_HEADER',handler=function()end,runOnUp=false};SELF_HEADER='Self category';SetBinding('K','SELF_ACTION');SetBinding('L','SELF_ACTION');local action,category,a,b=GetBinding(1);assert(GetNumBindings()==1 and action=='SELF_ACTION' and category=='SELF_HEADER' and a=='K' and b=='L');assert(GetBindingCategoryName(category)=='Self category' and GetBinding(2)==nil)").unwrap();
+    }
 }
 
 fn run(lua: &Lua, action: &str, down: bool) -> mlua::Result<()> {

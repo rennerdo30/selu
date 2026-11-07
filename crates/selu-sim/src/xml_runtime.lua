@@ -469,7 +469,7 @@ function __selu_xml_declare(n)
     if n.tag=='Binding' then
         local actions=__selu_binding_actions
         if actions then
-            actions[n.a.name]={runOnUp=n.a.runOnUp=='true',handler=assert(loadstring('return function(keystate)\n'..n.text..'\nend','@XML/Binding'))()}
+            actions[n.a.name]={header=n.a.header,runOnUp=n.a.runOnUp=='true',handler=assert(loadstring('return function(keystate)\n'..n.text..'\nend','@XML/Binding'))()}
         end
         return
     end

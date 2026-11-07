@@ -42,6 +42,11 @@ pub(crate) fn value(
         .find(|s| !matches!(*s, "nil" | "null"))
         .unwrap_or("nil")
         .trim_end_matches('?');
+    if ty.starts_with("LE_")
+        && let Some(value) = crate::legacy::native(lua, ty)
+    {
+        return Ok(Value::Integer(value));
+    }
     Ok(match ty {
         "boolean" | "bool" => Value::Boolean(false),
         "number" | "integer" | "float" | "double" | "luaIndex" | "uiUnit" | "WOWMONEY"
@@ -87,6 +92,11 @@ pub(crate) fn value(
                 && let Some(schema) = schemas.get(ty)
             {
                 if schema.ty.as_deref() == Some("enum") {
+                    if schema.values.is_empty()
+                        && let Some(value) = crate::legacy::native(lua, ty)
+                    {
+                        return Ok(Value::Integer(value));
+                    }
                     if lua
                         .named_registry_value::<Option<bool>>("selu.default_ui_strings")?
                         .unwrap_or(false)
@@ -94,6 +104,11 @@ pub(crate) fn value(
                         let enums: mlua::Table = lua.globals().get("Enum")?;
                         let name = ty.strip_prefix("Enum.").unwrap_or(ty);
                         let enumeration: mlua::Table = enums.get(name)?;
+                        if schema.values.is_empty()
+                            && let Some(value) = crate::legacy::native(lua, name)
+                        {
+                            return Ok(Value::Integer(value));
+                        }
                         // A typed stand-in has no world-specific semantic choice.
                         // Select a declared member deterministically, through the
                         // same runtime lookup used by UI code, never its exported

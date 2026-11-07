@@ -110,6 +110,10 @@ fn core_loads_real_common_frames_and_records_startup() {
         }
     }
     s.eval("assert(IsAddOnLoaded('Blizzard_Minimap'));assert(Minimap and DEFAULT_CHAT_FRAME and GameTooltip);assert(Minimap:GetObjectType()=='Minimap');assert(DEFAULT_CHAT_FRAME.AddMessage and GameTooltip.SetOwner)").unwrap();
+    if std::env::var("SELU_CORE_TARGET").ok().is_none_or(|t|t.split('@').next()==Some("wowf")) {
+        s.eval("for _,key in ipairs({'ENABLE_PING_SOUNDS','ENABLE_GAMEPAD_UI','ENABLE_SCREEN_NARRATOR','SETTINGS_PLAYER_MAP_COORDS','SHOW_SILHOUETTE_OPTION','SOCIAL_LOCATION_VISIBILITY_SETTING','ENABLE_PINGS','ENABLE_COOLDOWN_VIEWER','UNIT_NAMEPLATES_FRIENDLY_PLAYER_SHOW_ONLY_NAME','BINDING_HEADER_PING_SYSTEM'}) do assert(type(_G[key])=='string',key) end;assert(type(NUM_LE_LFG_CATEGORYS)=='number' and NUM_LE_LFG_CATEGORYS>0);assert(LE_LFG_CATEGORY_LFD>=1 and LE_LFG_CATEGORY_LFD<=NUM_LE_LFG_CATEGORYS)").unwrap();
+        assert!(s.default_ui_startup_errors().iter().all(|e|!e.contains("ScrollBoxListView.lua")),"{:?}",s.default_ui_startup_errors());
+    }
 }
 #[test]
 #[ignore = "requires the five locally installed client products via SELU_CLIENT_INSTALL"]

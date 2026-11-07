@@ -24,18 +24,26 @@ enum Token {
 }
 /// Missing localization is data, not an excuse to synthesize every uppercase
 /// global. Learn references only at explicit string-consuming source sites.
-pub(crate) fn register_text_refs(lua: &Lua, source: &str) -> mlua::Result<()> {
+pub(crate) fn register_text_refs(lua: &Lua, source: &str) -> mlua::Result<Vec<String>> {
+    let _profile = crate::profile::Span::new("source.string_refs");
+    let token = tokens(source);
+    let legacy = token
+        .iter()
+        .filter_map(|t| match t {
+            Token::Word(w) if w.starts_with("LE_") || w.starts_with("NUM_LE_") => Some(w.clone()),
+            _ => None,
+        })
+        .collect();
     if !lua
         .named_registry_value::<Option<bool>>("selu.synthetic_strings")?
         .unwrap_or(false)
     {
-        return Ok(());
+        return Ok(legacy);
     }
     let tags = lua
         .globals()
         .raw_get::<Option<Table>>("__selu_string_tags")?
         .unwrap_or(lua.create_table()?);
-    let token = tokens(source);
     let candidate = |s: &str| {
         s.contains('_')
             && s.bytes()
@@ -71,12 +79,13 @@ pub(crate) fn register_text_refs(lua: &Lua, source: &str) -> mlua::Result<()> {
             tags.raw_set(key.as_str(), true)?;
         }
     }
-    for key in helper_string_refs(&token) {
+    for key in helper_string_refs(lua, &token) {
         if candidate(&key) {
             tags.raw_set(key, true)?;
         }
     }
-    lua.globals().raw_set("__selu_string_tags", tags)
+    lua.globals().raw_set("__selu_string_tags", tags)?;
+    Ok(legacy)
 }
 fn string_consumer(name: &str) -> bool {
     [
@@ -112,10 +121,19 @@ struct TextHelper {
     begin: usize,
     end: usize,
     strings: std::collections::BTreeSet<usize>,
+    exported: bool,
 }
-/// Propagate explicit string use through unambiguous helpers in the same Lua
-/// file. This handles local wrappers without maintaining a list of UI names.
-fn helper_string_refs(t: &[Token]) -> Vec<String> {
+#[derive(Clone)]
+struct TextContract {
+    params: Vec<String>,
+    strings: std::collections::BTreeSet<usize>,
+}
+#[derive(Default)]
+struct TextContracts(BTreeMap<(String, bool), Option<TextContract>>);
+/// Read text argument roles from the client's helper signatures, and propagate
+/// explicit string use through unambiguous helpers. Cross-file contracts are
+/// session data; no UI function or frame names are maintained by the simulator.
+fn helper_string_refs(lua: &Lua, t: &[Token]) -> Vec<String> {
     let mut functions = Vec::<TextHelper>::new();
     for i in 0..t.len() {
         if !matches!(&t[i],Token::Word(w) if w=="function") {
@@ -158,14 +176,55 @@ fn helper_string_refs(t: &[Token]) -> Vec<String> {
             }
             at += 1;
         }
+        let typed_variable = params.iter().any(|p| p == "variableType");
+        let strings = params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                ["text", "label", "title", "tooltip", "description"].contains(&p.as_str())
+                    || p.ends_with("Text")
+                    || (typed_variable && (p.as_str() == "name" || p.as_str() == "nameValue"))
+            })
+            .map(|(i, _)| i)
+            .collect();
         functions.push(TextHelper {
             name,
             method,
             params,
             begin,
             end: at,
-            strings: Default::default(),
+            strings,
+            exported: i == 0 || !matches!(&t[i-1],Token::Word(w) if w=="local"),
         });
+    }
+    let local_count = functions.len();
+    let call_names: std::collections::BTreeSet<_> = t
+        .windows(2)
+        .filter_map(|w| match w {
+            [Token::Word(n), Token::Mark(b'(')] => Some(n.as_str()),
+            _ => None,
+        })
+        .collect();
+    if let Some(contracts) = lua.app_data_ref::<TextContracts>() {
+        for ((name, method), contract) in &contracts.0 {
+            let Some(contract) = contract else { continue };
+            if !call_names.contains(name.as_str())
+                || functions
+                    .iter()
+                    .any(|f| f.name == *name && f.method == *method)
+            {
+                continue;
+            }
+            functions.push(TextHelper {
+                name: name.clone(),
+                method: *method,
+                params: contract.params.clone(),
+                strings: contract.strings.clone(),
+                begin: usize::MAX,
+                end: usize::MAX,
+                exported: false,
+            });
+        }
     }
     let owner = |at: usize| {
         functions
@@ -300,6 +359,32 @@ fn helper_string_refs(t: &[Token]) -> Vec<String> {
         }
         if !changed {
             break;
+        }
+    }
+    let mut contracts = lua.app_data_mut::<TextContracts>();
+    if contracts.is_none() {
+        lua.set_app_data(TextContracts::default());
+        contracts = lua.app_data_mut::<TextContracts>();
+    }
+    let contracts = contracts.as_mut().unwrap();
+    for f in functions
+        .iter()
+        .take(local_count)
+        .filter(|f| f.exported && !f.strings.is_empty())
+    {
+        let key = (f.name.clone(), f.method);
+        let value = TextContract {
+            params: f.params.clone(),
+            strings: f.strings.clone(),
+        };
+        if let Some(old) = contracts.0.get_mut(&key) {
+            if old.as_ref().is_some_and(|old| {
+                old.params.len() != value.params.len() || old.strings != value.strings
+            }) {
+                *old = None;
+            }
+        } else {
+            contracts.0.insert(key, Some(value));
         }
     }
     globals.sort();
@@ -834,6 +919,11 @@ fn missing(lua: &Lua, ctx: &crate::Ctx, table: &Table, path: &str) -> mlua::Resu
                 return Ok(Value::Table(child));
             }
             if path.starts_with("Enum.") {
+                if let Some(value) =
+                    crate::legacy::enum_member(lua, path.trim_start_matches("Enum."), &key)
+                {
+                    return Ok(Value::Integer(value));
+                }
                 // Synthetic engine identity, not a client value. Hash the name
                 // so independent sessions agree regardless of lookup order.
                 // Negative integers avoid ordinary documented enum ranges;
@@ -1200,5 +1290,9 @@ mod string_use_tests {
         s.eval("assert(SELF_RECORD==nil and SELF_OTHER_RECORD==nil)")
             .unwrap();
         s.eval("assert(SELF_FORMAT=='SELF FORMAT' and SELF_CAPTION=='SELF CAPTION' and SELF_PATTERN=='SELF PATTERN' and SELF_TOOLTIP=='SELF TOOLTIP');assert(SELF_NUMBER==nil and LE_UNKNOWN_VALUE==nil and COMMENT_ONLY==nil and STRING_LITERAL_ONLY==nil);__selu_global_shapes.TYPED_LABEL='number';assert(TYPED_LABEL==0)").unwrap();
+        s.eval("assert(type(ENABLE_SELF_WRITTEN)=='string' and type(BINDING_HEADER_SELF_WRITTEN)=='string');__selu_global_shapes.SHOW_SELF_BOOLEAN='boolean';__selu_global_shapes.SETTINGS_SELF_NUMBER='number';assert(SHOW_SELF_BOOLEAN==false and SETTINGS_SELF_NUMBER==0 and UNRELATED_SELF_NUMBER==nil)").unwrap();
+        super::register_text_refs(s.lua(),"function Provider:Describe(label,tooltip) end;function Provider.Define(variable,variableType,name) end").unwrap();
+        super::register_text_refs(s.lua(),"Provider:Describe(SELF_CROSS_FILE,SELF_EXPLANATION);Provider.Define('self','boolean',SELF_VARIABLE_NAME)").unwrap();
+        s.eval("assert(SELF_CROSS_FILE=='SELF CROSS FILE' and SELF_EXPLANATION=='SELF EXPLANATION' and SELF_VARIABLE_NAME=='SELF VARIABLE NAME')").unwrap();
     }
 }
