@@ -20,6 +20,12 @@ fn core_loads_real_common_frames_and_records_startup() {
             |_| {},
         )
         .unwrap();
+    // Optional diagnostic of a read-only real addon; only its fresh in-memory
+    // error log is inspected, never a saved-variable file or player account.
+    let toolkit = std::env::var_os("SELU_CORE_TOOLKIT");
+    if let Some(path) = &toolkit {
+        s.load_addon_dir(std::path::Path::new(path)).unwrap();
+    }
     s.login().unwrap();
     for _ in 0..4 {
         s.advance_time(1. / 60.);
@@ -35,5 +41,14 @@ fn core_loads_real_common_frames_and_records_startup() {
         eprintln!("CORE ERROR {error}");
     }
     assert!(!report.elapsed.is_zero());
+    if toolkit.is_some() {
+        let ns = s.addon_namespace("RennersAddons").unwrap();
+        let errors: mlua::Table = ns.raw_get("ErrorLog").unwrap();
+        for error in errors.sequence_values::<mlua::Table>() {
+            let message: String = error.unwrap().raw_get("message").unwrap();
+            eprintln!("TOOLKIT INTERNAL ERROR {message}");
+            assert!(!message.contains("global 'Minimap' (a nil value)"));
+        }
+    }
     s.eval("assert(IsAddOnLoaded('Blizzard_Minimap'));assert(Minimap and DEFAULT_CHAT_FRAME and GameTooltip);assert(Minimap:GetObjectType()=='Minimap');assert(DEFAULT_CHAT_FRAME.AddMessage and GameTooltip.SetOwner)").unwrap();
 }
