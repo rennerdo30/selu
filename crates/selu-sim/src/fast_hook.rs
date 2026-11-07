@@ -1,5 +1,5 @@
 //! Exact count-hook fast path. Faults still use mlua's protected hook boundary.
-use crate::core::{Budget, Ctx, Shared, lock};
+use crate::core::{Ctx, Shared, SharedBudget, lock};
 use mlua::{Lua, Thread, ffi};
 use std::{
     cell::{Cell, RefCell},
@@ -9,10 +9,13 @@ use std::{
 thread_local! {
     // Lua is thread-confined. Owners outlive lua_close; coroutine addresses are
     // only used as keys, never dereferenced by this map.
+    // The active Lua state repeats for millions of hooks. Avoid hashing its
+    // address each time; Owner::drop invalidates the cache before freeing State.
+    static ACTIVE: Cell<(usize,*const State)> = const {Cell::new((0,std::ptr::null()))};
     static TARGETS: RefCell<HashMap<usize, *const State>> = RefCell::new(HashMap::new());
 }
 struct State {
-    budget: Shared<Budget>,
+    budget: SharedBudget,
     stale: Shared<std::collections::HashSet<String>>,
     active: Cell<usize>,
     original: Cell<Option<ffi::lua_Hook>>,
@@ -28,13 +31,23 @@ struct LegacyLogged;
 impl Drop for Owner {
     fn drop(&mut self) {
         let pointer = &*self.0 as *const State;
+        let _ = ACTIVE.try_with(|active| {
+            if active.get().1 == pointer {
+                active.set((0, std::ptr::null()));
+            }
+        });
         let _ =
             TARGETS.try_with(|targets| targets.borrow_mut().retain(|_, value| *value != pointer));
     }
 }
 
 unsafe extern "C-unwind" fn hook(lua: *mut ffi::lua_State, debug: *mut ffi::lua_Debug) {
-    let pointer = TARGETS.with(|targets| targets.borrow().get(&(lua as usize)).copied());
+    let cached = ACTIVE.with(Cell::get);
+    let pointer = if cached.0 == lua as usize {
+        Some(cached.1)
+    } else {
+        TARGETS.with(|targets| targets.borrow().get(&(lua as usize)).copied())
+    };
     let Some(pointer) = pointer else {
         // A newly created coroutine inherits the native hook pointer. As with
         // mlua, it is armed only by the coordinated resume boundary.
@@ -62,7 +75,7 @@ unsafe extern "C-unwind" fn hook(lua: *mut ffi::lua_State, debug: *mut ffi::lua_
     }
     let stale = !lock(&state.stale).is_empty();
     let delegate = {
-        let mut budget = lock(&state.budget);
+        let mut budget = state.budget.borrow_mut();
         if stale
             || budget.exhausted
             || budget.used.saturating_add(u64::from(quantum))
@@ -86,7 +99,7 @@ unsafe extern "C-unwind" fn hook(lua: *mut ffi::lua_State, debug: *mut ffi::lua_
     }
 }
 
-pub(crate) fn install(lua: &Lua, budget: Shared<Budget>, quantum: u32, thread: Option<Thread>) {
+pub(crate) fn install(lua: &Lua, budget: SharedBudget, quantum: u32, thread: Option<Thread>) {
     #[cfg(debug_assertions)]
     if std::env::var_os("SELU_SIM_PROFILE_LEGACY_HOOK").is_some() {
         if std::env::var_os("SELU_SIM_PROFILE").is_some()
@@ -136,6 +149,7 @@ pub(crate) fn install(lua: &Lua, budget: Shared<Budget>, quantum: u32, thread: O
             let original = ffi::lua_gethook(target);
             owner.0.original.set(original);
             owner.0.active.set(target as usize);
+            ACTIVE.with(|active| active.set((target as usize, pointer)));
             owner.0.quantum.set(quantum);
             TARGETS.with(|targets| {
                 targets.borrow_mut().insert(target as usize, pointer);

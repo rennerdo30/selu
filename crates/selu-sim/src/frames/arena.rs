@@ -133,6 +133,9 @@ pub struct Arena {
     pub focus: Option<usize>,
     pub capture: Option<usize>,
     pub moving: Option<usize>,
+    pub pressed_button: Option<String>,
+    pub press_origin: Option<(f64, f64)>,
+    pub dragging: bool,
 }
 /// Startup construction is committed as one layout transaction. The guard
 /// restores normal eager transitions even if source loading returns an error.

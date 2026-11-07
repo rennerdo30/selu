@@ -16,13 +16,67 @@ mod enabled {
         calls: bool,
         sites: BTreeMap<usize, (String, u64)>,
         lua_samples: BTreeMap<(String, i32), u64>,
+        cpu_start: Option<Duration>,
     }
     thread_local! {
         static DATA: RefCell<Data> = RefCell::new(Data {
             active: std::env::var_os("SELU_SIM_PROFILE").is_some(),
-            calls: std::env::var_os("SELU_SIM_PROFILE_CALLS").is_some(), ..Data::default()
+            calls: std::env::var_os("SELU_SIM_PROFILE_CALLS").is_some(),
+            cpu_start: if std::env::var_os("SELU_SIM_PROFILE").is_some() {cpu_time()} else {None}, ..Data::default()
         });
         static HOOKS: std::cell::Cell<(u64,u64)> = const { std::cell::Cell::new((0,0)) };
+    }
+    #[cfg(windows)]
+    fn cpu_time() -> Option<Duration> {
+        #[repr(C)]
+        #[derive(Default)]
+        struct FileTime {
+            low: u32,
+            high: u32,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            #[link_name = "GetCurrentThread"]
+            fn current_thread() -> *mut std::ffi::c_void;
+            #[link_name = "GetThreadTimes"]
+            fn thread_times(
+                handle: *mut std::ffi::c_void,
+                created: *mut FileTime,
+                exited: *mut FileTime,
+                kernel: *mut FileTime,
+                user: *mut FileTime,
+            ) -> i32;
+        }
+        let (mut created, mut exited, mut kernel, mut user) = (
+            FileTime::default(),
+            FileTime::default(),
+            FileTime::default(),
+            FileTime::default(),
+        );
+        // SAFETY: the pseudo-handle refers to this thread and all output
+        // pointers reference live repr(C) FILETIME-compatible stack values.
+        if unsafe {
+            thread_times(
+                current_thread(),
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        } == 0
+        {
+            return None;
+        }
+        let ticks = |value: FileTime| (u64::from(value.high) << 32) | u64::from(value.low);
+        Some(Duration::from_nanos(
+            ticks(kernel)
+                .saturating_add(ticks(user))
+                .saturating_mul(100),
+        ))
+    }
+    #[cfg(not(windows))]
+    fn cpu_time() -> Option<Duration> {
+        None
     }
     pub fn instruction_hook(quantum: u32) {
         if !DATA.with(|data| data.borrow().active) {
@@ -149,6 +203,9 @@ mod enabled {
                 "SELU_SIM_PROFILE active; exclusive durations; {} spans still active",
                 data.stack.len()
             );
+            if let (Some(start),Some(end))=(data.cpu_start,cpu_time()) {
+                eprintln!("PROFILE_WORKER_CPU since first span: {:.6}s (scheduled CPU time, not wall time)",end.saturating_sub(start).as_secs_f64());
+            }
             for (name, (duration, calls)) in &data.totals {
                 eprintln!(
                     "PROFILE {name}: {:.6}s ({calls} calls)",

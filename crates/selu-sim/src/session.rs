@@ -879,6 +879,7 @@ impl Session {
     /// Load an addon folder through its `.toc` and fire `ADDON_LOADED`.
     /// Returns the addon name.
     pub fn load_addon_dir(&mut self, dir: &Path) -> SimResult<String> {
+        let _profile = crate::profile::Span::new("addon.load");
         let _startup_layout = (!self.logged_in && self.default_ui_report.is_some())
             .then(|| crate::frames::arena::LayoutBatch::new(&self.sim.lua));
         if self.config.manifest.is_none() && lock(&self.sim.state).checked_manifests.is_empty() {

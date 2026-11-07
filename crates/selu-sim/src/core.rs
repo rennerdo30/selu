@@ -22,6 +22,10 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 pub(crate) type Shared<T> = Arc<Mutex<T>>;
+// Lua and callback queues are already thread-confined (Pending is not Send).
+// Budget guards never cross a Lua call, so a checked local borrow preserves
+// reentrancy detection without a mutex on every counted instruction.
+pub(crate) type SharedBudget = std::rc::Rc<std::cell::RefCell<Budget>>;
 
 pub(crate) fn shared<T>(value: T) -> Shared<T> {
     Arc::new(Mutex::new(value))
@@ -400,7 +404,7 @@ pub struct Ctx {
     pub(crate) warned: Shared<HashSet<String>>,
     pub clock: Shared<f64>,
     pub trace: Shared<Trace>,
-    pub(crate) budget: Shared<Budget>,
+    pub(crate) budget: SharedBudget,
     pub(crate) pending: Shared<VecDeque<Pending>>,
     pub(crate) scripts: Shared<VecDeque<Pending>>,
     pub(crate) tolerant_ui: Shared<bool>,
@@ -418,7 +422,7 @@ impl Ctx {
             warned: shared(HashSet::new()),
             clock: shared(0.0),
             trace: shared(Trace::default()),
-            budget: shared(Budget {
+            budget: std::rc::Rc::new(std::cell::RefCell::new(Budget {
                 limit: DEFAULT_BUDGET,
                 used: 0,
                 callbacks: 0,
@@ -427,7 +431,7 @@ impl Ctx {
                 failure: None,
                 exhausted: false,
                 blizzard_bootstrap: false,
-            }),
+            })),
             pending: shared(VecDeque::new()),
             scripts: shared(VecDeque::new()),
             tolerant_ui: shared(false),
@@ -480,7 +484,7 @@ impl Ctx {
 
     /// Hook calls allowed per dispatch (see [`HOOK_INTERVAL`]).
     pub fn set_budget(&self, hook_calls: u64) {
-        lock(&self.budget).limit = hook_calls.max(1);
+        self.budget.borrow_mut().limit = hook_calls.max(1);
     }
 }
 
@@ -506,12 +510,12 @@ pub fn install_hooks(lua: &Lua, ctx: &Ctx) {
 /// to the precise coroutine hook, so repeated short resumes cannot evade it.
 pub(crate) struct BlizzardBootstrapBudget<'a> {
     lua: &'a Lua,
-    budget: Shared<Budget>,
+    budget: SharedBudget,
     previous: bool,
 }
 impl<'a> BlizzardBootstrapBudget<'a> {
     pub fn new(lua: &'a Lua, ctx: &Ctx) -> Self {
-        let mut budget = lock(&ctx.budget);
+        let mut budget = ctx.budget.borrow_mut();
         let previous = budget.blizzard_bootstrap;
         budget.blizzard_bootstrap = true;
         drop(budget);
@@ -525,7 +529,7 @@ impl<'a> BlizzardBootstrapBudget<'a> {
 }
 impl Drop for BlizzardBootstrapBudget<'_> {
     fn drop(&mut self) {
-        lock(&self.budget).blizzard_bootstrap = self.previous;
+        self.budget.borrow_mut().blizzard_bootstrap = self.previous;
         set_count_hook(
             self.lua,
             self.budget.clone(),
@@ -539,9 +543,9 @@ impl Drop for BlizzardBootstrapBudget<'_> {
 /// That way the error surfaces in every frame up the stack: a `pcall`
 /// around a runaway loop catches it, but its caller's next instruction
 /// fails again, so `while true do pcall(f) end` can't keep running either.
-fn budget_instruction(lua: &Lua, budget: &Shared<Budget>, quantum: u32) -> mlua::Result<VmState> {
+fn budget_instruction(lua: &Lua, budget: &SharedBudget, quantum: u32) -> mlua::Result<VmState> {
     crate::profile::instruction_hook(quantum);
-    let mut b = lock(budget);
+    let mut b = budget.borrow_mut();
     b.used = b.used.saturating_add(u64::from(quantum));
     if b.exhausted || b.used > b.limit.saturating_mul(u64::from(HOOK_INTERVAL)) {
         b.exhausted = true;
@@ -558,7 +562,7 @@ fn budget_instruction(lua: &Lua, budget: &Shared<Budget>, quantum: u32) -> mlua:
 // mlua 0.10 has one hook target per VM. Switch that target only at native
 // resume boundaries, restoring the caller before executing more Lua. Count
 // every instruction so repeated short coroutine resumes cannot lose credit.
-fn set_count_hook(lua: &Lua, budget: Shared<Budget>, interval: u32) {
+fn set_count_hook(lua: &Lua, budget: SharedBudget, interval: u32) {
     let fast_budget = budget.clone();
     let stale = lua
         .app_data_ref::<Ctx>()
@@ -584,7 +588,7 @@ pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) 
         let fast_budget = budget.clone();
         let stale = ctx.stale_sources.clone();
         {
-            let mut current = lock(&budget);
+            let mut current = budget.borrow_mut();
             if current.blizzard_bootstrap {
                 current.used = current.used.saturating_add(u64::from(HOOK_INTERVAL));
             }
@@ -598,7 +602,7 @@ pub(crate) fn target_thread(lua: &Lua, ctx: &Ctx, thread: Option<mlua::Thread>) 
         );
         crate::fast_hook::install(lua, fast_budget, 1, Some(thread));
     } else {
-        let interval = if lock(&budget).blizzard_bootstrap {
+        let interval = if budget.borrow_mut().blizzard_bootstrap {
             HOOK_INTERVAL
         } else {
             1
@@ -639,7 +643,7 @@ fn reject_stale_sources(
 /// Reset the budget for a new dispatch, restoring the normal hook interval
 /// if the previous dispatch exhausted it.
 fn reset_budget(lua: &Lua, ctx: &Ctx) {
-    let mut b = lock(&ctx.budget);
+    let mut b = ctx.budget.borrow_mut();
     b.used = 0;
     b.callbacks = 0;
     b.pending_tasks = 0;
@@ -670,14 +674,14 @@ pub(crate) fn scheduler_dispatch<R>(
     ctx: &Ctx,
     call: impl FnOnce() -> mlua::Result<R>,
 ) -> mlua::Result<R> {
-    let limit = lock(&ctx.budget).limit;
+    let limit = ctx.budget.borrow_mut().limit;
     let previous = lua.remove_app_data::<CallbackInstructions>();
     lua.set_app_data(CallbackInstructions { limit, used: 0 });
-    lock(&ctx.budget).limit = DEFAULT_BUDGET;
+    ctx.budget.borrow_mut().limit = DEFAULT_BUDGET;
     let result = dispatch(lua, ctx, call);
     let instructions = lua.remove_app_data::<CallbackInstructions>().unwrap();
     {
-        let mut b = lock(&ctx.budget);
+        let mut b = ctx.budget.borrow_mut();
         b.limit = limit;
         b.used = instructions.used;
     }
@@ -695,7 +699,7 @@ pub(crate) fn callback_dispatch<R>(
         return call();
     };
     let (limit, used) = {
-        let mut b = lock(&ctx.budget);
+        let mut b = ctx.budget.borrow_mut();
         let saved = (b.limit, b.used);
         b.limit = instructions.limit;
         b.used = instructions.used;
@@ -704,7 +708,7 @@ pub(crate) fn callback_dispatch<R>(
     let result = call();
     flush(lua, ctx);
     let callback_used = {
-        let mut b = lock(&ctx.budget);
+        let mut b = ctx.budget.borrow_mut();
         let callback_used = b.used;
         b.limit = limit;
         b.used = used;
@@ -825,9 +829,9 @@ pub(crate) fn install_secure_range(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
             }
             return Ok(());
         }
-        struct Restore {budget:Shared<Budget>,depth:usize}
-        impl Drop for Restore {fn drop(&mut self){lock(&self.budget).callback_depth=self.depth;}}
-        let _restore=Restore{budget:ctx.budget.clone(),depth:lock(&ctx.budget).callback_depth};
+        struct Restore {budget:SharedBudget,depth:usize}
+        impl Drop for Restore {fn drop(&mut self){self.budget.borrow_mut().callback_depth=self.depth;}}
+        let _restore=Restore{budget:ctx.budget.clone(),depth:ctx.budget.borrow_mut().callback_depth};
         let mut args=extra;
         args.push_front(mlua::Value::Function(callback));args.push_front(mlua::Value::Table(values));
         args.push_front(mlua::Value::Function(lua.registry_value::<mlua::Function>(&report)?));
@@ -945,7 +949,7 @@ pub(crate) fn begin_callback(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
         10_000
     };
     let (reason, new_failure) = {
-        let mut b = lock(&ctx.budget);
+        let mut b = ctx.budget.borrow_mut();
         let reason = if b.exhausted {
             Some(b.failure.unwrap_or(BUDGET_ERROR))
         } else if b.callbacks >= callback_limit {
@@ -977,7 +981,7 @@ pub(crate) fn begin_callback(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
     Ok(())
 }
 pub(crate) fn end_callback(ctx: &Ctx) {
-    let mut b = lock(&ctx.budget);
+    let mut b = ctx.budget.borrow_mut();
     b.callback_depth = b.callback_depth.saturating_sub(1);
 }
 struct CallbackGuard<'a>(&'a Ctx);
@@ -1007,7 +1011,7 @@ pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
 /// API transitions wait only until arena borrows are released. They do not
 /// drain deferred host work or reset the outer dispatch's shared budgets.
 pub(crate) fn check_budget(ctx: &Ctx) -> mlua::Result<()> {
-    let b = lock(&ctx.budget);
+    let b = ctx.budget.borrow_mut();
     if b.exhausted {
         Err(mlua::Error::runtime(b.failure.unwrap_or(BUDGET_ERROR)))
     } else {
@@ -1025,7 +1029,7 @@ pub(crate) fn flush_scripts(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
             return Ok(());
         }
         if let Err(error) = flush_queue(lua, ctx, &shared(pending))
-            && (!*lock(&ctx.tolerant_ui) || lock(&ctx.budget).exhausted)
+            && (!*lock(&ctx.tolerant_ui) || ctx.budget.borrow_mut().exhausted)
         {
             return Err(error);
         }
@@ -1038,7 +1042,7 @@ fn flush_queue(lua: &Lua, ctx: &Ctx, queue: &Shared<VecDeque<Pending>>) -> mlua:
             break;
         };
         let stop = {
-            let mut b = lock(&ctx.budget);
+            let mut b = ctx.budget.borrow_mut();
             b.pending_tasks += 1;
             if b.pending_tasks > 10_000 {
                 b.exhausted = true;
@@ -1134,7 +1138,7 @@ mod tests {
             .unwrap_err();
             assert!(error.to_string().contains(BUDGET_ERROR));
         }
-        assert!(!lock(&ctx.budget).blizzard_bootstrap);
+        assert!(!ctx.budget.borrow_mut().blizzard_bootstrap);
         dispatch(&lua, &ctx, || lua.load("return 42").exec()).unwrap();
     }
 

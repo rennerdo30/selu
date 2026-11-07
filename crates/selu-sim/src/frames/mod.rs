@@ -172,6 +172,22 @@ mod tests {
         sim.eval("local f=CreateFrame('FRAME'); assert(f:GetObjectType()=='Frame'); f:SetForbidden(); local n=0; f:SetScript('OnAttributeChanged',function(self,name,value) assert(name=='demo' and value==7); n=n+1 end); f:SetAttribute('demo',7); f:SetAttribute('demo',7); assert(f:GetAttribute('demo')==7 and n==2)").unwrap();
     }
     #[test]
+    fn moving_follows_each_pointer_update_before_release() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("local f=CreateFrame('Frame','LiveMove');f:SetSize(60,40);f:SetPoint('BOTTOMLEFT',100,100);f:SetMovable(true);f:EnableMouse(true);f:RegisterForDrag('LeftButton');f:SetScript('OnDragStart',function(self) self:StartMoving() end);f:SetScript('OnDragStop',function(self) self:StopMovingOrSizing() end)").unwrap();
+        sim.mouse_down(120., 120., "LeftButton").unwrap();
+        sim.hover(130., 125.).unwrap();
+        sim.eval("assert(LiveMove:GetLeft()==110 and LiveMove:GetBottom()==105)")
+            .unwrap();
+        sim.hover(150., 145.).unwrap();
+        sim.eval("assert(LiveMove:GetLeft()==130 and LiveMove:GetBottom()==125)")
+            .unwrap();
+        sim.mouse_up(150., 145., "LeftButton").unwrap();
+        sim.hover(180., 190.).unwrap();
+        sim.eval("assert(LiveMove:GetLeft()==130 and LiveMove:GetBottom()==125)")
+            .unwrap();
+    }
+    #[test]
     fn native_geometry_coerces_xml_numeric_strings() {
         let sim = crate::Sim::new().unwrap();
         // Blizzard_ClassNameplateBar.xml:19 omits KeyValue type, so scale

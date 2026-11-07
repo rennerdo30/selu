@@ -203,6 +203,10 @@ function GetChatWindowSavedPosition() return nil end
 function GetChatWindowSavedDimensions() return nil end
 -- UpdateLayoutInfo prepends Blizzard's own preset layouts to this empty
 -- saved list. activeLayout is a Lua array index, not the zero-based preset enum.
+-- No native navigation frame exists without a simulated navigation target.
+-- SuperTrackedFrame.lua InitializeNavigationFrame explicitly tests for nil.
+C_Navigation=C_Navigation or {}
+function C_Navigation.GetFrame() return nil end
 C_EditMode=C_EditMode or {}
 function C_EditMode.GetLayouts() return {activeLayout=1,layouts={}} end
 function C_EditMode.GetAccountSettings()

@@ -6,8 +6,9 @@ local function note(s)
     if not warned[s] then warned[s]=true; print('not simulated: XML '..s) end
 end
 local parsedNames={}
+local emptyNames={}
 local function names(s)
-    s=s or ''
+    if not s or s=='' then return emptyNames end
     if parsedNames[s] then return parsedNames[s] end
     local t={}; for name in string.gmatch(s or '', '[^,%s]+') do t[#t+1]=name end
     parsedNames[s]=t
@@ -15,6 +16,7 @@ local function names(s)
 end
 local function lookup(s)
     if not s or s=='' then return nil end
+    if not string.find(s,'.',1,true) then return _G[s] end
     local v=_G
     for key in string.gmatch(s or '', '[^.]+') do
         if type(v)~='table' then return nil end
@@ -63,6 +65,7 @@ local function invoke(fn,...)
     return fn(...)
 end
 local function nativeKind(kind)
+    if not intrinsic[kind] then return kind end
     local seen={}
     while intrinsic[kind] do
         assert(not seen[kind],'XML intrinsic inheritance cycle: '..kind)
@@ -72,6 +75,7 @@ local function nativeKind(kind)
 end
 local function parentAttribute(node,seen)
     if inheritedParents[node]~=nil then return inheritedParents[node] or nil end
+    seen=seen or {}
     assert(not seen[node],'XML template inheritance cycle')
     seen[node]=true
     local parent
@@ -228,18 +232,126 @@ local function animationGroup(frame,node)
         end
     end
 end
+local childHandlers={}
+childHandlers['Size']=function(f,c,n,seen)
+    local b=c.a
+    local d=dimension(c).a; f:SetSize(tonumber(d.x) or 0,tonumber(d.y) or 0)
+end
+childHandlers['FontHeight']=function(f,c,n,seen)
+    local b=c.a
+    local d=dimension(c).a; local path,_,flags=f:GetFont()
+    f:SetFont(path,tonumber(d.val or d.value) or 12,flags)
+end
+childHandlers['Anchors']=function(f,c,n,seen)
+    local b=c.a
+    seen.anchors=true
+    for _,anchor in ipairs(c.children) do
+        local v=anchor.a; local x,y=tonumber(v.x) or 0,tonumber(v.y) or 0
+        for _,offset in ipairs(anchor.children) do
+            local d=dimension(offset).a; x=tonumber(d.x) or 0; y=tonumber(d.y) or 0
+        end
+        anchorPoint(f,v,x,y,true)
+    end
+end
+childHandlers['KeyValues']=function(f,c,n,seen)
+    local b=c.a
+    for _,kv in ipairs(c.children) do
+        local v=kv.a; local value=v.value
+        if v.type=='number' then value=tonumber(value)
+        elseif v.type=='boolean' then value=value=='true'
+        elseif v.type=='global' then value=lookup(value) end
+        local owner=f; local keys={}
+        for key in string.gmatch(v.key or '', '[^.]+') do keys[#keys+1]=key end
+        for i=1,#keys-1 do owner[keys[i]]=owner[keys[i]] or {}; owner=owner[keys[i]] end
+        if #keys>0 then owner[keys[#keys]]=value end
+    end
+end
+childHandlers['Mixins']=function(f,c,n,seen)
+    local b=c.a
+    for _,entry in ipairs(c.children) do
+        local mix=lookup(entry.a.key)
+        if type(mix)=='table' then for key,value in pairs(mix) do f[key]=value end
+        else note('mixin '..tostring(entry.a.key)) end
+        if entry.a.source=='secure' or entry.a.targetPartition or entry.a.inboundPartition then note('secure mixin partitions') end
+    end
+end
+childHandlers['Scripts']=function(f,c,n,seen)
+    local b=c.a
+ for _,s in ipairs(c.children) do script(f,s,n.a.intrinsic=='true' and n.a.name,seen) end
+end
+childHandlers['Animations']=function(f,c,n,seen)
+    local b=c.a
+    for _,group in ipairs(c.children) do
+        if group.tag=='AnimationGroup' then animationGroup(f,group)
+        else note('animation element '..group.tag) end
+    end
+end
+childHandlers['Frames']=function(f,c,n,seen)
+    local b=c.a
+    seen.children=seen.children or {}
+    for _,child in ipairs(c.children) do seen.children[#seen.children+1]={node=child} end
+end
+childHandlers['ScrollChild']=function(f,c,n,seen)
+    local b=c.a
+    seen.children=seen.children or {}
+    if c.children[1] then seen.children[#seen.children+1]={node=c.children[1],scroll=true} end
+end
+childHandlers['ButtonText']=function(f,c,n,seen)
+    local b=c.a
+ f:SetFontString(create(c,f))
+end
+childHandlers['NormalFont']=function(f,c,n,seen)
+    local b=c.a
+    local setter=f['Set'..c.tag..'Object']
+    if setter and b.style then setter(f,lookup(b.style)) end
+end
+childHandlers['HighlightFont']=childHandlers['NormalFont']
+childHandlers['DisabledFont']=childHandlers['NormalFont']
+childHandlers['Layers']=function(f,c,n,seen)
+    local b=c.a
+    for _,layer in ipairs(c.children) do
+        for _,child in ipairs(layer.children) do create(child,f,layer.a.level or 'ARTWORK',tonumber(layer.a.textureSubLevel)) end
+    end
+end
+childHandlers['Color']=function(f,c,n,seen)
+    local b=c.a
+    local r,g,bl,al=tonumber(b.r) or 1,tonumber(b.g) or 1,tonumber(b.b) or 1,tonumber(b.a) or 1
+    if n.tag=='FontString' or n.tag=='Font' then f:SetTextColor(r,g,bl,al) else f:SetVertexColor(r,g,bl,al) end
+end
+childHandlers['TexCoords']=function(f,c,n,seen)
+    local b=c.a
+ f:SetTexCoord(tonumber(b.left) or 0,tonumber(b.right) or 1,tonumber(b.top) or 0,tonumber(b.bottom) or 1)
+end
+childHandlers['BarTexture']=function(f,c,n,seen)
+    local b=c.a
+ f:SetStatusBarTexture(create(c,f))
+end
+childHandlers['BarColor']=function(f,c,n,seen)
+    local b=c.a
+ f:SetStatusBarColor(tonumber(b.r) or 1,tonumber(b.g) or 1,tonumber(b.b) or 1,tonumber(b.a) or 1)
+end
+childHandlers['TextureSuffix']=function(f,c,n,seen)
+    local b=c.a
+    local texture=create(c,f)
+    local setter=f['Set'..c.tag]; if setter then setter(f,texture) end
+end
 apply=function(f,n,seen)
     if intrinsic[n.tag] then
         assert(not seen[n.tag],'XML intrinsic inheritance cycle: '..n.tag)
         seen[n.tag]=true; apply(f,templates[n.tag],seen); seen[n.tag]=nil
     end
-    inherit(f,n.a.inherits,seen)
-    for _,key in ipairs({'mixin','secureMixin'}) do
-        for _,name in ipairs(names(n.a[key])) do
+    if n.a.inherits then inherit(f,n.a.inherits,seen) end
+    local mixins=n.mixins
+    if not mixins then
+        mixins={}
+        for _,name in ipairs(names(n.a.mixin)) do mixins[#mixins+1]=name end
+        for _,name in ipairs(names(n.a.secureMixin)) do mixins[#mixins+1]=name end
+        n.mixins=mixins
+    end
+    for _,name in ipairs(mixins) do
             local mix=lookup(name)
             if type(mix)=='table' then for k,v in pairs(mix) do f[k]=v end
             else note('mixin '..name) end
-        end
     end
     local a=n.a
     if a.parentKey or a.parentArray then
@@ -285,68 +397,9 @@ apply=function(f,n,seen)
     if a.file then f:SetTexture(a.file) end
     if a.atlas then f:SetAtlas(a.atlas,a.useAtlasSize=='true') end
     for _,c in ipairs(n.children) do
-        local b=c.a
-        if c.tag=='Size' then
-            local d=dimension(c).a; f:SetSize(tonumber(d.x) or 0,tonumber(d.y) or 0)
-        elseif c.tag=='FontHeight' then
-            local d=dimension(c).a; local path,_,flags=f:GetFont()
-            f:SetFont(path,tonumber(d.val or d.value) or 12,flags)
-        elseif c.tag=='Anchors' then
-            seen.anchors=true
-            for _,anchor in ipairs(c.children) do
-                local v=anchor.a; local x,y=tonumber(v.x) or 0,tonumber(v.y) or 0
-                for _,offset in ipairs(anchor.children) do
-                    local d=dimension(offset).a; x=tonumber(d.x) or 0; y=tonumber(d.y) or 0
-                end
-                anchorPoint(f,v,x,y,true)
-            end
-        elseif c.tag=='KeyValues' then
-            for _,kv in ipairs(c.children) do
-                local v=kv.a; local value=v.value
-                if v.type=='number' then value=tonumber(value)
-                elseif v.type=='boolean' then value=value=='true'
-                elseif v.type=='global' then value=lookup(value) end
-                local owner=f; local keys={}
-                for key in string.gmatch(v.key or '', '[^.]+') do keys[#keys+1]=key end
-                for i=1,#keys-1 do owner[keys[i]]=owner[keys[i]] or {}; owner=owner[keys[i]] end
-                if #keys>0 then owner[keys[#keys]]=value end
-            end
-        elseif c.tag=='Mixins' then
-            for _,entry in ipairs(c.children) do
-                local mix=lookup(entry.a.key)
-                if type(mix)=='table' then for key,value in pairs(mix) do f[key]=value end
-                else note('mixin '..tostring(entry.a.key)) end
-                if entry.a.source=='secure' or entry.a.targetPartition or entry.a.inboundPartition then note('secure mixin partitions') end
-            end
-        elseif c.tag=='Scripts' then for _,s in ipairs(c.children) do script(f,s,n.a.intrinsic=='true' and n.a.name,seen) end
-        elseif c.tag=='Animations' then
-            for _,group in ipairs(c.children) do
-                if group.tag=='AnimationGroup' then animationGroup(f,group)
-                else note('animation element '..group.tag) end
-            end
-        elseif c.tag=='Frames' then
-            seen.children=seen.children or {}
-            for _,child in ipairs(c.children) do seen.children[#seen.children+1]={node=child} end
-        elseif c.tag=='ScrollChild' then
-            seen.children=seen.children or {}
-            if c.children[1] then seen.children[#seen.children+1]={node=c.children[1],scroll=true} end
-        elseif c.tag=='ButtonText' then f:SetFontString(create(c,f))
-        elseif c.tag=='NormalFont' or c.tag=='HighlightFont' or c.tag=='DisabledFont' then
-            local setter=f['Set'..c.tag..'Object']
-            if setter and b.style then setter(f,lookup(b.style)) end
-        elseif c.tag=='Layers' then
-            for _,layer in ipairs(c.children) do
-                for _,child in ipairs(layer.children) do create(child,f,layer.a.level or 'ARTWORK',tonumber(layer.a.textureSubLevel)) end
-            end
-        elseif c.tag=='Color' then
-            local r,g,bl,al=tonumber(b.r) or 1,tonumber(b.g) or 1,tonumber(b.b) or 1,tonumber(b.a) or 1
-            if n.tag=='FontString' or n.tag=='Font' then f:SetTextColor(r,g,bl,al) else f:SetVertexColor(r,g,bl,al) end
-        elseif c.tag=='TexCoords' then f:SetTexCoord(tonumber(b.left) or 0,tonumber(b.right) or 1,tonumber(b.top) or 0,tonumber(b.bottom) or 1)
-        elseif c.tag=='BarTexture' then f:SetStatusBarTexture(create(c,f))
-        elseif c.tag=='BarColor' then f:SetStatusBarColor(tonumber(b.r) or 1,tonumber(b.g) or 1,tonumber(b.b) or 1,tonumber(b.a) or 1)
-        elseif string.match(c.tag,'Texture$') then
-            local texture=create(c,f)
-            local setter=f['Set'..c.tag]; if setter then setter(f,texture) end
+        local handler=childHandlers[c.tag]
+        if handler then handler(f,c,n,seen)
+        elseif string.match(c.tag,'Texture$') then childHandlers.TextureSuffix(f,c,n,seen)
         else note('element '..c.tag) end
     end
 end
@@ -378,7 +431,7 @@ end
 local native=CreateFrame
 create=function(n,parent,layer,subLevel)
     local a=n.a
-    parent=lookup(expand(parentAttribute(n,{}),parent)) or parent
+    parent=lookup(expand(parentAttribute(n),parent)) or parent
     local name=expand(a.name,parent)
     local f
     if n.tag=='MaskTexture' then f=parent:CreateMaskTexture(name,layer)

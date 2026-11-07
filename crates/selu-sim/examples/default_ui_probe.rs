@@ -14,6 +14,64 @@ fn painted(r: &selu_sim::RegionSnapshot) -> bool {
                 })))
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|s| s == "--micro-art") {
+        let storage = selu_gamedata::Storage::open(
+            std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),
+            "wowf",
+            None,
+        )?;
+        let ab = storage.read(897470)?;
+        let mb = storage.read(897532)?;
+        let eb = storage.read(1989276)?;
+        let a = selu_gamedata::db2::Table::parse(&ab)?;
+        let m = selu_gamedata::db2::Table::parse(&mb)?;
+        let e = selu_gamedata::db2::Table::parse(&eb)?;
+        let mut files = std::collections::HashMap::<u32, String>::new();
+        for row in 0..e.count() {
+            let name = e.text(row, 0)?;
+            if !name.starts_with("UI-HUD-MicroMenu-") {
+                continue;
+            }
+            let id = e.value(row, 1)?;
+            for member in 0..m.count() {
+                if m.value(member, 9)? != id {
+                    continue;
+                }
+                for sheet in 0..a.count() {
+                    if a.value(sheet, 0)? != m.value(member, 2)? {
+                        continue;
+                    }
+                    let file = a.value(sheet, 1)?;
+                    let info = files.entry(file).or_insert_with(|| {
+                        match storage
+                            .read(file)
+                            .and_then(|b| selu_gamedata::blp::decode(&b).map_err(Into::into))
+                        {
+                            Ok(image) => format!("installed {}x{}", image.width(), image.height()),
+                            Err(error) => format!("missing {error}"),
+                        }
+                    });
+                    println!(
+                        "MICRO_ART {name} member={} sheet={} set={} file={file} bounds={},{},{},{} declared={}x{} {info}",
+                        m.id(member)?,
+                        a.value(sheet, 0)?,
+                        a.value(sheet, 2)?,
+                        m.value(member, 5)?,
+                        m.value(member, 6)?,
+                        m.value(member, 7)?,
+                        m.value(member, 8)?,
+                        a.value(sheet, 3)?,
+                        a.value(sheet, 4)?
+                    );
+                }
+            }
+            println!(
+                "MICRO_SELECTED {name} {:?}",
+                storage.atlas(name).map(|a| a.file_data_id)
+            );
+        }
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "--ui-data") {
         let storage = selu_gamedata::Storage::open(
             std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),

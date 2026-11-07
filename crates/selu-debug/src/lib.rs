@@ -234,6 +234,7 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
                         });
                     })
                     .map(|report| {
+                        let _profile = selu_sim::profile::Span::new("studio.load_receipt");
                         let mut lines = vec![format!(
                             "Default UI: {} addons, {} errors, {:.2}s",
                             report.addons_loaded,
@@ -253,9 +254,10 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
                         let logs = session.logs();
                         lines.extend(logs.iter().filter(|s| !reported.contains(*s)).cloned());
                         logs_seen = logs.len();
-                        for line in &lines {
-                            eprintln!("{line}");
-                        }
+                        // Thousands of diagnostics otherwise make thousands of
+                        // unbuffered writes before login can continue. Preserve
+                        // every line in both the receipt and the UI update.
+                        eprintln!("{}", lines.join("\n"));
                         let _ = outbox.send(Update::Logs { lines });
                         None
                     })
@@ -353,6 +355,7 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
                 .map_err(|e| e.to_string()),
             Command::Shutdown => unreachable!(),
         };
+        let _observation = selu_sim::profile::Span::new("studio.command_observation");
         if session.generation() != before {
             // A new VM starts its buffers from zero.
             (prints_seen, logs_seen, trace_seen) = (0, 0, 0);

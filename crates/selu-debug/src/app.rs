@@ -186,6 +186,148 @@ type ShotResult = Result<PathBuf, String>;
 const TRACE_KEEP: usize = 2_000;
 const CONSOLE_KEEP: usize = 5_000;
 
+#[derive(Default)]
+struct PreviewInputState {
+    pointer: Option<(f64, f64)>,
+    drag_start: Option<(f64, f64)>,
+    modifiers: Modifiers,
+}
+fn preview_events(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    origin: Pos2,
+    scale: f32,
+    uh: f32,
+    in_flight: usize,
+    state: &mut PreviewInputState,
+) -> Vec<PreviewInput> {
+    let convert = |p: Pos2| {
+        (
+            ((p.x - origin.x) / scale) as f64,
+            (uh - (p.y - origin.y) / scale) as f64,
+        )
+    };
+    let mut events = Vec::new();
+    // Geometry alone also contains clicks belonging to overlaid Studio widgets.
+    // egui's response ownership respects occlusion and the active drag.
+    let owns_pointer = response.hovered() || response.dragged();
+    if response.hovered() && ui.input(|i| i.pointer.primary_pressed()) {
+        response.request_focus();
+        state.drag_start = ui.input(|i| i.pointer.interact_pos()).map(|p| {
+            (
+                ((p.x - origin.x) / scale) as f64,
+                (uh - (p.y - origin.y) / scale) as f64,
+            )
+        });
+    }
+    let focused = response.has_focus();
+    let modifiers = if focused {
+        ui.input(|i| i.modifiers)
+    } else {
+        Modifiers::NONE
+    };
+    for (key, was, now) in [
+        ("LSHIFT", state.modifiers.shift, modifiers.shift),
+        ("LCTRL", state.modifiers.ctrl, modifiers.ctrl),
+        ("LALT", state.modifiers.alt, modifiers.alt),
+    ] {
+        if was != now {
+            events.push(PreviewInput::Key {
+                key: key.into(),
+                down: now,
+            });
+        }
+    }
+    state.modifiers = modifiers;
+
+    for event in ui.input(|i| i.events.clone()) {
+        match event {
+            egui::Event::PointerMoved(pos) => {
+                let pointer = ((owns_pointer && response.rect.contains(pos))
+                    || state.drag_start.is_some())
+                .then(|| convert(pos));
+                if (in_flight == 0 || state.drag_start.is_some()) && pointer != state.pointer {
+                    let (x, y) = pointer.unwrap_or((-1., -1.));
+                    events.push(PreviewInput::Hover { x, y });
+                    state.pointer = pointer;
+                }
+            }
+            egui::Event::PointerGone if state.pointer.is_some() && state.drag_start.is_none() => {
+                events.push(PreviewInput::Hover { x: -1., y: -1. });
+                state.pointer = None;
+            }
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                ..
+            } if (pressed && owns_pointer && response.rect.contains(pos))
+                || (!pressed && focused) =>
+            {
+                let name = match button {
+                    egui::PointerButton::Primary => "LeftButton",
+                    egui::PointerButton::Secondary => "RightButton",
+                    egui::PointerButton::Middle => "MiddleButton",
+                    _ => continue,
+                };
+                let (x, y) = convert(pos);
+                events.push(PreviewInput::MouseButton {
+                    x,
+                    y,
+                    button: name.into(),
+                    down: pressed,
+                });
+                state.pointer = Some((x, y));
+                if button == egui::PointerButton::Primary {
+                    state.drag_start = pressed.then_some((x, y));
+                }
+            }
+            egui::Event::MouseWheel { delta, .. } if response.hovered() && delta.y != 0. => {
+                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                    let (x, y) = convert(pos);
+                    events.push(PreviewInput::Wheel {
+                        x,
+                        y,
+                        delta: f64::from(delta.y.signum()),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    // Deliver the newest skipped hover once the worker catches up.
+    if in_flight == 0
+        && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+    {
+        let pointer = ((owns_pointer && response.rect.contains(pos)) || state.drag_start.is_some())
+            .then(|| convert(pos));
+        if pointer != state.pointer {
+            let (x, y) = pointer.unwrap_or((-1., -1.));
+            events.push(PreviewInput::Hover { x, y });
+            state.pointer = pointer;
+        }
+    }
+    if focused {
+        for event in ui.input(|i| i.events.clone()) {
+            match event {
+                egui::Event::Text(text) => events.push(PreviewInput::Text(text)),
+                egui::Event::Key { key, pressed, .. } => events.push(PreviewInput::Key {
+                    key: match key {
+                        Key::ArrowUp => "UP".into(),
+                        Key::ArrowDown => "DOWN".into(),
+                        Key::ArrowLeft => "LEFT".into(),
+                        Key::ArrowRight => "RIGHT".into(),
+                        _ => format!("{key:?}").to_ascii_uppercase(),
+                    },
+                    down: pressed,
+                }),
+                _ => {}
+            }
+        }
+    }
+    events
+}
+
 pub struct Studio {
     opts: Options,
     worker: Worker,
@@ -195,9 +337,7 @@ pub struct Studio {
     console: VecDeque<Line>,
     trace: VecDeque<TraceRecord>,
     selected: Option<u32>,
-    preview_pointer: Option<(f64, f64)>,
-    preview_drag_start: Option<(f64, f64)>,
-    preview_modifiers: Modifiers,
+    preview_input: PreviewInputState,
     input: String,
     history: Vec<String>,
     history_pos: Option<usize>,
@@ -307,9 +447,7 @@ impl Studio {
             console: VecDeque::new(),
             trace: VecDeque::new(),
             selected: None,
-            preview_pointer: None,
-            preview_drag_start: None,
-            preview_modifiers: Modifiers::NONE,
+            preview_input: PreviewInputState::default(),
             input: String::new(),
             history: Vec::new(),
             history_pos: None,
@@ -3271,111 +3409,15 @@ impl Studio {
         if response.clicked() {
             self.selected = response.interact_pointer_pos().and_then(hit);
         }
-        let position = ui.input(|i| i.pointer.interact_pos()).map(|p| {
-            (
-                ((p.x - origin.x) / scale) as f64,
-                (uh - (p.y - origin.y) / scale) as f64,
-            )
-        });
-        let pointer = position.filter(|_| response.hovered());
-        let mut events = Vec::new();
-        // Coalesce hover while the worker is busy; button/key transitions are
-        // retained. One batch produces one snapshot, without a mouse backlog.
-        if self.in_flight == 0 && pointer != self.preview_pointer {
-            let (x, y) = pointer.unwrap_or((-1., -1.));
-            events.push(PreviewInput::Hover { x, y });
-            self.preview_pointer = pointer;
-        }
-        if response.hovered() && ui.input(|i| i.pointer.primary_pressed()) {
-            response.request_focus();
-            self.preview_drag_start = position;
-        }
-        let focused = response.has_focus();
-        let modifiers = if focused {
-            ui.input(|i| i.modifiers)
-        } else {
-            Modifiers::NONE
-        };
-        for (key, was, now) in [
-            ("LSHIFT", self.preview_modifiers.shift, modifiers.shift),
-            ("LCTRL", self.preview_modifiers.ctrl, modifiers.ctrl),
-            ("LALT", self.preview_modifiers.alt, modifiers.alt),
-        ] {
-            if was != now {
-                events.push(PreviewInput::Key {
-                    key: key.into(),
-                    down: now,
-                });
-            }
-        }
-        self.preview_modifiers = modifiers;
-        if let Some((x, y)) = position {
-            for (button, name) in [
-                (egui::PointerButton::Primary, "LeftButton"),
-                (egui::PointerButton::Secondary, "RightButton"),
-                (egui::PointerButton::Middle, "MiddleButton"),
-            ] {
-                if response.hovered() && ui.input(|i| i.pointer.button_pressed(button)) {
-                    events.push(PreviewInput::MouseButton {
-                        x,
-                        y,
-                        button: name.into(),
-                        down: true,
-                    });
-                }
-                if focused && ui.input(|i| i.pointer.button_released(button)) {
-                    if button == egui::PointerButton::Primary
-                        && response.drag_stopped()
-                        && let Some(from) = self.preview_drag_start.take()
-                    {
-                        events.push(PreviewInput::Drag { from, to: (x, y) });
-                    }
-                    events.push(PreviewInput::MouseButton {
-                        x,
-                        y,
-                        button: name.into(),
-                        down: false,
-                    });
-                    self.preview_drag_start = None;
-                }
-            }
-            if response.hovered() {
-                let delta = ui.input(|i| {
-                    i.events
-                        .iter()
-                        .filter_map(|event| match event {
-                            egui::Event::MouseWheel { delta, .. } => Some(delta.y),
-                            _ => None,
-                        })
-                        .sum::<f32>()
-                });
-                if delta != 0. {
-                    events.push(PreviewInput::Wheel {
-                        x,
-                        y,
-                        delta: f64::from(delta.signum()),
-                    });
-                }
-            }
-        }
-        if focused {
-            for event in ui.input(|i| i.events.clone()) {
-                match event {
-                    egui::Event::Text(text) => events.push(PreviewInput::Text(text)),
-                    egui::Event::Key { key, pressed, .. } => events.push(PreviewInput::Key {
-                        key: match key {
-                            Key::ArrowUp => "UP".into(),
-                            Key::ArrowDown => "DOWN".into(),
-                            Key::ArrowLeft => "LEFT".into(),
-                            Key::ArrowRight => "RIGHT".into(),
-                            _ => format!("{key:?}").to_ascii_uppercase(),
-                        },
-                        down: pressed,
-                    }),
-                    _ => {}
-                }
-            }
-        }
+        let events = preview_events(
+            ui,
+            &response,
+            origin,
+            scale,
+            uh,
+            self.in_flight,
+            &mut self.preview_input,
+        );
         if !events.is_empty() {
             self.act(Command::Input { events });
         }
@@ -3926,6 +3968,201 @@ impl Studio {
 mod tests {
     use super::*;
     use selu_sim::RegionId;
+
+    #[test]
+    fn preview_only_forwards_input_when_it_owns_the_pointer() {
+        let ctx = egui::Context::default();
+        let mut state = PreviewInputState::default();
+        let mut events = Vec::new();
+        let pointer = Pos2::new(100., 100.);
+        for raw in [
+            vec![egui::Event::PointerMoved(pointer)],
+            vec![egui::Event::PointerButton {
+                pos: pointer,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(ERect::from_min_size(Pos2::ZERO, Vec2::new(400., 300.))),
+                    events: raw,
+                    ..Default::default()
+                },
+                |root| {
+                    root.add_enabled_ui(false, |ui| {
+                        let response = ui.allocate_rect(
+                            ERect::from_min_size(Pos2::ZERO, Vec2::new(400., 300.)),
+                            Sense::click_and_drag(),
+                        );
+                        events.extend(preview_events(
+                            ui,
+                            &response,
+                            Pos2::ZERO,
+                            1.,
+                            300.,
+                            0,
+                            &mut state,
+                        ));
+                    });
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                PreviewInput::MouseButton { .. } | PreviewInput::Hover { x: 0.0.., .. }
+            )),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires read-only matching client and UI sources"]
+    fn client_preview_routes_pointer_phases_hover_wheel_and_live_drag() {
+        let worker = Worker::spawn(selu_sim::SessionConfig {
+            target: Some("wowf@1.60.1.70790".into()),
+            client_install: Some(
+                std::env::var_os("SELU_CLIENT_INSTALL")
+                    .expect("client install")
+                    .into(),
+            ),
+            ..Default::default()
+        });
+        let call = |command| {
+            let updates = worker.call(command);
+            assert!(
+                !updates.iter().any(|u| matches!(u, Update::Error { .. })),
+                "{updates:?}"
+            );
+            updates
+        };
+        call(Command::LoadDefaultUi {
+            source: std::env::var_os("SELU_DEFAULT_UI_SOURCE")
+                .expect("UI source")
+                .into(),
+        });
+        call(Command::Login);
+        let snapshot = || {
+            call(Command::Snapshot)
+                .into_iter()
+                .find_map(|u| {
+                    if let Update::Snapshot { snapshot } = u {
+                        Some(*snapshot)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap()
+        };
+        let center = |name: &str| {
+            let s = snapshot();
+            let r = s
+                .regions
+                .iter()
+                .find(|r| r.name.as_deref() == Some(name))
+                .unwrap();
+            assert!(r.visible);
+            let q = r.rect.unwrap();
+            Pos2::new(
+                40. + (q.left + q.width / 2.) as f32 * 0.5,
+                60. + (1080. - q.bottom - q.height / 2.) as f32 * 0.5,
+            )
+        };
+        let ctx = egui::Context::default();
+        let mut state = PreviewInputState::default();
+        let mut frame = |events: Vec<egui::Event>| {
+            let mut result = Vec::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(ERect::from_min_size(Pos2::ZERO, Vec2::new(1100., 700.))),
+                    events,
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(root, |ui| {
+                            let response = ui.allocate_rect(
+                                ERect::from_min_size(Pos2::new(40., 60.), Vec2::new(960., 540.)),
+                                Sense::click_and_drag(),
+                            );
+                            result = preview_events(
+                                ui,
+                                &response,
+                                response.rect.min,
+                                0.5,
+                                1080.,
+                                0,
+                                &mut state,
+                            );
+                        });
+                },
+            );
+            output.textures_delta.clear();
+            call(Command::Input { events: result });
+        };
+        frame(vec![]);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let bag = center("MainMenuBarBackpackButton");
+        frame(vec![egui::Event::PointerMoved(bag), button(bag, true)]);
+        frame(vec![button(bag, false)]);
+        assert!(
+            snapshot()
+                .regions
+                .iter()
+                .any(|r| r.name.as_deref() == Some("ContainerFrame1") && r.visible)
+        );
+        let micro = center("CharacterMicroButton");
+        frame(vec![egui::Event::PointerMoved(micro)]);
+        call(Command::Eval {
+            code:
+                "assert(GameTooltip:IsVisible() and GameTooltip:GetOwner()==CharacterMicroButton)"
+                    .into(),
+        });
+        call(Command::Eval{code:"CloseAllBags();for i=1,40 do print('studio scroll '..i) end;ChatFrame1:ScrollToBottom()".into()});
+        let chat = center("ChatFrame1");
+        frame(vec![
+            egui::Event::PointerMoved(chat),
+            egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0., 1.),
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        call(Command::Eval{code:"assert(ChatFrame1:GetScrollOffset()>0);local f=CreateFrame('Frame','StudioLiveDrag');f:SetSize(60,40);f:SetPoint('BOTTOMLEFT',900,700);f:EnableMouse(true);f:SetMovable(true);f:RegisterForDrag('LeftButton');f:SetScript('OnDragStart',function(self)self:StartMoving()end);f:SetScript('OnDragStop',function(self)self:StopMovingOrSizing()end)".into()});
+        let from = center("StudioLiveDrag");
+        frame(vec![egui::Event::PointerMoved(from), button(from, true)]);
+        let to = from + Vec2::new(10., -5.);
+        frame(vec![egui::Event::PointerMoved(to)]);
+        call(Command::Eval {
+            code: "assert(StudioLiveDrag:GetLeft()==920 and StudioLiveDrag:GetBottom()==710)"
+                .into(),
+        });
+        let end = from + Vec2::new(20., -15.);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        call(Command::Eval {
+            code: "assert(StudioLiveDrag:GetLeft()==940 and StudioLiveDrag:GetBottom()==730)"
+                .into(),
+        });
+        frame(vec![
+            button(end, false),
+            egui::Event::PointerMoved(Pos2::new(100., 100.)),
+        ]);
+        call(Command::Eval {
+            code: "assert(StudioLiveDrag:GetLeft()==940 and StudioLiveDrag:GetBottom()==730)"
+                .into(),
+        });
+    }
 
     #[test]
     fn saved_folder_choices_use_fixture_tree() {

@@ -676,12 +676,28 @@ The native count-hook fast path charges the same budget at the same quanta and
 delegates stale-source/budget faults to mlua's protected hook. XML runtime and
 inline script compilation are cached per VM/node, without caching player state.
 `SELU_SIM_PROFILE_LUA_SAMPLES=1` adds development-only instruction samples;
-these are not wall-time samples.
+these are not wall-time samples. Template child handlers dispatch by tag; parsed
+mixin-name lists and empty names are reused while mixin tables remain dynamic.
+The count-hook caches the current native state pointer without changing budget
+quanta or fault handling; destruction invalidates that pointer. The instruction
+counter uses a checked RefCell on the already thread-confined VM; borrow guards
+are released before entering Lua. Studio writes the load receipt to stderr in
+one batch while keeping every diagnostic in the UI. Separate development timers
+cover addon loading, receipt construction/output and command observation. On
+Windows the profile also reports worker scheduled CPU time since the first span,
+separately from exclusive wall times. This does not identify the cause of any
+wall-time variation.
 
 Preview input is batched onto the worker: hover/leave, mouse phases, wheel,
 keyboard/text and modifiers use native widget state and Blizzard handlers.
-XML script autoEnableInput follows the schema default. Dragging commits movement
-on release; continuous drag preview and full text-editing keys remain incomplete.
+XML script autoEnableInput follows the schema default. Pointer motion starts
+registered drags once, updates movable frames and sliders while held, and ends
+the drag on release. StartMoving follows cursor deltas until StopMovingOrSizing,
+with scale conversion and screen clamping. Preview raw pointer events preserve
+press/release order and use that same native path. Full text-editing keys remain
+incomplete. A client-backed Studio test feeds raw egui input through the shared
+preview adapter and worker to open bags, hover tooltips, scroll chat and move a
+frame before release.
 Container APIs read the same bag slots as Scenario. Item IDs currently receive
 explicitly synthetic names, count 1, quality 1 and generic question-mark art;
 item-data completion uses the normal event subscription dispatcher.
@@ -722,3 +738,13 @@ and names, and file:line parse errors appear below the controls. A malformed fil
 is skipped as a whole. Config.wtf and CVars are outside this feature. Logout and
 reload never write to the game install. Non-finite numbers are parsed but refused
 by the existing session saved-data validator.
+
+The read-only `default_ui_probe --micro-art` diagnostic reports every registered
+micro-menu atlas member, sheet/set/FileDataID, bounds, declared dimensions and
+installed decoded dimensions. In the tested build, 51 members use installed
+alternative sheet 8200846 (1024x512), while 17 named variants have only missing
+sheet 4708813; the generic missing-texture look remains for these. No runtime
+atlas-name or frame-name substitutions are made. Unpositioned quest-money,
+backpack currency and excluded Mainline micro-button helpers are retained until
+Blizzard anchors them. The empty navigation world returns no native navigation
+frame, allowing source scripts to hide the navigation decoration.

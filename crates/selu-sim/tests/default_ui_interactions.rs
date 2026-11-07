@@ -249,7 +249,14 @@ fn movable_addon_frame_drags_in_loaded_ui() {
     with_session(|s| {
         s.eval("local f=CreateFrame('Frame','InputDragProbe',UIParent);f:SetSize(60,40);f:SetPoint('CENTER');f:EnableMouse(true);f:SetMovable(true);f:RegisterForDrag('LeftButton');f:SetScript('OnDragStart',function(self) self:StartMoving() end);f:SetScript('OnDragStop',function(self) self:StopMovingOrSizing() end)").unwrap();
         let (x, y) = center(s, "InputDragProbe");
-        s.drag((x, y), (x + 37., y + 12.)).unwrap();
+        s.mouse_down(x, y, "LeftButton").unwrap();
+        s.hover(x + 10., y + 4.).unwrap();
+        let (mx, my) = center(s, "InputDragProbe");
+        assert!((mx - x - 10.).abs() < 0.001 && (my - y - 4.).abs() < 0.001);
+        s.hover(x + 37., y + 12.).unwrap();
+        let (mx, my) = center(s, "InputDragProbe");
+        assert!((mx - x - 37.).abs() < 0.001 && (my - y - 12.).abs() < 0.001);
+        s.mouse_up(x + 37., y + 12., "LeftButton").unwrap();
         let (nx, ny) = center(s, "InputDragProbe");
         assert!((nx - x - 37.).abs() < 0.001 && (ny - y - 12.).abs() < 0.001);
         s.eval("InputDragProbe:Hide()").unwrap();
@@ -276,5 +283,13 @@ fn scenario_items_reach_source_container_buttons() {
         scenario.apply(s.sim()).unwrap();
         click(s, "MainMenuBarBackpackButton");
         s.eval("assert(C_Container.GetContainerItemInfo(0,1).itemID==117);local count=0;for _,button in ContainerFrame1:EnumerateValidItems() do if button:GetBagID()==0 then local id=C_Container.GetContainerItemID(0,button:GetID());if id then assert(button.hasItem,'hasItem');assert(button.icon:GetTexture()~=nil,'icon texture');assert(button.icon:GetRect()~=nil,'icon rect');count=count+1 end end end;assert(count==2,'item count='..count..' size='..tostring(ContainerFrame1.size))").unwrap_or_else(|error|panic!("{error}; logs={:?}",s.logs().iter().rev().take(12).collect::<Vec<_>>()));
+    });
+}
+
+#[test]
+#[ignore = "requires read-only local game art and matching Blizzard UI sources"]
+fn active_micro_buttons_have_layout_and_absent_navigation_has_no_frame() {
+    with_session(|s| {
+        s.eval("assert(C_Navigation.GetFrame()==nil and not SuperTrackedFrame:IsShown());for _,info in ipairs(MicroMenu:GenerateButtonInfos()) do local button=info.button;if button and button:GetParent()==MicroMenu and button:IsVisible() then assert(button:GetRect(),button:GetName()) end end").unwrap();
     });
 }

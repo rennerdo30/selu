@@ -64,6 +64,7 @@ fn hit(sim: &Sim, x: f64, y: f64) -> Option<usize> {
 impl crate::session::Vm {
     pub fn hover(&self, x: f64, y: f64) -> SimResult<Option<RegionId>> {
         dispatch(self.lua(), self.ctx(), || {
+            self.move_pointer((x, y))?;
             let target = hit_motion(self, x, y, true, false);
             let a = store(self.lua());
             let mut a = a.borrow_mut();
@@ -112,7 +113,13 @@ impl crate::session::Vm {
             let a = store(self.lua());
             let target = if down {
                 let target = hit(self, x, y);
-                a.borrow_mut().capture = target;
+                {
+                    let mut a = a.borrow_mut();
+                    a.capture = target;
+                    a.press_origin = Some((x, y));
+                    a.pressed_button = Some(button.into());
+                    a.dragging = false;
+                }
                 target
             } else {
                 a.borrow().capture
@@ -140,12 +147,19 @@ impl crate::session::Vm {
                         vec![value.clone()],
                     )?;
                 }
+                if !down && a.borrow().dragging {
+                    invoke(self, i, "OnDragStop", vec![value.clone()])?;
+                }
                 let suffix = if down { "Down" } else { "Up" };
                 let registered = a.borrow().regions[i]
                     .click_buttons
                     .iter()
                     .any(|b| b == &format!("{button}{suffix}") || b == &format!("Any{suffix}"));
-                if eligible(self, i) && registered && (down || hit(self, x, y) == Some(i)) {
+                if !a.borrow().dragging
+                    && eligible(self, i)
+                    && registered
+                    && (down || hit(self, x, y) == Some(i))
+                {
                     {
                         let mut a = a.borrow_mut();
                         if a.regions[i].kind == "CheckButton" {
@@ -161,7 +175,11 @@ impl crate::session::Vm {
                 }
             }
             if !down {
-                a.borrow_mut().capture = None;
+                let mut a = a.borrow_mut();
+                a.capture = None;
+                a.press_origin = None;
+                a.pressed_button = None;
+                a.dragging = false;
             }
             Ok(target.map(|i| RegionId {
                 index: i as u32,
@@ -176,103 +194,113 @@ impl crate::session::Vm {
             Ok(target)
         })
     }
+    fn move_pointer(&self, to: (f64, f64)) -> SimResult<()> {
+        let a = store(self.lua());
+        let (from, target, button, start_drag) = {
+            let a = a.borrow();
+            let button = a.pressed_button.clone();
+            let start = a.capture.is_some_and(|i| {
+                !a.dragging
+                    && a.press_origin.is_some_and(|p| p != to)
+                    && button
+                        .as_ref()
+                        .is_some_and(|b| a.regions[i].drag_buttons.contains(b))
+            });
+            (a.cursor, a.capture, button, start)
+        };
+        if start_drag {
+            a.borrow_mut().dragging = true;
+            invoke(
+                self,
+                target.unwrap(),
+                "OnDragStart",
+                vec![Value::String(
+                    self.lua().create_string(button.as_deref().unwrap())?,
+                )],
+            )?;
+        }
+        // Moving follows the cursor until StopMovingOrSizing, independently of
+        // whether movement began in OnMouseDown or OnDragStart.
+        let moving = a.borrow().moving;
+        let i = target.or(moving);
+        if let Some(i) = i {
+            {
+                let mut a = a.borrow_mut();
+                a.cursor = to;
+                if let Some(moving) = a.moving.filter(|_| from != to) {
+                    let screen = a.regions[0].rect;
+                    let r = &mut a.regions[moving];
+                    let mut dx = to.0 - from.0;
+                    let mut dy = to.1 - from.1;
+                    if r.clamped
+                        && let (Some(q), Some(screen)) = (r.rect, screen)
+                    {
+                        dx = dx.clamp(
+                            screen.left - q.left,
+                            (screen.left + screen.width - q.left - q.width)
+                                .max(screen.left - q.left),
+                        );
+                        dy = dy.clamp(
+                            screen.bottom - q.bottom,
+                            (screen.bottom + screen.height - q.bottom - q.height)
+                                .max(screen.bottom - q.bottom),
+                        );
+                    }
+                    let scale = r.effective_scale;
+                    for point in &mut r.points {
+                        point.x += dx / scale;
+                        point.y += dy / scale;
+                    }
+                    a.dirty = true;
+                    a.dirty_regions.insert(moving);
+                }
+            }
+            if eligible(self, i) {
+                let value = {
+                    let arena = a.borrow();
+                    let r = &arena.regions[i];
+                    r.rect.filter(|_| r.kind == "Slider").map(|q| {
+                        let horizontal = r.orientation == "HORIZONTAL";
+                        let thumb = r.thumb.map(|t| &arena.regions[t]);
+                        let extent = thumb
+                            .map(|t| if horizontal { t.width } else { t.height })
+                            .unwrap_or(0.0)
+                            * r.effective_scale;
+                        let length = if horizontal { q.width } else { q.height };
+                        let position = if horizontal {
+                            to.0 - q.left
+                        } else {
+                            q.bottom + q.height - to.1
+                        };
+                        let fraction = if length > extent {
+                            ((position - extent / 2.0) / (length - extent)).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        let value = r.min + fraction * (r.max - r.min);
+                        if r.obey_step && r.step > 0.0 {
+                            ((value - r.min) / r.step + 0.5).floor() * r.step + r.min
+                        } else {
+                            value
+                        }
+                    })
+                };
+                if let Some(value) = value {
+                    let t = a.borrow().regions[i].table.get();
+                    let set: Function = t.get("SetValue")?;
+                    set.call::<()>((t, value, true))?;
+                }
+            }
+        } else {
+            a.borrow_mut().cursor = to;
+        }
+        Ok(())
+    }
     pub fn drag(&self, from: (f64, f64), to: (f64, f64)) -> SimResult<()> {
         dispatch(self.lua(), self.ctx(), || {
-            let a = store(self.lua());
-            a.borrow_mut().cursor = from;
-            let target = hit(self, from.0, from.1);
-            a.borrow_mut().capture = target;
-            let button = Value::String(self.lua().create_string("LeftButton")?);
-            if let Some(i) = target {
-                let registered = a.borrow().regions[i]
-                    .drag_buttons
-                    .iter()
-                    .any(|b| b == "LeftButton");
-                if registered {
-                    invoke(self, i, "OnDragStart", vec![button.clone()])?;
-                }
-                {
-                    let mut a = a.borrow_mut();
-                    a.cursor = to;
-                    if let Some(moving) = a.moving {
-                        let screen = a.regions[0].rect;
-                        let r = &mut a.regions[moving];
-                        let mut dx = to.0 - from.0;
-                        let mut dy = to.1 - from.1;
-                        if r.clamped
-                            && let (Some(q), Some(screen)) = (r.rect, screen)
-                        {
-                            dx = dx.clamp(
-                                screen.left - q.left,
-                                (screen.left + screen.width - q.left - q.width)
-                                    .max(screen.left - q.left),
-                            );
-                            dy = dy.clamp(
-                                screen.bottom - q.bottom,
-                                (screen.bottom + screen.height - q.bottom - q.height)
-                                    .max(screen.bottom - q.bottom),
-                            );
-                        }
-                        let scale = r.effective_scale;
-                        for point in &mut r.points {
-                            point.x += dx / scale;
-                            point.y += dy / scale;
-                        }
-                        a.dirty = true;
-                        a.full_layout = true;
-                    }
-                }
-                if eligible(self, i) {
-                    let value = {
-                        let arena = a.borrow();
-                        let r = &arena.regions[i];
-                        r.rect.filter(|_| r.kind == "Slider").map(|q| {
-                            let horizontal = r.orientation == "HORIZONTAL";
-                            let thumb = r.thumb.map(|t| &arena.regions[t]);
-                            let extent = thumb
-                                .map(|t| if horizontal { t.width } else { t.height })
-                                .unwrap_or(0.0)
-                                * r.effective_scale;
-                            let length = if horizontal { q.width } else { q.height };
-                            let position = if horizontal {
-                                to.0 - q.left
-                            } else {
-                                q.bottom + q.height - to.1
-                            };
-                            let fraction = if length > extent {
-                                ((position - extent / 2.0) / (length - extent)).clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            };
-                            let value = r.min + fraction * (r.max - r.min);
-                            if r.obey_step && r.step > 0.0 {
-                                ((value - r.min) / r.step + 0.5).floor() * r.step + r.min
-                            } else {
-                                value
-                            }
-                        })
-                    };
-                    if let Some(value) = value {
-                        let t = a.borrow().regions[i].table.get();
-                        let set: Function = t.get("SetValue")?;
-                        set.call::<()>((t, value, true))?;
-                    }
-                }
-                if registered {
-                    invoke(self, i, "OnDragStop", vec![button])?;
-                }
-                {
-                    let mut arena = a.borrow_mut();
-                    if !arena.regions[i].button_state_locked {
-                        arena.regions[i].button_state = "NORMAL";
-                    }
-                }
-                let table = a.borrow().regions[i].table.get();
-                super::widgets::sync_button_textures(self.lua(), self.ctx(), &table)?;
-            } else {
-                a.borrow_mut().cursor = to;
-            }
-            a.borrow_mut().capture = None;
+            self.mouse_down(from.0, from.1, "LeftButton")?;
+            self.hover(to.0, to.1)?;
+            self.mouse_up(to.0, to.1, "LeftButton")?;
             Ok(())
         })
     }
