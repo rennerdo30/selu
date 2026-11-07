@@ -30,9 +30,15 @@ pub(crate) fn deliver(
             continue;
         }
         let on_event: Value = frame.get::<Table>("__scripts")?.get("OnEvent")?;
+        let callbacks = frame
+            .raw_get::<Option<Table>>("__selu_event_callbacks")?
+            .map(|callbacks| callbacks.raw_get::<Option<Table>>(event))
+            .transpose()?
+            .flatten();
+        let callback_count = callbacks.as_ref().map_or(0, Table::raw_len);
         if let Value::Function(func) = on_event {
             let mut call = MultiValue::new();
-            call.push_back(Value::Table(frame));
+            call.push_back(Value::Table(frame.clone()));
             call.push_back(Value::String(lua.create_string(event)?));
             for a in args {
                 call.push_back(a.clone());
@@ -45,6 +51,45 @@ pub(crate) fn deliver(
             if let Err(error) = result {
                 if tolerant {
                     ctx.log(format!("error: {error}"));
+                } else {
+                    return Err(error);
+                }
+            }
+            delivered += 1;
+        }
+        for index in 1..=callback_count {
+            let current = frame
+                .raw_get::<Option<Table>>("__selu_event_callbacks")?
+                .map(|callbacks| callbacks.raw_get::<Option<Table>>(event))
+                .transpose()?
+                .flatten();
+            if current != callbacks {
+                break;
+            }
+            if frame
+                .get::<Table>("__events")?
+                .raw_get::<Value>(event)?
+                .is_nil()
+            {
+                break;
+            }
+            let mut call = MultiValue::new();
+            let callback = callbacks
+                .as_ref()
+                .unwrap()
+                .raw_get::<mlua::Function>(index)?;
+            // Frame callbacks receive their owner and payload, rather than
+            // the OnEvent script's additional event-name argument.
+            call.push_back(Value::Table(frame.clone()));
+            call.extend(args.iter().cloned());
+            ctx.record(TraceKind::Script, "EventCallback", vec![event.into()]);
+            let result = crate::core::script_callback(lua, ctx, || {
+                crate::core::call_lua::<()>(lua, callback, call)
+            });
+            crate::core::flush(lua, ctx);
+            if let Err(error) = result {
+                if tolerant {
+                    ctx.log(format!("error: {error}"))
                 } else {
                     return Err(error);
                 }

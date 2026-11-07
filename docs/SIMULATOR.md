@@ -654,11 +654,13 @@ layouts fail closed. Table layouts follow the primary
 GlobalColor (4328468) supplies the native color palette. GlobalStrings
 (1394440) was absent locally; selected HUD labels and fixed chat tags use
 visible synthetic text. These are not client-localization fidelity claims.
-Numeric GameMode/GameRule enums and primitive Constants are sourced from the
-Forever client export at BlizzardInterfaceResources commit
-`d1ee569878094270c0ad8d8b00de0762158fd578` (Resources/LuaEnum.lua).
-InputDeviceInterfaceType also follows InputConstantsDocumentation.lua:20-28
-(Mkb 0, Gamepad 1), so default mouse/keyboard mode stays unambiguous.
+Enum and constant values are parsed as literal data from the selected client's
+generated API documentation, preferring CASC with the local source checkout as
+fallback. No documentation chunk is executed. Decoded metadata is cached by
+product/build and source; source bytes use Studio's own cache. Unsupported
+expressions and undocumented values remain undefined with once-only notes.
+This can expose real startup compatibility gaps where UI code expects native
+values that the client's documentation does not supply.
 
 Simulator Lua helpers capture private builtin/library snapshots when the VM
 is created. Addons retain the real mutable global environment. Blizzard
@@ -806,3 +808,11 @@ errors with a known project file and line appear in the clickable Problems list.
 The default root list is defined once in crates/selu-sim/src/loader.rs as CORE_UI_ADDONS: Blizzard_UIParent, Blizzard_GameTooltip, Blizzard_Minimap and Blizzard_ChatFrameBase. Studio exposes an override list in Run > Game Installs. Required TOC dependencies and the native shared-library pass use the same loader and ordering as Full; no named-frame substitutes are installed. Root lists survive reload. Basic unit frames are not an additional Core root: dependency size and startup cost take priority here. Missing source leaves the environment unavailable rather than manufacturing frames.
 
 The client-backed core_ui integration test uses SELU_DEFAULT_UI_SOURCE and SELU_CLIENT_INSTALL and records elapsed startup. Run it separately with --ignored --test-threads=1. Full interaction tests still explicitly request Full. Neither test reads account data or starts the game.
+
+### Blizzard content
+
+The simulator reads Blizzard's Lua/XML, art, fonts and API values at runtime
+from the user's own installation or their local source checkout. That content
+is never committed or redistributed with the simulator. Repository test
+fixtures are self-written; client-backed tests use external local files.
+Screenshots made with client art stay local.

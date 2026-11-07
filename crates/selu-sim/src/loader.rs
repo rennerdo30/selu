@@ -353,7 +353,7 @@ pub fn read_toc(dir: &Path) -> Result<Toc, String> {
 pub fn read_toc_target(dir: &Path, target: Option<&str>) -> Result<Toc, String> {
     read_toc_target_client(dir, target, None, &mut |_| {})
 }
-fn read_toc_target_client(
+pub(crate) fn read_toc_target_client(
     dir: &Path,
     target: Option<&str>,
     client: Option<(&selu_gamedata::Storage, &Path)>,

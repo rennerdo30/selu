@@ -8,6 +8,25 @@ fn session() -> Session {
     .unwrap()
 }
 #[test]
+fn player_form_is_scenario_state_and_emits_only_on_transition() {
+    let s = session();
+    s.eval("assert(GetShapeshiftForm()==0); formChanges=0; local f=CreateFrame('Frame'); f:RegisterEvent('UPDATE_SHAPESHIFT_FORM'); f:SetScript('OnEvent',function() formChanges=formChanges+1 end)").unwrap();
+    let mut state = Scenario::default();
+    let player = state.units.entry("player".into()).or_default();
+    player.class = "DRUID".into();
+    player.form = 2;
+    state.apply(s.sim()).unwrap();
+    s.eval("assert(GetShapeshiftForm()==2 and formChanges==1)")
+        .unwrap();
+    state.apply(s.sim()).unwrap();
+    s.eval("assert(GetShapeshiftForm()==2 and formChanges==1)")
+        .unwrap();
+    state.units.get_mut("player").unwrap().form = 0;
+    state.apply(s.sim()).unwrap();
+    s.eval("assert(GetShapeshiftForm()==0 and formChanges==2)")
+        .unwrap();
+}
+#[test]
 fn scenario_units_events_and_apis() {
     let s = session();
     let mut state = Scenario::default();

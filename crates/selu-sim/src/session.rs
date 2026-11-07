@@ -468,6 +468,12 @@ impl Session {
             .lua
             .set_app_data(crate::native_defaults::CallCounts::default());
         crate::native_stdlib::install(&self.sim.lua)?;
+        crate::ui_metadata::install(
+            &self.sim.lua,
+            &self.sim.ctx,
+            source,
+            self.config.target.as_deref(),
+        )?;
         crate::client_ui::install(&self.sim.lua, &self.sim.ctx)?;
         crate::bindings::install(&self.sim.lua)?;
         crate::client_ui::load_strings(&self.sim.lua, &self.sim.ctx, source)?;
@@ -615,6 +621,7 @@ impl Session {
         api.raw_set("IsAddOnLoaded", loaded.clone())?;
         self.sim.lua.globals().raw_set("IsAddOnLoaded", loaded)?;
         self.sim.lua.globals().raw_set("C_AddOns", api)?;
+        let modules = self.sim.lua.create_table()?;
         for toc in addons {
             progress(&toc.name);
             // A bad input file must not discard every successfully read chunk
@@ -634,6 +641,27 @@ impl Session {
             }
             crate::fonts::register_addon_root(self.sim.lua(), &toc.dir)?;
             let ns = self.sim.lua.create_table()?;
+            let imported = modules.clone();
+            let module_prefix = toc.name.clone();
+            let environment = self.sim.lua.create_table()?;
+            let metatable = self.sim.lua.create_table()?;
+            metatable.raw_set("__index", self.sim.lua.globals())?;
+            metatable.raw_set("__newindex", self.sim.lua.globals())?;
+            environment.set_metatable(Some(metatable));
+            environment.raw_set(
+                "import",
+                self.sim.lua.create_function(move |_, name: String| {
+                    let key = if name.starts_with('.') {
+                        format!(
+                            "{module_prefix}/{}",
+                            name.trim_start_matches('.').replace('.', "/")
+                        )
+                    } else {
+                        name.replace('.', "/")
+                    };
+                    imported.raw_get::<Value>(key)
+                })?,
+            )?;
             self.sim
                 .lua
                 .set_named_registry_value(&format!("selu:addon:{}", toc.name), ns.clone())?;
@@ -642,7 +670,7 @@ impl Session {
                     eprintln!("Default UI source: {}: {name}", toc.name);
                 }
                 let result = dispatch(&self.sim.lua, &self.sim.ctx, || {
-                    core::call_lua::<()>(
+                    core::call_lua::<Value>(
                         &self.sim.lua,
                         if name == "@selu/xml-runtime" {
                             crate::host_lua::factory(
@@ -651,13 +679,25 @@ impl Session {
                                 &format!("return function(...)\n{source}\nend"),
                             )?
                         } else {
-                            self.sim.lua.load(&source).set_name(&name).into_function()?
+                            self.sim
+                                .lua
+                                .load(&source)
+                                .set_name(&name)
+                                .set_environment(environment.clone())
+                                .into_function()?
                         },
                         (toc.name.as_str(), ns.clone()),
                     )
                 });
-                if let Err(error) = result {
-                    report.errors.push(format!("{}: {error}", toc.name));
+                match result {
+                    Ok(value) => {
+                        let key = name.trim_start_matches('@').replace('\\', "/");
+                        modules.raw_set(
+                            format!("{}/{}", toc.name, key.trim_end_matches(".lua")),
+                            value,
+                        )?;
+                    }
+                    Err(error) => report.errors.push(format!("{}: {error}", toc.name)),
                 }
             }
             report.addons_loaded += 1;

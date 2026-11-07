@@ -40,6 +40,7 @@ pub mod snapshot;
 pub mod text;
 mod timers;
 mod trace;
+mod ui_metadata;
 pub mod world;
 mod wow_api;
 mod xml;

@@ -14,6 +14,8 @@ pub struct Unit {
     pub guid: String,
     pub name: String,
     pub class: String,
+    /// One-based shapeshift/stance bar index; zero means the normal form.
+    pub form: u32,
     pub level: u32,
     pub health: u32,
     pub max_health: u32,
@@ -158,6 +160,7 @@ impl Vm {
         next.set("guid", unit.guid)?;
         next.set("name", unit.name)?;
         next.set("class", unit.class)?;
+        next.set("form", unit.form)?;
         next.set("level", unit.level)?;
         next.set("health", unit.health)?;
         next.set("max_health", unit.max_health)?;
@@ -180,6 +183,14 @@ impl Vm {
             self.clear_unit(token)?;
         }
         units.set(token, next.clone())?;
+        if token == "player"
+            && old
+                .as_ref()
+                .map(|old| old.raw_get::<u32>("form").unwrap_or(0))
+                != Some(unit.form)
+        {
+            self.fire("UPDATE_SHAPESHIFT_FORM", vec![])?;
+        }
         if token == "player" {
             self.set_combat(unit.combat)?;
         }
@@ -296,6 +307,7 @@ function UnitExists(u) return units[u] ~= nil end
 function UnitName(u) return units[u] and units[u].name end
 local classes={WARRIOR={'Warrior',1},PALADIN={'Paladin',2},HUNTER={'Hunter',3},ROGUE={'Rogue',4},PRIEST={'Priest',5},DEATHKNIGHT={'Death Knight',6},SHAMAN={'Shaman',7},MAGE={'Mage',8},WARLOCK={'Warlock',9},MONK={'Monk',10},DRUID={'Druid',11},DEMONHUNTER={'Demon Hunter',12},EVOKER={'Evoker',13}}
 function UnitClass(u) local c=units[u] and units[u].class; local info=classes[c]; if info then return info[1],c,info[2] end end
+function GetShapeshiftForm() return units.player and units.player.form or 0 end
 function UnitLevel(u) return units[u] and units[u].level or 0 end
 function UnitHealth(u) return units[u] and units[u].health or 0 end
 function UnitHealthMax(u) return units[u] and units[u].max_health or 0 end
@@ -341,6 +353,7 @@ impl Default for Unit {
         Self {
             name: "Rare creature".into(),
             class: "WARRIOR".into(),
+            form: 0,
             level: 60,
             health: 100,
             max_health: 100,
@@ -583,6 +596,7 @@ impl Scenario {
                 Unit {
                     name: u.get("name")?,
                     class: u.get("class")?,
+                    form: u.get::<Option<u32>>("form")?.unwrap_or(0),
                     level: u.get("level")?,
                     health: u.get("health")?,
                     max_health: u.get("max_health")?,

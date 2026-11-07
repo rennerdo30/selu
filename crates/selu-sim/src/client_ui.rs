@@ -23,57 +23,6 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
         })?,
     )?;
     globals.raw_set("C_Log", logging)?;
-    // Native enum fields absent from generated API docs. Observed Forever
-    // client export: Ketho/BlizzardInterfaceResources, commit
-    // d1ee569878094270c0ad8d8b00de0762158fd578, Resources/LuaEnum.lua.
-    // These simulator values never add declarations to the Selu checker.
-    let observed: std::collections::BTreeMap<String, std::collections::BTreeMap<String, i64>> =
-        serde_json::from_str(include_str!("native_ui_enums.json"))
-            .map_err(mlua::Error::external)?;
-    let enums = globals
-        .raw_get::<Option<Table>>("Enum")?
-        .unwrap_or(lua.create_table()?);
-    for (name, fields) in observed {
-        let table = enums
-            .raw_get::<Option<Table>>(name.as_str())?
-            .unwrap_or(lua.create_table()?);
-        for (key, value) in fields {
-            if table.raw_get::<Value>(key.as_str())?.is_nil() {
-                table.raw_set(key, value)?;
-            }
-        }
-        enums.raw_set(name, table)?;
-    }
-    globals.raw_set("Enum", enums)?;
-    let constants = globals
-        .raw_get::<Option<Table>>("Constants")?
-        .unwrap_or(lua.create_table()?);
-    let observed: std::collections::BTreeMap<
-        String,
-        std::collections::BTreeMap<String, serde_json::Value>,
-    > = serde_json::from_str(include_str!("native_ui_constants.json"))
-        .map_err(mlua::Error::external)?;
-    for (name, fields) in observed {
-        let table = constants
-            .raw_get::<Option<Table>>(name.as_str())?
-            .unwrap_or(lua.create_table()?);
-        for (key, value) in fields {
-            if table.raw_get::<Value>(key.as_str())?.is_nil() {
-                let value = match value {
-                    serde_json::Value::Bool(value) => Value::Boolean(value),
-                    serde_json::Value::Number(value) => Value::Number(
-                        value
-                            .as_f64()
-                            .ok_or_else(|| mlua::Error::runtime("invalid observed constant"))?,
-                    ),
-                    _ => return Err(mlua::Error::runtime("non-primitive observed constant")),
-                };
-                table.raw_set(key, value)?;
-            }
-        }
-        constants.raw_set(name, table)?;
-    }
-    globals.raw_set("Constants", constants)?;
     let texture = globals
         .raw_get::<Option<Table>>("C_Texture")?
         .unwrap_or(lua.create_table()?);

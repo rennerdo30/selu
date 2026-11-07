@@ -2776,6 +2776,12 @@ impl Studio {
             ui.text_edit_singleline(&mut u.name);
             ui.label("GUID");
             ui.text_edit_singleline(&mut u.guid);
+            ui.label("Class token");
+            ui.text_edit_singleline(&mut u.class);
+            ui.horizontal(|ui| {
+                ui.label("Form / stance index (0 = normal)");
+                ui.add(egui::DragValue::new(&mut u.form));
+            });
             ui.horizontal(|ui| {
                 ui.label("Level");
                 ui.add(egui::DragValue::new(&mut u.level));

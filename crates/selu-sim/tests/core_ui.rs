@@ -31,12 +31,51 @@ fn core_loads_real_common_frames_and_records_startup() {
         s.advance_time(1. / 60.);
     }
     eprintln!(
-        "Core startup {:?}: {} addons; {} load errors; startup {:?}",
+        "Core startup {:?}: {} addons; {} load errors; {} startup errors",
         start.elapsed(),
         report.addons_loaded,
         report.errors.len(),
-        s.default_ui_startup_errors()
+        s.default_ui_startup_errors().len()
     );
+    for error in s.default_ui_startup_errors() {
+        eprintln!("CORE STARTUP {error}");
+    }
+    if let Some(dir) = std::env::var_os("SELU_CORE_AUDIT_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::write(
+            dir.join("snapshot.json"),
+            serde_json::to_vec(&s.snapshot().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let mut keys = Vec::new();
+        for root in ["Enum", "Constants"] {
+            let table: mlua::Table = s.lua().globals().raw_get(root).unwrap();
+            for pair in table.pairs::<String, mlua::Table>() {
+                let (name, fields) = pair.unwrap();
+                for pair in fields.pairs::<String, mlua::Value>() {
+                    let (key, value) = pair.unwrap();
+                    if !value.is_nil() {
+                        keys.push(format!("{root}.{name}.{key}"));
+                    }
+                }
+            }
+        }
+        keys.sort();
+        std::fs::write(dir.join("documented-keys.txt"), keys.join("\n")).unwrap();
+        if let Some(file) = std::env::var_os("SELU_CORE_DUMP_TEXTURE") {
+            let id = file.to_string_lossy().parse::<u32>().unwrap();
+            let storage = selu_sim::frames::arena::store(s.lua())
+                .borrow()
+                .fonts
+                .assets
+                .client_storage()
+                .unwrap();
+            selu_gamedata::blp::decode(&storage.read(id).unwrap())
+                .unwrap()
+                .save(dir.join("texture.png"))
+                .unwrap();
+        }
+    }
     for error in &report.errors {
         eprintln!("CORE ERROR {error}");
     }

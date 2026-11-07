@@ -460,6 +460,8 @@ pub fn create(
                 }
             }
             for method in METHODS.split_whitespace().chain([
+                "SetMaskTexture",
+                "RegisterEventCallback",
                 "IsMouseMotionFocus",
                 "IsMouseOver",
                 "SetPadding",
@@ -623,6 +625,44 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     let i = id(t)?;
     let v = &args[1..];
     let a = store(lua);
+    if method == "SetMaskTexture" {
+        t.raw_set(
+            "__selu_minimap_mask",
+            v.first().cloned().unwrap_or(Value::Nil),
+        )?;
+        return ().into_lua_multi(lua);
+    }
+    if method == "RegisterEventCallback" {
+        let event = string(v.first()).ok_or_else(|| mlua::Error::runtime("event name expected"))?;
+        let Some(Value::Function(callback)) = v.get(1) else {
+            return Err(mlua::Error::runtime("event callback expected"));
+        };
+        let callbacks = t
+            .raw_get::<Option<Table>>("__selu_event_callbacks")?
+            .unwrap_or(lua.create_table()?);
+        let entries = callbacks
+            .raw_get::<Option<Table>>(event.as_str())?
+            .unwrap_or(lua.create_table()?);
+        if !entries
+            .raw_get::<Option<bool>>(callback.clone())?
+            .unwrap_or(false)
+        {
+            entries.raw_set(callback.clone(), true)?;
+            entries.raw_set(entries.raw_len() + 1, callback.clone())?;
+        }
+        callbacks.raw_set(event.as_str(), entries)?;
+        t.raw_set("__selu_event_callbacks", callbacks)?;
+        call(
+            lua,
+            ctx,
+            "RegisterEvent",
+            MultiValue::from_vec(vec![
+                Value::Table(t.clone()),
+                Value::String(lua.create_string(event)?),
+            ]),
+        )?;
+        return true.into_lua_multi(lua);
+    }
     if matches!(method, "IsMouseMotionFocus" | "IsMouseOver") {
         return (a.borrow().hover == Some(i)).into_lua_multi(lua);
     }
@@ -1206,6 +1246,9 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                     .insert(i);
             }
             "UnregisterEvent" => {
+                if let Some(callbacks) = t.raw_get::<Option<Table>>("__selu_event_callbacks")? {
+                    callbacks.raw_set(name.as_str(), Value::Nil)?;
+                }
                 t.raw_get::<Table>("__events")?
                     .raw_set(name.as_str(), Value::Nil)?;
                 if let Some(indices) = a.borrow_mut().event_subscribers.get_mut(&name) {
@@ -1213,6 +1256,7 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 }
             }
             _ => {
+                t.raw_set("__selu_event_callbacks", Value::Nil)?;
                 t.raw_set("__events", lua.create_table()?)?;
                 for indices in a.borrow_mut().event_subscribers.values_mut() {
                     indices.remove(&i);

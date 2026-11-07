@@ -142,6 +142,19 @@ mod manifest;
 #[cfg(test)]
 mod tests {
     #[test]
+    fn native_event_callbacks_survive_script_replacement_and_unregister() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        s.eval("nativeEvents=0;scriptEvents=0;f=CreateFrame('Frame'); assert(f:RegisterEventCallback('NATIVE_EVENT',function(owner,payload) assert(owner==f and payload==7);nativeEvents=nativeEvents+1 end));f:SetScript('OnEvent',function(_,event,payload) assert(event=='NATIVE_EVENT' and payload==7);scriptEvents=scriptEvents+1 end)").unwrap();
+        s.fire("NATIVE_EVENT", vec![mlua::Value::Integer(7)])
+            .unwrap();
+        s.eval("assert(nativeEvents==1 and scriptEvents==1);f:UnregisterEvent('NATIVE_EVENT')")
+            .unwrap();
+        s.fire("NATIVE_EVENT", vec![mlua::Value::Integer(7)])
+            .unwrap();
+        s.eval("assert(nativeEvents==1 and scriptEvents==1)")
+            .unwrap();
+    }
+    #[test]
     fn child_enumeration_preserves_regions_identity_and_reparenting() {
         let sim = crate::Sim::new().unwrap();
         sim.eval("local p=CreateFrame('Frame'); local a=CreateFrame('Button',nil,p); local b=CreateFrame('Frame',nil,p); local t=p:CreateTexture(); local s=p:CreateFontString(); local x,y=p:GetChildren(); assert(x==a and y==b and p:GetNumChildren()==2); local x,y=p:GetRegions(); assert(x==t and y==s and p:GetNumRegions()==2); a:SetParent(b); assert(p:GetNumChildren()==1 and b:GetNumChildren()==1 and b:GetChildren()==a)").unwrap();

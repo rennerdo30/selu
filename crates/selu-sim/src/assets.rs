@@ -29,6 +29,9 @@ impl Resolver {
         })
     }
     pub fn open_client(&mut self, root: &std::path::Path, product: &str) -> Result<(), String> {
+        let _profile = crate::profile::Span::new("assets.client_index");
+        #[cfg(debug_assertions)]
+        let started = std::env::var_os("SELU_SIM_PROFILE").map(|_| std::time::Instant::now());
         // Studio and its worker share one read-only index; decoded images remain lazy.
         type Key = (PathBuf, String);
         type Index = HashMap<Key, Weak<selu_gamedata::Storage>>;
@@ -42,7 +45,10 @@ impl Resolver {
             .lock()
             .map_err(|e| e.to_string())?;
         indexes.retain(|_, value| value.strong_count() > 0);
-        let storage = if let Some(storage) = indexes.get(&key).and_then(Weak::upgrade) {
+        let reused = indexes.get(&key).and_then(Weak::upgrade);
+        #[cfg(debug_assertions)]
+        let cached = reused.is_some();
+        let storage = if let Some(storage) = reused {
             storage
         } else {
             let storage = Arc::new(
@@ -53,6 +59,14 @@ impl Resolver {
         };
         self.sources
             .retain(|s| !matches!(s, Source::ClientStorage(_)));
+        #[cfg(debug_assertions)]
+        if let Some(started) = started {
+            eprintln!(
+                "PROFILE_CLIENT_INDEX thread={:?} product={product} cached={cached} elapsed={:?}",
+                std::thread::current().id(),
+                started.elapsed()
+            );
+        }
         self.sources.push(Source::ClientStorage(Some(storage)));
         self.cache.get_mut().clear();
         self.atlases.get_mut().clear();
@@ -85,6 +99,11 @@ impl Resolver {
         result
     }
     pub fn add_addon(&mut self, root: PathBuf) {
+        // Resolution compares canonical candidates with the sandbox root.
+        // GUI paths can be relative or lack Windows' extended-path prefix.
+        let Ok(root) = root.canonicalize() else {
+            return;
+        };
         if !self
             .sources
             .iter()
@@ -204,6 +223,25 @@ impl Source {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn qualified_media_uses_the_selected_addon_root() {
+        let root =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../selu-sim/tests/fixtures/rendering");
+        let mut resolver = Resolver::default();
+        resolver.add_addon(root);
+        assert!(matches!(
+            resolver.lookup("Interface/AddOns/rendering/checker"),
+            Lookup::Found(_)
+        ));
+        assert!(matches!(
+            resolver.lookup("Interface/AddOns/other/checker"),
+            Lookup::Missing
+        ));
+        assert!(matches!(
+            resolver.lookup("Interface/AddOns/rendering/../checker"),
+            Lookup::Missing
+        ));
+    }
     #[test]
     fn offline_and_invalid_paths() {
         let r = Resolver::default();
