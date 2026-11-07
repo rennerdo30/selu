@@ -785,3 +785,18 @@ atlas-name or frame-name substitutions are made. Unpositioned quest-money,
 backpack currency and excluded Mainline micro-button helpers are retained until
 Blizzard anchors them. The empty navigation world returns no native navigation
 frame, allowing source scripts to hide the navigation decoration.
+
+## Plain Lua addons in Studio
+
+File > Open also accepts an addon folder containing a TOC without `selu.toml`.
+Studio loads that folder directly, with no compiler step. Rebuild and save watching
+reload the addon through the simulator's existing TOC/XML loader. Recent folders,
+client assets, the default UI option and Scenario saved-variable seeds use the same
+session path. No Selu declarations or Lua imports are created.
+
+The TOC Interface number selects the newest matching non-fixture target manifest;
+otherwise the current target or newest wowf manifest is used. Lua completion and
+hover use that manifest, including namespace members and colon widget methods.
+Project identifiers are collected with a tolerant scan; receiver types and Lua
+programs are not type checked. Lua and XML files have syntax colours. Runtime
+errors with a known project file and line appear in the clickable Problems list.

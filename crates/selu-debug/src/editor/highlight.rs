@@ -255,14 +255,14 @@ pub fn dotted_at(text: &str, at: usize) -> Option<(Range<usize>, String)> {
     let (range, _) = word_at(text, at)?;
     let b = text.as_bytes();
     let mut s = range.start;
-    while s > 1 && b[s - 1] == b'.' && is_ident(b[s - 2]) {
+    while s > 1 && matches!(b[s - 1], b'.' | b':') && is_ident(b[s - 2]) {
         let mut k = s - 1;
         while k > 0 && is_ident(b[k - 1]) {
             k -= 1;
         }
         s = k;
     }
-    Some((range.clone(), text[s..range.end].to_string()))
+    Some((range.clone(), text[s..range.end].replace(':', ".")))
 }
 
 #[cfg(test)]
@@ -329,5 +329,129 @@ mod tests {
         assert_eq!(dotted_at(t, 10).unwrap().1, "C_Timer.After");
         assert_eq!(dotted_at(t, 2).unwrap().1, "C_Timer");
         assert!(word_at(t, 13).is_none() || word_at(t, 13).unwrap().1 == "After");
+    }
+}
+
+/// Tolerant Lua scanner, including long strings and comments.
+pub fn lua_spans(text: &str, api: &dyn Fn(&str) -> bool) -> Vec<(Range<usize>, Kind)> {
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let start = i;
+        let comment = text[i..].starts_with("--");
+        if comment {
+            i += 2;
+        }
+        let mut k = i;
+        if b.get(k) == Some(&b'[') {
+            k += 1;
+            while b.get(k) == Some(&b'=') {
+                k += 1;
+            }
+        }
+        let long = k > i && b.get(k) == Some(&b'[');
+        let kind = if long {
+            let close = format!("]{}]", "=".repeat(k - i - 1));
+            i = text[k + 1..]
+                .find(&close)
+                .map_or(text.len(), |n| k + 1 + n + close.len());
+            if comment { Kind::Comment } else { Kind::String }
+        } else if comment {
+            i = text[i..].find('\n').map_or(text.len(), |n| i + n);
+            Kind::Comment
+        } else if matches!(b[i], b'\'' | b'"') {
+            let quote = b[i];
+            i += 1;
+            while i < b.len() {
+                if b[i] == b'\\' {
+                    i = (i + 2).min(b.len());
+                } else if b[i] == quote {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            while !text.is_char_boundary(i) {
+                i += 1;
+            }
+            Kind::String
+        } else if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+            i += 1;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            let word = &text[start..i];
+            if [
+                "and", "break", "do", "else", "elseif", "end", "for", "function", "if", "in",
+                "local", "not", "or", "repeat", "return", "then", "until", "while",
+            ]
+            .contains(&word)
+            {
+                Kind::Keyword
+            } else if ["true", "false", "nil"].contains(&word) {
+                Kind::Constant
+            } else if api(word) {
+                Kind::Api
+            } else {
+                Kind::Plain
+            }
+        } else {
+            i += text[i..].chars().next().unwrap().len_utf8();
+            if b[start].is_ascii_digit() {
+                Kind::Number
+            } else {
+                Kind::Punct
+            }
+        };
+        out.push((start..i, kind));
+    }
+    out
+}
+
+pub fn xml_spans(text: &str) -> Vec<(Range<usize>, Kind)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        let start = i;
+        let (end, kind) = if text[i..].starts_with("<!--") {
+            (
+                text[i + 4..]
+                    .find("-->")
+                    .map_or(text.len(), |n| i + 4 + n + 3),
+                Kind::Comment,
+            )
+        } else if text.as_bytes()[i] == b'<' {
+            (
+                text[i..].find('>').map_or(text.len(), |n| i + n + 1),
+                Kind::Keyword,
+            )
+        } else {
+            (
+                text[i..].find('<').map_or(text.len(), |n| i + n),
+                Kind::Plain,
+            )
+        };
+        i = end;
+        out.push((start..i, kind));
+    }
+    out
+}
+
+#[cfg(test)]
+mod addon_tests {
+    use super::*;
+    #[test]
+    fn lua_comments_long_strings_and_xml_comments() {
+        let text = "local name = [=[hello]=] -- comment\nreturn nil";
+        let got: Vec<_> = lua_spans(text, &|_| false)
+            .into_iter()
+            .map(|(r, k)| (text[r].to_string(), k))
+            .collect();
+        assert!(got.contains(&("local".into(), Kind::Keyword)));
+        assert!(got.contains(&("[=[hello]=]".into(), Kind::String)));
+        assert!(got.contains(&("-- comment".into(), Kind::Comment)));
+        assert_eq!(xml_spans("<!-- hello --><Ui/> ")[0].1, Kind::Comment);
     }
 }

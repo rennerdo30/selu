@@ -107,6 +107,10 @@ fn list_files(project: &Path) -> Vec<String> {
     }
     // Files and folders (with a trailing `/`) the Explorer shows.
     let mut out = Vec::new();
+    if !project.join("selu.toml").is_file() {
+        walk(project, project, &mut out);
+        return out;
+    }
     if project.join("selu.toml").is_file() {
         out.push("selu.toml".to_string());
     }
@@ -182,6 +186,45 @@ fn byte_to_char(text: &str, byte: usize) -> usize {
 }
 
 impl Editor {
+    pub fn set_api(&mut self, manifest: &selu_manifest::Manifest) {
+        self.api = Some(Arc::new(ApiIndex::from_manifest(manifest)));
+        self.api_rx = None;
+    }
+    pub fn runtime_error(&mut self, message: &str) {
+        let Some(project) = &self.project else { return };
+        for (i, _) in message.match_indices(':') {
+            let tail = &message[i + 1..];
+            let Some((line, _)) = tail.split_once(':') else {
+                continue;
+            };
+            let Ok(line) = line.parse::<u32>() else {
+                continue;
+            };
+            let before = message[..i]
+                .trim_start_matches('@')
+                .trim_end_matches(['\"', ']']);
+            if let Some(file) = self
+                .files
+                .iter()
+                .filter(|f| !f.ends_with('/'))
+                .find(|f| before.replace('\\', "/").ends_with(f.as_str()))
+            {
+                if project.join(file).is_file() {
+                    self.problems.push(Problem {
+                        severity: Severity::Error,
+                        code: "Lua".into(),
+                        message: message.into(),
+                        file: Some(file.clone()),
+                        line,
+                        column: 1,
+                        notes: vec![],
+                    });
+                }
+                break;
+            }
+        }
+    }
+
     pub fn new(
         project: Option<PathBuf>,
         selu: Option<PathBuf>,
@@ -225,7 +268,11 @@ impl Editor {
                 .files
                 .iter()
                 .find(|f| f.ends_with("main.selu"))
-                .or_else(|| editor.files.iter().find(|f| f.ends_with(".selu")))
+                .or_else(|| {
+                    editor.files.iter().find(|f| {
+                        f.ends_with(".selu") || f.ends_with(".lua") || f.ends_with(".xml")
+                    })
+                })
                 .cloned();
             if let Some(f) = first {
                 editor.open_file(&f);
@@ -389,12 +436,15 @@ impl Editor {
     }
 
     fn request_check(&mut self, now: f64) {
-        self.edited_at = Some(now);
+        self.edited_at = self.checker.as_ref().map(|_| now);
     }
 
     /// Background work: API loading, check results, starting checks after
     /// a pause in typing, reloading files changed on disk.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        if self.checker.is_none() {
+            self.edited_at = None;
+        }
         let now = ctx.input(|i| i.time);
         if let Some(rx) = &self.api_rx
             && let Ok(result) = rx.try_recv()

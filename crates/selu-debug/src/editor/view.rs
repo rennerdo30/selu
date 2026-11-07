@@ -792,7 +792,12 @@ impl Editor {
     pub fn ui_problems(&mut self, ui: &mut egui::Ui) {
         if self.problems.is_empty() {
             ui.add_space(6.0);
-            let (text, c) = if self.checker.is_none() {
+            let (text, c) = if self.project.is_some() && self.checker.is_none() {
+                (
+                    "Lua errors will appear here when the addon runs.",
+                    palette::MUTED,
+                )
+            } else if self.checker.is_none() {
                 (
                     "Open a Selu project to see its problems here.",
                     palette::FAINT,
@@ -1275,8 +1280,32 @@ impl Editor {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
         if self.locals_stale {
-            let texts: Vec<&str> = self.open.iter().map(|b| b.text.as_str()).collect();
-            self.locals = complete::local_words(&texts);
+            let disk: Vec<String> = self
+                .project
+                .as_ref()
+                .map(|p| {
+                    self.files
+                        .iter()
+                        .filter(|f| f.ends_with(".lua") && !self.open.iter().any(|b| &b.rel == *f))
+                        .filter_map(|f| std::fs::read_to_string(p.join(f)).ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let texts: Vec<&str> = self
+                .open
+                .iter()
+                .map(|b| b.text.as_str())
+                .chain(disk.iter().map(String::as_str))
+                .collect();
+            self.locals = if self
+                .project
+                .as_ref()
+                .is_some_and(|p| !p.join("selu.toml").is_file())
+            {
+                complete::lua_words(&texts)
+            } else {
+                complete::local_words(&texts)
+            };
             self.locals_stale = false;
         }
         let id = egui::Id::unique(("selu-editor", &rel));
@@ -1335,7 +1364,8 @@ impl Editor {
             .collect();
         let api = self.api.clone();
         let font = FontId::monospace(self.font_size);
-        let is_selu = rel.ends_with(".selu");
+        let is_selu = rel.ends_with(".selu") || rel.ends_with(".lua");
+        let is_xml = rel.ends_with(".xml");
         let find_ranges = matches.clone();
         let current = current_match.clone();
         let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
@@ -1344,7 +1374,13 @@ impl Editor {
             let api_ref = api.as_deref();
             let is_api = |w: &str| api_ref.is_some_and(|a| a.is_api(w));
             let spans = if is_selu {
-                highlight::spans(text, &is_api)
+                if rel.ends_with(".lua") {
+                    highlight::lua_spans(text, &is_api)
+                } else {
+                    highlight::spans(text, &is_api)
+                }
+            } else if is_xml {
+                highlight::xml_spans(text)
             } else {
                 vec![(0..text.len(), Kind::Plain)]
             };

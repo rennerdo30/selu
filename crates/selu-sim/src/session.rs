@@ -200,6 +200,7 @@ pub struct Session {
     sim: Vm,
     generation: Generation,
     logged_in: bool,
+    requested_addons: Vec<PathBuf>,
     saved: crate::saved::SavedSnapshot,
 }
 
@@ -707,6 +708,7 @@ impl Session {
             sim,
             generation: Generation::default(),
             logged_in: false,
+            requested_addons: Vec::new(),
             saved: Default::default(),
         })
     }
@@ -879,6 +881,10 @@ impl Session {
     /// Load an addon folder through its `.toc` and fire `ADDON_LOADED`.
     /// Returns the addon name.
     pub fn load_addon_dir(&mut self, dir: &Path) -> SimResult<String> {
+        let requested = dir.canonicalize().map_err(|e| runtime(e.to_string()))?;
+        if !self.requested_addons.contains(&requested) {
+            self.requested_addons.push(requested);
+        }
         let _profile = crate::profile::Span::new("addon.load");
         let _startup_layout = (!self.logged_in && self.default_ui_report.is_some())
             .then(|| crate::frames::arena::LayoutBatch::new(&self.sim.lua));
@@ -1068,7 +1074,12 @@ impl Session {
             },
             None => HostCommand::Reload,
         });
-        let addons = lock(&self.sim.state).loaded.clone();
+        let mut addons = lock(&self.sim.state).loaded.clone();
+        for dir in &self.requested_addons {
+            if !addons.contains(dir) {
+                addons.push(dir.clone());
+            }
+        }
         let old_checked = lock(&self.sim.state).checked_manifests.clone();
         let target = snapshot_target(&self.config, &old_checked);
         let mut snapshots = CheckedManifests::new();

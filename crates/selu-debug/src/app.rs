@@ -40,6 +40,9 @@ enum OpenStatus {
 /// The built addon folder in `dist/`: the one named like the project's addon,
 /// else the first folder with a `.toc` (per-target layouts end in `-product`).
 fn built_addon(project: &Path) -> Option<PathBuf> {
+    if plain_addon(project) {
+        return Some(project.to_path_buf());
+    }
     let name = std::fs::read_to_string(project.join("selu.toml"))
         .ok()
         .and_then(|t| toml::from_str::<toml::Value>(&t).ok())
@@ -108,7 +111,7 @@ mod clock_tests {
 /// The project folder for a picked folder: the folder itself, its `selu`
 /// subfolder, or its only direct subfolder that contains `selu.toml`.
 fn find_project(picked: &std::path::Path) -> Option<PathBuf> {
-    if picked.join("selu.toml").is_file() {
+    if picked.join("selu.toml").is_file() || plain_addon(picked) {
         return Some(picked.to_path_buf());
     }
     if picked.join("selu").join("selu.toml").is_file() {
@@ -121,6 +124,60 @@ fn find_project(picked: &std::path::Path) -> Option<PathBuf> {
         .collect();
     found.sort();
     if found.len() == 1 { found.pop() } else { None }
+}
+
+fn plain_addon(dir: &Path) -> bool {
+    !dir.join("selu.toml").is_file()
+        && std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries.flatten().any(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("toc"))
+            })
+        })
+}
+
+fn addon_manifest(
+    dir: &Path,
+    manifests: &Path,
+    fallback: Option<&str>,
+) -> Option<selu_manifest::Manifest> {
+    let mut tocs: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("toc")))
+        .collect();
+    tocs.sort();
+    let interfaces: Vec<u32> = tocs
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .flat_map(|t| {
+            t.lines()
+                .filter_map(|l| l.trim().strip_prefix("## Interface:").map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .flat_map(|s| {
+            s.split(',')
+                .filter_map(|v| v.trim().parse().ok())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let all = selu_manifest::load_manifest_dir(manifests).ok()?;
+    all.iter()
+        .filter(|m| !m.fixture && interfaces.contains(&m.interface))
+        .max_by_key(|m| m.build)
+        .or_else(|| {
+            fallback
+                .and_then(|t| selu_manifest::TargetSpec::parse(t).ok())
+                .and_then(|spec| selu_manifest::resolve(&spec, &all).ok())
+        })
+        .or_else(|| {
+            all.iter()
+                .filter(|m| !m.fixture && selu_manifest::product(&m.flavour) == "wowf")
+                .max_by_key(|m| m.build)
+        })
+        .cloned()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -412,7 +469,23 @@ pub struct Studio {
 }
 
 impl Studio {
-    pub fn new(opts: Options, ctx: &egui::Context) -> Studio {
+    pub fn new(mut opts: Options, ctx: &egui::Context) -> Studio {
+        if let Some(dir) = opts.project.clone().filter(|p| plain_addon(p)) {
+            let manifests = opts
+                .manifest_dir
+                .clone()
+                .or_else(|| crate::editor::complete::find_manifests(&dir));
+            opts.manifest = manifests
+                .as_deref()
+                .and_then(|m| addon_manifest(&dir, m, opts.target.as_deref()));
+            opts.target = opts
+                .manifest
+                .as_ref()
+                .map(selu_manifest::Manifest::target_string)
+                .or(opts.target);
+            opts.addons = vec![dir];
+            opts.selu = None;
+        }
         let mut assets = selu_sim::assets::Resolver::default();
         if let Some(root) = &opts.client_install {
             let target = opts
@@ -434,7 +507,8 @@ impl Studio {
             trace: true,
             ..SessionConfig::default()
         });
-        let auto_rebuild = opts.project.is_some() && opts.selu.is_some();
+        let auto_rebuild = opts.project.is_some()
+            && (opts.selu.is_some() || opts.project.as_deref().is_some_and(plain_addon));
         let (opts_project, opts_selu, opts_target) =
             (opts.project.clone(), opts.selu.clone(), opts.target.clone());
         let mut studio = Studio {
@@ -515,6 +589,9 @@ impl Studio {
         };
         // Started with a project that has not built yet (`selu debug` after a
         // failed build): open it anyway, build here, load once it builds.
+        if let Some(m) = &studio.opts.manifest {
+            studio.editor.set_api(m);
+        }
         if studio.auto_rebuild && studio.opts.addons.is_empty() {
             studio.load_after_build = true;
             studio.rebuild();
@@ -584,6 +661,9 @@ impl Studio {
                         } else {
                             LineKind::Log
                         };
+                        if kind == LineKind::Error {
+                            self.editor.runtime_error(&l);
+                        }
                         self.line(kind, l);
                     }
                 }
@@ -597,7 +677,10 @@ impl Studio {
                 }
                 Update::Scenario { state } => self.scenario = state,
                 Update::Snapshot { snapshot } => self.snapshot = Some(*snapshot),
-                Update::Error { message } => self.line(LineKind::Error, message),
+                Update::Error { message } => {
+                    self.editor.runtime_error(&message);
+                    self.line(LineKind::Error, message);
+                }
                 Update::Generation { generation } => {
                     self.generation = generation;
                     self.trace.clear();
@@ -616,6 +699,11 @@ impl Studio {
     /// console as it arrives; a successful build reloads the addon. The UI
     /// thread never waits for it.
     fn rebuild(&mut self) {
+        if self.opts.project.as_deref().is_some_and(plain_addon) {
+            self.editor.problems.clear();
+            self.act(Command::Reload);
+            return;
+        }
         if self.build.is_some() {
             return; // one build at a time
         }
@@ -851,7 +939,11 @@ fn sources_stamp(project: &Path) -> Option<SystemTime> {
     let mut best = std::fs::metadata(project.join("selu.toml"))
         .and_then(|m| m.modified())
         .ok();
-    walk(&project.join("src"), &mut best);
+    if plain_addon(project) {
+        walk(project, &mut best);
+    } else {
+        walk(&project.join("src"), &mut best);
+    }
     best
 }
 
@@ -1620,7 +1712,7 @@ impl Studio {
     fn open_project(&mut self, picked: PathBuf, ctx: &egui::Context) {
         let Some(dir) = find_project(&picked) else {
             let message = format!(
-                "{} is not a Selu project: no selu.toml in it, in its selu folder or in a direct subfolder.",
+                "{} contains neither a plain addon TOC nor a Selu project.",
                 picked.display()
             );
             self.line(LineKind::Error, message.clone());
@@ -1653,11 +1745,37 @@ impl Studio {
         self.saved_status.clear();
         self.opts.project = Some(dir.clone());
         self.opts.selu = Some(selu);
-        self.opts.target = None;
-        self.opts.manifest = None;
+        let plain = plain_addon(&dir);
+        let manifests = self
+            .opts
+            .manifest_dir
+            .clone()
+            .or_else(|| crate::editor::complete::find_manifests(&dir));
+        self.opts.manifest = if plain {
+            manifests
+                .as_deref()
+                .and_then(|m| addon_manifest(&dir, m, self.opts.target.as_deref()))
+        } else {
+            None
+        };
+        self.opts.target = self
+            .opts
+            .manifest
+            .as_ref()
+            .map(selu_manifest::Manifest::target_string);
         self.opts.addons.clear();
-        self.editor =
-            crate::editor::Editor::new(Some(dir.clone()), self.opts.selu.clone(), None, ctx);
+        self.editor = crate::editor::Editor::new(
+            Some(dir.clone()),
+            if plain { None } else { self.opts.selu.clone() },
+            self.opts.target.clone(),
+            ctx,
+        );
+        if let Some(m) = &self.opts.manifest {
+            self.editor.set_api(m);
+        }
+        if plain {
+            self.opts.addons = vec![dir.clone()];
+        }
         self.sources_stamp = sources_stamp(&dir);
         self.auto_rebuild = true;
         self.side = Side::Explorer;
@@ -1677,7 +1795,9 @@ impl Studio {
         self.line(LineKind::Build, format!("opened {}", dir.display()));
         self.load_after_build = true;
         self.playing = false;
-        self.rebuild();
+        if !plain {
+            self.rebuild();
+        }
     }
 
     /// Whether there is an addon to simulate. A project opens before its
@@ -4333,6 +4453,64 @@ mod sim4_texture_tests {
 #[cfg(test)]
 mod open_project_tests {
     use super::find_project;
+
+    #[test]
+    fn plain_addon_discovery_target_load_error_and_saved_edit_reload() {
+        use super::*;
+        let root = std::env::temp_dir().join(format!("sl26-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join(format!("sl26-{}.toc", std::process::id())),
+            "## Interface: 10000\nDemo.lua\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("Demo.lua"), "value = 1").unwrap();
+        assert_eq!(find_project(&root), Some(root.clone()));
+        assert_eq!(built_addon(&root), Some(root.clone()));
+        let manifests = root.join("manifests");
+        std::fs::create_dir_all(&manifests).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../manifests/fixtures/forever-1.0.0.1000.json");
+        let mut m = selu_manifest::load_manifest(&fixture).unwrap();
+        m.fixture = false;
+        m.interface = 10000;
+        std::fs::write(manifests.join("test.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        assert_eq!(
+            addon_manifest(&root, &manifests, None)
+                .unwrap()
+                .target_string(),
+            m.target_string()
+        );
+        let mut session = selu_sim::Session::new(SessionConfig::default()).unwrap();
+        session.load_addon_dir(&root).unwrap();
+        session.eval("assert(value == 1)").unwrap();
+        let ctx = egui::Context::default();
+        let mut editor = crate::editor::Editor::new(Some(root.clone()), None, None, &ctx);
+        let before_save = sources_stamp(&root);
+        editor.open[0].text = "value = 2".into();
+        editor.save_all();
+        assert_ne!(
+            sources_stamp(&root),
+            before_save,
+            "save must trigger the Studio source watcher"
+        );
+        session.reload().unwrap();
+        session.eval("assert(value == 2)").unwrap();
+        std::fs::write(root.join("Demo.lua"), "error('broken')").unwrap();
+        let mut broken = selu_sim::Session::new(SessionConfig::default()).unwrap();
+        let error = broken.load_addon_dir(&root).unwrap_err().to_string();
+        assert!(error.contains(":1:"), "{error}");
+        std::fs::write(root.join("Demo.lua"), "value = 3").unwrap();
+        broken.reload().unwrap();
+        broken.eval("assert(value == 3)").unwrap();
+        editor.runtime_error(&error);
+        assert_eq!(editor.problems[0].line, 1);
+        editor.problems.clear();
+        editor.runtime_error(&format!("{}:7: broken", root.join("Demo.lua").display()));
+        assert_eq!(editor.problems[0].line, 7);
+        assert_eq!(editor.problems[0].file.as_deref(), Some("Demo.lua"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn finds_the_project_in_the_folder_its_selu_folder_or_one_subfolder() {

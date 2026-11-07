@@ -83,6 +83,27 @@ fn returns(d: &Declaration) -> String {
     }
 }
 
+fn documented(signature: String, declaration: &Declaration) -> String {
+    let docs = declaration
+        .attributes
+        .get("Documentation")
+        .or_else(|| declaration.attributes.get("Description"));
+    let text = match docs {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Array(lines)) => lines
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    if text.is_empty() {
+        signature
+    } else {
+        format!("{signature}\n{text}")
+    }
+}
+
 impl ApiIndex {
     pub fn from_manifest(m: &Manifest) -> ApiIndex {
         let mut index = ApiIndex {
@@ -94,7 +115,7 @@ impl ApiIndex {
                 continue;
             }
             let sig = match &f.signature {
-                Some(d) => format!("{}({}){}", f.name, arg_list(d), returns(d)),
+                Some(d) => documented(format!("{}({}){}", f.name, arg_list(d), returns(d)), d),
                 None => format!("{}({})", f.name, f.params.join(", ")),
             };
             let sig = if f.restrictions.is_empty() {
@@ -118,12 +139,15 @@ impl ApiIndex {
         for w in &m.widgets {
             for method in &w.methods {
                 index.methods.entry(method.name.clone()).or_insert_with(|| {
-                    format!(
-                        "{}:{}({}){}",
-                        w.name,
-                        method.name,
-                        arg_list(method),
-                        returns(method)
+                    documented(
+                        format!(
+                            "{}:{}({}){}",
+                            w.name,
+                            method.name,
+                            arg_list(method),
+                            returns(method)
+                        ),
+                        method,
                     )
                 });
             }
@@ -199,7 +223,7 @@ pub fn context_at(text: &str, at: usize) -> (usize, String, Context) {
         s -= 1;
     }
     let prefix = text[s..at].to_string();
-    if s > 0 && b[s - 1] == b'.' {
+    if s > 0 && matches!(b[s - 1], b'.' | b':') {
         let mut k = s - 1;
         while k > 0 && (b[k - 1].is_ascii_alphanumeric() || b[k - 1] == b'_' || b[k - 1] == b'$') {
             k -= 1;
@@ -243,6 +267,18 @@ pub fn local_words(texts: &[&str]) -> BTreeSet<String> {
         }
     }
     out
+}
+
+pub fn lua_words(texts: &[&str]) -> BTreeSet<String> {
+    texts
+        .iter()
+        .flat_map(|text| {
+            super::highlight::lua_spans(text, &|_| false)
+                .into_iter()
+                .filter(|(_, kind)| *kind == super::highlight::Kind::Plain)
+                .map(|(range, _)| text[range].to_string())
+        })
+        .collect()
 }
 
 fn rank(label: &str, prefix: &str) -> Option<(u8, usize)> {
@@ -332,7 +368,7 @@ pub fn items(
                     );
                 }
                 if prefix.len() >= 2 {
-                    for (name, detail) in &api.globals {
+                    for (name, detail) in api.globals.iter().chain(api.events.iter()) {
                         add(name, ItemKind::Global, detail);
                     }
                 }
@@ -362,7 +398,8 @@ pub fn find_manifests(project: &Path) -> Option<PathBuf> {
         }
         dir = d.parent().map(Path::to_path_buf);
     }
-    None
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+    bundled.is_dir().then_some(bundled)
 }
 
 /// The first target in the project's `selu.toml`, e.g. `retail@12.0`.
@@ -406,6 +443,29 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../manifests/fixtures/forever-1.0.0.1000.json");
         ApiIndex::from_manifest(&selu_manifest::load_manifest(&path).unwrap())
+    }
+
+    #[test]
+    fn lua_namespace_and_colon_method_completion() {
+        let mut api = ApiIndex::default();
+        api.namespaces
+            .entry("C_Demo".into())
+            .or_default()
+            .insert("Action".into(), "C_Demo.Action()".into());
+        api.methods
+            .insert("SetPoint".into(), "Frame:SetPoint()".into());
+        let locals = BTreeSet::new();
+        assert!(
+            items(Some(&api), &locals, &Context::Plain, "C_", 40)
+                .iter()
+                .any(|i| i.label == "C_Demo")
+        );
+        let (_, prefix, context) = context_at("frame:SetP", 10);
+        assert!(
+            items(Some(&api), &locals, &context, &prefix, 40)
+                .iter()
+                .any(|i| i.label == "SetPoint")
+        );
     }
 
     #[test]
