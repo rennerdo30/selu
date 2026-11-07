@@ -80,7 +80,9 @@ pub(crate) fn default_ui_order_client(
     let root = source.canonicalize().map_err(|e| e.to_string())?;
     let mut report = DefaultUiReport::default();
     if let Some(roots) = roots {
-        report.notes.push(format!("Blizzard Core roots: {}", roots.join(", ")));
+        report
+            .notes
+            .push(format!("Blizzard Core roots: {}", roots.join(", ")));
     }
     let client = storage.map(|s| (s, root.as_path()));
     let list = read_ui_text(&root.join("Interface/ui-toc-list.txt"), client, &mut |n| {
