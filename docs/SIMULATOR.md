@@ -934,6 +934,11 @@ than manufacturing frames. No required dependency is excluded merely to hide
 its errors. Missing client localization uses synthetic labels, while
 undocumented legacy aliases use simulator identities as described below.
 
+Studio upgrades an exact saved copy of the previous shipped Core defaults once.
+Other custom lists stay unchanged, and a versioned explicit override can still
+choose the old subset. Current defaults are omitted from saved settings so later
+Core additions follow the simulator defaults rather than a stale saved copy.
+
 Combat Log is included because the chat configuration initializes its filter
 defaults at login. It adds three addons through required TOC dependencies in
 the measured client. Localized positional formatting (`%1$s`, `%2$d`) reorders

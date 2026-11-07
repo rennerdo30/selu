@@ -234,8 +234,13 @@ pub enum UiMode {
 pub struct Settings {
     #[serde(default)]
     pub ui_mode: UiMode,
-    #[serde(default = "core_ui_roots")]
+    #[serde(
+        default = "core_ui_roots",
+        skip_serializing_if = "uses_default_core_ui_roots"
+    )]
     pub core_ui_addons: Vec<String>,
+    #[serde(default)]
+    pub core_ui_roots_revision: u8,
     #[serde(default)]
     pub default_ui_source: Option<PathBuf>,
     #[serde(default)]
@@ -273,11 +278,18 @@ fn core_ui_roots() -> Vec<String> {
         .map(|s| (*s).into())
         .collect()
 }
+fn uses_default_core_ui_roots(roots: &[String]) -> bool {
+    roots
+        .iter()
+        .map(String::as_str)
+        .eq(selu_sim::loader::CORE_UI_ADDONS.iter().copied())
+}
 impl Default for Settings {
     fn default() -> Self {
         Self {
             ui_mode: UiMode::Core,
             core_ui_addons: core_ui_roots(),
+            core_ui_roots_revision: 1,
             default_ui_source: None,
             decrypt_client_files: false,
             client_key_file: None,
@@ -299,6 +311,16 @@ fn settings_path() -> Option<PathBuf> {
 }
 
 impl Settings {
+    fn upgrade_core_ui_roots(&mut self) {
+        if self.core_ui_roots_revision == 0 {
+            if let Some(roots) =
+                selu_sim::loader::upgrade_legacy_core_ui_roots(&self.core_ui_addons)
+            {
+                self.core_ui_addons = roots;
+            }
+            self.core_ui_roots_revision = 1;
+        }
+    }
     pub fn active_key_file(&self) -> Option<PathBuf> {
         self.decrypt_client_files
             .then(|| self.client_key_file.clone())
@@ -308,6 +330,10 @@ impl Settings {
         settings_path()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|t| toml::from_str(&t).ok())
+            .map(|mut settings: Settings| {
+                settings.upgrade_core_ui_roots();
+                settings
+            })
             .unwrap_or_default()
     }
 
@@ -618,6 +644,46 @@ pub fn installed_build(client: &Client) -> Option<selu_manifest::Build> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shipped_core_roots_upgrade_once_while_custom_overrides_survive() {
+        let old = [
+            "Blizzard_UIParent",
+            "Blizzard_GameTooltip",
+            "Blizzard_Minimap",
+            "Blizzard_ChatFrameBase",
+            "Blizzard_CombatLog",
+            "Blizzard_MainMenuBarBagButtons",
+            "Blizzard_QueueStatusFrame",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        let mut historical = Settings {
+            core_ui_addons: old.clone(),
+            core_ui_roots_revision: 0,
+            ..Default::default()
+        };
+        historical.upgrade_core_ui_roots();
+        assert_eq!(historical.core_ui_addons, core_ui_roots());
+        let serialized = toml::to_string(&historical).unwrap();
+        assert!(!serialized.contains("core_ui_addons"));
+        let restored: Settings = toml::from_str(&serialized).unwrap();
+        assert_eq!(restored.core_ui_addons, core_ui_roots());
+        for (roots, revision) in [(vec!["CustomFixture".into()], 0), (old, 1), (vec![], 0)] {
+            let mut custom = Settings {
+                core_ui_addons: roots.clone(),
+                core_ui_roots_revision: revision,
+                ..Default::default()
+            };
+            custom.upgrade_core_ui_roots();
+            assert_eq!(custom.core_ui_addons, roots);
+            let mut restored: Settings =
+                toml::from_str(&toml::to_string(&custom).unwrap()).unwrap();
+            restored.upgrade_core_ui_roots();
+            assert_eq!(restored.core_ui_addons, roots);
+        }
+    }
 
     #[test]
     fn decryption_is_explicitly_opt_in() {

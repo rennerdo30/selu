@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 /// Real Blizzard addon roots for the lean compatibility environment. Required
 /// TOC dependencies and the client's shared-library pass are resolved below.
 /// Blizzard addons whose frames addons most often touch. Each product's own
-/// `ui-toc-list.txt` and TOCs supply their dependencies and files. Checked
+/// `ui-toc-list.txt` and TOCs supply their dependencies and files.
 /// Root availability comes from each client's own TOCs. Modern clients split
 /// aura, map and tracker services into separate addons; Classic clients keep
 /// some of them in FrameXML. Absent built-in roots are noted, never stood in for.
@@ -38,6 +38,26 @@ pub const CORE_UI_ADDONS: &[&str] = &[
     "Blizzard_ObjectiveTracker",
     "Blizzard_ContentTracking",
 ];
+
+/// One-time migration of Selu's pre-map shipped settings, not a product map.
+/// Custom lists are never expanded. Callers version the migration so an
+/// explicit future override can still choose exactly this old subset.
+pub fn upgrade_legacy_core_ui_roots(roots: &[String]) -> Option<Vec<String>> {
+    const PRE_MAP_DEFAULT: &[&str] = &[
+        "Blizzard_UIParent",
+        "Blizzard_GameTooltip",
+        "Blizzard_Minimap",
+        "Blizzard_ChatFrameBase",
+        "Blizzard_CombatLog",
+        "Blizzard_MainMenuBarBagButtons",
+        "Blizzard_QueueStatusFrame",
+    ];
+    roots
+        .iter()
+        .map(String::as_str)
+        .eq(PRE_MAP_DEFAULT.iter().copied())
+        .then(|| CORE_UI_ADDONS.iter().map(|name| (*name).into()).collect())
+}
 
 pub(crate) fn read_ui_text(
     path: &Path,

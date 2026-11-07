@@ -732,10 +732,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         }
         if let Some(parent) = a.borrow().regions[i].parent {
             let parent = a.borrow().regions[parent].table.get();
-            if let Some(old) = old {
-                if parent.raw_get::<Value>(old.as_str())? == Value::Table(t.clone()) {
-                    parent.raw_set(old, Value::Nil)?
-                }
+            if let Some(old) = old
+                && parent.raw_get::<Value>(old.as_str())? == Value::Table(t.clone())
+            {
+                parent.raw_set(old, Value::Nil)?
             }
             if method == "SetParentKey" {
                 let Some(Value::String(key)) = v.first() else {
