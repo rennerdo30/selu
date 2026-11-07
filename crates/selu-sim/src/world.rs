@@ -4,6 +4,82 @@
 //! ContainerDocumentation.lua (bags), MapDocumentation.lua (zone events/map).
 use crate::{SimResult, session::Vm, value_string};
 use mlua::{Lua, ObjectLike, Table, Value};
+/// Simulated fresh-character preference; layout data remains client-owned.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EditModePreset {
+    #[default]
+    Modern,
+    Classic,
+}
+impl EditModePreset {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Modern => "modern",
+            Self::Classic => "classic",
+        }
+    }
+    fn enum_key(self) -> &'static str {
+        match self {
+            Self::Modern => "Modern",
+            Self::Classic => "Classic",
+        }
+    }
+    fn layout(self) -> u8 {
+        match self {
+            Self::Modern => 1,
+            Self::Classic => 2,
+        }
+    }
+}
+pub(crate) fn configure_edit_mode(vm: &Vm, available: bool) -> SimResult<()> {
+    vm.lua
+        .set_named_registry_value("selu.edit_mode_available", available)?;
+    if !available {
+        vm.ctx()
+            .not_simulated("Edit Mode preset ignored: this UI source does not ship Edit Mode");
+    }
+    let api: Table = vm.lua.globals().raw_get("C_EditMode")?;
+    api.raw_set(
+        "GetLayouts",
+        vm.lua.create_function(move |lua, ()| {
+            let preset = if available {
+                read_edit_mode_preset(lua)?
+            } else {
+                EditModePreset::Modern
+            };
+            let info = lua.create_table()?;
+            info.raw_set("activeLayout", preset.layout())?;
+            info.raw_set("layouts", lua.create_table()?)?;
+            Ok(info)
+        })?,
+    )?;
+    api.raw_set(
+        "GetEditModeDefaultLayout",
+        vm.lua.create_function(move |lua, ()| {
+            let enums: Table = lua.globals().get("Enum")?;
+            let presets: Table = enums.get("EditModePresetLayouts")?;
+            let preset = if available {
+                read_edit_mode_preset(lua)?
+            } else {
+                EditModePreset::Modern
+            };
+            presets.get::<Value>(preset.enum_key())
+        })?,
+    )
+}
+fn read_edit_mode_preset(lua: &Lua) -> SimResult<EditModePreset> {
+    Ok(
+        match lua
+            .globals()
+            .raw_get::<Option<String>>("__selu_edit_mode_preset")?
+            .as_deref()
+        {
+            Some("classic") => EditModePreset::Classic,
+            _ => EditModePreset::Modern,
+        },
+    )
+}
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BagSlots {
     pub ordinary: u8,
@@ -204,6 +280,16 @@ pub(crate) fn install_restrictions(lua: &Lua, ctx: &crate::Ctx) -> SimResult<()>
     Ok(())
 }
 impl Vm {
+    pub fn edit_mode_preset(&self) -> SimResult<EditModePreset> {
+        read_edit_mode_preset(&self.lua)
+    }
+    pub fn edit_mode_available(&self) -> bool {
+        self.lua
+            .named_registry_value::<Option<bool>>("selu.edit_mode_available")
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
     pub fn bag_slot_counts(&self) -> SimResult<BagSlots> {
         bag_slots(&self.lua)
     }
@@ -495,6 +581,7 @@ pub struct Vignette {
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Scenario {
+    pub edit_mode_preset: EditModePreset,
     /// Omitted counts select the session product's simulator defaults.
     pub bag_slots: Option<u8>,
     pub reagent_bag_slots: Option<u8>,
@@ -556,6 +643,18 @@ impl Scenario {
             vm.set_unit(t, u.clone())?;
         }
         vm.set_combat(self.combat)?;
+        vm.lua
+            .globals()
+            .raw_set("__selu_edit_mode_preset", self.edit_mode_preset.key())?;
+        if self.edit_mode_preset != EditModePreset::Modern
+            && vm
+                .lua
+                .named_registry_value::<Option<bool>>("selu.edit_mode_available")?
+                == Some(false)
+        {
+            vm.ctx()
+                .not_simulated("Edit Mode preset ignored: this UI source does not ship Edit Mode");
+        }
         update_bag_slots(&vm.lua, self.bag_slots, self.reagent_bag_slots)?;
         if vm.lua.globals().get::<u64>("__selu_world_money")? != self.money {
             vm.set_money(self.money)?;
@@ -703,7 +802,10 @@ impl Scenario {
     pub fn capture(vm: &Vm) -> SimResult<Self> {
         let globals = vm.lua.globals();
         let units: Table = globals.get("__selu_world_units")?;
-        let mut result = Self::default();
+        let mut result = Self {
+            edit_mode_preset: vm.edit_mode_preset()?,
+            ..Self::default()
+        };
         let slots = vm.bag_slot_counts()?;
         result.bag_slots = Some(slots.ordinary);
         result.reagent_bag_slots = Some(slots.reagent);

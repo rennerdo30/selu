@@ -459,6 +459,7 @@ pub struct Studio {
     auto_shot: Option<(PathBuf, u32)>,
     editor: crate::editor::Editor,
     scenario: selu_sim::world::Scenario,
+    edit_mode_available: bool,
     scenario_token: String,
     scenario_unit: selu_sim::world::Unit,
     scenario_name: String,
@@ -583,6 +584,7 @@ impl Studio {
             shots: channel(),
             auto_shot: std::env::var_os("SELU_STUDIO_SCREENSHOT").map(|p| (PathBuf::from(p), 20)),
             scenario: Default::default(),
+            edit_mode_available: false,
             scenario_token: "target".into(),
             scenario_unit: Default::default(),
             scenario_name: "rare-test".into(),
@@ -637,6 +639,13 @@ impl Studio {
         // For screenshots in checks: open Project Settings at start.
         if std::env::var_os("SELU_STUDIO_OPEN_SETTINGS").is_some() {
             studio.open_settings();
+        }
+        // Read-only scenario preload for automated release captures.
+        if let Some(path) = std::env::var_os("SELU_STUDIO_SCENARIO_FILE") {
+            match selu_sim::world::Scenario::load(std::path::Path::new(&path)) {
+                Ok(state) => studio.send(Command::Scenario { state }),
+                Err(error) => studio.line(LineKind::Error, error),
+            }
         }
         studio.queue_default_ui();
         for dir in studio.opts.addons.clone() {
@@ -699,7 +708,13 @@ impl Studio {
                         self.trace.push_back(r);
                     }
                 }
-                Update::Scenario { state } => self.scenario = state,
+                Update::Scenario {
+                    state,
+                    edit_mode_available,
+                } => {
+                    self.scenario = state;
+                    self.edit_mode_available = edit_mode_available;
+                }
                 Update::Snapshot { snapshot } => self.snapshot = Some(*snapshot),
                 Update::Error { message } => {
                     self.editor.runtime_error(&message);
@@ -2906,6 +2921,26 @@ impl Studio {
                 .as_ref()
                 .map(selu_manifest::Manifest::target_string)
                 .or_else(|| self.opts.target.clone());
+            if self.edit_mode_available {
+                ui.horizontal(|ui| {
+                    ui.label("Fresh-character Edit Mode preset");
+                    for preset in [
+                        selu_sim::world::EditModePreset::Modern,
+                        selu_sim::world::EditModePreset::Classic,
+                    ] {
+                        apply |= ui
+                            .radio_value(
+                                &mut self.scenario.edit_mode_preset,
+                                preset,
+                                format!("{preset:?}"),
+                            )
+                            .changed();
+                    }
+                });
+                ui.small("Preset changes reload the session; Blizzard places the UI.");
+            } else {
+                ui.small("Edit Mode preset ignored: unavailable in this UI source.");
+            }
             let defaults = selu_sim::world::bag_slot_defaults(target.as_deref());
             let mut ordinary = self.scenario.bag_slots.unwrap_or(defaults.ordinary);
             let mut reagent = self.scenario.reagent_bag_slots.unwrap_or(defaults.reagent);

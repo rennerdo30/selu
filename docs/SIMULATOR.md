@@ -344,7 +344,7 @@ in the console, plus the most frequently called manifest native stand-ins.
 Reload rebuilds the default UI before the user's addon.
 
 The synthetic profile exposes one visible General chat window and selects the
-first of Blizzard's own edit-mode presets through `EDIT_MODE_LAYOUTS_UPDATED`.
+scenario's chosen Blizzard edit-mode preset through `EDIT_MODE_LAYOUTS_UPDATED`.
 It never reads the client's saved layouts. XML `relativeKey` anchors can walk
 anonymous parents and child members. Animation groups exist before OnLoad;
 Alpha and Translation use the existing simulator animation clock. Other
@@ -605,13 +605,19 @@ checkout is optional; see "Default UI startup"). Changing the UI mode, roots or 
 The install root contains `.build.info`; the source root contains `Interface`.
 Keep **Disable client fonts and art** unchecked for client-backed rendering.
 
-The empty profile selects Blizzard's **Modern** Edit Mode preset (layout 1,
-preset enum 0). Its low player-frame placement is source-correct:
-`Blizzard_EditMode/Mainline/EditModePresetLayouts.lua:248-261` anchors it at
-bottom-center with offset (-300, 250). Camelot loads that shared-family file.
-Classic is a separate preset; the simulator does not reposition named frames
-or switch presets to imitate a presumed fresh Forever account.
+The fresh-character Edit Mode preset is scenario account/character state.
+**Scenario → Fresh-character Edit Mode preset** selects **Modern** (the default)
+or **Classic** and reloads the session. Scenario TOML stores
+`edit_mode_preset = "modern"` or `edit_mode_preset = "classic"`; older files
+without the field retain Modern. `C_EditMode.GetLayouts()` supplies the active
+one-based layout index, and `GetEditModeDefaultLayout()` reads the corresponding
+enum from the client's own API data. Blizzard's preset manager prepends its
+layouts and applies its own anchors: Modern places the player low near the
+bottom centre; Classic puts it at the top left. No named frame is repositioned.
 
+Capability comes from the source's Edit Mode addon TOC, not a product table.
+Sources without Edit Mode hide the selector and log a once-only ignored note;
+the TOML preference can be reapplied in a later supported session.
 The HUD currently includes the player/class-icon portrait, minimap placeholder,
 action bar art, chat, micro menu and bags bar. Native input runs Blizzard's
 click/hover/leave, tooltip, Escape, keyboard focus/modifier, live drag and chat

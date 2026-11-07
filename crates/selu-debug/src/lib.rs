@@ -117,6 +117,8 @@ pub enum PreviewInput {
 pub enum Update {
     Scenario {
         state: selu_sim::world::Scenario,
+        #[serde(default)]
+        edit_mode_available: bool,
     },
     Prints {
         lines: Vec<String>,
@@ -320,11 +322,14 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
             Command::Eval { code } => session.eval(&code).map(|_| None).map_err(|e| e.to_string()),
             Command::Scenario { state } => (|| -> selu_sim::SimResult<Option<Update>> {
                 let before = session.sim().bag_slot_counts()?;
+                let before_preset = session.sim().edit_mode_preset()?;
                 state.apply(session.sim())?;
-                if before != session.sim().bag_slot_counts()?
+                if (before != session.sim().bag_slot_counts()?
+                    || (session.sim().edit_mode_available()
+                        && before_preset != state.edit_mode_preset))
                     && session.default_ui_report().is_some()
                 {
-                    // Blizzard caches its container topology during Lua startup.
+                    // Blizzard caches container topology and applies Edit Mode at login.
                     // Re-run the source with the new world, never patch UI globals.
                     session.reload()?;
                 }
@@ -422,7 +427,10 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
             }
         }
         if let Ok(state) = selu_sim::world::Scenario::capture(session.sim()) {
-            let _ = outbox.send(Update::Scenario { state });
+            let _ = outbox.send(Update::Scenario {
+                state,
+                edit_mode_available: session.sim().edit_mode_available(),
+            });
         }
         let _ = outbox.send(Update::Done { seq });
         seq += 1;
@@ -640,5 +648,59 @@ mod scenario_tests {
             "{updates:?}"
         );
         std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod edit_mode_tests {
+    #[test]
+    fn preset_edit_reloads_source_and_reports_client_capability() {
+        use super::{Command, Update, Worker};
+        let root = std::env::temp_dir().join(format!(
+            "selu-self-written-edit-mode-{}",
+            std::process::id()
+        ));
+        let addon = root.join("Interface/AddOns/Blizzard_EditMode");
+        std::fs::create_dir_all(&addon).unwrap();
+        std::fs::write(
+            root.join("Interface/ui-toc-list.txt"),
+            "Interface/AddOns/Blizzard_EditMode/Blizzard_EditMode.toc\n",
+        )
+        .unwrap();
+        std::fs::write(addon.join("Blizzard_EditMode.toc"), "Fixture.lua\n").unwrap();
+        std::fs::write(addon.join("Fixture.lua"),"Enum.EditModePresetLayouts={Modern=17,Classic=42};AtLoad=C_EditMode.GetLayouts().activeLayout;DefaultAtLoad=C_EditMode.GetEditModeDefaultLayout()").unwrap();
+        let worker = Worker::spawn(Default::default());
+        let updates = worker.call(Command::LoadDefaultUi { source: root });
+        assert!(updates.iter().any(|u| matches!(
+            u,
+            Update::Scenario {
+                edit_mode_available: true,
+                ..
+            }
+        )));
+        let before = worker.call(Command::Eval {
+            code: "assert(AtLoad==1 and DefaultAtLoad==17)".into(),
+        });
+        assert!(
+            !before.iter().any(|u| matches!(u, Update::Error { .. })),
+            "{before:?}"
+        );
+        let updated = worker.call(Command::Scenario {
+            state: selu_sim::world::Scenario {
+                edit_mode_preset: selu_sim::world::EditModePreset::Classic,
+                ..Default::default()
+            },
+        });
+        assert!(
+            !updated.iter().any(|u| matches!(u, Update::Error { .. })),
+            "{updated:?}"
+        );
+        let after = worker.call(Command::Eval {
+            code: "assert(AtLoad==2 and DefaultAtLoad==42)".into(),
+        });
+        assert!(
+            !after.iter().any(|u| matches!(u, Update::Error { .. })),
+            "{after:?}"
+        );
     }
 }

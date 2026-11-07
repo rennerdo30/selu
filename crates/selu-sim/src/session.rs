@@ -606,6 +606,14 @@ impl Session {
         )
         .map_err(runtime)?;
         report.notes.extend(source_notes);
+        let edit_mode = loader::read_toc_target_client(
+            &source_root.join("Interface/AddOns/Blizzard_EditMode"),
+            toc_target.as_deref(),
+            client,
+            &mut |_| {},
+        )
+        .is_ok();
+        crate::world::configure_edit_mode(&self.sim, edit_mode)?;
         let saved_names: Table = self.sim.lua.globals().raw_get("__selu_saved_names")?;
         for toc in &addons {
             for name in toc
@@ -1201,6 +1209,7 @@ impl Session {
             "__selu_world_money",
             "__selu_world_bags",
             "__selu_bag_slots",
+            "__selu_edit_mode_preset",
             "__selu_sim_combat",
         ] {
             world.push((
