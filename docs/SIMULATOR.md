@@ -681,6 +681,10 @@ receive stable synthetic numeric identities on first lookup, with once-only
 "not simulated" notes. These identities are simulator behaviour, not copied
 client values. Native enum stand-ins use the same runtime lookup; documented
 client values always take precedence. Undocumented Constants remain undefined.
+Documented Constant tables with the selected game's or family's suffix also
+expose the unsuffixed native name, preferring the game-specific form and
+preserving explicitly documented unsuffixed declarations. The shared product
+mapping supplies those suffixes; no client values are copied into the simulator.
 Missing constants and localization can still interrupt Blizzard startup; Core
 and Full are not error-free compatibility environments.
 

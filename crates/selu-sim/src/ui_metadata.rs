@@ -254,6 +254,28 @@ struct Metadata {
     tables: BTreeMap<String, BTreeMap<String, Node>>,
 }
 impl Metadata {
+    fn expose_constant_aliases(&mut self, target: Option<&str>) {
+        let Some(ui) = target.and_then(selu_manifest::client_ui_for_target) else {
+            return;
+        };
+        let names: Vec<_> = self.tables.keys().cloned().collect();
+        // Generated documentation names product variants with their game or
+        // family suffix; native Constants expose the unsuffixed table. For
+        // example the installed Camelot LevelConstants documentation and its
+        // MicroMenu consumers use those two forms. Reuse the product mapping,
+        // prefer game over family, and never replace an explicit declaration.
+        for folder in [ui.game_folder, ui.family] {
+            let suffix = format!("_{folder}");
+            for name in &names {
+                if name.starts_with("Constants.")
+                    && let Some(base) = name.strip_suffix(&suffix)
+                    && !self.tables.contains_key(base)
+                {
+                    self.tables.insert(base.into(), self.tables[name].clone());
+                }
+            }
+        }
+    }
     fn read(&mut self, source: &str) {
         if source.len() > 4 * 1024 * 1024 {
             return;
@@ -358,6 +380,7 @@ pub(crate) fn install(
             }
             Err(e) => ctx.not_simulated(&format!("client API documentation: {e}")),
         }
+        data.expose_constant_aliases(target);
         let data = Arc::new(data);
         cache.lock().unwrap().insert(key, data.clone());
         data
@@ -491,6 +514,25 @@ fn apply(lua: &Lua, ctx: &crate::Ctx, data: &Metadata) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn documented_constant_variants_use_the_selected_game_and_family() {
+        let source = r#"{Tables={
+            {Name="Fixture_Camelot",Type="Constants",Values={{Name="Choice",Value=7}}},
+            {Name="Fixture_Mainline",Type="Constants",Values={{Name="Choice",Value=29}}},
+            {Name="Fixture_Classic",Type="Constants",Values={{Name="Choice",Value=41}}},
+            {Name="Direct",Type="Constants",Values={{Name="Choice",Value=13}}},
+            {Name="Direct_Mainline",Type="Constants",Values={{Name="Choice",Value=17}}},
+            {Name="Unrelated_Other",Type="Constants",Values={{Name="Choice",Value=19}}}
+        }}"#;
+        for (target, expected) in [("wowf", 7), ("wow", 29), ("wow_classic_era", 41)] {
+            let mut data = Metadata::default();
+            data.read(source);
+            data.expose_constant_aliases(Some(target));
+            let s = crate::Session::new(Default::default()).unwrap();
+            apply(s.lua(), s.sim().ctx(), &data).unwrap();
+            s.eval(&format!("assert(Constants.Fixture.Choice=={expected});assert(Constants.Direct.Choice==13);assert(Constants.Unrelated==nil)")).unwrap();
+        }
+    }
     #[test]
     fn synthetic_enums_are_stable_unique_and_constants_stay_unknown() {
         for reverse in [false, true] {
@@ -648,6 +690,12 @@ mod tests {
                     .unwrap(),
                 );
             }
+            // Variants use the selected client's own values, including the
+            // unsuffixed native name when its game/family form is documented.
+            if let Ok(bytes) = storage.read_path("Interface/AddOns/Blizzard_APIDocumentationGenerated/LevelConstantsDocumentation.lua") {
+                expected.read(&String::from_utf8(bytes).unwrap());
+            }
+            expected.expose_constant_aliases(Some(product));
             assert!(expected.tables.keys().any(|p| p.starts_with("Enum.")));
             assert!(expected.tables.keys().any(|p| p.starts_with("Constants.")));
             for (path, fields) in &expected.tables {
