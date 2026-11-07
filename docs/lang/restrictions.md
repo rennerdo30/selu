@@ -193,3 +193,110 @@ zero and empty strings). A protected issecretvalue probe precedes all payload co
 arithmetic/truth proof. A failed proof is secret. The string variant requires
 string type and proves concatenation; absence is unreadable. False is preserved.
 This read point exposes a safe reason, never a secret value to branch on.
+
+## Taint safety
+
+All supported WoW products, including Classic and PTR/beta channels, have
+secure UI. Selu checks addon code on every target. These checks detect risky
+boundaries; they do not prove that an addon is taint free in combat.
+
+SELU0604 warns about `hook` on foreign objects or global functions, and
+`hookScript` on foreign objects for `OnShow`, `OnHide`, `OnEnable`, and
+`OnDisable`. Such callbacks run synchronously inside Blizzard's call and can
+taint secure UI. Poll `IsShown` from an owned ticker or frame instead.
+
+```selu
+hookScript(UIParent, "OnShow", () => {}); // SELU0604
+hook(UIParent, "Show", () => {});         // SELU0604
+hook("GetTime", () => {});               // SELU0604
+const owned = CreateFrame("Frame");
+hookScript(owned, "OnShow", () => {});    // owned receiver
+```
+
+Ownership is a conservative source-origin proof, following the lowering
+purity analysis: a unique binding initialized by `CreateFrame`, a visible
+Selu constructor, or an object/array literal is owned. Aliases retain proof;
+a reassigned binding loses proof. Binding and class-field identities come
+from the checker, so unrelated names in another scope do not invalidate proof. A frame created
+with an owned parent is owned. Class fields retain proof when every visible non-null initializer or store
+produces an owned value. Foreign stores invalidate that proof. Fields of
+owned object literals can retain their initializer's proof.
+
+Only manifest game types can be foreign: widgets, widget-like API types,
+manifest API tables and manifest namespace receivers. A game value has one of
+three origins:
+
+- **owned**: proven created by this addon (see above);
+- **foreign**: proven to come from the game. That is a manifest global no
+  Selu binding shadows, a game API result that is not a factory (for example
+  `GetMouseFocus`, or `GetParent` on a foreign value), a field, index or
+  method result of a foreign value, or a binding or class field whose every
+  store is foreign;
+- **unknown**: anything else, such as a frame returned by the addon's own
+  factory function, a parameter or an import.
+
+By default SELU0604 and SELU0605 report only **foreign** values, so frames an
+addon builds in its own helpers do not warn. `[build] strict_taint = true`
+also reports **unknown** values and makes both checks errors; use it to audit
+code where frames are passed in from elsewhere. The string form
+`hook("GlobalFunction", ...)` always targets the game. Selu class instances (including
+`this`), interfaces, source object types, arrays, maps, sets and functions
+are never foreign. A union is a game boundary only if an arm is a manifest
+game type; collection element types and object fields do not make the
+containing collection or object foreign. Selu collection callbacks and
+Selu-defined methods therefore do not trigger SELU0605.
+
+Hook checks apply only to the checker-resolved `hook` and `hookScript`
+built-ins. A local declaration shadows the built-in throughout its scope.
+
+SELU0605 warns when a function value is passed to a method on a foreign
+receiver or assigned to a foreign field (including indexed fields):
+
+```selu
+foreignView.SetExtentCalculator(() => 24); // SELU0605
+foreignObject.callback = () => {};         // SELU0605
+```
+
+The small safe registry list lives in `selu-check/src/taint.rs`: `C_Timer.*`,
+`CallbackRegistryMixin.RegisterCallback`, `EventRegistry.RegisterCallback`, and
+`EventRegistry.RegisterFrameEventAndCallback`. CallbackRegistry's
+`TriggerEvent` uses `secureexecuterange` (client `CallbackRegistry.lua`,
+lines 200–204, owner evidence SL-34). An arbitrary method named
+`RegisterCallback` is not enough to prove that receiver uses this registry.
+
+SELU0606 rejects calls in the shipped deny table in `selu-check/src/taint.rs`.
+The table records owner-observed SL-34 incidents and alternatives: the three
+bank table getters should use `C_Bank.FetchNumPurchasedBankTabs`; bank purchase
+and talent/spellbook opening need secure click proxies; `ToggleWorldMap` and
+`OpenWorldMap` should use `C_Map.OpenWorldMap(mapID)`. The incidents were on
+Forever; these APIs are also rejected on other targets where they exist.
+The checker does not introduce missing manifest declarations.
+
+Project rules augment that table:
+
+```toml
+[lint]
+deny = [{ api = "Example.Unsafe", reason = "Our documented incident" }]
+
+[build]
+strict_taint = true
+```
+
+`strict_taint` also reports values of unknown origin and promotes SELU0604
+and SELU0605 to errors. Denied calls
+are always errors. API names and reasons in project rules must be nonempty.
+
+Allow one expression with a mandatory nonempty literal written reason:
+
+```selu
+allowTaint("Reviewed secure caller at this site", ToggleSpellBook());
+```
+
+For a field assignment, wrap its function value, for example
+`foreignObject.callback = allowTaint("Reviewed registry", () => {});`.
+
+The wrapper is erased during lowering and preserves the expression's value.
+It suppresses the wrapped occurrence only; nested calls retain their checks.
+An empty or missing reason is SELU0607. It does not suppress type checking or
+secret-value errors. Secret values used as table keys, for reads or writes,
+are rejected with SELU0601 just like other opaque secret reads.

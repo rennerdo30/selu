@@ -110,6 +110,9 @@ impl Lowerer<'_> {
             return None;
         }
         let n = callee.dotted_name()?;
+        if n == "allowTaint" {
+            return Some(self.expr(&args[1], pre));
+        }
         if n == "onError" {
             self.wow.error_handler = true;
             let value = self.expr(&args[0], pre);

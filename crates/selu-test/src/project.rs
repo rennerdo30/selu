@@ -7,12 +7,27 @@ use std::process::ExitCode;
 struct Project {
     addon: AddonSection,
     #[serde(default)]
+    lint: LintSection,
+    #[serde(default)]
     build: BuildSection,
     /// `[format]`: read by `selu fmt` and Studio (validated here so a typo
     /// is an error rather than ignored).
     #[serde(default)]
     #[allow(dead_code)]
     format: FormatSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LintSection {
+    #[serde(default)]
+    deny: Vec<DenyEntry>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DenyEntry {
+    api: String,
+    reason: String,
 }
 
 /// The `[format]` table of `selu.toml`.
@@ -46,6 +61,8 @@ enum BuildLayout {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BuildSection {
+    #[serde(default)]
+    strict_taint: bool,
     #[serde(default)]
     strict_api: bool,
     #[serde(default)]
@@ -151,6 +168,20 @@ fn build_impl(
     let check_options = selu_check::CheckOptions {
         strict_api: project.build.strict_api,
     };
+    let strict_taint = project.build.strict_taint;
+    let deny: Vec<_> = project
+        .lint
+        .deny
+        .into_iter()
+        .map(|e| (e.api, e.reason))
+        .collect();
+    if deny
+        .iter()
+        .any(|(api, reason)| api.trim().is_empty() || reason.trim().is_empty())
+    {
+        eprintln!("selu: lint deny entries require an API and a written reason");
+        return Err(ExitCode::FAILURE);
+    }
     let shared = project.build.layout == BuildLayout::Shared;
     let debug = project.build.debug;
     let assets = project.build.assets;
@@ -274,8 +305,20 @@ fn build_impl(
             }
             imports_time += phase.elapsed();
             let phase = std::time::Instant::now();
-            let (checked, signature) =
+            let (mut checked, signature) =
                 prepared.check_module(&module.program, imports, check_options);
+            checked.diagnostics.retain(|d| {
+                !matches!(
+                    d.code.as_str(),
+                    "SELU0604" | "SELU0605" | "SELU0606" | "SELU0607"
+                )
+            });
+            checked.diagnostics.extend(selu_check::taint::check(
+                &module.program,
+                &checked.types,
+                strict_taint,
+                &deny,
+            ));
             if timing {
                 eprintln!(
                     "timing module {} check {:.3}s",
@@ -1283,4 +1326,27 @@ fn validate_saved_names(modules: &[ModuleSource], addon: &str) -> Result<(), Exi
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod taint_config_tests {
+    use super::*;
+    #[test]
+    fn parses_project_taint_policy() {
+        let p: Project = toml::from_str(
+            r#"
+[addon]
+name = "Test"
+targets = ["wow_classic_era"]
+[build]
+strict_taint = true
+[lint]
+deny = [{ api = "Example.Unsafe", reason = "documented incident" }]
+"#,
+        )
+        .unwrap();
+        assert!(p.build.strict_taint);
+        assert_eq!(p.lint.deny[0].api, "Example.Unsafe");
+        assert_eq!(p.lint.deny[0].reason, "documented incident");
+    }
 }

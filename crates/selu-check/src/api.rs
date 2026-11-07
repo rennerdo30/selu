@@ -197,12 +197,14 @@ pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
                 .map(|f| (f.name.clone(), map(m, f, depth + 1)))
                 .collect(),
         );
-        if flag(d, "SeluClosed") {
-            let shape = crate::types::NamedShape::new(format!("@selu_closed:{n}"));
-            shape.set(object);
-            return Type::Named(n.into(), shape);
-        }
-        return object;
+        let prefix = if flag(d, "SeluClosed") {
+            "@selu_closed"
+        } else {
+            "@manifest"
+        };
+        let shape = crate::types::NamedShape::new(format!("{prefix}:{n}"));
+        shape.set(object);
+        return Type::Named(n.into(), shape);
     }
     if let Some((_, members)) = SCALAR_UNIONS.iter().find(|(name, _)| *name == n) {
         return Type::ApiOpaque(n.into(), members.to_vec());
@@ -508,6 +510,7 @@ impl Ctx<'_> {
                 .index
                 .function(self.manifest, &format!("{root}.{name}"))
         {
+            self.types.mark_api_receiver(object.id);
             return Some(
                 f.signature
                     .as_ref()
@@ -660,6 +663,9 @@ impl Ctx<'_> {
             return Some(Type::Error);
         }
         let f = self.index.function(self.manifest, &full)?.clone();
+        if let ExprKind::Member { object, .. } = &callee.kind {
+            self.types.mark_api_receiver(object.id);
+        }
         let d = f.signature?;
         let ty = signature_for(self.manifest, &full, &d);
         self.types.set(callee.id, ty.clone());

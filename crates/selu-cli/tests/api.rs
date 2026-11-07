@@ -806,6 +806,22 @@ fn assignment_targets_emit_each_diagnostic_once() {
 
 #[test]
 fn sg_wave1_contracts() {
+    // This test checks API type errors. Foreign-hook warnings are covered by
+    // taint tests and must not mask the negative type-contract cases below.
+    fn codes(src: &str, flavour: &str) -> Vec<String> {
+        let manifests = cached_manifests();
+        let m = manifests
+            .iter()
+            .find(|m| m.flavour == flavour && !m.fixture)
+            .unwrap();
+        let p = selu_syntax::parse("sg.selu", src).unwrap();
+        selu_check::check(&p, m)
+            .into_iter()
+            .filter(|d| d.severity == selu_diagnostics::Severity::Error)
+            .map(|d| d.code.clone())
+            .collect()
+    }
+
     for flavour in ["wow", "wowf"] {
         for src in [
             include_str!("fixtures/sg/w1-format-union/src/main.selu"),
