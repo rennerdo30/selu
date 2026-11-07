@@ -383,6 +383,8 @@ apply=function(f,n,seen)
             if not found then array[#array+1]=f end
         end
     end
+    -- protected="true" (directly or through a template): see taint.rs.
+    if a.protected=='true' then rawset(f,'__protected',true) end
     if a.hidden~=nil then
         -- This is the initial XML state, before the instance's OnLoad.
         -- Inherited visibility scripts must not observe a half-built frame.

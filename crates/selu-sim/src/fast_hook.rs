@@ -16,6 +16,8 @@ thread_local! {
 }
 struct State {
     budget: SharedBudget,
+    /// Execution taint; call events attribute the called function.
+    taint: crate::taint::SharedTaint,
     stale: Shared<std::collections::HashSet<String>>,
     active: Cell<usize>,
     original: Cell<Option<ffi::lua_Hook>>,
@@ -60,6 +62,39 @@ unsafe extern "C-unwind" fn hook(lua: *mut ffi::lua_State, debug: *mut ffi::lua_
     if state.active.get() != lua as usize {
         // Match mlua's single active hook target, including inherited hooks.
         unsafe { ffi::lua_sethook(lua, None, 0, 0) };
+        return;
+    }
+    // SAFETY: `debug` is the record Lua passed to this hook.
+    let event = unsafe { (*debug).event };
+    if event == ffi::LUA_HOOKCALL {
+        // Only reached while taint tracking is on (an addon is loaded).
+        // getinfo "S" fills the called function's source; it cannot error.
+        if let Ok(mut taint) = state.taint.try_borrow_mut()
+            && taint.current.is_none()
+        {
+            let source = unsafe {
+                ffi::lua_getinfo(lua, c"S".as_ptr(), debug);
+                (*debug).source
+            };
+            if !source.is_null() {
+                let key = source as usize;
+                let owner = match taint.by_source.get(&key) {
+                    Some(owner) => owner.clone(),
+                    None => {
+                        let text = unsafe { std::ffi::CStr::from_ptr(source) }.to_string_lossy();
+                        let owner = taint.owner_of_source(crate::taint::source_name(&text));
+                        taint.by_source.insert(key, owner.clone());
+                        owner
+                    }
+                };
+                if owner.is_some() {
+                    taint.current = owner;
+                }
+            }
+        }
+        return;
+    }
+    if event != ffi::LUA_HOOKCOUNT {
         return;
     }
     let quantum = state.quantum.get();
@@ -115,6 +150,7 @@ pub(crate) fn install(lua: &Lua, budget: SharedBudget, quantum: u32, thread: Opt
             return;
         };
         let stale = ctx.stale_sources.clone();
+        let taint = ctx.taint.clone();
         drop(ctx);
         #[cfg(debug_assertions)]
         if std::env::var_os("SELU_SIM_PROFILE").is_some() {
@@ -124,6 +160,7 @@ pub(crate) fn install(lua: &Lua, budget: SharedBudget, quantum: u32, thread: Opt
         }
         lua.set_app_data(Owner(Box::new(State {
             budget,
+            taint,
             stale,
             active: Cell::new(0),
             original: Cell::new(None),
@@ -154,9 +191,32 @@ pub(crate) fn install(lua: &Lua, budget: SharedBudget, quantum: u32, thread: Opt
             TARGETS.with(|targets| {
                 targets.borrow_mut().insert(target as usize, pointer);
             });
-            ffi::lua_sethook(target, Some(hook), ffi::LUA_MASKCOUNT, quantum as i32);
+            let mask = if owner.0.taint.borrow().tracking() {
+                ffi::LUA_MASKCOUNT | ffi::LUA_MASKCALL
+            } else {
+                ffi::LUA_MASKCOUNT
+            };
+            ffi::lua_sethook(target, Some(hook), mask, quantum as i32);
             ffi::lua_settop(caller, 0);
         })
     }
     .expect("native hook installation");
+}
+
+/// Re-apply the native hook on the calling thread, picking up call events
+/// once taint tracking starts (the first addon chunk is registered).
+pub(crate) fn refresh(lua: &Lua) {
+    let Some(owner) = lua.app_data_ref::<Owner>() else {
+        // The VM's first hook install precedes its context datum; arm the
+        // native hook now through the normal path.
+        let Some(ctx) = lua.app_data_ref::<Ctx>().map(|ctx| ctx.clone()) else {
+            return;
+        };
+        crate::core::rearm_hook(lua, &ctx);
+        return;
+    };
+    let quantum = owner.0.quantum.get();
+    let budget = owner.0.budget.clone();
+    drop(owner);
+    install(lua, budget, quantum, None);
 }

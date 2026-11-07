@@ -1017,3 +1017,52 @@ from the user's own installation or their local source checkout. That content
 is never committed or redistributed with the simulator. Repository test
 fixtures are self-written; client-backed tests use external local files.
 Screenshots made with client art stay local.
+
+## Taint (SL-35)
+
+The client runs Blizzard's code secure and addon code insecure. Once addon
+code runs inside a call, the rest of that call is tainted by the addon, and
+protected actions in it are refused. The simulator models this at runtime, so
+the taint errors addons hit in the game reproduce in tests and in Studio.
+
+- **Who owns code.** Every chunk an addon's TOC loads belongs to that addon.
+  Blizzard's chunks and the simulator's own are secure. A chunk name both
+  load stays secure, so Blizzard code is never tainted by mistake.
+- **How taint spreads.** A native call hook taints the current call as soon
+  as it enters an addon function. That covers event and script handlers,
+  `hooksecurefunc` and `HookScript` hooks, timers, and Blizzard code calling
+  an addon closure directly (for example a layout calling an addon's extent
+  calculator). Taint stays for the rest of the call. Call tracking starts
+  when the first addon is loaded, so Blizzard's UI load pays nothing for it.
+- **Where it resets.** Every engine entry (an event, a script, a timer, an
+  input action) starts secure. `securecall`, `securecallfunction`,
+  `CreateSecureDelegate` and `secureexecuterange` give each callback the
+  caller's taint and restore it afterwards, so a callee's taint never
+  reaches the caller.
+- **Attribute handlers.** `OnAttributeChanged` runs with the handler's own
+  security even when insecure code called `SetAttribute`, as in the client:
+  that is how secure code (for example `SecureHelper.lua`) accepts requests
+  from addons and checks the values with `issecurevalue`. Other handlers run
+  inside the call that triggered them and inherit its taint (an insecure
+  `Show()` taints the frame's `OnShow`).
+- **Refused actions.**
+  - On a protected frame in combat, a tainted call to `Show`, `Hide`,
+    `SetShown`, `SetPoint`, `SetAllPoints`, `ClearAllPoints`, `SetParent`,
+    `SetSize`/`SetWidth`/`SetHeight`, `SetScale`, `SetAttribute`,
+    `SetFrameStrata`/`SetFrameLevel`, `Raise`/`Lower`, `EnableMouse` or
+    `RegisterForClicks` does nothing and raises `ADDON_ACTION_BLOCKED`.
+  - A protected API function (manifest restriction `SecureOnly`, the
+    documentation's `IsProtectedFunction`) called from tainted code does
+    nothing and raises `ADDON_ACTION_FORBIDDEN`, in or out of combat.
+  - Each refusal is logged as `taint: <EVENT> <addon> <action>`, recorded in
+    the trace, and fires the client's event with the addon and the action.
+    `Session::taint_log()` returns them.
+- **Protected frames.** `protected="true"` in XML, directly or inherited from
+  a template (Blizzard's `SecureFrameTemplate` family), marks a frame
+  protected; `IsProtected()` reports it.
+- **Inspection.** `issecure()` reports the current call. `forceinsecure()`
+  taints it as `*** ForceTaint_Strong ***`.
+
+Not modeled yet: per-variable and per-value taint (`issecurevariable` and
+`issecurevalue` report every value secure, with a once-only note), taint carried by values written to tables,
+and protection inherited through anchoring. The console's `eval` runs secure.

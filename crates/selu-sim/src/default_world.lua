@@ -125,9 +125,7 @@ end
 function GetCurrentEnvironment() return _G end
 function GetGlobalEnvironment() return _G end
 function debuglocals() return '' end
-function issecure() return true end
--- Native taint is not modeled; print handlers still need this host transition.
-function forceinsecure() end
+-- issecure/forceinsecure/issecurevariable are natives (taint.rs).
 if version then
     function GetBuildInfo() return version,tostring(build),'',interface end
 end

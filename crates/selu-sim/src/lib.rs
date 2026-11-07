@@ -40,6 +40,7 @@ pub mod saved;
 pub mod session;
 mod sim_globals;
 pub mod snapshot;
+pub mod taint;
 pub mod text;
 mod timers;
 mod trace;

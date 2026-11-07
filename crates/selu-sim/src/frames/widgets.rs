@@ -194,7 +194,22 @@ pub fn callback(ctx: &Ctx, t: Table, name: &str, args: Vec<Value>) {
             ctx2.record(crate::TraceKind::Script, &name, vec![]);
             let mut call = MultiValue::from_vec(vec![Value::Table(t)]);
             call.extend(args);
-            crate::core::script_callback(lua, &ctx2, || crate::core::call_lua::<()>(lua, f, call))?;
+            let run = || {
+                crate::core::script_callback(lua, &ctx2, || {
+                    crate::core::call_lua::<()>(lua, f, call)
+                })
+            };
+            if name == "OnAttributeChanged" {
+                // The client runs attribute handlers with their own security:
+                // an insecure SetAttribute hands values to secure code, whose
+                // taint the handler checks with issecurevalue (taint.rs).
+                crate::taint::isolated(&ctx2.taint, || {
+                    ctx2.taint.borrow_mut().current = None;
+                    run()
+                })?;
+            } else {
+                run()?;
+            }
         }
         Ok(())
     });
@@ -658,6 +673,28 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     let i = id(t)?;
     let v = &args[1..];
     let a = store(lua);
+    // A protected frame refuses layout and visibility changes in combat
+    // while the call is tainted by an addon (taint.rs).
+    if crate::taint::combat_protected_method(method)
+        && ctx.taint.borrow().current.is_some()
+        && t.raw_get::<Option<bool>>("__protected")?.unwrap_or(false)
+        && lua
+            .globals()
+            .raw_get::<Option<bool>>("__selu_sim_combat")?
+            .unwrap_or(false)
+    {
+        let name = a.borrow().regions[i]
+            .name
+            .clone()
+            .unwrap_or_else(|| "<unnamed>".into());
+        crate::taint::refuse(
+            lua,
+            ctx,
+            "ADDON_ACTION_BLOCKED",
+            format!("{name}:{method}()"),
+        );
+        return Ok(MultiValue::new());
+    }
     if method == "UpdateMouseOverTooltip" {
         return (Value::Nil, 0).into_lua_multi(lua);
     }

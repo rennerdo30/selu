@@ -531,7 +531,6 @@ impl Session {
                 .create_function(move |_, name: String| Ok(events.contains(&name)))?,
         )?;
         self.sim.lua.globals().raw_set("C_EventUtils", event_api)?;
-        self.sim.ctx.not_simulated("native taint tracking");
         self.sim
             .ctx
             .not_simulated("localized SecondsFormatter rendering (configuration only)");
@@ -539,10 +538,14 @@ impl Session {
         self.sim.lua.globals().raw_set(
             "__selu_secure_invoke",
             self.sim.lua.create_function(
-                move |lua, (function, args): (Function, MultiValue)| match core::script_callback(
-                    lua,
-                    &ctx,
-                    || core::call_lua::<MultiValue>(lua, function, args),
+                // securecall: the callee's taint never reaches the caller.
+                move |lua, (function, args): (Function, MultiValue)| match crate::taint::isolated(
+                    &ctx.taint,
+                    || {
+                        core::script_callback(lua, &ctx, || {
+                            core::call_lua::<MultiValue>(lua, function, args)
+                        })
+                    },
                 ) {
                     Ok(values) => Ok(values),
                     Err(error) => {
@@ -729,17 +732,16 @@ impl Session {
                                 &format!("return function(...)\n{source}\nend"),
                             )?
                         } else {
+                            let chunk = std::path::Path::new(&name)
+                                .strip_prefix(&toc.dir)
+                                .map(|p| p.to_string_lossy().into_owned())
+                                .unwrap_or_else(|_| name.clone());
+                            // Blizzard's code runs secure (see taint.rs).
+                            self.sim.ctx.taint.borrow_mut().register_secure(&chunk);
                             self.sim
                                 .lua
                                 .load(&source)
-                                .set_name(
-                                    std::path::Path::new(&name)
-                                        .strip_prefix(&toc.dir)
-                                        .map(|p| p.to_string_lossy())
-                                        .unwrap_or_else(|_| {
-                                            std::borrow::Cow::Borrowed(name.as_str())
-                                        }),
-                                )
+                                .set_name(chunk)
                                 .set_environment(environment.clone())
                                 .into_function()?
                         },
@@ -1330,6 +1332,10 @@ impl Session {
         Ok(())
     }
 
+    /// Protected actions refused because the call was tainted (taint.rs).
+    pub fn taint_log(&self) -> Vec<crate::taint::TaintRecord> {
+        self.sim.ctx.taint.borrow().log().to_vec()
+    }
     pub fn eval(&self, source: &str) -> SimResult<()> {
         lock(&self.sim.state).commands.push(HostCommand::Eval {
             code: source.into(),
@@ -1497,6 +1503,7 @@ impl Vm {
         )?;
         crate::host_lua::load(&lua, include_str!("inventory.lua")).exec()?;
         crate::world::install_restrictions(&lua, &ctx)?;
+        crate::taint::install(&lua, &ctx)?;
         crate::trace::install(&lua, &ctx)?;
         crate::host_lua::seal(&lua)?;
 
@@ -1528,6 +1535,14 @@ impl Vm {
     /// file receives `...` = the addon's name and one table shared by all of
     /// its files.
     fn load_chunks(&self, addon: &str, files: &[(String, String)]) -> SimResult<()> {
+        // An addon's code is insecure: calling it taints the call (taint.rs).
+        {
+            let mut taint = self.ctx.taint.borrow_mut();
+            for (name, _) in files {
+                taint.register(name, addon);
+            }
+        }
+        crate::fast_hook::refresh(&self.lua);
         let ns = self.lua.create_table()?;
         self.lua
             .set_named_registry_value(&format!("selu:addon:{addon}"), ns.clone())?;

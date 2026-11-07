@@ -258,8 +258,22 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
         let schemas = schemas.clone();
         let context = ctx.clone();
         let full_name = entry.name.clone();
+        let protected = entry
+            .restrictions
+            .iter()
+            .any(|r| r == "SecureOnly" || r.eq_ignore_ascii_case("protected"));
         let native = lua.create_function(move |lua, _: mlua::MultiValue| {
             let _profile = crate::profile::Span::new("native.defaults");
+            // A protected function refuses a tainted caller (taint.rs).
+            if protected && context.taint.borrow().current.is_some() {
+                crate::taint::refuse(
+                    lua,
+                    &context,
+                    "ADDON_ACTION_FORBIDDEN",
+                    format!("{full_name}()"),
+                );
+                return Ok(mlua::MultiValue::new());
+            }
             crate::native_defaults::record(lua, &full_name);
             context.not_simulated(&full_name);
             crate::native_defaults::values(lua, &returns, &schemas, &context, 0)
@@ -649,6 +663,36 @@ mod sg_tests {
                 .count(),
             1
         );
+    }
+    #[test]
+    fn protected_functions_refuse_tainted_callers() {
+        let mut manifest: selu_manifest::Manifest = serde_json::from_str(include_str!(
+            "../../../manifests/fixtures/forever-1.0.0.1000.json"
+        ))
+        .unwrap();
+        manifest.functions.push(
+            serde_json::from_value(serde_json::json!({
+                "name":"C_Synthetic.Protected","evidence":"verified","restrictions":["SecureOnly"],
+                "signature":{"name":"Protected","returns":[{"name":"ok","type":"boolean"}]}
+            }))
+            .unwrap(),
+        );
+        let s = crate::Session::new(crate::SessionConfig {
+            manifest: Some(manifest),
+            ..Default::default()
+        })
+        .unwrap();
+        // Secure code (no owner) may call it.
+        s.eval("assert(C_Synthetic.Protected() == false)").unwrap();
+        assert!(s.taint_log().is_empty());
+        // Tainted code is refused and the client's event is recorded.
+        s.eval("forceinsecure(); assert(C_Synthetic.Protected() == nil)")
+            .unwrap();
+        let log = s.taint_log();
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(log[0].event, "ADDON_ACTION_FORBIDDEN");
+        assert_eq!(log[0].addon, crate::taint::FORCED);
+        assert_eq!(log[0].action, "C_Synthetic.Protected()");
     }
     #[test]
     fn wow_string_aliases_and_frame_ids() {

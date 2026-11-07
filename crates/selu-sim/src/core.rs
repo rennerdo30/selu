@@ -413,6 +413,8 @@ pub struct Ctx {
     pub(crate) tolerant_ui: Shared<bool>,
     /// Nesting depth of [`dispatch`]; only the outermost resets and flushes.
     pub(crate) depth: Shared<u32>,
+    /// Execution taint: which addon's code the current call has run.
+    pub taint: crate::taint::SharedTaint,
 }
 
 impl Ctx {
@@ -439,6 +441,7 @@ impl Ctx {
             scripts: shared(VecDeque::new()),
             tolerant_ui: shared(false),
             depth: shared(0),
+            taint: Default::default(),
         }
     }
 
@@ -645,6 +648,17 @@ fn reject_stale_sources(
 
 /// Reset the budget for a new dispatch, restoring the normal hook interval
 /// if the previous dispatch exhausted it.
+/// Re-install the count hook with the current interval (taint.rs: call
+/// events start once an addon is loaded).
+pub(crate) fn rearm_hook(lua: &Lua, ctx: &Ctx) {
+    let interval = if ctx.budget.borrow().blizzard_bootstrap {
+        HOOK_INTERVAL
+    } else {
+        1
+    };
+    set_count_hook(lua, ctx.budget.clone(), interval);
+}
+
 fn reset_budget(lua: &Lua, ctx: &Ctx) {
     let mut b = ctx.budget.borrow_mut();
     b.used = 0;
@@ -840,6 +854,8 @@ pub(crate) fn install_secure_range(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
         args.push_front(mlua::Value::Function(lua.registry_value::<mlua::Function>(&report)?));
         args.push_front(mlua::Value::Function(boundary_renderer(lua)?));
         let mut failure=None;
+        // Each callback starts with the caller's taint; the caller keeps it.
+        let saved_taint=ctx.taint.borrow().current.clone();
         // SAFETY: exec_raw protects stack restoration and lua_next errors.
         // The closure owns only borrowed references and primitive indices;
         // no Rust Drop value lives across an unprotected Lua operation.
@@ -854,6 +870,7 @@ pub(crate) fn install_secure_range(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
             mlua::ffi::lua_pushnil(state);
             while mlua::ffi::lua_next(state,3)!=0 {
                 if let Err(error)=begin_callback(lua,&ctx) {failure=Some(error);break;}
+                ctx.taint.borrow_mut().current=saved_taint.clone();
                 mlua::ffi::lua_pushvalue(state,4);
                 mlua::ffi::lua_pushvalue(state,top+1);
                 mlua::ffi::lua_pushvalue(state,top+2);
@@ -870,6 +887,7 @@ pub(crate) fn install_secure_range(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
             }
             mlua::ffi::lua_settop(state,0);
         })}?;
+        ctx.taint.borrow_mut().current=saved_taint;
         if let Some(error)=failure {return Err(error);}
         check_budget(&ctx)?;
         match error {mlua::Value::Nil=>Ok(()),mlua::Value::Error(error)=>Err(*error),mlua::Value::String(error)=>Err(mlua::Error::runtime(error.to_string_lossy())),_=>Err(mlua::Error::runtime("protected range reporter failed"))}
@@ -886,6 +904,28 @@ pub(crate) fn call_lua<R: mlua::FromLuaMulti>(
 ) -> mlua::Result<R> {
     let _profile = crate::profile::Span::new("lua.execute_and_boundary");
     crate::profile::secure_call(&function, false);
+    let taint = lua.app_data_ref::<Ctx>().map(|ctx| ctx.taint.clone());
+    if let Some(taint) = &taint {
+        {
+            let mut t = taint.borrow_mut();
+            if t.lua_depth == 0 {
+                // The engine is calling: this entry starts secure.
+                t.current = None;
+            }
+            t.lua_depth += 1;
+        }
+        crate::taint::enter_function(taint, &function);
+    }
+    struct Leave(Option<crate::taint::SharedTaint>);
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            if let Some(taint) = &self.0 {
+                let mut t = taint.borrow_mut();
+                t.lua_depth = t.lua_depth.saturating_sub(1);
+            }
+        }
+    }
+    let _leave = Leave(taint);
     let mut args = args.into_lua_multi(lua)?;
     args.push_front(mlua::Value::Function(function));
     args.push_front(mlua::Value::Function(boundary_renderer(lua)?));
