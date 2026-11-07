@@ -579,6 +579,43 @@ item IDs per slot, not inventory metadata or item stack counts.
 ## Default UI startup (stage 1, opt-in)
 
 The Default UI setting remains **off by default until visual acceptance**.
+To enable it, open Studio's **Run > Game installs...** window, enable
+**Default UI (applies on next project load)**, and set the UI source checkout
+and client install paths there. Reopen the project to start a new session.
+The install root contains `.build.info`; the source root contains `Interface`.
+Keep **Disable client fonts and art** unchecked for client-backed rendering.
+
+The empty profile selects Blizzard's **Modern** Edit Mode preset (layout 1,
+preset enum 0). Its low player-frame placement is source-correct:
+`Blizzard_EditMode/Mainline/EditModePresetLayouts.lua:248-261` anchors it at
+bottom-center with offset (-300, 250). Camelot loads that shared-family file.
+Classic is a separate preset; the simulator does not reposition named frames
+or switch presets to imitate a presumed fresh Forever account.
+
+The HUD currently includes the player/class-icon portrait, minimap placeholder,
+action bar art, chat, micro menu and bags bar. Native input runs Blizzard's
+click/hover/leave, tooltip, Escape, keyboard focus/modifier, live drag and chat
+wheel handlers. Scenario bag items appear through container APIs. The native
+world is synthetic: there is no 3D scene or actual minimap terrain, item names
+and art are limited, some native APIs and text editing remain incomplete,
+and startup errors are captured rather than proving complete client fidelity.
+Missing installed art uses a generic marker. Empty or inverted render quads
+draw nothing, including missing-art markers on collapsed three-slice centers;
+the actual bag-slot atlas art remains visible underneath.
+
+For client-backed tests, set `SELU_DEFAULT_UI_SOURCE` to the read-only checkout
+root and `SELU_CLIENT_INSTALL` to the read-only install root. Run
+`cargo test -p selu-sim --test default_ui_interactions -j 4 -- --ignored --test-threads=1`
+and the Studio bin's ignored
+`client_preview_routes_pointer_phases_hover_wheel_and_live_drag` test separately.
+Use a private `CARGO_TARGET_DIR`. These tests never launch the game or read WTF.
+
+Everyday `scripts/studio.bat` builds both CLI and Studio with `--release`
+through `scripts/_tools.bat`. `selu debug` finds Studio beside the CLI, so that
+workflow uses release Studio (8.93 s in the preceding measured startup run),
+not the slower development build. The launcher itself does not select a Cargo
+profile: `SELU_STUDIO` overrides the sibling binary, with PATH as a fallback.
+
 An explicitly enabled session loads Blizzard's external Lua/XML before the
 user addon. Local CASC files take precedence over the configured read-only
 source checkout; missing locally installed files fall back with notes. The

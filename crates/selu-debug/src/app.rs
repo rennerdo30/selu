@@ -3161,7 +3161,7 @@ impl Studio {
                     .unwrap_or(area)
                     .intersect(area),
             );
-            let Some(rect) = r.rect.as_ref().map(to_screen) else {
+            let Some(rect) = r.rect.as_ref().and_then(|rect| paint_rect(to_screen(rect))) else {
                 continue;
             };
             if r.widget == "Minimap" {
@@ -3237,7 +3237,14 @@ impl Studio {
                         if matches!(r.texture, Some(TextureFill::Atlas(_))) {
                             return Err("unavailable atlas".into());
                         }
-                        crate::textures::load_resolved(&self.assets, name).map(|mut image| {
+                        let resolved = crate::textures::load_resolved(&self.assets, name);
+                        #[cfg(debug_assertions)]
+                        if std::env::var_os("SELU_SIM_PROFILE").is_some()
+                            && let Err(error) = &resolved
+                        {
+                            eprintln!("PROFILE_ASSET {name}: {error}");
+                        }
+                        resolved.map(|mut image| {
                             if r.visual.desaturated {
                                 crate::textures::desaturate(&mut image);
                             }
@@ -3970,6 +3977,23 @@ mod tests {
     use selu_sim::RegionId;
 
     #[test]
+    fn preview_rejects_empty_or_inverted_quads() {
+        // Missing-art diagonals must not turn an empty three-slice center
+        // into visible artwork. Textured quads use this same geometry gate.
+        for size in [
+            Vec2::new(-35., 16.),
+            Vec2::new(16., -35.),
+            Vec2::new(0., 16.),
+            Vec2::new(16., 0.),
+            Vec2::new(f32::INFINITY, 16.),
+            Vec2::ZERO,
+        ] {
+            assert!(paint_rect(ERect::from_min_size(Pos2::ZERO, size)).is_none());
+        }
+        assert!(paint_rect(ERect::from_min_size(Pos2::ZERO, Vec2::splat(16.))).is_some());
+    }
+
+    #[test]
     fn preview_only_forwards_input_when_it_owns_the_pointer() {
         let ctx = egui::Context::default();
         let mut state = PreviewInputState::default();
@@ -4235,6 +4259,13 @@ mod tests {
         };
         assert_eq!(region_label(&r), "FontString #3 \"Hello\"");
     }
+}
+
+/// Empty geometry has no drawable pixels, including diagnostic markers.
+fn paint_rect(rect: ERect) -> Option<ERect> {
+    // An inverted three-slice center is empty, not a mirrored quad. In
+    // particular, the missing-art diagonals must not draw across its edges.
+    (rect.is_finite() && rect.is_positive()).then_some(rect)
 }
 
 /// Split at sampler boundaries so each axis can clamp, repeat or mirror independently.

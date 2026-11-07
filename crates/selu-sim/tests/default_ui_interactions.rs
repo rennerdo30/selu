@@ -128,6 +128,42 @@ fn shown(s: &Session, name: &str) -> bool {
         .find(|r| r.name.as_deref() == Some(name))
         .is_some_and(|r| r.visible)
 }
+fn verify_default_layout_and_bag_art(s: &Session) {
+    // Mainline/EditModePresetLayouts.lua:248-261 is also loaded by Camelot.
+    // Compare the applied native anchors with Blizzard's selected preset data,
+    // rather than inventing a supposedly more appropriate player position.
+    s.eval(r#"
+        local m=EditModeManagerFrame
+        local layout=m:GetActiveLayoutInfo()
+        assert(layout.layoutIndex==Enum.EditModePresetLayouts.Modern)
+        local expected=EDIT_MODE_MODERN_SYSTEM_MAP[PlayerFrame.system][PlayerFrame.systemIndex].anchorInfo
+        local point,relative,relativePoint,x,y=PlayerFrame:GetPoint(1)
+        assert(point==expected.point and relative==_G[expected.relativeTo] and relativePoint==expected.relativePoint)
+        assert(x==expected.offsetX and y==expected.offsetY)
+        __bag_art_ids={}
+        for _,f in ipairs({CharacterBag0Slot,CharacterBag1Slot,CharacterBag2Slot,CharacterBag3Slot,CharacterReagentBag0Slot}) do
+            local normal=f:GetNormalTexture()
+            local atlas=f:GetSlotAtlases()
+            assert(normal:IsVisible() and normal:GetAtlas()==atlas)
+            __bag_art_ids[#__bag_art_ids+1]=assert(tonumber(normal:GetTexture()))
+        end
+    "#).unwrap();
+    let install = std::env::var_os("SELU_CLIENT_INSTALL").unwrap();
+    let storage =
+        selu_gamedata::Storage::open(std::path::Path::new(&install), "wowf", None).unwrap();
+    let ids: mlua::Table = s.lua().globals().raw_get("__bag_art_ids").unwrap();
+    for id in ids.sequence_values::<u32>() {
+        let id = id.unwrap();
+        let bytes = storage
+            .read(id)
+            .unwrap_or_else(|e| panic!("bag art {id}: {e}"));
+        selu_gamedata::blp::decode(&bytes).unwrap_or_else(|e| panic!("bag art {id}: {e}"));
+    }
+    s.lua()
+        .globals()
+        .raw_set("__bag_art_ids", mlua::Value::Nil)
+        .unwrap();
+}
 #[test]
 #[ignore = "requires read-only local game art and matching Blizzard UI sources"]
 fn backpack_button_opens_backpack() {
@@ -194,6 +230,7 @@ fn action_button_has_pressed_texture_until_release() {
 #[ignore = "requires read-only local game art and matching Blizzard UI sources"]
 fn fresh_login_has_no_absent_unit_frames_or_empty_objective_tracker() {
     with_session(|s| {
+        verify_default_layout_and_bag_art(s);
         s.eval("assert(not UnitExists('target') and not UnitExists('focus'))")
             .unwrap();
         for name in ["TargetFrame", "FocusFrame", "ObjectiveTrackerFrame"] {
