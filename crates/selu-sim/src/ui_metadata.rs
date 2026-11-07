@@ -416,7 +416,10 @@ pub(crate) fn install(
     let key = format!("{}:{build}:{}", target.unwrap_or("none"), source.display());
     static CACHE: OnceLock<Mutex<BTreeMap<String, Arc<Metadata>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(Mutex::default);
-    let cached = cache.lock().unwrap().get(&key).cloned();
+    let shared = storage.as_ref().is_none_or(|s| !s.uses_user_keys());
+    let cached = shared
+        .then(|| cache.lock().unwrap().get(&key).cloned())
+        .flatten();
     let data = if let Some(data) = cached {
         data
     } else {
@@ -443,7 +446,9 @@ pub(crate) fn install(
         }
         data.expose_constant_aliases(target);
         let data = Arc::new(data);
-        cache.lock().unwrap().insert(key, data.clone());
+        if shared {
+            cache.lock().unwrap().insert(key, data.clone());
+        }
         data
     };
     apply(lua, ctx, &data)?;

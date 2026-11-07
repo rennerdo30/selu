@@ -1,8 +1,10 @@
 //! Read-only local CASC access. No downloader or extraction pipeline is called.
 mod hash;
+pub mod keys;
 mod local;
 use hash::hashpath;
 use local::*;
+pub use local::{BuildInfo, parse_build_info};
 use md5::{Digest, Md5};
 use std::{
     collections::HashMap,
@@ -13,6 +15,8 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub mod blp;
 /// An opened snapshot of the active product's local index and root.
 pub struct Storage {
+    install: PathBuf,
+    keys: keys::Keyring,
     pub build: BuildInfo,
     root_entry_count: usize,
     /// Every enUS content key a file has, in root order. A file can have
@@ -34,6 +38,18 @@ fn key(value: &str) -> Result<[u8; 16]> {
 }
 impl Storage {
     pub fn open(install: &Path, product: &str, listfile: Option<&Path>) -> Result<Self> {
+        Self::open_with_key_file(install, product, listfile, None)
+    }
+    pub fn open_with_key_file(
+        install: &Path,
+        product: &str,
+        listfile: Option<&Path>,
+        key_file: Option<&Path>,
+    ) -> Result<Self> {
+        let keys = key_file
+            .map(keys::Keyring::load)
+            .transpose()?
+            .unwrap_or_default();
         let builds = parse_build_info(&std::fs::read_to_string(install.join(".build.info"))?)?;
         let mut matches = builds
             .into_iter()
@@ -53,11 +69,12 @@ impl Storage {
 
         let read = |ekey: &[u8]| -> Result<Vec<u8>> {
             let entry = index.find(ekey).ok_or("encoding key absent locally")?;
-            read_entry(
+            read_entry_with_keys(
                 &data,
                 entry.archive_number,
                 entry.archive_offset,
                 entry.size,
+                &keys,
             )
         };
         let encoding = EncodingFile::parse(&read(&key(&config.encoding_ekey)?)?)?;
@@ -88,6 +105,8 @@ impl Storage {
                 .join(hex::encode(product.as_bytes()))
                 .join(hex::encode(build_key));
         Ok(Self {
+            install: install.to_path_buf(),
+            keys,
             cache,
             build,
             root_entry_count,
@@ -103,6 +122,13 @@ impl Storage {
     }
     pub fn entry_count(&self) -> usize {
         self.root_entry_count
+    }
+    pub fn install_root(&self) -> &Path {
+        &self.install
+    }
+    /// Keyed sessions must not publish decrypted content to shared caches.
+    pub fn uses_user_keys(&self) -> bool {
+        !self.keys.is_empty()
     }
     pub fn resolve(&self, path: &str) -> Result<u32> {
         let path = normalize(path);
@@ -155,7 +181,8 @@ impl Storage {
     }
     fn read_content(&self, ckey: &[u8; 16]) -> Result<Option<Vec<u8>>> {
         let cache = self.cache.join(hex::encode(ckey));
-        if let Ok(bytes) = std::fs::read(&cache)
+        if self.keys.is_empty()
+            && let Ok(bytes) = std::fs::read(&cache)
             && Md5::digest(&bytes).as_slice() == ckey
         {
             return Ok(Some(bytes));
@@ -166,15 +193,23 @@ impl Storage {
         let mut failure = None;
         for ekey in &enc.ekeys {
             if let Some(e) = self.index.find(ekey) {
-                let result = read_entry(&self.data, e.archive_number, e.archive_offset, e.size);
+                let result = read_entry_with_keys(
+                    &self.data,
+                    e.archive_number,
+                    e.archive_offset,
+                    e.size,
+                    &self.keys,
+                );
                 match result {
                     Ok(bytes) => {
                         if Md5::digest(&bytes).as_slice() != ckey {
                             failure = Some("decoded CASC content hash mismatch".into());
                             continue;
                         }
-                        std::fs::create_dir_all(&self.cache)?;
-                        std::fs::write(&cache, &bytes)?;
+                        if self.keys.is_empty() {
+                            std::fs::create_dir_all(&self.cache)?;
+                            std::fs::write(&cache, &bytes)?;
+                        }
                         return Ok(Some(bytes));
                     }
                     Err(error) => failure = Some(error),
@@ -236,7 +271,17 @@ fn local_entry_present(data: &Path, entry: &IndexEntry, ekey: &[u8; 16]) -> bool
     };
     check().unwrap_or(false)
 }
+#[cfg(test)]
 fn read_entry(data: &Path, archive: u32, offset: u64, size: u32) -> Result<Vec<u8>> {
+    read_entry_with_keys(data, archive, offset, size, &keys::Keyring::default())
+}
+fn read_entry_with_keys(
+    data: &Path,
+    archive: u32,
+    offset: u64,
+    size: u32,
+    keys: &keys::Keyring,
+) -> Result<Vec<u8>> {
     if !(8..=268_435_456).contains(&size) {
         return Err("invalid or oversized CASC entry".into());
     }
@@ -258,7 +303,7 @@ fn read_entry(data: &Path, archive: u32, offset: u64, size: u32) -> Result<Vec<u
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = vec![0; len];
     file.read_exact(&mut bytes)?;
-    decode_blte(&bytes)
+    local::decode_blte_with_keys(&bytes, keys)
 }
 #[cfg(test)]
 mod tests {

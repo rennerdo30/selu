@@ -127,6 +127,8 @@ pub struct SessionConfig {
     pub manifest: Option<selu_manifest::Manifest>,
     /// Explicit read-only client install; None keeps deterministic offline sessions.
     pub client_install: Option<PathBuf>,
+    /// Explicit opt-in only; never read when None. Contents are not serialized.
+    pub client_key_file: Option<PathBuf>,
     /// `flavour@version`, selecting flavour-specific `.toc` files.
     pub target: Option<String>,
     /// UIParent size in pixels at scale 1 (decision 4).
@@ -157,6 +159,7 @@ impl Default for SessionConfig {
         SessionConfig {
             manifest: None,
             client_install: None,
+            client_key_file: None,
             target: None,
             ui_size: snapshot::DEFAULT_UI_SIZE,
             seed: 1,
@@ -185,7 +188,7 @@ fn open_client_assets(sim: &Vm, config: &SessionConfig) -> SimResult<()> {
         crate::frames::arena::store(sim.lua())
             .borrow_mut()
             .fonts
-            .open_client(root, product)
+            .open_client_with_keys(root, product, config.client_key_file.as_deref())
             .map_err(mlua::Error::runtime)?;
     }
     Ok(())

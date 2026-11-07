@@ -8,4 +8,6 @@ license.workspace = true
 flate2 = "1"
 md-5 = "0.10"
 hex = "0.4"
+salsa20 = { version = "0.11", features = ["zeroize"] }
+zeroize = "1"
 image = { version = "0.25", default-features = false, features = ["dds", "png"] }

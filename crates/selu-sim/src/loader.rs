@@ -38,7 +38,9 @@ pub(crate) fn read_ui_text(
         if !name.starts_with("Interface/") {
             return Err("UI input is outside Interface".into());
         }
-        if let Some(text) = crate::ui_source_cache::get(path, false) {
+        if !storage.uses_user_keys()
+            && let Some(text) = crate::ui_source_cache::get(path, false)
+        {
             return Ok(text);
         }
         let _casc_profile = crate::profile::Span::new("source.casc");
@@ -47,7 +49,9 @@ pub(crate) fn read_ui_text(
                 let text = String::from_utf8(bytes)
                     .map(|text| text.trim_start_matches('\u{feff}').to_owned())
                     .map_err(|e| e.to_string())?;
-                crate::ui_source_cache::put(path, &text, false);
+                if !storage.uses_user_keys() {
+                    crate::ui_source_cache::put(path, &text, false);
+                }
                 return Ok(text);
             }
             Err(e) => diagnostic(format!("CASC UI fallback: {name}: {e}")),

@@ -513,13 +513,18 @@ impl Studio {
                 .map(selu_manifest::Manifest::target_string)
                 .or_else(|| opts.target.clone());
             if let Some(target) = target {
-                let _ = assets.open_client(root, target.split('@').next().unwrap_or_default());
+                let _ = assets.open_client_with_keys(
+                    root,
+                    target.split('@').next().unwrap_or_default(),
+                    crate::game::Settings::load().active_key_file().as_deref(),
+                );
             }
         }
         for root in &opts.addons {
             assets.add_addon(root.clone());
         }
         let worker = Worker::spawn(SessionConfig {
+            client_key_file: crate::game::Settings::load().active_key_file(),
             client_install: opts.client_install.clone(),
             manifest: opts.manifest.clone(),
             target: opts.target.clone(),
@@ -1567,6 +1572,8 @@ impl Studio {
             self.game_settings.ui_mode,
             self.game_settings.core_ui_addons.clone(),
             self.game_settings.default_ui_source.clone(),
+            self.game_settings.decrypt_client_files,
+            self.game_settings.client_key_file.clone(),
         );
         let mut rescan = false;
         egui::Window::new(egui::RichText::new("Game Installs").size(15.0).strong())
@@ -1665,6 +1672,14 @@ impl Studio {
                 });
                 ui.add_space(6.0);
                 ui.label("Client assets (takes effect after restarting Studio)");
+                changed |= ui.checkbox(&mut self.game_settings.decrypt_client_files,"Decrypt client files with my own keys (optional)").changed();
+                let mut key_path=self.game_settings.client_key_file.as_ref().map(|p|p.display().to_string()).unwrap_or_default();
+                if ui.text_edit_singleline(&mut key_path).changed() {
+                    self.game_settings.client_key_file=(!key_path.trim().is_empty()).then(||PathBuf::from(key_path.trim()));
+                    changed=true;
+                }
+                ui.label("User key file: keyname keyhex per line. Keys are never supplied or downloaded by Selu.");
+                if let Some(line)=self.console.iter().rev().find(|l|l.text.starts_with("Interface text ")) { ui.label(&line.text); }
                 for mode in [crate::game::UiMode::None, crate::game::UiMode::Core, crate::game::UiMode::Full] {
                     changed |= ui.radio_value(&mut self.game_settings.ui_mode,mode,format!("{mode:?}")).changed();
                 }
@@ -1721,6 +1736,8 @@ impl Studio {
                 self.game_settings.ui_mode,
                 self.game_settings.core_ui_addons.clone(),
                 self.game_settings.default_ui_source.clone(),
+                self.game_settings.decrypt_client_files,
+                self.game_settings.client_key_file.clone(),
             )
         {
             self.restart_session();
@@ -1889,7 +1906,11 @@ impl Studio {
                 .map(selu_manifest::Manifest::target_string)
                 .or_else(|| self.opts.target.clone());
             if let Some(target) = target {
-                let _ = assets.open_client(root, target.split('@').next().unwrap_or_default());
+                let _ = assets.open_client_with_keys(
+                    root,
+                    target.split('@').next().unwrap_or_default(),
+                    crate::game::Settings::load().active_key_file().as_deref(),
+                );
             }
         }
         for root in &self.opts.addons {
@@ -1898,6 +1919,7 @@ impl Studio {
         self.assets = assets;
         self.textures.clear();
         self.worker = Worker::spawn(SessionConfig {
+            client_key_file: self.game_settings.active_key_file(),
             client_install: self.opts.client_install.clone(),
             manifest: self.opts.manifest.clone(),
             target: self.opts.target.clone(),

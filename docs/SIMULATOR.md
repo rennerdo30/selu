@@ -680,13 +680,32 @@ GlobalColor (4328468) supplies the native color palette. GlobalStrings uses
 WDC5 scalar palette compression for Flags in the tested builds. On the
 2026-11-07 installation, Era and Anniversary strings decode successfully;
 wow, wowf and wow_classic payloads are locally present but BLTE-encrypted.
-Encrypted payloads are refused with their key identifier, without fetching
-or reading key material. Their failures must not be reported as absent files.
-Synthetic labels are enabled only when neither a readable DB2 nor a Lua
-export is available, including a reported unsupported schema/decode failure.
-Strings from another product are never borrowed. Selected synthetic HUD
-labels and chat tags remain visibly approximate rather than localization
-fidelity claims.
+Unreadable own-client text falls back to another active product on the same
+installation root. The preference table is `interface_text::TEXT_FAMILIES`:
+
+| Session products (including PTR/beta channels) | First donors | Then |
+| --- | --- | --- |
+| `wow`, `wowf` | Mainline family | Classic family |
+| `wow_classic`, `wow_classic_era`, `wow_anniversary`, `wow_classic_titan` | Classic family | Mainline family |
+
+Within each group, the closest numeric build ID wins; product name and version
+break ties. Only readable donors are used. Studio's game settings and the
+session log identify the selected product/build and own-client failure once.
+Known string tags missing from borrowed text use synthetic labels; if no donor
+or source export can be read, the synthetic fallback remains. These labels are
+approximate, not a localization fidelity claim. Readable own-client text,
+including text decrypted with an explicitly enabled user key file, takes priority.
+
+Studio's **Game installs** settings offer **Decrypt client files with my key
+file**, off by default, and a path to a user-owned file containing one
+`keyname keyhex` pair per line (blank lines and `#` comments are accepted).
+Keys are secrets: no keys are shipped, fetched, logged or included in reports.
+Users choose whether to supply their own keys under Blizzard's terms. Missing
+keys report only the key identifier and preserve borrowing. The maintained
+RustCrypto Salsa20 implementation (MIT OR Apache-2.0) handles TACT encrypted
+BLTE blocks and per-block IVs. Keyed storage bypasses the ordinary decoded disk
+cache; key buffers are cleared on drop. Repository encryption tests create
+their own keys and encrypted payloads and never decrypt client content.
 Enum and constant values are parsed as literal data from the selected client's
 generated API documentation, preferring CASC with the local source checkout as
 fallback. No documentation chunk is executed. Decoded metadata is cached by

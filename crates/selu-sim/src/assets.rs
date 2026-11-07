@@ -29,6 +29,26 @@ impl Resolver {
         })
     }
     pub fn open_client(&mut self, root: &std::path::Path, product: &str) -> Result<(), String> {
+        self.open_client_with_keys(root, product, None)
+    }
+    pub fn open_client_with_keys(
+        &mut self,
+        root: &std::path::Path,
+        product: &str,
+        key_file: Option<&std::path::Path>,
+    ) -> Result<(), String> {
+        if let Some(path) = key_file {
+            let storage =
+                selu_gamedata::Storage::open_with_key_file(root, product, None, Some(path))
+                    .map_err(|e| e.to_string())?;
+            self.sources
+                .retain(|s| !matches!(s, Source::ClientStorage(_)));
+            self.sources
+                .push(Source::ClientStorage(Some(Arc::new(storage))));
+            self.cache.get_mut().clear();
+            self.atlases.get_mut().clear();
+            return Ok(());
+        }
         let _profile = crate::profile::Span::new("assets.client_index");
         #[cfg(debug_assertions)]
         let started = std::env::var_os("SELU_SIM_PROFILE").map(|_| std::time::Instant::now());

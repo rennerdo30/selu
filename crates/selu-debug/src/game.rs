@@ -239,6 +239,10 @@ pub struct Settings {
     #[serde(default)]
     pub default_ui_source: Option<PathBuf>,
     #[serde(default)]
+    pub decrypt_client_files: bool,
+    #[serde(default)]
+    pub client_key_file: Option<PathBuf>,
+    #[serde(default)]
     pub wtf_override: String,
     #[serde(default)]
     pub saved_choices: BTreeMap<String, Vec<String>>,
@@ -275,6 +279,8 @@ impl Default for Settings {
             ui_mode: UiMode::Core,
             core_ui_addons: core_ui_roots(),
             default_ui_source: None,
+            decrypt_client_files: false,
+            client_key_file: None,
             wtf_override: String::new(),
             saved_choices: BTreeMap::new(),
             disable_client_assets: false,
@@ -293,6 +299,11 @@ fn settings_path() -> Option<PathBuf> {
 }
 
 impl Settings {
+    pub fn active_key_file(&self) -> Option<PathBuf> {
+        self.decrypt_client_files
+            .then(|| self.client_key_file.clone())
+            .flatten()
+    }
     pub fn load() -> Settings {
         settings_path()
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -607,6 +618,17 @@ pub fn installed_build(client: &Client) -> Option<selu_manifest::Build> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decryption_is_explicitly_opt_in() {
+        let mut settings = Settings::default();
+        settings.client_key_file = Some("self-written-nonexistent-fixture.keys".into());
+        assert!(settings.active_key_file().is_none());
+        settings.decrypt_client_files = true;
+        assert_eq!(settings.active_key_file(), settings.client_key_file);
+        let restored: Settings = serde_json::from_str("{}").unwrap();
+        assert!(restored.active_key_file().is_none());
+    }
 
     #[test]
     fn launch_codes_from_folder_names() {

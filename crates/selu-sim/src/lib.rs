@@ -28,6 +28,7 @@ mod fast_hook;
 pub mod fonts;
 pub mod frames;
 mod host_lua;
+pub mod interface_text;
 pub mod loader;
 mod native_defaults;
 mod native_stdlib;

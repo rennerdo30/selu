@@ -245,7 +245,9 @@ fn main() -> ExitCode {
             .map(selu_manifest::Manifest::target_string)
     });
     let ui_install = client_install.clone();
+    let settings = game::Settings::load();
     let worker = Worker::spawn(SessionConfig {
+        client_key_file: settings.active_key_file(),
         client_install,
         manifest,
         target,
@@ -264,7 +266,6 @@ fn main() -> ExitCode {
         }
         let _ = out.flush();
     };
-    let settings = game::Settings::load();
     let (source, skipped) = match (&ui_target, settings.ui_mode) {
         (Some(target), mode) if mode != game::UiMode::None => game::ui_source(
             settings.default_ui_source.as_deref(),

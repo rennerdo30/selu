@@ -8,6 +8,9 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
     let standins = globals.raw_get::<Option<Table>>("__selu_native_standins")?;
     for (path, shape, capability) in [
         ("GuildControlGetNumRanks", "count", None),
+        // No resurrection is pending in the baseline world. An empty string
+        // is truthy in Lua and incorrectly opens a dialog at login.
+        ("ResurrectGetOfferer", "empty", None),
         ("GetMaxBattlefieldID", "count", None),
         (
             "GetNumSpecializations",
@@ -217,10 +220,36 @@ pub(crate) fn load_strings(
                     count += 1;
                 }
             }
-            Err(error) => ctx.log(format!("GlobalStrings DB2 unavailable: {error}")),
+            Err(error) => {
+                let reason = error.to_string();
+                ctx.log(format!("GlobalStrings DB2 unavailable: {reason}"));
+                if let Some(strings) = crate::interface_text::borrow(
+                    lua,
+                    ctx,
+                    storage.install_root(),
+                    storage,
+                    &reason,
+                ) {
+                    for (key, text) in &strings {
+                        lua.globals().raw_set(key.as_str(), text.as_str())?;
+                    }
+                    if reason.starts_with("encrypted with key") {
+                        ctx.log(format!("{reason}; borrowed text in use"));
+                    }
+                    lua.set_named_registry_value("selu.synthetic_strings", true)?;
+                    return lua.globals().raw_set("__selu_synthetic_strings", true);
+                }
+            }
         }
     }
     if found {
+        let description = format!(
+            "Interface text from {} {}",
+            storage.as_ref().unwrap().build.product,
+            storage.as_ref().unwrap().build.version
+        );
+        ctx.log(description.clone());
+        lua.set_named_registry_value("selu.interface_text_source", description)?;
         ctx.log(format!(
             "GlobalStrings: {count} DB2 game strings loaded; synthetic labels disabled"
         ));
@@ -349,6 +378,15 @@ mod tests {
                 }
                 Err(error) => {
                     assert!(synthetic, "{product}: {error}");
+                    let source: String = s
+                        .lua()
+                        .named_registry_value("selu.interface_text_source")
+                        .unwrap();
+                    assert!(
+                        source.starts_with("Interface text borrowed from "),
+                        "{source}"
+                    );
+                    eprintln!("PRODUCT_TEXT_SOURCE {source}");
                     eprintln!("PRODUCT_STRINGS {product} unavailable={error}; synthetic=true");
                 }
             }
@@ -362,7 +400,7 @@ mod tests {
         s.eval("function GetNumSpecializations() return 7 end")
             .unwrap();
         super::install(s.lua(), s.sim().ctx()).unwrap();
-        s.eval("assert(GetNumSpecializations()==7);assert(GetMaxBattlefieldID()==0);assert(GuildControlGetNumRanks()==0);assert(C_PetJournal.GetNumPetsNeedingFanfare()==0);assert(C_AzeriteItem.FindActiveAzeriteItem()==nil);assert(select('#',C_PetBattles.GetAllEffectNames())==0); local a,b,c=C_LFGList.GetAvailableRoles();assert(a==false and b==false and c==false)").unwrap();
+        s.eval("assert(ResurrectGetOfferer()==nil);assert(GetNumSpecializations()==7);assert(GetMaxBattlefieldID()==0);assert(GuildControlGetNumRanks()==0);assert(C_PetJournal.GetNumPetsNeedingFanfare()==0);assert(C_AzeriteItem.FindActiveAzeriteItem()==nil);assert(select('#',C_PetBattles.GetAllEffectNames())==0); local a,b,c=C_LFGList.GetAvailableRoles();assert(a==false and b==false and c==false)").unwrap();
     }
     #[test]
     fn animation_restart_rewinds_and_model_properties_are_per_region() {

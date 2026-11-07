@@ -16,7 +16,15 @@ pub struct FontBook {
 }
 impl FontBook {
     pub fn open_client(&mut self, root: &std::path::Path, product: &str) -> Result<(), String> {
-        self.assets.open_client(root, product)?;
+        self.open_client_with_keys(root, product, None)
+    }
+    pub fn open_client_with_keys(
+        &mut self,
+        root: &Path,
+        product: &str,
+        key_file: Option<&Path>,
+    ) -> Result<(), String> {
+        self.assets.open_client_with_keys(root, product, key_file)?;
         self.faces.get_mut().clear();
         self.layouts.get_mut().clear();
         self.asset_presence.get_mut().clear();

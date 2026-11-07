@@ -222,13 +222,17 @@ impl RootFile {
             .map(|(_, e)| e)
     }
 }
+#[cfg(test)]
 pub fn decode_blte(b: &[u8]) -> Result<Vec<u8>> {
+    decode_blte_with_keys(b, &crate::keys::Keyring::default())
+}
+pub fn decode_blte_with_keys(b: &[u8], keys: &crate::keys::Keyring) -> Result<Vec<u8>> {
     if slice(b, 0, 4)? != b"BLTE" {
         return Err("invalid BLTE magic".into());
     }
     let h = be(b, 4, 4)? as usize;
     if h == 0 {
-        return block(slice(b, 8, b.len() - 8)?);
+        return block(slice(b, 8, b.len() - 8)?, keys, 0, 0);
     }
     if slice(b, 8, 1)? != [15] {
         return Err("unsupported BLTE table".into());
@@ -242,7 +246,7 @@ pub fn decode_blte(b: &[u8]) -> Result<Vec<u8>> {
     for i in 0..count {
         let n = be(b, 12 + i * 24, 4)? as usize;
         let expected = be(b, 16 + i * 24, 4)? as usize;
-        let decoded = block(slice(b, p, n)?)?;
+        let decoded = block(slice(b, p, n)?, keys, u32::try_from(i)?, 0)?;
         if decoded.len() != expected {
             return Err("BLTE size mismatch".into());
         }
@@ -254,7 +258,10 @@ pub fn decode_blte(b: &[u8]) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
-fn block(b: &[u8]) -> Result<Vec<u8>> {
+fn block(b: &[u8], keys: &crate::keys::Keyring, index: u32, depth: usize) -> Result<Vec<u8>> {
+    if depth > 4 {
+        return Err("nested BLTE encryption limit exceeded".into());
+    }
     match b.first() {
         Some(b'N') => Ok(b[1..].to_vec()),
         Some(b'Z') => {
@@ -272,12 +279,38 @@ fn block(b: &[u8]) -> Result<Vec<u8>> {
             // it without reading key material or attempting decryption.
             let length = usize::from(*b.get(1).ok_or("truncated encrypted BLTE header")?);
             let name = slice(b, 2, length)?;
-            Err(format!(
-                "encrypted BLTE: key name {} (stored bytes {}); no supplied local key support",
-                hex::encode(name.iter().rev().copied().collect::<Vec<_>>()),
-                hex::encode(name)
-            )
-            .into())
+            if name.len() != 8 {
+                return Err("unsupported BLTE key identifier length".into());
+            }
+            let id = u64::from_le_bytes(name.try_into()?);
+            if keys.is_empty() {
+                return Err(format!("encrypted with key {id:016x}").into());
+            }
+            let at = 2 + length;
+            let iv_len = usize::from(*b.get(at).ok_or("truncated BLTE IV")?);
+            if !matches!(iv_len, 4 | 8) {
+                return Err("unsupported BLTE IV length".into());
+            }
+            let iv = slice(b, at + 1, iv_len)?;
+            let mut nonce = [0u8; 8];
+            nonce[..iv_len].copy_from_slice(iv);
+            for (byte, mask) in nonce[..4].iter_mut().zip(index.to_le_bytes()) {
+                *byte ^= mask;
+            }
+            if slice(b, at + 1 + iv_len, 1)? != b"S" {
+                return Err("unsupported BLTE cipher".into());
+            }
+            let start = at + 2 + iv_len;
+            let mut decoded = slice(
+                b,
+                start,
+                b.len()
+                    .checked_sub(start)
+                    .ok_or("truncated BLTE cipher data")?,
+            )?
+            .to_vec();
+            keys.apply(id, nonce, &mut decoded)?;
+            block(&decoded, keys, index, depth + 1)
         }
         _ => Err("unsupported BLTE block".into()),
     }
