@@ -83,6 +83,72 @@ pub fn load_resolved(
     ))
 }
 
+/// Rasterize a mask in the target region's coordinate space. Mask regions are
+/// inputs to the texture pipeline, not independently painted UI regions.
+pub fn mask_alpha(
+    output: &mut eframe::egui::ColorImage,
+    image: &eframe::egui::ColorImage,
+    bounds: [f64; 4],
+    uv: [f32; 4],
+) {
+    let [left, top, width, height] = bounds;
+    for y in 0..output.size[1] {
+        for x in 0..output.size[0] {
+            let u = ((x as f64 + 0.5) / output.size[0] as f64 - left) / width;
+            let v = ((y as f64 + 0.5) / output.size[1] as f64 - top) / height;
+            let alpha = if width <= 0.0
+                || height <= 0.0
+                || !(0.0..1.0).contains(&u)
+                || !(0.0..1.0).contains(&v)
+            {
+                0
+            } else {
+                let sx = ((f64::from(uv[0]) + u * f64::from(uv[1] - uv[0])) * image.size[0] as f64)
+                    .floor()
+                    .clamp(0.0, image.size[0].saturating_sub(1) as f64)
+                    as usize;
+                let sy = ((f64::from(uv[2]) + v * f64::from(uv[3] - uv[2])) * image.size[1] as f64)
+                    .floor()
+                    .clamp(0.0, image.size[1].saturating_sub(1) as f64)
+                    as usize;
+                image.pixels[sy * image.size[0] + sx].a()
+            };
+            let at = y * output.size[0] + x;
+            let old = output.pixels[at].a();
+            output.pixels[at] = eframe::egui::Color32::from_white_alpha(
+                (u16::from(old) * u16::from(alpha) / 255) as u8,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod mask_tests {
+    #[test]
+    fn masks_multiply_alpha_in_relative_bounds_and_crop_uvs() {
+        use eframe::egui::{Color32, ColorImage};
+        let mask = ColorImage::new([2, 1], vec![Color32::TRANSPARENT, Color32::WHITE]);
+        let mut output = ColorImage::filled([4, 1], Color32::WHITE);
+        super::mask_alpha(
+            &mut output,
+            &mask,
+            [0.5, 0.0, 0.5, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+        );
+        assert_eq!(
+            output.pixels.iter().map(Color32::a).collect::<Vec<_>>(),
+            vec![0, 0, 0, 255]
+        );
+        super::mask_alpha(
+            &mut output,
+            &mask,
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.5, 0.0, 1.0],
+        );
+        assert!(output.pixels.iter().all(|p| p.a() == 0));
+    }
+}
+
 /// BLP2 palette and uncompressed BGRA mip zero. Unsupported encodings are explicit.
 fn blp(bytes: &[u8]) -> Result<eframe::egui::ColorImage, String> {
     let image = selu_gamedata::blp::decode(bytes)?;

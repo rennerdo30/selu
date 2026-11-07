@@ -15,10 +15,15 @@ fn core_loads_real_common_frames_and_records_startup() {
         .collect::<Vec<_>>();
     let report = s
         .load_blizzard_ui(
-            std::path::Path::new(&std::env::var_os("SELU_DEFAULT_UI_SOURCE").unwrap_or_else(||std::env::var_os("SELU_CLIENT_INSTALL").unwrap())),
+            std::path::Path::new(
+                &std::env::var_os("SELU_DEFAULT_UI_SOURCE")
+                    .unwrap_or_else(|| std::env::var_os("SELU_CLIENT_INSTALL").unwrap()),
+            ),
             Some(&roots),
             |_| {},
         )
+        .unwrap();
+    s.eval("assert(C_GameRules.GetActiveGameMode()==Enum.GameMode.Standard)")
         .unwrap();
     // Optional diagnostic of a read-only real addon; only its fresh in-memory
     // error log is inspected, never a saved-variable file or player account.

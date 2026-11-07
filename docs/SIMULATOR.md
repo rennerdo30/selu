@@ -676,9 +676,13 @@ Enum and constant values are parsed as literal data from the selected client's
 generated API documentation, preferring CASC with the local source checkout as
 fallback. No documentation chunk is executed. Decoded metadata is cached by
 product/build and source; source bytes use Studio's own cache. Unsupported
-expressions and undocumented values remain undefined with once-only notes.
-This can expose real startup compatibility gaps where UI code expects native
-values that the client's documentation does not supply.
+expressions remain unsupported with once-only notes. Undocumented enum members
+receive stable synthetic numeric identities on first lookup, with once-only
+"not simulated" notes. These identities are simulator behaviour, not copied
+client values. Native enum stand-ins use the same runtime lookup; documented
+client values always take precedence. Undocumented Constants remain undefined.
+Missing constants and localization can still interrupt Blizzard startup; Core
+and Full are not error-free compatibility environments.
 
 Simulator Lua helpers capture private builtin/library snapshots when the VM
 is created. Addons retain the real mutable global environment. Blizzard
@@ -826,6 +830,12 @@ errors with a known project file and line appear in the clickable Problems list.
 The default root list is defined once in crates/selu-sim/src/loader.rs as CORE_UI_ADDONS: Blizzard_UIParent, Blizzard_GameTooltip, Blizzard_Minimap and Blizzard_ChatFrameBase. Studio exposes an override list in Run > Game Installs. Required TOC dependencies and the native shared-library pass use the same loader and ordering as Full; no named-frame substitutes are installed. Root lists survive reload. Basic unit frames are not an additional Core root: dependency size and startup cost take priority here. Missing source leaves the environment unavailable rather than manufacturing frames.
 
 The client-backed core_ui integration test uses SELU_DEFAULT_UI_SOURCE and SELU_CLIENT_INSTALL and records elapsed startup. Run it separately with --ignored --test-threads=1. Full interaction tests still explicitly request Full. Neither test reads account data or starts the game.
+
+Texture mask attachments survive snapshots. Studio does not paint MaskTexture
+regions directly; solid-color textures multiply attached mask alpha in the
+mask's own bounds and atlas UVs. Multiple masks combine multiplicatively and
+the resulting alpha image is cached. Masks on file textures and gradients are
+not yet rendered.
 
 ### Blizzard content
 

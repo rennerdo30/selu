@@ -3314,7 +3314,12 @@ impl Studio {
         if self.glyphs.len() > 8192 {
             self.glyphs.clear();
         }
-        let mut ordered: Vec<_> = snap.regions.iter().skip(1).filter(|r| visible(r)).collect();
+        let mut ordered: Vec<_> = snap
+            .regions
+            .iter()
+            .skip(1)
+            .filter(|r| visible(r) && r.widget != "MaskTexture")
+            .collect();
         ordered.sort_by_key(|r| (r.strata, r.level, r.layer, r.id.index));
         for r in &ordered {
             let painter = painter.with_clip_rect(
@@ -3388,7 +3393,76 @@ impl Studio {
                         (c[2] * tint[2] * 255.0) as u8,
                         (c[3] * tint[3] * 255.0) as u8,
                     );
-                    painter.rect_filled(rect, 0.0, fade(r, col));
+                    if r.visual.masks.is_empty() {
+                        painter.rect_filled(rect, 0.0, fade(r, col));
+                    } else if let Some(target) = &r.rect {
+                        let masks: Vec<_> = r
+                            .visual
+                            .masks
+                            .iter()
+                            .filter_map(|id| {
+                                snap.regions
+                                    .iter()
+                                    .find(|mask| mask.id.index as usize == *id)
+                            })
+                            .collect();
+                        let mut key = format!(
+                            "mask-color:{}:{}:{}",
+                            r.id.index, target.width, target.height
+                        );
+                        for mask in &masks {
+                            if let Some(bounds) = &mask.rect {
+                                key.push_str(&format!(
+                                    "{:?}:{:?}:{}:{}:{}:{}",
+                                    mask.texture,
+                                    mask.visual.uv,
+                                    bounds.left - target.left,
+                                    bounds.bottom - target.bottom,
+                                    bounds.width,
+                                    bounds.height
+                                ));
+                            }
+                        }
+                        let cached = self.textures.entry(key.clone()).or_insert_with(|| {
+                            let size = [
+                                target.width.round().clamp(1.0, 1024.0) as usize,
+                                target.height.round().clamp(1.0, 1024.0) as usize,
+                            ];
+                            let mut image = egui::ColorImage::filled(size, Color32::WHITE);
+                            for mask in &masks {
+                                let Some(bounds) = &mask.rect else { continue };
+                                let Some(TextureFill::File(name)) = &mask.texture else {
+                                    return Err("unavailable mask texture".into());
+                                };
+                                let source = crate::textures::load_resolved(&self.assets, name)?;
+                                crate::textures::mask_alpha(
+                                    &mut image,
+                                    &source,
+                                    [
+                                        (bounds.left - target.left) / target.width,
+                                        (target.bottom + target.height
+                                            - bounds.bottom
+                                            - bounds.height)
+                                            / target.height,
+                                        bounds.width / target.width,
+                                        bounds.height / target.height,
+                                    ],
+                                    mask.visual.uv,
+                                );
+                            }
+                            Ok(ui
+                                .ctx()
+                                .load_texture(&key, image, egui::TextureOptions::LINEAR))
+                        });
+                        if let Ok(texture) = cached {
+                            painter.image(
+                                texture.id(),
+                                rect,
+                                ERect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                fade(r, col),
+                            );
+                        }
+                    }
                 }
                 (Some(TextureFill::File(name) | TextureFill::Atlas(name)), _) => {
                     let key = if r.visual.desaturated {

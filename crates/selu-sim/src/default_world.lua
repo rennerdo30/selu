@@ -224,7 +224,13 @@ function CreateSecureDelegate(fn,options)
     return function(...) return __selu_secure_invoke(fn,...) end
 end
 C_GameRules=C_GameRules or {}
-function C_GameRules.GetActiveGameMode() return Enum.GameMode.Standard end
+function C_GameRules.GetActiveGameMode()
+    -- Some clients omit this enumeration from their generated documentation.
+    -- Preserve the unknown result (and Enum's once-only note) rather than
+    -- throwing inside the native or inventing an undocumented numeric value.
+    local modes=Enum.GameMode
+    return modes and modes.Standard
+end
 function C_GameRules.IsStandard() return true end
 function C_GameRules.IsWoWHack() return false end
 function C_GameRules.IsPlunderstorm() return false end

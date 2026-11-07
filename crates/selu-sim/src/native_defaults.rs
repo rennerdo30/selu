@@ -87,6 +87,25 @@ pub(crate) fn value(
                 && let Some(schema) = schemas.get(ty)
             {
                 if schema.ty.as_deref() == Some("enum") {
+                    if lua
+                        .named_registry_value::<Option<bool>>("selu.default_ui_strings")?
+                        .unwrap_or(false)
+                    {
+                        let enums: mlua::Table = lua.globals().get("Enum")?;
+                        let name = ty.strip_prefix("Enum.").unwrap_or(ty);
+                        let enumeration: mlua::Table = enums.get(name)?;
+                        // A typed stand-in has no world-specific semantic choice.
+                        // Select a declared member deterministically, through the
+                        // same runtime lookup used by UI code, never its exported
+                        // manifest number. An empty schema gets an engine sentinel.
+                        let member = schema
+                            .values
+                            .keys()
+                            .min()
+                            .map(String::as_str)
+                            .unwrap_or("__selu_default");
+                        return enumeration.get(member);
+                    }
                     return Ok(Value::Number(0.0));
                 }
                 for parent in &schema.inherits {

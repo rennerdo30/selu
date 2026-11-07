@@ -1,5 +1,35 @@
 use selu_sim::Sim;
 #[test]
+fn masks_attach_once_remove_and_reach_the_renderer() {
+    let sim = Sim::new().unwrap();
+    sim.eval("local t=UIParent:CreateTexture('MaskedPaint');local m=UIParent:CreateMaskTexture('PaintMask'); t:AddMaskTexture(m);t:AddMaskTexture(m)").unwrap();
+    let snapshot = sim.snapshot().unwrap();
+    let texture = snapshot
+        .regions
+        .iter()
+        .find(|r| r.name.as_deref() == Some("MaskedPaint"))
+        .unwrap();
+    let mask = snapshot
+        .regions
+        .iter()
+        .find(|r| r.name.as_deref() == Some("PaintMask"))
+        .unwrap();
+    assert_eq!(texture.visual.masks, vec![mask.id.index as usize]);
+    sim.eval("MaskedPaint:RemoveMaskTexture(PaintMask)")
+        .unwrap();
+    assert!(
+        sim.snapshot()
+            .unwrap()
+            .regions
+            .iter()
+            .find(|r| r.name.as_deref() == Some("MaskedPaint"))
+            .unwrap()
+            .visual
+            .masks
+            .is_empty()
+    );
+}
+#[test]
 fn colour_getters_and_inherited_font() {
     let sim = Sim::new().unwrap();
     sim.eval(

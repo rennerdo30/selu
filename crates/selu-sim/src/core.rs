@@ -124,6 +124,8 @@ pub enum TextureFill {
 /// Visual state shared by layout, snapshots and Studio.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VisualStyle {
+    #[serde(default)]
+    pub masks: Vec<usize>,
     pub font: String,
     pub size: f64,
     pub flags: String,
@@ -166,6 +168,7 @@ fn default_true() -> bool {
 impl Default for VisualStyle {
     fn default() -> Self {
         Self {
+            masks: vec![],
             font: String::new(),
             size: 12.0,
             flags: String::new(),

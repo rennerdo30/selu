@@ -288,12 +288,11 @@ impl Metadata {
             if let Some(Node::Table(_, entries)) = fields.get(list) {
                 let mut values = BTreeMap::new();
                 for entry in entries {
-                    if let Node::Table(entry, _) = entry {
-                        if let (Some(Node::Text(key)), Some(v)) =
+                    if let Node::Table(entry, _) = entry
+                        && let (Some(Node::Text(key)), Some(v)) =
                             (entry.get("Name"), entry.get(value))
-                        {
-                            values.insert(key.clone(), v.clone());
-                        }
+                    {
+                        values.insert(key.clone(), v.clone());
                     }
                 }
                 if !namespace.is_empty() {
@@ -396,8 +395,38 @@ fn missing(lua: &Lua, ctx: &crate::Ctx, table: &Table, path: &str) -> mlua::Resu
     let path = path.to_owned();
     mt.raw_set(
         "__index",
-        lua.create_function(move |_, (_, key): (Value, String)| {
+        lua.create_function(move |lua, (owner, key): (Table, String)| {
             ctx.not_simulated(&format!("undocumented client value: {path}.{key}"));
+            if path == "Enum" {
+                let child = lua.create_table()?;
+                missing(lua, &ctx, &child, &format!("Enum.{key}"))?;
+                owner.raw_set(key, child.clone())?;
+                return Ok(Value::Table(child));
+            }
+            if path.starts_with("Enum.") {
+                // Synthetic engine identity, not a client value. Hash the name
+                // so independent sessions agree regardless of lookup order.
+                // Negative integers avoid ordinary documented enum ranges;
+                // collision probing also checks every existing real value.
+                let mut hash = 2166136261u32;
+                for byte in key.bytes() {
+                    hash = (hash ^ u32::from(byte)).wrapping_mul(16777619);
+                }
+                let mut number = -1 - i64::from(hash & 0x3fff_ffff);
+                while owner
+                    .clone()
+                    .pairs::<Value, Value>()
+                    .any(|entry| match entry {
+                        Ok((_, Value::Integer(n))) => n == number,
+                        Ok((_, Value::Number(n))) => n == number as f64,
+                        _ => false,
+                    })
+                {
+                    number -= 1;
+                }
+                owner.raw_set(key, number)?;
+                return Ok(Value::Integer(number));
+            }
             Ok(Value::Nil)
         })?,
     )?;
@@ -463,6 +492,55 @@ fn apply(lua: &Lua, ctx: &crate::Ctx, data: &Metadata) -> mlua::Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn synthetic_enums_are_stable_unique_and_constants_stay_unknown() {
+        for reverse in [false, true] {
+            let s = crate::Session::new(Default::default()).unwrap();
+            apply(s.lua(), s.sim().ctx(), &Metadata::default()).unwrap();
+            if reverse {
+                s.eval("local x=Enum.Synthetic.Second").unwrap();
+            }
+            s.eval("assert(type(Enum.Synthetic.First)=='number'); assert(Enum.Synthetic.First==Enum.Synthetic.First); assert(Enum.Synthetic.First~=Enum.Synthetic.Second); assert(Constants.Missing==nil)").unwrap();
+            let first: i64 = s.lua().load("return Enum.Synthetic.First").eval().unwrap();
+            s.lua()
+                .set_named_registry_value("selu.default_ui_strings", true)
+                .unwrap();
+            let schema = serde_json::from_value(
+                serde_json::json!({"name":"Synthetic","type":"enum","values":{"First":7}}),
+            )
+            .unwrap();
+            let schemas = Arc::new(std::collections::HashMap::from([(
+                "Enum.Synthetic".into(),
+                schema,
+            )]));
+            let native = crate::native_defaults::value(
+                s.lua(),
+                "Enum.Synthetic",
+                &schemas,
+                s.sim().ctx(),
+                0,
+            )
+            .unwrap();
+            assert_eq!(native, Value::Integer(first));
+            let again = crate::Session::new(Default::default()).unwrap();
+            apply(again.lua(), again.sim().ctx(), &Metadata::default()).unwrap();
+            assert_eq!(
+                first,
+                again
+                    .lua()
+                    .load("return Enum.Synthetic.First")
+                    .eval::<i64>()
+                    .unwrap()
+            );
+            assert_eq!(
+                s.logs()
+                    .iter()
+                    .filter(|l| l.contains("undocumented client value: Enum.Synthetic.First"))
+                    .count(),
+                1
+            );
+        }
+    }
+    #[test]
     fn comments_and_nonliteral_values_are_not_declarations() {
         let mut data = Metadata::default();
         data.read(r#"--[=[
@@ -483,13 +561,64 @@ mod tests {
         );
     }
     #[test]
-    #[ignore = "requires read-only wowf and wow client storage"]
+    #[ignore = "requires read-only wowf, wow and wow_classic_era client storage"]
     fn installed_product_documentation() {
         let root = std::env::var_os("SELU_CLIENT_INSTALL").unwrap();
         let source = std::env::temp_dir().join(format!("selu-client-docs-{}", std::process::id()));
         std::fs::create_dir_all(&source).unwrap();
-        for product in ["wowf", "wow"] {
+        let game_mode_id = selu_gamedata::Storage::open(Path::new(&root), "wow_classic_era", None)
+            .unwrap()
+            .resolve("DBFilesClient/GameMode.db2")
+            .ok();
+        for product in ["wowf", "wow", "wow_classic_era"] {
             let storage = selu_gamedata::Storage::open(Path::new(&root), product, None).unwrap();
+            if let Some(id) = game_mode_id {
+                match storage.read(id) {
+                    Ok(bytes) => {
+                        eprintln!(
+                            "CLIENT_DATA_SEARCH {product} GameMode by runtime resolved ID: {} bytes",
+                            bytes.len()
+                        );
+                        match selu_gamedata::db2::Table::parse(&bytes) {
+                            Ok(table) => {
+                                eprintln!(
+                                    "GameMode records={} layout={}",
+                                    table.count(),
+                                    table.layout
+                                );
+                                for row in 0..table.count().min(8) {
+                                    for column in 0..8 {
+                                        if let Ok(text) = table.text(row, column)
+                                            && !text.is_empty()
+                                        {
+                                            eprintln!(
+                                                "GameMode string row={row} column={column}: {text}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => eprintln!("GameMode table decode unavailable: {e}"),
+                        }
+                    }
+                    Err(e) => eprintln!("GameMode data unavailable: {e}"),
+                }
+            }
+            for path in [
+                "Interface/AddOns/Blizzard_SharedXML/Enum.lua",
+                "Interface/AddOns/Blizzard_SharedXML/Enums.lua",
+                "Interface/AddOns/Blizzard_SharedXMLBase/Enum.lua",
+                "Interface/AddOns/Blizzard_APIDocumentationGenerated/GameModeConstantsDocumentation.lua",
+                "Interface/AddOns/Blizzard_APIDocumentationGenerated/GameRuleConstantsDocumentation.lua",
+                "DBFilesClient/GameMode.db2",
+                "DBFilesClient/GameRule.db2",
+                "DBFilesClient/GameRules.db2",
+            ] {
+                eprintln!(
+                    "CLIENT_DATA_SEARCH {product} {path}: {:?}",
+                    storage.read_path(path).map(|b| b.len())
+                );
+            }
             let path = "Interface/AddOns/Blizzard_APIDocumentationGenerated/Blizzard_APIDocumentationGenerated.toc";
             eprintln!(
                 "PRODUCT_DOCUMENTATION {product} build={} toc={:?}",

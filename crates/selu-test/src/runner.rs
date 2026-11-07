@@ -678,6 +678,7 @@ fn install(
             s.borrow().set_unit(
                 &token,
                 selu_sim::world::Unit {
+                    form: 0,
                     name: unit
                         .get::<Option<String>>("name")?
                         .unwrap_or_else(|| token.clone()),

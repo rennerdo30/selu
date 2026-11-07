@@ -461,6 +461,8 @@ pub fn create(
             }
             for method in METHODS.split_whitespace().chain([
                 "SetMaskTexture",
+                "AddMaskTexture",
+                "RemoveMaskTexture",
                 "RegisterEventCallback",
                 "IsMouseMotionFocus",
                 "IsMouseOver",
@@ -630,6 +632,25 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             "__selu_minimap_mask",
             v.first().cloned().unwrap_or(Value::Nil),
         )?;
+        return ().into_lua_multi(lua);
+    }
+    if matches!(method, "AddMaskTexture" | "RemoveMaskTexture") {
+        let Some(Value::Table(mask)) = v.first() else {
+            return Err(mlua::Error::runtime("mask texture expected"));
+        };
+        let mask = id(mask)?;
+        let mut arena = a.borrow_mut();
+        if arena.regions[mask].kind != "MaskTexture" {
+            return Err(mlua::Error::runtime("mask texture expected"));
+        }
+        let masks = &mut arena.regions[i].visual.masks;
+        if method == "AddMaskTexture" {
+            if !masks.contains(&mask) {
+                masks.push(mask);
+            }
+        } else {
+            masks.retain(|id| *id != mask);
+        }
         return ().into_lua_multi(lua);
     }
     if method == "RegisterEventCallback" {
