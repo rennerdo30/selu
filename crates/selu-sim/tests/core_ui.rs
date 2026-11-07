@@ -1,6 +1,6 @@
 //! Read-only local client check for the lean real Blizzard environment.
 #[test]
-#[ignore = "requires SELU_DEFAULT_UI_SOURCE and SELU_CLIENT_INSTALL"]
+#[ignore = "requires SELU_CLIENT_INSTALL; optional SELU_DEFAULT_UI_SOURCE override"]
 fn core_loads_real_common_frames_and_records_startup() {
     let start = std::time::Instant::now();
     let mut s = selu_sim::Session::new(selu_sim::SessionConfig {
@@ -15,7 +15,7 @@ fn core_loads_real_common_frames_and_records_startup() {
         .collect::<Vec<_>>();
     let report = s
         .load_blizzard_ui(
-            std::path::Path::new(&std::env::var_os("SELU_DEFAULT_UI_SOURCE").unwrap()),
+            std::path::Path::new(&std::env::var_os("SELU_DEFAULT_UI_SOURCE").unwrap_or_else(||std::env::var_os("SELU_CLIENT_INSTALL").unwrap())),
             Some(&roots),
             |_| {},
         )
@@ -30,6 +30,7 @@ fn core_loads_real_common_frames_and_records_startup() {
     for _ in 0..4 {
         s.advance_time(1. / 60.);
     }
+    selu_sim::profile::report();
     eprintln!(
         "Core startup {:?}: {} addons; {} load errors; {} startup errors",
         start.elapsed(),

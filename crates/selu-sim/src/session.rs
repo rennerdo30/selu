@@ -484,7 +484,7 @@ impl Session {
             &self.sim.lua,
             &self.sim.ctx,
             source,
-            self.config.target.as_deref(),
+            self.config.toc_target().as_deref(),
         )?;
         crate::client_ui::install(&self.sim.lua, &self.sim.ctx)?;
         crate::bindings::install(&self.sim.lua)?;
