@@ -459,6 +459,10 @@ create=function(n,parent,layer,subLevel)
     elseif n.tag=='FontString' or n.tag=='ButtonText' then f=parent:CreateFontString(name,layer)
     elseif n.tag=='Font' then f=CreateFont(name)
     else f=native(nativeKind(n.tag),name,parent) end
+    -- A top-level XML frame has no implicit parent. In particular a panel
+    -- whose Lua assigns its host later must start detached. Lua-only frame
+    -- construction retains the simulator's existing default-parent contract.
+    if not parent and n.tag~='Font' then f:SetParent(nil) end
     if layer and subLevel then f:SetDrawLayer(layer,subLevel) end
     construct(f,function(plan)
         apply(f,n,plan)

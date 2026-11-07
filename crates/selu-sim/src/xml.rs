@@ -382,6 +382,15 @@ mod tests {
         sim.eval("assert(TimingRoot.Timer:GetLooping()=='BOUNCE');assert(math.abs(TimingRoot.Timer.Clock:GetSmoothProgress()-.25)<.001)").unwrap();
     }
     #[test]
+    fn top_level_xml_frames_start_detached_before_their_onload_assigns_a_host() {
+        let sim = crate::Sim::new().unwrap();
+        run(
+            &sim,
+            r#"<Ui><Frame name="DetachedPanel"><Scripts><OnLoad>assert(self:GetParent()==nil);self:SetParent(UIParent)</OnLoad></Scripts></Frame></Ui>"#,
+        );
+        sim.eval("assert(DetachedPanel:GetParent()==UIParent);assert(CreateFrame('Frame'):GetParent()==UIParent)").unwrap();
+    }
+    #[test]
     fn relative_keys_anchor_to_anonymous_parent_members() {
         let sim = crate::Sim::new().unwrap();
         run(

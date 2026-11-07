@@ -334,6 +334,13 @@ pub fn create(
     .unwrap_or(kind);
     let a = store(lua);
     let index = a.borrow().regions.len();
+    let parent = parent.or_else(|| {
+        lua.globals()
+            .raw_get::<Option<Table>>("UIParent")
+            .ok()
+            .flatten()
+            .filter(|table| id(table).is_ok())
+    });
     let pid = parent.as_ref().map(id).transpose()?;
     let name = name.map(|s| {
         s.replace(

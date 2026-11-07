@@ -19,7 +19,7 @@ fn native_mouse_registration_and_pass_through_are_independent_of_clicks() {
 #[test]
 fn native_parent_keys_bind_to_the_current_parent_without_fabricating_one() {
     let sim = Sim::new().unwrap();
-    sim.eval("local root=CreateFrame('Frame');assert(root:GetParent()==nil);local child=CreateFrame('Frame',nil,root);child:SetParentKey('First');assert(root.First==child and child:GetParentKey()=='First');child:SetParentKey('Second');assert(root.First==nil and root.Second==child);child:ClearParentKey();assert(root.Second==nil and child:GetParentKey()==nil)").unwrap();
+    sim.eval("local root=CreateFrame('Frame');root:SetParent(nil);assert(root:GetParent()==nil);local child=CreateFrame('Frame',nil,root);child:SetParentKey('First');assert(root.First==child and child:GetParentKey()=='First');child:SetParentKey('Second');assert(root.First==nil and root.Second==child);child:ClearParentKey();assert(root.Second==nil and child:GetParentKey()==nil)").unwrap();
 }
 #[test]
 fn api_callbacks_finish_before_return() {
