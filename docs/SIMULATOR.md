@@ -299,7 +299,7 @@ The committed visual fixture is `crates/selu-sim/tests/fixtures/rendering`.
 
 ### Default UI startup (SL-23)
 
-Studio's Game Installs settings include Default UI (off by default) and a
+Studio's Game Installs settings offer None, Core (default), Full, and a
 source checkout path. The initial source is
 `E:/Development/wow-ui-source`; it is read-only. Library sessions remain opt-in
 through `Session::load_default_ui`. With a configured client, TOC lists, TOCs,
