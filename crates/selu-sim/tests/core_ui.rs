@@ -111,3 +111,32 @@ fn core_loads_real_common_frames_and_records_startup() {
     }
     s.eval("assert(IsAddOnLoaded('Blizzard_Minimap'));assert(Minimap and DEFAULT_CHAT_FRAME and GameTooltip);assert(Minimap:GetObjectType()=='Minimap');assert(DEFAULT_CHAT_FRAME.AddMessage and GameTooltip.SetOwner)").unwrap();
 }
+#[test]
+#[ignore = "requires the five locally installed client products via SELU_CLIENT_INSTALL"]
+fn installed_products_ship_the_combat_log_dependency() {
+    let root = std::env::var_os("SELU_CLIENT_INSTALL").unwrap();
+    for product in [
+        "wow",
+        "wowf",
+        "wow_classic",
+        "wow_classic_era",
+        "wow_anniversary",
+    ] {
+        let storage =
+            selu_gamedata::Storage::open(std::path::Path::new(&root), product, None).unwrap();
+        let list =
+            String::from_utf8(storage.read_path("Interface/ui-toc-list.txt").unwrap()).unwrap();
+        let path = list
+            .lines()
+            .map(|s| s.trim().replace('\\', "/"))
+            .find(|p| p.starts_with("Interface/AddOns/Blizzard_CombatLog/"))
+            .unwrap();
+        let bytes = storage.read_path(&path).unwrap();
+        assert!(!bytes.is_empty(), "{product}");
+        eprintln!(
+            "COMBAT_LOG_DEPENDENCY {product} {}: {} bytes",
+            storage.build.version,
+            bytes.len()
+        );
+    }
+}

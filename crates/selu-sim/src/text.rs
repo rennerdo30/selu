@@ -4,6 +4,50 @@ use crate::core::VisualStyle;
 use ab_glyph::{Font, FontArc, GlyphId, ScaleFont};
 use serde::{Deserialize, Serialize};
 
+/// WoW accepts numbered arguments in localized format strings. Keep ordinary
+/// Lua formatting on the original fast path and delegate conversion rules to
+/// that formatter after reordering only the argument references.
+pub(crate) fn install_format(lua: &mlua::Lua) -> mlua::Result<()> {
+    let formatter: mlua::Function = crate::host_lua::factory(
+        lua,
+        "selu.client_string_format",
+        r#"
+        local native_format=string.format
+        return function(pattern,...)
+            if not string.find(pattern,'%%%d+%$') then return native_format(pattern,...) end
+            local source={...}
+            local output,arguments={},{}
+            local cursor,implicit,count=1,1,0
+            while cursor<=#pattern do
+                local first=string.find(pattern,'%',cursor,true)
+                if not first then table.insert(output,string.sub(pattern,cursor));break end
+                table.insert(output,string.sub(pattern,cursor,first-1))
+                if string.sub(pattern,first+1,first+1)=='%' then
+                    table.insert(output,'%%');cursor=first+2
+                else
+                    local tail=string.sub(pattern,first+1)
+                    local position,conversion=string.match(tail,'^(%d+)%$([-+ #0]*%d*%.?%d*[cdiouxXeEfgGqs])')
+                    local consumed
+                    if position then consumed=#position+1+#conversion;position=tonumber(position)
+                    else
+                        conversion=string.match(tail,'^([-+ #0]*%d*%.?%d*[cdiouxXeEfgGqs])')
+                        if not conversion then return native_format(pattern,...) end
+                        consumed=#conversion;position=implicit;implicit=implicit+1
+                    end
+                    count=count+1;arguments[count]=source[position]
+                    table.insert(output,'%'..conversion);cursor=first+1+consumed
+                end
+            end
+            return native_format(table.concat(output),unpack(arguments,1,count))
+        end
+    "#,
+    )?;
+    lua.globals()
+        .raw_get::<mlua::Table>("string")?
+        .raw_set("format", formatter.clone())?;
+    lua.globals().raw_set("format", formatter)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Content {
     Glyph(u16),
@@ -570,6 +614,12 @@ pub(crate) fn expected_fallback(text: &str, size: f32) -> (f64, f64) {
 #[cfg(test)]
 mod markup_tests {
     use super::*;
+    #[test]
+    fn localized_format_reorders_arguments_without_changing_lua_conversions() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        install_format(s.lua()).unwrap();
+        s.eval("assert(string.format('%2$s/%1$03d/%2$s',7,'two')=='two/007/two');assert(format('%3$s','one',nil,'three')=='three');assert(format('%%1$s %1$s','literal')=='%1$s literal');assert(format('%04d %.2f',7,1.25)=='0007 1.25');assert(not pcall(format,'%1$d','invalid'));table={};string={};assert(format('%2$s/%1$d',7,'two')=='two/7')").unwrap();
+    }
     fn plain(a: &[Atom]) -> String {
         a.iter()
             .filter_map(|a| {

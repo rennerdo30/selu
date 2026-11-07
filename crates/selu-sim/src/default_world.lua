@@ -33,7 +33,7 @@ for _,name in ipairs({'GetBuildInfo','Mixin','CreateFromMixins','CopyTable','Get
     'UnitRace','UnitGUID','UnitIsUnit','UnitIsPlayer','UnitPlayerControlled','UnitIsConnected','UnitIsVisible','UnitSex',
     'UnitFactionGroup','HasFullControl','GetUnitName','GetSpecialization','UnitInParty','UnitInRaid','UnitPowerType',
     'GetPowerDisplayMod','GetZoneText','GetRealZoneText','GetSubZoneText','IsLoggedIn','IsPlayerInWorld',
-    'securecall','securecallfunction','secureexecuterange','CreateSecureDelegate','UnitHealthPercent','UnitPowerPercent',
+    'securecall','securecallfunction','securecallmethod','secureexecuterange','CreateSecureDelegate','UnitHealthPercent','UnitPowerPercent',
     'GetChatWindowInfo','GetChatWindowSavedPosition','GetChatWindowSavedDimensions','GetTasksTable','GetNumAutoQuestPopUps','GetNumShapeshiftForms'}) do remember(_G,name,name) end
 for namespace,keys in pairs({C_UnitAuras={'GetAuraSlots','GetAuraDataByIndex','GetAuraDataBySlot','GetAuraDataByAuraInstanceID','GetPlayerAuraBySpellID','GetUnitAuras'},
     C_CVar={'GetCVar','GetCVarBool','GetCVarNumber','SetCVar','AreCVarsLoaded','GetCVarDefault'},
@@ -214,6 +214,7 @@ function C_EditMode.GetAccountSettings()
     return settings
 end
 function securecallfunction(fn,...) return __selu_secure_invoke(fn,...) end
+function securecallmethod(object,method,...) return __selu_secure_invoke(object[method],object,...) end
 -- FrameScriptDocumentation.lua: delegates preserve argument/return values
 -- and execute in a protected context. Native taint itself remains unmodeled.
 function CreateSecureDelegate(fn,options)

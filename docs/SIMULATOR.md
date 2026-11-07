@@ -920,7 +920,7 @@ errors with a known project file and line appear in the clickable Problems list.
 
 The default root list is defined once in crates/selu-sim/src/loader.rs as
 CORE_UI_ADDONS: Blizzard_UIParent, Blizzard_GameTooltip, Blizzard_Minimap,
-Blizzard_ChatFrameBase, Blizzard_MainMenuBarBagButtons and Blizzard_QueueStatusFrame.
+Blizzard_ChatFrameBase, Blizzard_CombatLog, Blizzard_MainMenuBarBagButtons and Blizzard_QueueStatusFrame.
 The last two complete dependencies used implicitly by the action-bar and Edit
 Mode code pulled in by the minimap: bag topology and group-finder anchoring.
 Studio exposes an override list in Run > Game Installs. Required TOC dependencies
@@ -931,6 +931,12 @@ take priority here. Missing source leaves the environment unavailable rather
 than manufacturing frames. No required dependency is excluded merely to hide
 its errors; absent localization and legacy native constants can still abort
 settings, community and queue initialization.
+
+Combat Log is included because the chat configuration initializes its filter
+defaults at login. It adds three addons through required TOC dependencies in
+the measured client. Localized positional formatting (`%1$s`, `%2$d`) reorders
+arguments before delegating conversion to Lua's native formatter. Secure method
+calls preserve the receiver, return values and captured-error boundary.
 
 Core still leaves World Map outside its roots. A dependency probe adds four
 addons but reaches additional map-canvas input gaps; it does not yet complete

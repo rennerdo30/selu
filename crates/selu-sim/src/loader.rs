@@ -15,11 +15,14 @@ use std::path::{Path, PathBuf};
 /// reported as missing, never stood in for.
 /// Bag buttons and queue status complete implicit action-bar/Edit Mode
 /// dependencies; their own TOCs select product-specific files.
+/// Combat Log supplies the filter defaults that the chat configuration reads
+/// during login, even before its panel is opened.
 pub const CORE_UI_ADDONS: &[&str] = &[
     "Blizzard_UIParent",
     "Blizzard_GameTooltip",
     "Blizzard_Minimap",
     "Blizzard_ChatFrameBase",
+    "Blizzard_CombatLog",
     "Blizzard_MainMenuBarBagButtons",
     "Blizzard_QueueStatusFrame",
 ];

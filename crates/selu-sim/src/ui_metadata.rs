@@ -44,10 +44,11 @@ pub(crate) fn register_text_refs(lua: &Lua, source: &str) -> mlua::Result<()> {
                 .iter()
                 .any(|p| s.starts_with(p))
     };
-    for window in token.windows(3) {
+    for (at, window) in token.windows(3).enumerate() {
+        let projected = matches!(token.get(at + 3), Some(Token::Mark(b'.' | b'[' | b':')));
         let key = match window {
             [Token::Word(method), Token::Mark(b'('), Token::Word(key)]
-                if string_consumer(method) =>
+                if string_consumer(method) && !projected =>
             {
                 Some(key)
             }
@@ -58,8 +59,9 @@ pub(crate) fn register_text_refs(lua: &Lua, source: &str) -> mlua::Result<()> {
                 Some(key)
             }
             [Token::Word(field), Token::Mark(b'='), Token::Word(key)]
-                if ["text", "label", "title", "tooltip", "description"]
-                    .contains(&field.as_str()) =>
+                if !projected
+                    && ["text", "label", "title", "tooltip", "description"]
+                        .contains(&field.as_str()) =>
             {
                 Some(key)
             }
@@ -175,8 +177,11 @@ fn helper_string_refs(t: &[Token]) -> Vec<String> {
     };
     let mut uses = Vec::<(usize, String)>::new();
     for (at, w) in t.windows(3).enumerate() {
+        let projected = matches!(t.get(at + 3), Some(Token::Mark(b'.' | b'[' | b':')));
         match w {
-            [Token::Word(f), Token::Mark(b'('), Token::Word(p)] if string_consumer(f) => {
+            [Token::Word(f), Token::Mark(b'('), Token::Word(p)]
+                if string_consumer(f) && !projected =>
+            {
                 uses.push((at, p.clone()))
             }
             [Token::Word(p), Token::Mark(b':'), Token::Word(f)]
@@ -206,6 +211,7 @@ fn helper_string_refs(t: &[Token]) -> Vec<String> {
             {
                 if matches!(&t[pos],Token::Word(w) if w=="and" || w=="or")
                     && let Some(Token::Word(value)) = t.get(pos + 1)
+                    && !matches!(t.get(pos + 2), Some(Token::Mark(b'.' | b'[' | b':')))
                 {
                     conditional = true;
                     aliases.push(value.clone());
@@ -1186,6 +1192,13 @@ mod string_use_tests {
         s.eval("assert(SELF_WRAPPED=='SELF WRAPPED' and SELF_COMMAND=='SELF COMMAND');assert(SELF_UNKNOWN_NUMBER==nil)").unwrap();
         super::register_text_refs(s.lua(),"local function description(flag) local body=SELF_FLAG and SELF_SHORT_BODY or SELF_LONG_BODY; return body:format(1) end; color:WrapTextInColorCode(SELF_COLORED)").unwrap();
         s.eval("assert(SELF_SHORT_BODY=='SELF SHORT BODY' and SELF_LONG_BODY=='SELF LONG BODY' and SELF_COLORED=='SELF COLORED' and SELF_FLAG==nil)").unwrap();
+        super::register_text_refs(
+            s.lua(),
+            "format(SELF_RECORD.name);local data={text=SELF_OTHER_RECORD.caption}",
+        )
+        .unwrap();
+        s.eval("assert(SELF_RECORD==nil and SELF_OTHER_RECORD==nil)")
+            .unwrap();
         s.eval("assert(SELF_FORMAT=='SELF FORMAT' and SELF_CAPTION=='SELF CAPTION' and SELF_PATTERN=='SELF PATTERN' and SELF_TOOLTIP=='SELF TOOLTIP');assert(SELF_NUMBER==nil and LE_UNKNOWN_VALUE==nil and COMMENT_ONLY==nil and STRING_LITERAL_ONLY==nil);__selu_global_shapes.TYPED_LABEL='number';assert(TYPED_LABEL==0)").unwrap();
     }
 }

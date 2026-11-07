@@ -1737,6 +1737,21 @@ mod tests {
             .unwrap();
     }
     #[test]
+    fn secure_method_calls_preserve_receiver_results_and_error_boundaries() {
+        let mut session = Session::new(SessionConfig::default()).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/default-ui");
+        session.load_default_ui(&source, |_| {}).unwrap();
+        session.eval("local object={};function object:Release(value) assert(self==object);return true,nil,value end;local a,b,c=securecallmethod(object,'Release',7);assert(a==true and b==nil and c==7);function object:Fail() error('secure method fixture failure') end;assert(securecallmethod(object,'Fail')==nil);assert(securecallmethod(object,'Release',9)==true)").unwrap();
+        assert_eq!(
+            session
+                .logs()
+                .iter()
+                .filter(|l| l.starts_with("error:") && l.contains("secure method fixture failure"))
+                .count(),
+            1
+        );
+    }
+    #[test]
     fn blizzard_login_queries_live_geometry_and_allows_large_system_searches() {
         let mut session = Session::new(SessionConfig::default()).unwrap();
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/default-ui");
