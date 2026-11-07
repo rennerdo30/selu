@@ -507,6 +507,9 @@ pub fn create(
                 "SetHighlightFontObject",
                 "SetDisabledFontObject",
                 "SetFormattedText",
+                "SetRotation",
+                "GetRotation",
+                "SetPortraitZoom",
             ]) {
                 let method = method.to_owned();
                 let context = ctx.clone();
@@ -627,6 +630,22 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
     let i = id(t)?;
     let v = &args[1..];
     let a = store(lua);
+    if matches!(method, "SetRotation" | "GetRotation" | "SetPortraitZoom") {
+        let property = if method.ends_with("Rotation") {
+            "__selu_rotation"
+        } else {
+            "__selu_portrait_zoom"
+        };
+        if method.starts_with("Set") {
+            ctx.not_simulated("model/region rotation and portrait zoom rendering");
+            t.raw_set(property, number(v.first(), 0.0))?;
+            return ().into_lua_multi(lua);
+        }
+        return t
+            .raw_get::<Option<f64>>(property)?
+            .unwrap_or(0.0)
+            .into_lua_multi(lua);
+    }
     if method == "SetMaskTexture" {
         t.raw_set(
             "__selu_minimap_mask",

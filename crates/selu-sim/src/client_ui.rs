@@ -2,6 +2,56 @@
 use mlua::{Lua, Table, Value};
 pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
     let globals = lua.globals();
+    // The baseline has no guild, queued battlegrounds, learned specializations,
+    // pets, or equipped Azerite item. These are empty world collections, not
+    // client constants or UI policies. Preserve any richer native provider.
+    let standins = globals.raw_get::<Option<Table>>("__selu_native_standins")?;
+    for (path, shape) in [
+        ("GuildControlGetNumRanks", "count"),
+        ("GetMaxBattlefieldID", "count"),
+        ("GetNumSpecializations", "count"),
+        ("C_PetJournal.GetNumPetsNeedingFanfare", "count"),
+        ("C_PetBattles.GetAllEffectNames", "empty"),
+        ("C_PetBattles.GetAllStates", "empty"),
+        ("C_LFGList.GetAvailableRoles", "roles"),
+        ("C_AzeriteItem.FindActiveAzeriteItem", "empty"),
+        ("C_AccountServices.GetPreferredLocales", "empty"),
+        (
+            "C_AccountServices.GetPreferredDatacenterLocalities",
+            "empty",
+        ),
+    ] {
+        let (owner, key) = if let Some((namespace, key)) = path.split_once('.') {
+            let owner = globals
+                .raw_get::<Option<Table>>(namespace)?
+                .unwrap_or(lua.create_table()?);
+            globals.raw_set(namespace, owner.clone())?;
+            (owner, key)
+        } else {
+            (globals.clone(), path)
+        };
+        let existing = owner.raw_get::<Value>(key)?;
+        let standin = standins
+            .as_ref()
+            .map(|s| s.raw_get::<Value>(path))
+            .transpose()?
+            .unwrap_or(Value::Nil);
+        if !existing.is_nil() && existing != standin {
+            continue;
+        }
+        let context = ctx.clone();
+        owner.raw_set(
+            key,
+            lua.create_function(move |_, _: mlua::MultiValue| {
+                context.not_simulated(path);
+                Ok(match shape {
+                    "count" => mlua::MultiValue::from_vec(vec![Value::Integer(0)]),
+                    "roles" => mlua::MultiValue::from_vec(vec![Value::Boolean(false); 3]),
+                    _ => mlua::MultiValue::new(),
+                })
+            })?,
+        )?;
+    }
     lua.set_named_registry_value("selu.default_ui_strings", true)?;
     let logging = globals
         .raw_get::<Option<Table>>("C_Log")?
@@ -213,4 +263,25 @@ pub(crate) fn load_strings(
     }
     lua.set_named_registry_value("selu.synthetic_strings", !found)?;
     lua.globals().raw_set("__selu_synthetic_strings", !found)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn empty_collections_are_native_world_results_and_existing_providers_win() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        s.eval("function GetNumSpecializations() return 7 end")
+            .unwrap();
+        super::install(s.lua(), s.sim().ctx()).unwrap();
+        s.eval("assert(GetNumSpecializations()==7);assert(GetMaxBattlefieldID()==0);assert(GuildControlGetNumRanks()==0);assert(C_PetJournal.GetNumPetsNeedingFanfare()==0);assert(C_AzeriteItem.FindActiveAzeriteItem()==nil);assert(select('#',C_PetBattles.GetAllEffectNames())==0); local a,b,c=C_LFGList.GetAvailableRoles();assert(a==false and b==false and c==false)").unwrap();
+    }
+    #[test]
+    fn animation_restart_rewinds_and_model_properties_are_per_region() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        s.eval("f=CreateFrame('PlayerModel');other=CreateFrame('PlayerModel');f:SetRotation(.75);f:SetPortraitZoom(.4);assert(f:GetRotation()==.75 and other:GetRotation()==0);assert(f.__selu_portrait_zoom==.4);g=f:CreateAnimationGroup();a=g:CreateAnimation('Alpha');a:SetFromAlpha(0);a:SetToAlpha(1);a:SetDuration(1);plays=0;g:SetScript('OnPlay',function()plays=plays+1 end);g:Play()").unwrap();
+        s.advance_time(0.5);
+        s.eval("assert(f:GetAlpha()>.4 and f:GetAlpha()<.6);g:Restart();assert(g:IsPlaying() and plays==2)").unwrap();
+        s.advance_time(0.1);
+        s.eval("assert(f:GetAlpha()<.2)").unwrap();
+    }
 }

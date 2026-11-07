@@ -103,7 +103,15 @@ pub(crate) fn read_client(
     for node in nodes {
         if matches!(node.tag_name().name(), "Include" | "Script") {
             if let Some(file) = node.attribute("file") {
-                let child = path.parent().unwrap().join(file.replace('\\', "/"));
+                let relative = file.replace('\\', "/");
+                let local = path.parent().unwrap().join(&relative);
+                // Product-specific XML also references shared addon-root
+                // scripts. Keep local includes working, then try the addon
+                // root when that file does not exist (in CASC or on disk).
+                let child = match crate::loader::ui_path(&local, client) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => root.join(relative),
+                    _ => local,
+                };
                 read_client(root, &child, stack, out, diagnostic, client)?;
             } else if node.tag_name().name() == "Script" {
                 out.push((path.display().to_string(), node.text().unwrap_or("").into()));
@@ -204,6 +212,47 @@ mod tests {
             sim.eval(&format!("__selu_xml_declare({})", encode(n, 0).unwrap()))
                 .unwrap();
         }
+    }
+    #[test]
+    fn nested_xml_can_include_shared_addon_root_scripts() {
+        let root = std::env::temp_dir().join(format!("selu-xml-root-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("Variant")).unwrap();
+        std::fs::write(
+            root.join("Variant/Main.xml"),
+            "<Ui><Script file=\"Shared.lua\"/></Ui>",
+        )
+        .unwrap();
+        std::fs::write(root.join("Shared.lua"), "SharedFixtureLoaded=true").unwrap();
+        let root = root.canonicalize().unwrap();
+        let mut chunks = Vec::new();
+        read_client(
+            &root,
+            &root.join("Variant/Main.xml"),
+            &mut Vec::new(),
+            &mut chunks,
+            &mut |_| {},
+            None,
+        )
+        .unwrap();
+        assert!(
+            chunks
+                .iter()
+                .any(|(_, source)| source == "SharedFixtureLoaded=true")
+        );
+    }
+    #[test]
+    fn repeated_intrinsic_ancestors_do_not_erase_derived_methods_or_keyvalues() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("PrimitiveMixin={Read=function() return 'primitive' end};OverrideMixin={Read=function()return 'derived' end}").unwrap();
+        // Multiple ItemButton templates in the client's bag widgets repeat
+        // the same intrinsic ancestor. The later template must not reconstruct
+        // that ancestor over the earlier template's overrides.
+        run(
+            &sim,
+            r#"<Ui><Button name="Primitive" intrinsic="true" mixin="PrimitiveMixin"><KeyValues><KeyValue key="flag" value="true" type="boolean"/></KeyValues></Button><Primitive name="Override" mixin="OverrideMixin" virtual="true"><KeyValues><KeyValue key="flag" value="false" type="boolean"/></KeyValues></Primitive><Primitive name="Plain" virtual="true"/><Primitive name="Result" inherits="Override, Plain"/></Ui>"#,
+        );
+        sim.eval("assert(Result:Read()=='derived' and Result.flag==false)")
+            .unwrap();
     }
     #[test]
     fn inherited_edit_box_flags_and_binding_bodies_use_native_input() {

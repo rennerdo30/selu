@@ -662,6 +662,11 @@ simulator input mechanisms; none introduces untyped Lua into Selu programs.
 `inherit="append"` appends the inherited handler after the local handler,
 as required by FloatingChatFrame.xml's chat-frame initialization. Intrinsic
 postcall OnLoad handlers run after the instance's normal OnLoad and regions.
+An intrinsic base is applied once per object, including when several inherited
+templates share it. Later templates do not reset earlier derived mixins or
+KeyValues to the intrinsic defaults. Animation groups support Restart;
+rotation and portrait-zoom setters retain native property state, while their
+rendering remains unsimulated.
 
 The client atlas index decodes UiTextureAtlas (897470), UiTextureAtlasMember
 (897532) and UiTextureAtlasElement (1989276), joining member ElementID to
@@ -687,6 +692,15 @@ Documented Constant tables with the selected game's or family's suffix also
 expose the unsuffixed native name, preferring the game-specific form and
 preserving explicitly documented unsuffixed declarations. The shared product
 mapping supplies those suffixes; no client values are copied into the simulator.
+The same data-only documentation reader supplies return contracts for native
+functions omitted from the checked public manifest, including secure-only UI
+APIs. Existing engine or addon implementations win. Native record results
+receive their documented mixin from the loaded client Lua. This changes only
+the simulator environment; it exposes no untyped API to Selu programs.
+The baseline world has no guild ranks, queued battlegrounds, learned
+specializations, pet collection, pet-battle ability catalog, preferred account
+localities, or equipped Azerite item. Their native queries return empty results
+with once-only unsimulated notes; no account files are read.
 Missing constants and localization can still interrupt Blizzard startup; Core
 and Full are not error-free compatibility environments.
 
@@ -858,7 +872,19 @@ errors with a known project file and line appear in the clickable Problems list.
 
 ### Lean Core environment (SL-31)
 
-The default root list is defined once in crates/selu-sim/src/loader.rs as CORE_UI_ADDONS: Blizzard_UIParent, Blizzard_GameTooltip, Blizzard_Minimap and Blizzard_ChatFrameBase. Studio exposes an override list in Run > Game Installs. Required TOC dependencies and the native shared-library pass use the same loader and ordering as Full; no named-frame substitutes are installed. Root lists survive reload. Basic unit frames are not an additional Core root: dependency size and startup cost take priority here. Missing source leaves the environment unavailable rather than manufacturing frames.
+The default root list is defined once in crates/selu-sim/src/loader.rs as
+CORE_UI_ADDONS: Blizzard_UIParent, Blizzard_GameTooltip, Blizzard_Minimap,
+Blizzard_ChatFrameBase, Blizzard_MainMenuBarBagButtons and Blizzard_QueueStatusFrame.
+The last two complete dependencies used implicitly by the action-bar and Edit
+Mode code pulled in by the minimap: bag topology and group-finder anchoring.
+Studio exposes an override list in Run > Game Installs. Required TOC dependencies
+and the native shared-library pass use the same loader and ordering as Full;
+no named-frame substitutes are installed. Root lists survive reload. Basic
+unit frames are not an additional Core root: dependency size and startup cost
+take priority here. Missing source leaves the environment unavailable rather
+than manufacturing frames. No required dependency is excluded merely to hide
+its errors; absent localization and legacy native constants can still abort
+settings, community and queue initialization.
 
 The client-backed core_ui integration test uses SELU_DEFAULT_UI_SOURCE and SELU_CLIENT_INSTALL and records elapsed startup. Run it separately with --ignored --test-threads=1. Full interaction tests still explicitly request Full. Neither test reads account data or starts the game.
 

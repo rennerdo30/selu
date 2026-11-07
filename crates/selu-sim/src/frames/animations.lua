@@ -51,6 +51,7 @@ return function(target, note, translate)
     end
     function g:Pause() if self.state=="playing" then self.state="paused";driver:Hide() end end
     function g:Stop() self.state="stopped";driver:Hide();self.elapsed=0;restore() end
+    function g:Restart() self:Stop();self:Play() end
     driver:SetScript("OnUpdate",function(_,dt)
         if g.state~="playing" then return end
         local duration=g:GetDuration()

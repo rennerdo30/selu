@@ -10,14 +10,18 @@ use std::path::{Path, PathBuf};
 /// TOC dependencies and the client's shared-library pass are resolved below.
 /// Blizzard addons whose frames addons most often touch. Each product's own
 /// `ui-toc-list.txt` and TOCs supply their dependencies and files. Checked
-/// 2026-11-07: all four ship in the installed wow, wowf, wow_classic,
+/// 2026-11-07: the base roots ship in the installed wow, wowf, wow_classic,
 /// wow_classic_era and wow_anniversary clients. A root a product lacks is
 /// reported as missing, never stood in for.
+/// Bag buttons and queue status complete implicit action-bar/Edit Mode
+/// dependencies; their own TOCs select product-specific files.
 pub const CORE_UI_ADDONS: &[&str] = &[
     "Blizzard_UIParent",
     "Blizzard_GameTooltip",
     "Blizzard_Minimap",
     "Blizzard_ChatFrameBase",
+    "Blizzard_MainMenuBarBagButtons",
+    "Blizzard_QueueStatusFrame",
 ];
 
 pub(crate) fn read_ui_text(

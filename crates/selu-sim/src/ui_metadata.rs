@@ -252,6 +252,35 @@ impl Parser {
 #[derive(Clone, Default)]
 struct Metadata {
     tables: BTreeMap<String, BTreeMap<String, Node>>,
+    functions: BTreeMap<String, selu_manifest::Declaration>,
+    schemas: BTreeMap<String, selu_manifest::Declaration>,
+}
+fn declaration(node: &Node) -> Option<selu_manifest::Declaration> {
+    let Node::Table(fields, _) = node else {
+        return None;
+    };
+    let Node::Text(name) = fields.get("Name")? else {
+        return None;
+    };
+    let mut data = serde_json::json!({"name": name});
+    if let Some(Node::Text(ty)) = fields.get("Type") {
+        data["type"] = ty.as_str().into();
+    }
+    if let Some(Node::Text(mixin)) = fields.get("Mixin") {
+        data["attributes"]["Mixin"] = mixin.as_str().into();
+    }
+    for (source, dest) in [
+        ("Fields", "fields"),
+        ("Returns", "returns"),
+        ("Functions", "methods"),
+    ] {
+        if let Some(Node::Table(_, list)) = fields.get(source) {
+            data[dest] =
+                serde_json::to_value(list.iter().filter_map(declaration).collect::<Vec<_>>())
+                    .ok()?;
+        }
+    }
+    serde_json::from_value(data).ok()
 }
 impl Metadata {
     fn expose_constant_aliases(&mut self, target: Option<&str>) {
@@ -280,7 +309,7 @@ impl Metadata {
         if source.len() > 4 * 1024 * 1024 {
             return;
         }
-        if !source.contains("EnumValue") && !source.contains("Constants") {
+        if !source.contains("Type") {
             return;
         }
         let mut p = Parser {
@@ -302,6 +331,38 @@ impl Metadata {
         if let (Some(Node::Text(name)), Some(Node::Text(kind))) =
             (fields.get("Name"), fields.get("Type"))
         {
+            if let Some(mut schema) = declaration(node) {
+                match kind.as_str() {
+                    "System" => {
+                        let namespace = match fields.get("Namespace") {
+                            Some(Node::Text(s)) => s.as_str(),
+                            _ => "",
+                        };
+                        for mut function in schema.methods {
+                            if !namespace.is_empty() {
+                                function.name = format!("{namespace}.{}", function.name);
+                            }
+                            self.functions.insert(function.name.clone(), function);
+                        }
+                    }
+                    "Structure" => {
+                        self.schemas.insert(name.clone(), schema);
+                    }
+                    "Enumeration" => {
+                        schema.ty = Some("enum".into());
+                        if let Some(Node::Table(_, entries)) = fields.get("Fields") {
+                            for entry in entries {
+                                if let Some(field) = declaration(entry) {
+                                    schema.values.insert(field.name, serde_json::Value::Null);
+                                }
+                            }
+                        }
+                        self.schemas.insert(name.clone(), schema.clone());
+                        self.schemas.insert(format!("Enum.{name}"), schema);
+                    }
+                    _ => {}
+                }
+            }
             let (namespace, list, value) = match kind.as_str() {
                 "Enumeration" => ("Enum", "Fields", "EnumValue"),
                 "Constants" => ("Constants", "Values", "Value"),
@@ -385,7 +446,56 @@ pub(crate) fn install(
         cache.lock().unwrap().insert(key, data.clone());
         data
     };
-    apply(lua, ctx, &data)
+    apply(lua, ctx, &data)?;
+    install_natives(lua, ctx, &data)
+}
+fn install_natives(lua: &Lua, ctx: &crate::Ctx, data: &Metadata) -> mlua::Result<()> {
+    // Private/secure UI natives can be absent from the public checked API.
+    // Read their return contracts from this client, without executing docs or
+    // exposing any additional API to the Selu language.
+    let schemas: crate::native_defaults::Schemas = Arc::new(
+        data.schemas
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    );
+    let standins = lua
+        .globals()
+        .raw_get::<Option<Table>>("__selu_native_standins")?
+        .unwrap_or(lua.create_table()?);
+    lua.globals()
+        .raw_set("__selu_native_standins", standins.clone())?;
+    'functions: for (path, function) in &data.functions {
+        let parts: Vec<_> = path.split('.').collect();
+        let mut owner = lua.globals();
+        for part in &parts[..parts.len() - 1] {
+            owner = match owner.raw_get::<Value>(*part)? {
+                Value::Table(t) => t,
+                Value::Nil => {
+                    let t = lua.create_table()?;
+                    owner.raw_set(*part, t.clone())?;
+                    t
+                }
+                _ => continue 'functions,
+            };
+        }
+        let key = parts[parts.len() - 1];
+        if !owner.raw_get::<Value>(key)?.is_nil() {
+            continue;
+        }
+        let name = path.clone();
+        let returns = function.returns.clone();
+        let schemas = schemas.clone();
+        let context = ctx.clone();
+        let native = lua.create_function(move |lua, _: mlua::MultiValue| {
+            crate::native_defaults::record(lua, &name);
+            context.not_simulated(&name);
+            crate::native_defaults::values(lua, &returns, &schemas, &context, 0)
+        })?;
+        standins.raw_set(path.as_str(), native.clone())?;
+        owner.raw_set(key, native)?;
+    }
+    Ok(())
 }
 fn value(lua: &Lua, node: &Node) -> mlua::Result<Value> {
     Ok(match node {
@@ -529,6 +639,25 @@ fn apply(lua: &Lua, ctx: &crate::Ctx, data: &Metadata) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runtime_documentation_supplies_private_natives_and_real_record_mixins() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        let mut data = Metadata::default();
+        data.read(r#"local fixture={Name="Fixture",Type="System",Namespace="C_Fixture",Functions={
+            {Name="Read",Type="Function",Returns={{Name="result",Type="FixtureRecord",Mixin="FixtureMixin"},{Name="ok",Type="bool"}}},
+            {Name="Existing",Type="Function",Returns={{Name="result",Type="number"}}}
+        },Tables={{Name="FixtureRecord",Type="Structure",Fields={{Name="count",Type="number"}}}}}"#);
+        s.eval("C_Fixture={Existing=function() return 19 end}; FixtureMixin={Count=function(self)return self.count end}").unwrap();
+        install_natives(s.lua(), s.sim().ctx(), &data).unwrap();
+        s.eval("local r,ok=C_Fixture.Read();assert(r.count==0 and r:Count()==0 and ok==false);assert(C_Fixture.Existing()==19);assert(C_Fixture.NotDocumented==nil);C_Fixture.Read()").unwrap();
+        assert_eq!(
+            s.logs()
+                .iter()
+                .filter(|s| s.contains("not simulated: C_Fixture.Read"))
+                .count(),
+            1
+        );
+    }
     #[test]
     fn documented_constant_variants_use_the_selected_game_and_family() {
         let source = r#"{Tables={

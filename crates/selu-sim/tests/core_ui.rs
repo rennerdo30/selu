@@ -9,10 +9,20 @@ fn core_loads_real_common_frames_and_records_startup() {
         ..Default::default()
     })
     .unwrap();
-    let roots = selu_sim::loader::CORE_UI_ADDONS
+    let mut roots = selu_sim::loader::CORE_UI_ADDONS
         .iter()
         .map(|s| (*s).into())
         .collect::<Vec<_>>();
+    // Optional dependency-cost probe, using addon roots rather than UI objects.
+    if let Ok(extra) = std::env::var("SELU_CORE_EXTRA_ADDONS") {
+        roots.extend(
+            extra
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned),
+        );
+    }
     let report = s
         .load_blizzard_ui(
             std::path::Path::new(

@@ -1,4 +1,4 @@
-//! Defaults are restricted to manifest-declared fields and methods. Unknown
+//! Defaults are restricted to manifest or runtime client-documentation fields and methods. Unknown
 //! members remain nil; there is no dynamic catch-all object or language bridge.
 use mlua::{Lua, MultiValue, Value};
 use selu_manifest::Declaration;
@@ -155,13 +155,28 @@ pub(crate) fn values(
 ) -> mlua::Result<MultiValue> {
     let mut out = MultiValue::new();
     for declaration in returns {
-        out.push_back(value(
+        let result = value(
             lua,
             declaration.ty.as_deref().unwrap_or("table"),
             schemas,
             ctx,
             depth,
-        )?);
+        )?;
+        // Native record results carry the documented Lua mixin too. The
+        // mixin comes from the user's loaded UI, never a copied simulator API.
+        if let Value::Table(table) = &result
+            && let Some(name) = declaration
+                .attributes
+                .get("Mixin")
+                .and_then(serde_json::Value::as_str)
+            && let Some(mixin) = lua.globals().raw_get::<Option<mlua::Table>>(name)?
+        {
+            for entry in mixin.pairs::<Value, Value>() {
+                let (key, value) = entry?;
+                table.raw_set(key, value)?;
+            }
+        }
+        out.push_back(result);
     }
     Ok(out)
 }

@@ -338,7 +338,14 @@ end
 apply=function(f,n,seen)
     if intrinsic[n.tag] then
         assert(not seen[n.tag],'XML intrinsic inheritance cycle: '..n.tag)
-        seen[n.tag]=true; apply(f,templates[n.tag],seen); seen[n.tag]=nil
+        -- An object's intrinsic base is constructed once. Replaying it for
+        -- each virtual template would overwrite already-applied derived
+        -- mixins (in particular their method overrides).
+        seen.intrinsicApplied=seen.intrinsicApplied or {}
+        if not seen.intrinsicApplied[n.tag] then
+            seen.intrinsicApplied[n.tag]=true
+            seen[n.tag]=true; apply(f,templates[n.tag],seen); seen[n.tag]=nil
+        end
     end
     if n.a.inherits then inherit(f,n.a.inherits,seen) end
     local mixins=n.mixins
