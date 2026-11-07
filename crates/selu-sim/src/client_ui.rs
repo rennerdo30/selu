@@ -6,21 +6,49 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
     // pets, or equipped Azerite item. These are empty world collections, not
     // client constants or UI policies. Preserve any richer native provider.
     let standins = globals.raw_get::<Option<Table>>("__selu_native_standins")?;
-    for (path, shape) in [
-        ("GuildControlGetNumRanks", "count"),
-        ("GetMaxBattlefieldID", "count"),
-        ("GetNumSpecializations", "count"),
-        ("C_PetJournal.GetNumPetsNeedingFanfare", "count"),
-        ("C_PetBattles.GetAllEffectNames", "empty"),
-        ("C_PetBattles.GetAllStates", "empty"),
-        ("C_LFGList.GetAvailableRoles", "roles"),
-        ("C_AzeriteItem.FindActiveAzeriteItem", "empty"),
-        ("C_AccountServices.GetPreferredLocales", "empty"),
+    for (path, shape, capability) in [
+        ("GuildControlGetNumRanks", "count", None),
+        ("GetMaxBattlefieldID", "count", None),
+        (
+            "GetNumSpecializations",
+            "count",
+            Some("C_SpecializationInfo"),
+        ),
+        (
+            "C_PetJournal.GetNumPetsNeedingFanfare",
+            "count",
+            Some("C_PetJournal"),
+        ),
+        (
+            "C_PetBattles.GetAllEffectNames",
+            "empty",
+            Some("C_PetBattles"),
+        ),
+        ("C_PetBattles.GetAllStates", "empty", Some("C_PetBattles")),
+        ("C_LFGList.GetAvailableRoles", "roles", Some("C_LFGList")),
+        (
+            "C_AzeriteItem.FindActiveAzeriteItem",
+            "empty",
+            Some("C_AzeriteItem"),
+        ),
+        (
+            "C_AccountServices.GetPreferredLocales",
+            "empty",
+            Some("C_Club"),
+        ),
         (
             "C_AccountServices.GetPreferredDatacenterLocalities",
             "empty",
+            Some("C_Club"),
         ),
     ] {
+        // Use the selected client's capabilities rather than making modern
+        // systems appear on products whose documentation lacks them.
+        if let Some(capability) = capability
+            && globals.raw_get::<Value>(capability)?.is_nil()
+        {
+            continue;
+        }
         let (owner, key) = if let Some((namespace, key)) = path.split_once('.') {
             let owner = globals
                 .raw_get::<Option<Table>>(namespace)?
@@ -270,6 +298,8 @@ mod tests {
     #[test]
     fn empty_collections_are_native_world_results_and_existing_providers_win() {
         let s = crate::Session::new(Default::default()).unwrap();
+        super::install(s.lua(), s.sim().ctx()).unwrap();
+        s.eval("assert(C_PetJournal==nil and C_PetBattles==nil and C_AzeriteItem==nil and C_AccountServices==nil and GetNumSpecializations==nil); C_PetJournal={};C_PetBattles={};C_AzeriteItem={};C_LFGList={};C_Club={};C_SpecializationInfo={}").unwrap();
         s.eval("function GetNumSpecializations() return 7 end")
             .unwrap();
         super::install(s.lua(), s.sim().ctx()).unwrap();
@@ -278,7 +308,7 @@ mod tests {
     #[test]
     fn animation_restart_rewinds_and_model_properties_are_per_region() {
         let s = crate::Session::new(Default::default()).unwrap();
-        s.eval("f=CreateFrame('PlayerModel');other=CreateFrame('PlayerModel');f:SetRotation(.75);f:SetPortraitZoom(.4);assert(f:GetRotation()==.75 and other:GetRotation()==0);assert(f.__selu_portrait_zoom==.4);g=f:CreateAnimationGroup();a=g:CreateAnimation('Alpha');a:SetFromAlpha(0);a:SetToAlpha(1);a:SetDuration(1);plays=0;g:SetScript('OnPlay',function()plays=plays+1 end);g:Play()").unwrap();
+        s.eval("f=CreateFrame('PlayerModel');other=CreateFrame('PlayerModel');f:SetRotation(.75);f:SetPortraitZoom(.4);assert(f.__selu_rotation==.75 and other.__selu_rotation==nil);assert(f.__selu_portrait_zoom==.4);local t=f:CreateTexture();t:SetRotation(.25);assert(t:GetRotation()==.25);g=f:CreateAnimationGroup();a=g:CreateAnimation('Alpha');a:SetFromAlpha(0);a:SetToAlpha(1);a:SetDuration(1);plays=0;g:SetScript('OnPlay',function()plays=plays+1 end);g:Play()").unwrap();
         s.advance_time(0.5);
         s.eval("assert(f:GetAlpha()>.4 and f:GetAlpha()<.6);g:Restart();assert(g:IsPlaying() and plays==2)").unwrap();
         s.advance_time(0.1);
