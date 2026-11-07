@@ -55,12 +55,24 @@ Selu, the simulator and Studio support every World of Warcraft product
   port targets `wowf`); the tools may not.
 - No personal paths (for example `E:/Development/...`) as defaults in code.
 
-## Blizzard content (owner, 2026-11-07)
+## Blizzard content: never ship Blizzard's IP (owner, 2026-11-07)
 
-Blizzard's Lua, XML, art, fonts and game data are read at runtime from the
-user's own installation (or their local source checkout). Never commit or
-redistribute them, or data exported from them, for the simulator. Test
-fixtures are self-written. Screenshots with client art stay local.
+Selu never ships Blizzard-owned intellectual property. Everything Blizzard
+owns is loaded from the user's own game files at runtime, when it is needed.
+
+- Blizzard's Lua, XML, art, fonts, sounds, text and game data are read at
+  runtime from the user's own installation (or their local source
+  checkout). Never commit, bundle, cache in the repository or redistribute
+  them, or data exported or derived from them.
+- Never ship decryption keys. Selu does not embed, commit, download or look
+  up encryption keys. Decrypting protected client files is only possible
+  with keys the user supplies themselves through an opt-in setting, at
+  their own choice; by default Selu uses readable data only (for example
+  text borrowed from another installed product).
+- Keys are secrets: never print or log them, or put them in reports, errors
+  or tests. Name only the key ID. Agents never obtain or use real keys;
+  tests use self-made keys and self-made encrypted fixtures.
+- Test fixtures are self-written. Screenshots with client art stay local.
 
 ## The simulator runs Blizzard's UI, never a copy of it (owner, 2026-11-07)
 
