@@ -680,13 +680,40 @@ expressions remain unsupported with once-only notes. Undocumented enum members
 receive stable synthetic numeric identities on first lookup, with once-only
 "not simulated" notes. These identities are simulator behaviour, not copied
 client values. Native enum stand-ins use the same runtime lookup; documented
-client values always take precedence. Undocumented Constants remain undefined.
+client values always take precedence. Undocumented Constant namespaces are lazy
+empty tables; their unknown members remain nil with once-only notes. The two
+inventory bag-count members are modeled character facts, described below.
 Documented Constant tables with the selected game's or family's suffix also
 expose the unsuffixed native name, preferring the game-specific form and
 preserving explicitly documented unsuffixed declarations. The shared product
 mapping supplies those suffixes; no client values are copied into the simulator.
 Missing constants and localization can still interrupt Blizzard startup; Core
 and Full are not error-free compatibility environments.
+
+Scenario `bag_slots` and `reagent_bag_slots` select supported ordinary and
+reagent bag counts, excluding the backpack. Omitted fields use the single
+`world::BAG_SLOT_DEFAULTS` table: `wow`/`wowf` use 4 ordinary and 1 reagent;
+`wow_classic`, `wow_classic_era`, `wow_anniversary`, and `wow_classic_titan`
+use 4 ordinary and 0 reagent. Their PTR/beta channels use the base product.
+These are owner-selected simulator defaults, not client exports. An unknown
+or unselected product claims neither capacity. Parsed client documentation
+wins per member when it provides a value; effective native world state and
+`Constants.InventoryConstants` agree.
+
+The Scenario panel edits both counts and saves them in scenario TOML, for example:
+
+```toml
+bag_slots = 4
+reagent_bag_slots = 1
+```
+
+Constants reads reflect scenario changes immediately. Because Blizzard caches
+container topology during startup, Studio reloads in the worker when effective
+counts change. The world state survives that reload. Direct simulator callers
+can apply a Scenario and call `Session::reload` for the same source-driven UI
+rebuild. No Blizzard globals or frame layouts are patched. Implicit binding XML
+also loads from client storage, so source-checkout and CASC-only sessions use
+the same Blizzard key-binding handlers.
 
 Simulator Lua helpers capture private builtin/library snapshots when the VM
 is created. Addons retain the real mutable global environment. Blizzard

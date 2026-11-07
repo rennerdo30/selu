@@ -419,10 +419,18 @@ fn missing(lua: &Lua, ctx: &crate::Ctx, table: &Table, path: &str) -> mlua::Resu
     mt.raw_set(
         "__index",
         lua.create_function(move |lua, (owner, key): (Table, String)| {
+            if path == "Constants.InventoryConstants" {
+                let slots = crate::world::bag_slots(lua)?;
+                match key.as_str() {
+                    "NumBagSlots" => return Ok(Value::Integer(i64::from(slots.ordinary))),
+                    "NumReagentBagSlots" => return Ok(Value::Integer(i64::from(slots.reagent))),
+                    _ => {}
+                }
+            }
             ctx.not_simulated(&format!("undocumented client value: {path}.{key}"));
-            if path == "Enum" {
+            if path == "Enum" || path == "Constants" {
                 let child = lua.create_table()?;
-                missing(lua, &ctx, &child, &format!("Enum.{key}"))?;
+                missing(lua, &ctx, &child, &format!("{path}.{key}"))?;
                 owner.raw_set(key, child.clone())?;
                 return Ok(Value::Table(child));
             }
@@ -508,6 +516,13 @@ fn apply(lua: &Lua, ctx: &crate::Ctx, data: &Metadata) -> mlua::Result<()> {
     for (_, path, _, _) in pending {
         ctx.not_simulated(&format!("undocumented client value: {path}"));
     }
+    let constants: Table = lua.globals().raw_get("Constants")?;
+    let inventory: Table = constants.get("InventoryConstants")?;
+    crate::world::documented_bag_slots(
+        lua,
+        inventory.raw_get("NumBagSlots")?,
+        inventory.raw_get("NumReagentBagSlots")?,
+    )?;
     Ok(())
 }
 
@@ -530,7 +545,7 @@ mod tests {
             data.expose_constant_aliases(Some(target));
             let s = crate::Session::new(Default::default()).unwrap();
             apply(s.lua(), s.sim().ctx(), &data).unwrap();
-            s.eval(&format!("assert(Constants.Fixture.Choice=={expected});assert(Constants.Direct.Choice==13);assert(Constants.Unrelated==nil)")).unwrap();
+            s.eval(&format!("assert(Constants.Fixture.Choice=={expected});assert(Constants.Direct.Choice==13);assert(type(Constants.Unrelated)=='table' and Constants.Unrelated.Choice==nil)")).unwrap();
         }
     }
     #[test]
@@ -541,7 +556,9 @@ mod tests {
             if reverse {
                 s.eval("local x=Enum.Synthetic.Second").unwrap();
             }
-            s.eval("assert(type(Enum.Synthetic.First)=='number'); assert(Enum.Synthetic.First==Enum.Synthetic.First); assert(Enum.Synthetic.First~=Enum.Synthetic.Second); assert(Constants.Missing==nil)").unwrap();
+            // Owner-approved change: missing Constant namespaces exist, while
+            // their unknown members remain nil (no numeric value fallback).
+            s.eval("assert(type(Enum.Synthetic.First)=='number'); assert(Enum.Synthetic.First==Enum.Synthetic.First); assert(Enum.Synthetic.First~=Enum.Synthetic.Second); assert(type(Constants.Missing)=='table' and Constants.Missing.Value==nil)").unwrap();
             let first: i64 = s.lua().load("return Enum.Synthetic.First").eval().unwrap();
             s.lua()
                 .set_named_registry_value("selu.default_ui_strings", true)

@@ -4,6 +4,113 @@
 //! ContainerDocumentation.lua (bags), MapDocumentation.lua (zone events/map).
 use crate::{SimResult, session::Vm, value_string};
 use mlua::{Lua, ObjectLike, Table, Value};
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BagSlots {
+    pub ordinary: u8,
+    pub reagent: u8,
+}
+/// Owner-selected simulator defaults, not exported client data. Channels use
+/// their base product; an unselected/unknown product makes no capacity claim.
+pub const BAG_SLOT_DEFAULTS: &[(&str, BagSlots)] = &[
+    (
+        "wow",
+        BagSlots {
+            ordinary: 4,
+            reagent: 1,
+        },
+    ),
+    (
+        "wowf",
+        BagSlots {
+            ordinary: 4,
+            reagent: 1,
+        },
+    ),
+    (
+        "wow_classic",
+        BagSlots {
+            ordinary: 4,
+            reagent: 0,
+        },
+    ),
+    (
+        "wow_classic_era",
+        BagSlots {
+            ordinary: 4,
+            reagent: 0,
+        },
+    ),
+    (
+        "wow_anniversary",
+        BagSlots {
+            ordinary: 4,
+            reagent: 0,
+        },
+    ),
+    (
+        "wow_classic_titan",
+        BagSlots {
+            ordinary: 4,
+            reagent: 0,
+        },
+    ),
+];
+pub fn bag_slot_defaults(target: Option<&str>) -> BagSlots {
+    let product = target.unwrap_or("").split('@').next().unwrap_or("");
+    let product = selu_manifest::base_product(selu_manifest::product(product));
+    let product = product
+        .strip_suffix("_ptr")
+        .or_else(|| product.strip_suffix("_beta"))
+        .unwrap_or(product);
+    BAG_SLOT_DEFAULTS
+        .iter()
+        .find(|(name, _)| *name == product)
+        .map(|(_, slots)| *slots)
+        .unwrap_or_default()
+}
+pub(crate) fn configure_bag_slots(lua: &Lua, target: Option<&str>) -> SimResult<()> {
+    let slots = bag_slot_defaults(target);
+    let state = lua.create_table()?;
+    state.raw_set("default_ordinary", slots.ordinary)?;
+    state.raw_set("default_reagent", slots.reagent)?;
+    state.raw_set("ordinary", slots.ordinary)?;
+    state.raw_set("reagent", slots.reagent)?;
+    lua.globals().raw_set("__selu_bag_slots", state)
+}
+fn update_bag_slots(lua: &Lua, ordinary: Option<u8>, reagent: Option<u8>) -> SimResult<()> {
+    let state: Table = lua.globals().raw_get("__selu_bag_slots")?;
+    state.raw_set("requested_ordinary", ordinary)?;
+    state.raw_set("requested_reagent", reagent)?;
+    for (key, requested) in [("ordinary", ordinary), ("reagent", reagent)] {
+        let value = state
+            .raw_get::<Option<u8>>(format!("documented_{key}"))?
+            .or(requested)
+            .unwrap_or(state.raw_get(format!("default_{key}"))?);
+        state.raw_set(key, value)?;
+    }
+    Ok(())
+}
+pub(crate) fn documented_bag_slots(
+    lua: &Lua,
+    ordinary: Option<u8>,
+    reagent: Option<u8>,
+) -> SimResult<()> {
+    let state: Table = lua.globals().raw_get("__selu_bag_slots")?;
+    state.raw_set("documented_ordinary", ordinary)?;
+    state.raw_set("documented_reagent", reagent)?;
+    update_bag_slots(
+        lua,
+        state.raw_get("requested_ordinary")?,
+        state.raw_get("requested_reagent")?,
+    )
+}
+pub(crate) fn bag_slots(lua: &Lua) -> SimResult<BagSlots> {
+    let state: Table = lua.globals().raw_get("__selu_bag_slots")?;
+    Ok(BagSlots {
+        ordinary: state.raw_get("ordinary")?,
+        reagent: state.raw_get("reagent")?,
+    })
+}
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Unit {
@@ -97,6 +204,9 @@ pub(crate) fn install_restrictions(lua: &Lua, ctx: &crate::Ctx) -> SimResult<()>
     Ok(())
 }
 impl Vm {
+    pub fn bag_slot_counts(&self) -> SimResult<BagSlots> {
+        bag_slots(&self.lua)
+    }
     /// Toggle combat and dispatch the matching transition event once.
     pub fn set_combat(&self, combat: bool) -> SimResult<()> {
         let old = self.lua.globals().get::<bool>("__selu_sim_combat")?;
@@ -279,6 +389,7 @@ fn valid_token(t: &str) -> bool {
             .is_some_and(|n| (1..=40).contains(&n))
 }
 pub(crate) fn install(lua: &Lua) -> SimResult<()> {
+    configure_bag_slots(lua, None)?;
     crate::host_lua::load(lua,r#"
 __selu_world_units = {}; __selu_world_money = 0; __selu_world_bags = {}
 local units = __selu_world_units
@@ -384,6 +495,9 @@ pub struct Vignette {
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Scenario {
+    /// Omitted counts select the session product's simulator defaults.
+    pub bag_slots: Option<u8>,
+    pub reagent_bag_slots: Option<u8>,
     pub units: std::collections::BTreeMap<String, Unit>,
     pub vignettes: Vec<Vignette>,
     pub combat: bool,
@@ -442,6 +556,7 @@ impl Scenario {
             vm.set_unit(t, u.clone())?;
         }
         vm.set_combat(self.combat)?;
+        update_bag_slots(&vm.lua, self.bag_slots, self.reagent_bag_slots)?;
         if vm.lua.globals().get::<u64>("__selu_world_money")? != self.money {
             vm.set_money(self.money)?;
         }
@@ -589,6 +704,9 @@ impl Scenario {
         let globals = vm.lua.globals();
         let units: Table = globals.get("__selu_world_units")?;
         let mut result = Self::default();
+        let slots = vm.bag_slot_counts()?;
+        result.bag_slots = Some(slots.ordinary);
+        result.reagent_bag_slots = Some(slots.reagent);
         for pair in units.pairs::<String, Table>() {
             let (t, u) = pair?;
             result.units.insert(

@@ -786,6 +786,7 @@ impl Session {
 
     fn start_vm(config: &SessionConfig) -> SimResult<Vm> {
         let sim = Vm::new()?;
+        crate::world::configure_bag_slots(sim.lua(), config.toc_target().as_deref())?;
         open_client_assets(&sim, config)?;
         if let Some(manifest) = &config.manifest {
             crate::sim_globals::install_manifest(sim.lua(), manifest, &sim.ctx)?;
@@ -1196,6 +1197,7 @@ impl Session {
             "__selu_world_units",
             "__selu_world_money",
             "__selu_world_bags",
+            "__selu_bag_slots",
             "__selu_sim_combat",
         ] {
             world.push((

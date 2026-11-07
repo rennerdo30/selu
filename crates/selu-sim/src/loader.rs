@@ -418,7 +418,6 @@ pub(crate) fn read_toc_target_client(
     // The client tries its own TOC suffixes in order, then the plain name.
     let ui = target.and_then(selu_manifest::client_ui_for_target);
     let suffixes = ui.map_or(&[][..], |ui| ui.toc_suffixes);
-    let suffix = suffixes.first().copied().unwrap_or("");
     let path = suffixes
         .iter()
         .map(|suffix| dir.join(format!("{name}_{suffix}.toc")))
@@ -434,8 +433,12 @@ pub(crate) fn read_toc_target_client(
         }
     }
     // Bindings XML is an implicit addon file, selected by client flavour.
-    for binding in [format!("Bindings_{suffix}.xml"), "Bindings.xml".into()] {
-        if dir.join(&binding).is_file() {
+    for binding in suffixes
+        .iter()
+        .map(|suffix| format!("Bindings_{suffix}.xml"))
+        .chain(std::iter::once("Bindings.xml".into()))
+    {
+        if ui_path(&dir.join(&binding), client).is_ok() {
             if !toc.files.contains(&binding) {
                 toc.files.push(binding);
             }

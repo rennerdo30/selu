@@ -2878,9 +2878,42 @@ impl Studio {
                     .add(egui::DragValue::new(&mut self.scenario.money))
                     .changed();
             });
+            let target = self
+                .opts
+                .manifest
+                .as_ref()
+                .map(selu_manifest::Manifest::target_string)
+                .or_else(|| self.opts.target.clone());
+            let defaults = selu_sim::world::bag_slot_defaults(target.as_deref());
+            let mut ordinary = self.scenario.bag_slots.unwrap_or(defaults.ordinary);
+            let mut reagent = self.scenario.reagent_bag_slots.unwrap_or(defaults.reagent);
+            ui.horizontal(|ui| {
+                ui.label("Bag slots");
+                let response = ui.add(egui::DragValue::new(&mut ordinary));
+                if response.changed() {
+                    self.scenario.bag_slots = Some(ordinary);
+                }
+                // Commit topology edits once, rather than queueing a reload
+                // for every intermediate value during a mouse drag or typing.
+                apply |= response.drag_stopped()
+                    || response.lost_focus()
+                    || (response.changed() && !response.dragged() && !response.has_focus());
+                ui.label("Reagent bag slots");
+                let response = ui.add(egui::DragValue::new(&mut reagent));
+                if response.changed() {
+                    self.scenario.reagent_bag_slots = Some(reagent);
+                }
+                apply |= response.drag_stopped()
+                    || response.lost_focus()
+                    || (response.changed() && !response.dragged() && !response.has_focus());
+            });
+            ui.small("Slot changes reload the UI. Client-defined limits take precedence.");
             ui.horizontal(|ui| {
                 ui.label("Bag ID");
-                ui.add(egui::DragValue::new(&mut self.scenario_bag_id).range(0..=4));
+                ui.add(
+                    egui::DragValue::new(&mut self.scenario_bag_id)
+                        .range(0..=i32::from(ordinary) + i32::from(reagent)),
+                );
             });
             ui.label("Item IDs (comma separated)");
             ui.text_edit_singleline(&mut self.scenario_bag);

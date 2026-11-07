@@ -318,10 +318,19 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
                 Ok(None)
             }
             Command::Eval { code } => session.eval(&code).map(|_| None).map_err(|e| e.to_string()),
-            Command::Scenario { state } => state
-                .apply(session.sim())
-                .map(|_| None)
-                .map_err(|e| e.to_string()),
+            Command::Scenario { state } => (|| -> selu_sim::SimResult<Option<Update>> {
+                let before = session.sim().bag_slot_counts()?;
+                state.apply(session.sim())?;
+                if before != session.sim().bag_slot_counts()?
+                    && session.default_ui_report().is_some()
+                {
+                    // Blizzard caches its container topology during Lua startup.
+                    // Re-run the source with the new world, never patch UI globals.
+                    session.reload()?;
+                }
+                Ok(None)
+            })()
+            .map_err(|e| e.to_string()),
             Command::Snapshot => session
                 .snapshot()
                 .map(|s| {
@@ -547,6 +556,55 @@ mod tests {
 
 #[cfg(test)]
 mod scenario_tests {
+    #[test]
+    fn bag_capacity_edit_reloads_source_with_the_new_world() {
+        use super::{Command, Update, Worker};
+        let root =
+            std::env::temp_dir().join(format!("selu-studio-bag-world-{}", std::process::id()));
+        let addon = root.join("Interface/AddOns/Fixture");
+        std::fs::create_dir_all(&addon).unwrap();
+        std::fs::write(
+            root.join("Interface/ui-toc-list.txt"),
+            "Interface/AddOns/Fixture/Fixture.toc\n",
+        )
+        .unwrap();
+        std::fs::write(addon.join("Fixture.toc"), "Fixture.lua\n").unwrap();
+        std::fs::write(
+            addon.join("Fixture.lua"),
+            "CountAtLoad=Constants.InventoryConstants.NumBagSlots",
+        )
+        .unwrap();
+        let worker = Worker::spawn(selu_sim::SessionConfig {
+            target: Some("wow_classic_era@fixture".into()),
+            ..Default::default()
+        });
+        worker.call(Command::LoadDefaultUi { source: root });
+        let initial = worker.call(Command::Eval {
+            code: "assert(CountAtLoad==4)".into(),
+        });
+        assert!(
+            !initial.iter().any(|u| matches!(u, Update::Error { .. })),
+            "{initial:?}"
+        );
+        let updates = worker.call(Command::Scenario {
+            state: selu_sim::world::Scenario {
+                bag_slots: Some(2),
+                reagent_bag_slots: Some(0),
+                ..Default::default()
+            },
+        });
+        assert!(
+            !updates.iter().any(|u| matches!(u, Update::Error { .. })),
+            "{updates:?}"
+        );
+        let result = worker.call(Command::Eval {
+            code: "assert(CountAtLoad==2 and Constants.InventoryConstants.NumBagSlots==2)".into(),
+        });
+        assert!(
+            !result.iter().any(|u| matches!(u, Update::Error { .. })),
+            "{result:?}"
+        );
+    }
     #[test]
     fn studio_scenario_round_trip() {
         let mut state = selu_sim::world::Scenario::default();
