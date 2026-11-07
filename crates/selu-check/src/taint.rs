@@ -288,6 +288,67 @@ impl Origins {
         }
         walk(c, &mut |c| self.collect(c));
     }
+    /// Proven to come from the game: a manifest global that no Selu binding
+    /// shadows, a game API's result that is not a factory, or a field, index
+    /// or method result of a proven game value. Factory returns, parameters
+    /// and imports are unknown, not foreign.
+    fn proven_foreign(&self, e: &Expr, types: &TypeTable, depth: usize) -> bool {
+        if depth > 32 {
+            return false;
+        }
+        // Checked bindings and class fields: every store must be a game value.
+        if let Some(path) = types.origin_path(e) {
+            if self.resolved_writes.contains(&path) {
+                return false;
+            }
+            if let Some(values) = self.resolved_values.get(&path) {
+                return values.iter().any(|v| !matches!(v.kind, ExprKind::Null))
+                    && values.iter().all(|v| {
+                        matches!(v.kind, ExprKind::Null) || self.proven_foreign(v, types, depth + 1)
+                    });
+            }
+        }
+        match &e.kind {
+            ExprKind::Ident(n) => {
+                if self.counts.get(n) == Some(&1) && !self.writes.contains(n) {
+                    return self
+                        .values
+                        .get(n)
+                        .is_some_and(|v| self.proven_foreign(v, types, depth + 1));
+                }
+                !self.counts.contains_key(n) && !self.writes.contains(n)
+            }
+            // A class field whose only store is a proven game value.
+            ExprKind::Member { object, name }
+                if matches!(object.kind, ExprKind::This)
+                    && !self.duplicate_fields.contains(name)
+                    && !self.duplicate_fields.contains("*") =>
+            {
+                self.fields
+                    .get(name)
+                    .is_some_and(|v| self.proven_foreign(v, types, depth + 1))
+            }
+            ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+                self.proven_foreign(object, types, depth + 1)
+            }
+            ExprKind::Call { callee, .. } => {
+                let api = matches!(
+                    types.get(callee.id),
+                    Some(Type::Function { api, api_semantics, .. })
+                        if api.0.is_some() && !api_semantics.frame_factory
+                );
+                match &callee.kind {
+                    // A method on a game object returns more of the game.
+                    ExprKind::Member { object, .. } => {
+                        api && self.proven_foreign(object, types, depth + 1)
+                    }
+                    // A game function returning a game object (GetMouseFocus, ...).
+                    _ => api && self.api_name(callee, 0).is_some(),
+                }
+            }
+            _ => false,
+        }
+    }
     fn owned(&self, e: &Expr, depth: usize) -> bool {
         if depth > 32 {
             return false;
@@ -356,10 +417,14 @@ pub(crate) fn is_game_type(t: &Type) -> bool {
 fn safe_registry(callee: &Expr, types: &TypeTable) -> bool {
     matches!(types.get(callee.id), Some(Type::Function { api, .. }) if api.0.as_ref().is_some_and(|s| s.name.starts_with("C_Timer.") || SAFE_REGISTRIES.contains(&s.name.as_str())))
 }
-fn foreign(e: &Expr, o: &Origins, types: &TypeTable) -> bool {
+/// A game receiver this check reports. By default only values proven to come
+/// from the game; `strict` also reports values of unknown origin (anything
+/// not proven owned), such as frames returned by the addon's own factories.
+fn foreign(e: &Expr, o: &Origins, types: &TypeTable, strict: bool) -> bool {
     !matches!(e.kind, ExprKind::This)
         && types.is_game_receiver(e.id)
         && !o.owned_checked(e, types, 0)
+        && (strict || o.proven_foreign(e, types, 0))
 }
 /// Run on checked syntax; project entries augment the shipped list.
 pub fn check(
@@ -435,9 +500,9 @@ pub fn check(
                     if types.is_builtin_call(callee.id)
                         && ((n == "hook"
                             && (args.len() == 2
-                                || args.first().is_some_and(|e| foreign(e, o, types))))
+                                || args.first().is_some_and(|e| foreign(e, o, types, strict))))
                             || (n == "hookScript"
-                                && args.first().is_some_and(|e| foreign(e, o, types))
+                                && args.first().is_some_and(|e| foreign(e, o, types, strict))
                                 && matches!(args.get(1).map(|e| &e.kind), Some(ExprKind::Str(s)) if matches!(s.as_str(), "OnShow"|"OnHide"|"OnEnable"|"OnDisable"))))
                     {
                         emit(
@@ -447,7 +512,7 @@ pub fn check(
                         );
                     }
                     if let ExprKind::Member { object, .. } = &callee.kind
-                        && foreign(object, o, types)
+                        && foreign(object, o, types, strict)
                         && !safe_registry(callee, types)
                         && args.iter().any(|a| {
                             matches!(
@@ -467,7 +532,7 @@ pub fn check(
                     let allowed_value = matches!(&value.kind, ExprKind::Call { callee, args } if callee.dotted_name().as_deref() == Some("allowTaint") && types.is_builtin_call(callee.id) && args.len() == 2 && matches!(&args[0].kind, ExprKind::Str(s) if !s.trim().is_empty()));
                     if let ExprKind::Member { object, .. } | ExprKind::Index { object, .. } =
                         &target.kind
-                        && foreign(object, o, types)
+                        && foreign(object, o, types, strict)
                         && !allowed_value
                         && (matches!(value.kind, ExprKind::Function { .. })
                             || matches!(
@@ -709,9 +774,37 @@ mod tests {
             false,
             &[],
         );
-        assert_eq!(d.iter().filter(|d| d.code == "SELU0604").count(), 1);
+        // A parameter is of unknown origin: only strict mode reports it.
+        assert_eq!(d.iter().filter(|d| d.code == "SELU0604").count(), 0);
         assert_eq!(d.iter().filter(|d| d.code == "SELU0606").count(), 1);
         assert!(!d.iter().any(|d| d.code == "SELU0605"));
+        let strict = lint(
+            r#"function inspect(frame: Frame) { hookScript(frame, "OnShow", () => {}); }"#,
+            true,
+            &[],
+        );
+        assert_eq!(strict.iter().filter(|d| d.code == "SELU0604").count(), 1);
+    }
+    #[test]
+    fn unknown_origins_warn_only_in_strict_mode() {
+        // A frame returned by the addon's own factory is unknown, not foreign.
+        let src = r#"function make(): Frame { return CreateFrame("Frame"); } const f = make(); f.SetScript("OnShow", () => {}); hookScript(f, "OnShow", () => {});"#;
+        assert!(
+            lint(src, false, &[]).is_empty(),
+            "{:?}",
+            lint(src, false, &[])
+        );
+        let strict = lint(src, true, &[]);
+        assert!(strict.iter().any(|d| d.code == "SELU0605"), "{strict:?}");
+        assert!(strict.iter().any(|d| d.code == "SELU0604"), "{strict:?}");
+        // Proven game values still warn by default.
+        let d = lint(
+            r#"const frame = UIParent; frame.SetScript("OnShow", () => {}); hookScript(UIParent, "OnShow", () => {});"#,
+            false,
+            &[],
+        );
+        assert!(d.iter().any(|d| d.code == "SELU0605"), "{d:?}");
+        assert!(d.iter().any(|d| d.code == "SELU0604"), "{d:?}");
     }
     #[test]
     fn module_values_and_class_fields() {

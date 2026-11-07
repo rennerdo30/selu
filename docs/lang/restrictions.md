@@ -223,9 +223,23 @@ produces an owned value. Foreign stores invalidate that proof. Fields of
 owned object literals can retain their initializer's proof.
 
 Only manifest game types can be foreign: widgets, widget-like API types,
-manifest API tables and manifest namespace receivers. A game value from a
-manifest global, an API return such as `GetParent` or `GetFrame`, a foreign
-field, or an unproven origin is foreign. Selu class instances (including
+manifest API tables and manifest namespace receivers. A game value has one of
+three origins:
+
+- **owned**: proven created by this addon (see above);
+- **foreign**: proven to come from the game. That is a manifest global no
+  Selu binding shadows, a game API result that is not a factory (for example
+  `GetMouseFocus`, or `GetParent` on a foreign value), a field, index or
+  method result of a foreign value, or a binding or class field whose every
+  store is foreign;
+- **unknown**: anything else, such as a frame returned by the addon's own
+  factory function, a parameter or an import.
+
+By default SELU0604 and SELU0605 report only **foreign** values, so frames an
+addon builds in its own helpers do not warn. `[build] strict_taint = true`
+also reports **unknown** values and makes both checks errors; use it to audit
+code where frames are passed in from elsewhere. The string form
+`hook("GlobalFunction", ...)` always targets the game. Selu class instances (including
 `this`), interfaces, source object types, arrays, maps, sets and functions
 are never foreign. A union is a game boundary only if an arm is a manifest
 game type; collection element types and object fields do not make the
@@ -268,7 +282,8 @@ deny = [{ api = "Example.Unsafe", reason = "Our documented incident" }]
 strict_taint = true
 ```
 
-`strict_taint` promotes SELU0604 and SELU0605 warnings to errors. Denied calls
+`strict_taint` also reports values of unknown origin and promotes SELU0604
+and SELU0605 to errors. Denied calls
 are always errors. API names and reasons in project rules must be nonempty.
 
 Allow one expression with a mandatory nonempty literal written reason:
