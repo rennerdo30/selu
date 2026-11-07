@@ -209,30 +209,23 @@ pub(crate) fn load_strings(
     let mut found = false;
     let mut count = 0;
     if let Some(storage) = storage.as_deref() {
-        let bytes = storage
-            .read(1394440)
-            .or_else(|_| storage.read_path("DBFilesClient/GlobalStrings.db2"));
-        match bytes {
-            Ok(bytes) => {
+        match storage.global_strings() {
+            Ok(strings) => {
                 found = true;
-                match selu_gamedata::db2::Table::parse(&bytes) {
-                    Ok(table) => {
-                        for row in 0..table.count() {
-                            let (Ok(key), Ok(text)) = (table.text(row, 0), table.text(row, 1))
-                            else {
-                                continue;
-                            };
-                            if !key.is_empty() {
-                                lua.globals().raw_set(key, text)?;
-                                count += 1;
-                            }
-                        }
-                    }
-                    Err(error) => ctx.not_simulated(&format!("GlobalStrings DB2 decode: {error}")),
+                for (key, text) in strings {
+                    lua.globals().raw_set(key.as_str(), text.as_str())?;
+                    count += 1;
                 }
             }
             Err(error) => ctx.log(format!("GlobalStrings DB2 unavailable: {error}")),
         }
+    }
+    if found {
+        ctx.log(format!(
+            "GlobalStrings: {count} DB2 game strings loaded; synthetic labels disabled"
+        ));
+        lua.set_named_registry_value("selu.synthetic_strings", false)?;
+        return lua.globals().raw_set("__selu_synthetic_strings", false);
     }
     let mut paths = vec![
         "Interface/GlobalStrings.lua".to_owned(),
@@ -283,11 +276,9 @@ pub(crate) fn load_strings(
         }
     }
     if !found {
-        ctx.not_simulated("GlobalStrings absent from local CASC and source export; synthetic localized labels enabled");
+        ctx.not_simulated("GlobalStrings unavailable from local CASC and source export; synthetic localized labels enabled");
     } else {
-        ctx.log(format!(
-            "GlobalStrings: {count} DB2 strings loaded; synthetic labels disabled"
-        ));
+        ctx.log("GlobalStrings Lua source loaded; synthetic labels disabled".to_owned());
     }
     lua.set_named_registry_value("selu.synthetic_strings", !found)?;
     lua.globals().raw_set("__selu_synthetic_strings", !found)
@@ -295,6 +286,74 @@ pub(crate) fn load_strings(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_strings_disable_fallback_and_missing_sources_enable_it() {
+        let root =
+            std::env::temp_dir().join(format!("selu-self-written-strings-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("Interface")).unwrap();
+        std::fs::write(
+            root.join("Interface/GlobalStrings.lua"),
+            "SELF_WRITTEN_TAG='Synthetic export'",
+        )
+        .unwrap();
+        let s = crate::Session::new(Default::default()).unwrap();
+        super::load_strings(s.lua(), s.sim().ctx(), &root).unwrap();
+        s.eval("assert(SELF_WRITTEN_TAG=='Synthetic export' and __selu_synthetic_strings==false)")
+            .unwrap();
+        let missing = root.join("missing");
+        std::fs::create_dir_all(&missing).unwrap();
+        let s = crate::Session::new(Default::default()).unwrap();
+        super::load_strings(s.lua(), s.sim().ctx(), &missing).unwrap();
+        s.eval("assert(SELF_WRITTEN_TAG==nil and __selu_synthetic_strings==true)")
+            .unwrap();
+    }
+    #[test]
+    #[ignore = "requires read-only installed clients via SELU_CLIENT_INSTALL"]
+    fn installed_global_strings_follow_each_clients_own_data() {
+        let root = std::env::var_os("SELU_CLIENT_INSTALL").unwrap();
+        for product in [
+            "wow",
+            "wowf",
+            "wow_classic",
+            "wow_classic_era",
+            "wow_anniversary",
+        ] {
+            let storage =
+                selu_gamedata::Storage::open(std::path::Path::new(&root), product, None).unwrap();
+            let s = crate::Session::new(crate::SessionConfig {
+                target: Some(product.into()),
+                client_install: Some(root.clone().into()),
+                ..Default::default()
+            })
+            .unwrap();
+            super::load_strings(s.lua(), s.sim().ctx(), std::path::Path::new(&root)).unwrap();
+            let synthetic = s
+                .lua()
+                .named_registry_value::<bool>("selu.synthetic_strings")
+                .unwrap();
+            match storage.global_strings() {
+                Ok(strings) => {
+                    assert!(!synthetic, "{product}");
+                    for (key, value) in strings {
+                        assert_eq!(
+                            s.lua().globals().raw_get::<String>(key.as_str()).unwrap(),
+                            *value,
+                            "{product}: {key}"
+                        );
+                    }
+                    eprintln!(
+                        "PRODUCT_STRINGS {product} build={} loaded={} synthetic=false",
+                        storage.build.version,
+                        strings.len()
+                    );
+                }
+                Err(error) => {
+                    assert!(synthetic, "{product}: {error}");
+                    eprintln!("PRODUCT_STRINGS {product} unavailable={error}; synthetic=true");
+                }
+            }
+        }
+    }
     #[test]
     fn empty_collections_are_native_world_results_and_existing_providers_win() {
         let s = crate::Session::new(Default::default()).unwrap();

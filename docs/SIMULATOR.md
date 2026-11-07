@@ -645,9 +645,11 @@ It must not name a Blizzard frame/template/button to show, hide, anchor,
 label or restyle it. Blizzard code owns those decisions. Missing textures use
 one generic look. UIParent and WorldFrame are engine roots, not recreated
 Blizzard UI. Test selectors and read-only diagnostics may inspect named frames.
-GlobalStrings is tried from CASC DB2 1394440/path and Lua exports in CASC or
-the source checkout before synthetic labels are enabled. Neither is installed
-in the tested build; the receipt explicitly records that fallback. Font
+GlobalStrings is read from the selected client's CASC DB2 (named path, with
+FileDataID 1394440 where root names are absent), before trying Lua exports in
+CASC or the source checkout. BaseTag names the global, TagText_lang supplies
+its text, and the FrameXML flag selects game strings. The decoded strings are
+cached on that immutable product/build Storage snapshot. Font
 profiles and backdrop mixins are read from Blizzard XML/Lua, not named Rust
 substitutions. Legacy native Frame backdrop storage remains available to all
 frame types; a template name no longer installs it. Without source/manifest declarations, unknown templates fail.
@@ -674,9 +676,17 @@ element names. The decoded index is cached on the immutable Storage build
 snapshot. Supported WDC5 layout hashes are checked; unknown compression or
 layouts fail closed. Table layouts follow the primary
 [WoWDBDefs definitions](https://github.com/wowdev/WoWDBDefs/tree/master/definitions).
-GlobalColor (4328468) supplies the native color palette. GlobalStrings
-(1394440) was absent locally; selected HUD labels and fixed chat tags use
-visible synthetic text. These are not client-localization fidelity claims.
+GlobalColor (4328468) supplies the native color palette. GlobalStrings uses
+WDC5 scalar palette compression for Flags in the tested builds. On the
+2026-11-07 installation, Era and Anniversary strings decode successfully;
+wow, wowf and wow_classic payloads are locally present but BLTE-encrypted.
+Encrypted payloads are refused with their key identifier, without fetching
+or reading key material. Their failures must not be reported as absent files.
+Synthetic labels are enabled only when neither a readable DB2 nor a Lua
+export is available, including a reported unsupported schema/decode failure.
+Strings from another product are never borrowed. Selected synthetic HUD
+labels and chat tags remain visibly approximate rather than localization
+fidelity claims.
 Enum and constant values are parsed as literal data from the selected client's
 generated API documentation, preferring CASC with the local source checkout as
 fallback. No documentation chunk is executed. Decoded metadata is cached by

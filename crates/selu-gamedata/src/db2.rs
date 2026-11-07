@@ -1,4 +1,5 @@
-//! WDC5 fixed-record tables. Unsupported compression and sparse/encrypted sections fail closed.
+//! WDC5 fixed records with scalar bitpacking/palettes. Other compression and
+//! sparse/encrypted sections fail closed.
 use crate::{
     Result, Storage,
     local::{le, slice},
@@ -55,6 +56,7 @@ pub struct Table<'a> {
     count: usize,
     size: usize,
     fields: Vec<(usize, usize, bool)>,
+    palettes: Vec<Option<Vec<u32>>>,
     string_start: usize,
     string_end: usize,
     source_rows: Vec<usize>,
@@ -95,23 +97,54 @@ impl<'a> Table<'a> {
             string_end.checked_sub(offset).ok_or("DB2 overflow")?,
         )?;
         let mut fields = Vec::new();
+        let mut palettes = Vec::new();
+        let mut pallet_at = 244 + n * 4 + le(b, 188)? as usize;
+        let pallet_end = pallet_at
+            .checked_add(le(b, 196)? as usize)
+            .ok_or("DB2 palette overflow")?;
+        if le(b, 196)? != 0 && (le(b, 188)? as usize != n * 24 || pallet_end > offset) {
+            return Err("invalid DB2 palette metadata layout".into());
+        }
+        slice(b, pallet_at, pallet_end - pallet_at)?;
         for i in 0..n {
             let p = 244 + n * 4 + i * 24;
             let c = slice(b, p, 24)?;
             let bit = u16::from_le_bytes(c[..2].try_into()?) as usize;
             let width = u16::from_le_bytes(c[2..4].try_into()?) as usize;
             // WDC5 signed scalar bitpacking (UiCanvas dimensions and colors).
-            // Pallet/common/array encodings still fail closed.
+            // Common and array encodings still fail closed.
             let signed = le(c, 8)? == 5
                 && le(c, 4)? == 0
                 && (le(c, 12)? as usize == bit || (width == 32 && le(c, 12)? == 0))
                 && le(c, 16)? as usize == width
                 && le(c, 20)? == 0;
             let plain = le(c, 8)? == 0 && bit.is_multiple_of(8) && [8, 16, 32].contains(&width);
-            if !(plain || signed) || width == 0 || width > 32 || bit + width > size * 8 {
+            let pallet = le(c, 8)? == 3
+                && le(c, 4)?.is_multiple_of(4)
+                && le(c, 16)? as usize == width
+                && le(c, 20)? == 0;
+            if !(plain || signed || pallet) || width == 0 || width > 32 || bit + width > size * 8 {
                 return Err("unsupported DB2 field storage".into());
             }
+            palettes.push(if pallet {
+                let len = le(c, 4)? as usize;
+                let end = pallet_at.checked_add(len).ok_or("DB2 palette overflow")?;
+                if end > pallet_end {
+                    return Err("DB2 palette outside metadata".into());
+                }
+                let values = (pallet_at..end)
+                    .step_by(4)
+                    .map(|at| le(b, at))
+                    .collect::<Result<Vec<_>>>()?;
+                pallet_at = end;
+                Some(values)
+            } else {
+                None
+            });
             fields.push((bit, width, signed));
+        }
+        if pallet_at != pallet_end {
+            return Err("unconsumed DB2 palette metadata".into());
         }
         let inline_id = if flags & 4 == 0 {
             Some((le(b, 172)? >> 16) as usize)
@@ -122,7 +155,13 @@ impl<'a> Table<'a> {
         for row in 0..count {
             let id = if let Some(column) = inline_id {
                 let field = *fields.get(column).ok_or("invalid inline ID column")?;
-                scalar(b, offset + row * size, field)?
+                let raw = scalar(b, offset + row * size, field)?;
+                match &palettes[column] {
+                    Some(values) => *values
+                        .get(raw as usize)
+                        .ok_or("DB2 ID palette index out of bounds")?,
+                    None => raw,
+                }
             } else {
                 le(b, string_end + row * 4)?
             };
@@ -159,6 +198,7 @@ impl<'a> Table<'a> {
             count: source_rows.len(),
             size,
             fields,
+            palettes,
             string_start,
             string_end,
             source_rows,
@@ -183,11 +223,18 @@ impl<'a> Table<'a> {
             return Ok(self.ids[row]);
         }
         let field = *self.fields.get(column).ok_or("column out of bounds")?;
-        scalar(
+        let raw = scalar(
             self.bytes,
             self.offset + self.source_rows[row] * self.size,
             field,
-        )
+        )?;
+        match &self.palettes[column] {
+            Some(values) => values
+                .get(raw as usize)
+                .copied()
+                .ok_or_else(|| "DB2 palette index out of bounds".into()),
+            None => Ok(raw),
+        }
     }
 
     pub fn text(&self, row: usize, column: usize) -> Result<&str> {
@@ -206,6 +253,47 @@ impl<'a> Table<'a> {
             .position(|c| *c == 0)
             .ok_or("unterminated DB2 string")?;
         Ok(std::str::from_utf8(&b[..n])?)
+    }
+}
+/// GlobalStrings D40F6D96 stores non-inline ID, BaseTag, TagText_lang, Flags.
+/// The strings are runtime client content; only the schema lives here.
+pub fn global_strings(bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    let table = Table::parse(bytes)?;
+    if table.layout != 0xd40f6d96 || table.fields.len() != 3 || table.inline_id.is_some() {
+        return Err("unsupported GlobalStrings schema".into());
+    }
+    let mut strings = Vec::with_capacity(table.count());
+    for row in 0..table.count() {
+        // Flags bit 0 selects FrameXML/game globals, bit 1 GlueXML.
+        if table.value(row, 2)? & 1 == 0 {
+            continue;
+        }
+        let key = table.text(row, 0)?;
+        let text = table.text(row, 1)?;
+        if !key.is_empty() {
+            strings.push((key.to_owned(), text.to_owned()));
+        }
+    }
+    if strings.is_empty() {
+        return Err("GlobalStrings has no game strings".into());
+    }
+    Ok(strings)
+}
+impl Storage {
+    /// Uses this immutable product/build snapshot; never reads encryption keys.
+    pub fn global_strings(&self) -> Result<&[(String, String)]> {
+        let result = self.global_strings_cache.get_or_init(|| {
+            let id = self
+                .resolve("DBFilesClient/GlobalStrings.db2")
+                .unwrap_or(1394440);
+            self.read(id)
+                .and_then(|bytes| global_strings(&bytes))
+                .map_err(|error| error.to_string())
+        });
+        result
+            .as_ref()
+            .map(Vec::as_slice)
+            .map_err(|error| error.clone().into())
     }
 }
 /// Owned decoded records, scoped to Storage's immutable product/build snapshot.
@@ -403,6 +491,47 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scalar_palettes_and_runtime_global_string_columns() {
+        let mut bytes = records(
+            0xd40f6d96,
+            &[vec![0, 0, 0], vec![0, 0, 1]],
+            &[
+                (0, 0, "SELF_WRITTEN_TAG"),
+                (0, 1, "Synthetic %s — fixture"),
+                (1, 0, "SELF_WRITTEN_GLUE"),
+                (1, 1, "Glue fixture"),
+            ],
+        );
+        let original = le(&bytes, 212).unwrap() as usize;
+        bytes.splice(
+            original..original,
+            [1u32.to_le_bytes(), 2u32.to_le_bytes()].concat(),
+        );
+        bytes[212..216].copy_from_slice(&((original + 8) as u32).to_le_bytes());
+        for (at, value) in [(172, 4u32), (188, 72), (196, 8), (228, 8)] {
+            bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let field = 244 + 3 * 4 + 2 * 24;
+        bytes[field + 2..field + 4].copy_from_slice(&2u16.to_le_bytes());
+        for (at, value) in [(4, 8u32), (8, 3), (16, 2)] {
+            bytes[field + at..field + at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes.extend_from_slice(&7u32.to_le_bytes());
+        bytes.extend_from_slice(&9u32.to_le_bytes());
+        let table = Table::parse(&bytes).unwrap();
+        assert_eq!(table.value(0, 2).unwrap(), 1);
+        assert_eq!(table.value(1, 2).unwrap(), 2);
+        assert_eq!(
+            global_strings(&bytes).unwrap(),
+            vec![("SELF_WRITTEN_TAG".into(), "Synthetic %s — fixture".into())]
+        );
+        bytes[original + 8 + 8] = 3;
+        assert!(Table::parse(&bytes).unwrap().value(0, 2).is_err());
+        assert!(global_strings(&bytes).is_err());
+        bytes[field + 4..field + 8].copy_from_slice(&12u32.to_le_bytes());
+        assert!(Table::parse(&bytes).is_err());
+    }
     #[test]
     fn full_width_signed_color_storage_preserves_argb_bits() {
         let mut bytes = records(0, &[vec![1, 0xffffd200]], &[]);

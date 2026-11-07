@@ -4,7 +4,9 @@
 fn core_loads_real_common_frames_and_records_startup() {
     let start = std::time::Instant::now();
     let mut s = selu_sim::Session::new(selu_sim::SessionConfig {
-        target: Some("wowf@1.60.1.70790".into()),
+        target: Some(
+            std::env::var("SELU_CORE_TARGET").unwrap_or_else(|_| "wowf@1.60.1.70790".into()),
+        ),
         client_install: Some(std::env::var_os("SELU_CLIENT_INSTALL").unwrap().into()),
         ..Default::default()
     })

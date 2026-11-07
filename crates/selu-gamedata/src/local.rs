@@ -267,7 +267,18 @@ fn block(b: &[u8]) -> Result<Vec<u8>> {
             }
             Ok(out)
         }
-        Some(b'E') => Err("encrypted BLTE: no supplied local key support yet".into()),
+        Some(b'E') => {
+            // This is an identifier, never the encryption key itself. Report
+            // it without reading key material or attempting decryption.
+            let length = usize::from(*b.get(1).ok_or("truncated encrypted BLTE header")?);
+            let name = slice(b, 2, length)?;
+            Err(format!(
+                "encrypted BLTE: key name {} (stored bytes {}); no supplied local key support",
+                hex::encode(name.iter().rev().copied().collect::<Vec<_>>()),
+                hex::encode(name)
+            )
+            .into())
+        }
         _ => Err("unsupported BLTE block".into()),
     }
 }
@@ -279,6 +290,15 @@ mod tests {
         assert_eq!(decode_blte(b"BLTE\0\0\0\0Nhello").unwrap(), b"hello");
         assert!(decode_blte(b"BLTE\0\0\0\0Ebad").is_err());
         assert!(decode_blte(b"BAD").is_err());
+    }
+    #[test]
+    fn encrypted_blte_reports_only_its_key_identifier() {
+        let mut bytes = b"BLTE\0\0\0\0E\x08".to_vec();
+        bytes.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let error = decode_blte(&bytes).unwrap_err().to_string();
+        assert!(error.contains("0807060504030201"));
+        assert!(!error.contains("not installed"));
+        assert!(decode_blte(b"BLTE\0\0\0\0E\x08\x01").is_err());
     }
     #[test]
     fn synthetic_root() {

@@ -25,6 +25,7 @@ pub struct Storage {
     names: HashMap<String, u32>,
     name_hashes: HashMap<u64, Option<u32>>,
     atlas_cache: std::sync::OnceLock<std::result::Result<db2::AtlasIndex, String>>,
+    global_strings_cache: std::sync::OnceLock<std::result::Result<Vec<(String, String)>, String>>,
 }
 fn key(value: &str) -> Result<[u8; 16]> {
     Ok(hex::decode(value)?
@@ -97,6 +98,7 @@ impl Storage {
             names,
             name_hashes,
             atlas_cache: std::sync::OnceLock::new(),
+            global_strings_cache: std::sync::OnceLock::new(),
         })
     }
     pub fn entry_count(&self) -> usize {
@@ -141,12 +143,15 @@ impl Storage {
             .ok_or("FileDataID absent for enUS")?;
         // The first variant that is installed locally is the one the client
         // on this machine uses.
+        let mut failure = None;
         for ckey in keys {
-            if let Some(bytes) = self.read_content(ckey)? {
-                return Ok(bytes);
+            match self.read_content(ckey) {
+                Ok(Some(bytes)) => return Ok(bytes),
+                Ok(None) => {}
+                Err(error) => failure = Some(error),
             }
         }
-        Err("file not installed locally".into())
+        Err(failure.unwrap_or_else(|| "file not installed locally".into()))
     }
     fn read_content(&self, ckey: &[u8; 16]) -> Result<Option<Vec<u8>>> {
         let cache = self.cache.join(hex::encode(ckey));
@@ -158,20 +163,28 @@ impl Storage {
         let Some(enc) = self.encoding.find_ekey(ckey) else {
             return Ok(None);
         };
+        let mut failure = None;
         for ekey in &enc.ekeys {
             if let Some(e) = self.index.find(ekey) {
                 let result = read_entry(&self.data, e.archive_number, e.archive_offset, e.size);
-                if let Ok(bytes) = result {
-                    if Md5::digest(&bytes).as_slice() != ckey {
-                        continue;
+                match result {
+                    Ok(bytes) => {
+                        if Md5::digest(&bytes).as_slice() != ckey {
+                            failure = Some("decoded CASC content hash mismatch".into());
+                            continue;
+                        }
+                        std::fs::create_dir_all(&self.cache)?;
+                        std::fs::write(&cache, &bytes)?;
+                        return Ok(Some(bytes));
                     }
-                    std::fs::create_dir_all(&self.cache)?;
-                    std::fs::write(&cache, &bytes)?;
-                    return Ok(Some(bytes));
+                    Err(error) => failure = Some(error),
                 }
             }
         }
-        Ok(None)
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 }
 fn index_names<'a>(
