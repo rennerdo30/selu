@@ -29,7 +29,7 @@ pub struct Storage {
     names: HashMap<String, u32>,
     name_hashes: HashMap<u64, Option<u32>>,
     atlas_cache: std::sync::OnceLock<std::result::Result<db2::AtlasIndex, String>>,
-    global_strings_cache: std::sync::OnceLock<std::result::Result<Vec<(String, String)>, String>>,
+    global_strings_cache: std::sync::OnceLock<std::result::Result<db2::GlobalStrings, String>>,
 }
 fn key(value: &str) -> Result<[u8; 16]> {
     Ok(hex::decode(value)?

@@ -279,21 +279,34 @@ pub fn global_strings(bytes: &[u8]) -> Result<Vec<(String, String)>> {
     }
     Ok(strings)
 }
+pub(crate) struct GlobalStrings {
+    strings: Vec<(String, String)>,
+    content_hash: String,
+}
 impl Storage {
-    /// Uses this immutable product/build snapshot; never reads encryption keys.
+    /// Decoded text and its verified CASC content identity share one snapshot.
     pub fn global_strings(&self) -> Result<&[(String, String)]> {
+        Ok(&self.global_strings_snapshot()?.strings)
+    }
+    pub fn global_strings_content_hash(&self) -> Result<&str> {
+        Ok(&self.global_strings_snapshot()?.content_hash)
+    }
+    fn global_strings_snapshot(&self) -> Result<&GlobalStrings> {
         let result = self.global_strings_cache.get_or_init(|| {
             let id = self
                 .resolve("DBFilesClient/GlobalStrings.db2")
                 .unwrap_or(1394440);
             self.read(id)
-                .and_then(|bytes| global_strings(&bytes))
+                .and_then(|bytes| {
+                    use md5::{Digest, Md5};
+                    Ok(GlobalStrings {
+                        content_hash: hex::encode(Md5::digest(&bytes)),
+                        strings: global_strings(&bytes)?,
+                    })
+                })
                 .map_err(|error| error.to_string())
         });
-        result
-            .as_ref()
-            .map(Vec::as_slice)
-            .map_err(|error| error.clone().into())
+        result.as_ref().map_err(|error| error.clone().into())
     }
 }
 /// Owned decoded records, scoped to Storage's immutable product/build snapshot.

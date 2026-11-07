@@ -230,9 +230,15 @@ pub(crate) fn load_strings(
                     storage,
                     &reason,
                 ) {
+                    let started = std::time::Instant::now();
                     for (key, text) in &strings {
                         lua.globals().raw_set(key.as_str(), text.as_str())?;
                     }
+                    crate::interface_text::timing(
+                        "register_globals",
+                        &storage.build.product,
+                        started.elapsed(),
+                    );
                     if reason.starts_with("encrypted with key") {
                         ctx.log(format!("{reason}; borrowed text in use"));
                     }

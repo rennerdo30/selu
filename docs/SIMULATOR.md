@@ -689,7 +689,18 @@ installation root. The preference table is `interface_text::TEXT_FAMILIES`:
 | `wow_classic`, `wow_classic_era`, `wow_anniversary`, `wow_classic_titan` | Classic family | Mainline family |
 
 Within each group, the closest numeric build ID wins; product name and version
-break ties. Only readable donors are used. Studio's game settings and the
+break ties. Only readable donors are used. Decoded donor tables are cached in
+process memory and `%LOCALAPPDATA%/Selu/interface-text/v1`, scoped to install,
+product, immutable CASC build key and the DB2 content hash. A small build index
+locates the hash without reopening donor storage on a later start. Build
+changes invalidate the lookup; malformed, missing or mismatched cache entries
+fall back to the client. Writes replace files atomically. Build-stable encrypted
+refusals are remembered too; transient I/O/download failures are retried.
+Donor storage opens only after the own client's strings fail and no valid
+cache entry exists. User-key/decrypted data never enters this donor cache.
+`SELU_SIM_PROFILE=1` reports donor storage, DB2 and registration times and
+memory/disk hit or miss decisions, including in release builds.
+Studio's game settings and the
 session log identify the selected product/build and own-client failure once.
 Known string tags missing from borrowed text use synthetic labels; if no donor
 or source export can be read, the synthetic fallback remains. These labels are
