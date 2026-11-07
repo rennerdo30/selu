@@ -77,6 +77,18 @@ impl Ctx<'_> {
             return Some(t);
         }
         let n = self.wow_name(callee)?;
+        if n == "allowTaint" {
+            if args.len() != 2 {
+                self.out.push(err(
+                    "SELU0607",
+                    "allowTaint needs a reason and an expression",
+                    &e.span,
+                ));
+                return Some(Type::Error);
+            }
+            self.value(&args[0]);
+            return Some(self.value(&args[1]));
+        }
         if n == "onError" {
             let expected = Type::Function {
                 multiple_results: false,

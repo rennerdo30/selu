@@ -193,3 +193,83 @@ zero and empty strings). A protected issecretvalue probe precedes all payload co
 arithmetic/truth proof. A failed proof is secret. The string variant requires
 string type and proves concatenation; absence is unreadable. False is preserved.
 This read point exposes a safe reason, never a secret value to branch on.
+
+## Taint safety
+
+All supported WoW products, including Classic and PTR/beta channels, have
+secure UI. Selu checks addon code on every target. These checks detect risky
+boundaries; they do not prove that an addon is taint free in combat.
+
+SELU0604 warns about `hook` on foreign objects or global functions, and
+`hookScript` on foreign objects for `OnShow`, `OnHide`, `OnEnable`, and
+`OnDisable`. Such callbacks run synchronously inside Blizzard's call and can
+taint secure UI. Poll `IsShown` from an owned ticker or frame instead.
+
+```selu
+hookScript(UIParent, "OnShow", () => {}); // SELU0604
+hook(UIParent, "Show", () => {});         // SELU0604
+hook("GetTime", () => {});               // SELU0604
+const owned = CreateFrame("Frame");
+hookScript(owned, "OnShow", () => {});    // owned receiver
+```
+
+Ownership is a conservative source-origin proof, following the lowering
+purity analysis: a unique binding initialized by `CreateFrame`, a visible
+Selu constructor, or an object/array literal is owned. Aliases retain proof;
+any assignment or ambiguous/shadowed binding invalidates it. A frame created
+with an owned parent is owned. Unique initialized class fields (including a single direct constructor store) and fields of
+owned object literals retain their initializer's proof; writes invalidate
+field proof. Imported values, manifest globals, API returns such as
+`GetParent` and `GetFrame`, fields of foreign objects, and anything unproven
+are foreign. Structural types alone never prove ownership.
+
+SELU0605 warns when a function value is passed to a method on a foreign
+receiver or assigned to a foreign field (including indexed fields):
+
+```selu
+foreignView.SetExtentCalculator(() => 24); // SELU0605
+foreignObject.callback = () => {};         // SELU0605
+```
+
+The small safe registry list lives in `selu-check/src/taint.rs`: `C_Timer.*`,
+`CallbackRegistryMixin.RegisterCallback`, `EventRegistry.RegisterCallback`, and
+`EventRegistry.RegisterFrameEventAndCallback`. CallbackRegistry's
+`TriggerEvent` uses `secureexecuterange` (client `CallbackRegistry.lua`,
+lines 200–204, owner evidence SL-34). An arbitrary method named
+`RegisterCallback` is not enough to prove that receiver uses this registry.
+
+SELU0606 rejects calls in the shipped deny table in `selu-check/src/taint.rs`.
+The table records owner-observed SL-34 incidents and alternatives: the three
+bank table getters should use `C_Bank.FetchNumPurchasedBankTabs`; bank purchase
+and talent/spellbook opening need secure click proxies; `ToggleWorldMap` and
+`OpenWorldMap` should use `C_Map.OpenWorldMap(mapID)`. The incidents were on
+Forever; these APIs are also rejected on other targets where they exist.
+The checker does not introduce missing manifest declarations.
+
+Project rules augment that table:
+
+```toml
+[lint]
+deny = [{ api = "Example.Unsafe", reason = "Our documented incident" }]
+
+[build]
+strict_taint = true
+```
+
+`strict_taint` promotes SELU0604 and SELU0605 warnings to errors. Denied calls
+are always errors. API names and reasons in project rules must be nonempty.
+
+Allow one expression with a mandatory nonempty literal written reason:
+
+```selu
+allowTaint("Reviewed secure caller at this site", ToggleSpellBook());
+```
+
+For a field assignment, wrap its function value, for example
+`foreignObject.callback = allowTaint("Reviewed registry", () => {});`.
+
+The wrapper is erased during lowering and preserves the expression's value.
+It suppresses the wrapped occurrence only; nested calls retain their checks.
+An empty or missing reason is SELU0607. It does not suppress type checking or
+secret-value errors. Secret values used as table keys, for reads or writes,
+are rejected with SELU0601 just like other opaque secret reads.

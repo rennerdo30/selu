@@ -154,3 +154,23 @@ fn several_targets_keep_secret_guards_regardless_of_primary_order() {
         assert!(c.diagnostics.is_empty(), "{:?}", c.diagnostics);
     }
 }
+
+#[test]
+fn secret_table_keys_are_rejected_for_reads_and_writes() {
+    for src in [
+        "const t = new Map<number, number>(); const x = t[UnitHealth(\"player\")];",
+        "const t = new Map<number, number>(); t[UnitHealth(\"player\")] = 1;",
+    ] {
+        assert!(compile(src).1.iter().any(|c| c == "SELU0601"));
+    }
+}
+
+#[test]
+fn taint_suppression_erases_wrapper_and_preserves_value() {
+    let (lua, codes) = compile(r#"print(allowTaint("reviewed test occurrence", 42));"#);
+    assert!(codes.is_empty(), "{codes:?}");
+    assert!(!lua.contains("allowTaint"));
+    let sim = Sim::new().unwrap();
+    sim.load_files(&[("test.lua".into(), lua)]).unwrap();
+    assert_eq!(sim.prints(), ["42"]);
+}

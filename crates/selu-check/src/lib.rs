@@ -42,6 +42,7 @@ mod functions;
 mod loops;
 mod lvalues;
 pub mod patterns;
+pub mod taint;
 pub mod targets;
 pub mod types;
 mod wow;
@@ -118,6 +119,7 @@ pub fn check_program_with_options(
     ctx.finish_alias_diagnostics();
     let types = ctx.types;
     restrictions::check_uses(program, &types, &mut out);
+    out.extend(taint::check(program, &types, false, &[]));
     Checked {
         diagnostics: out,
         types,
@@ -264,6 +266,7 @@ impl PreparedTarget {
         let exports = ctx.module.exports;
         let types = ctx.types;
         restrictions::check_uses(program, &types, &mut out);
+        out.extend(taint::check(program, &types, false, &[]));
         (
             Checked {
                 diagnostics: out,

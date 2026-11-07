@@ -152,3 +152,22 @@ export const missing = "Interface\\AddOns\\Hello\\Sounds\\Ping.ogg";
     assert_eq!(copied, (true, true, true, false), "{err}");
     assert!(err.contains("SELU0504") && err.contains("Sounds"), "{err}");
 }
+
+#[test]
+fn taint_project_policy_enforces_deny_and_strict_mode() {
+    let dir = hello_project("taint-policy");
+    let manifests = repo().join("manifests");
+    let config = "[addon]\nname = \"TaintTest\"\ntargets = [\"wow@12.1.5.70391\"]\n";
+    std::fs::write(dir.join("src/main.selu"), "hook(\"GetTime\", () => {});").unwrap();
+    std::fs::write(dir.join("selu.toml"), config).unwrap();
+    assert!(selu_test::project::check_project(&dir, None, Some(&manifests)).is_ok());
+    std::fs::write(
+        dir.join("selu.toml"),
+        format!("{config}\n[build]\nstrict_taint = true\n"),
+    )
+    .unwrap();
+    assert!(selu_test::project::check_project(&dir, None, Some(&manifests)).is_err());
+    std::fs::write(dir.join("src/main.selu"), "GetTime();").unwrap();
+    std::fs::write(dir.join("selu.toml"), format!("{config}\n[lint]\ndeny = [{{ api = \"GetTime\", reason = \"project regression fixture\" }}]\n")).unwrap();
+    assert!(selu_test::project::check_project(&dir, None, Some(&manifests)).is_err());
+}
