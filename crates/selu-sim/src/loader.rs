@@ -6,6 +6,15 @@
 
 use std::path::{Path, PathBuf};
 
+/// Real Blizzard addon roots for the lean compatibility environment. Required
+/// TOC dependencies and the client's shared-library pass are resolved below.
+pub const CORE_UI_ADDONS: &[&str] = &[
+    "Blizzard_UIParent",
+    "Blizzard_GameTooltip",
+    "Blizzard_Minimap",
+    "Blizzard_ChatFrameBase",
+];
+
 pub(crate) fn read_ui_text(
     path: &Path,
     client: Option<(&selu_gamedata::Storage, &Path)>,
@@ -60,15 +69,19 @@ pub fn default_ui_order(
     source: &Path,
     target: Option<&str>,
 ) -> Result<(Vec<Toc>, DefaultUiReport), String> {
-    default_ui_order_client(source, target, None)
+    default_ui_order_client(source, target, None, None)
 }
 pub(crate) fn default_ui_order_client(
     source: &Path,
     target: Option<&str>,
     storage: Option<&selu_gamedata::Storage>,
+    roots: Option<&[String]>,
 ) -> Result<(Vec<Toc>, DefaultUiReport), String> {
     let root = source.canonicalize().map_err(|e| e.to_string())?;
     let mut report = DefaultUiReport::default();
+    if let Some(roots) = roots {
+        report.notes.push(format!("Blizzard Core roots: {}", roots.join(", ")));
+    }
     let client = storage.map(|s| (s, root.as_path()));
     let list = read_ui_text(&root.join("Interface/ui-toc-list.txt"), client, &mut |n| {
         report.notes.push(n)
@@ -174,7 +187,10 @@ pub(crate) fn default_ui_order_client(
         }
     }
     for name in names {
-        if all[&name].get("LoadOnDemand") != Some("1") {
+        if roots.map_or_else(
+            || all[&name].get("LoadOnDemand") != Some("1"),
+            |roots| roots.contains(&name),
+        ) {
             visit(
                 &name,
                 &all,
@@ -183,6 +199,15 @@ pub(crate) fn default_ui_order_client(
                 &mut out,
                 &mut report.errors,
             );
+        }
+    }
+    if let Some(roots) = roots {
+        for name in roots {
+            if !all.contains_key(name) {
+                report
+                    .errors
+                    .push(format!("missing Blizzard Core root: {name}"));
+            }
         }
     }
     Ok((out, report))

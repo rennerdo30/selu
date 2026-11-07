@@ -239,6 +239,10 @@ fn main() -> ExitCode {
         };
     }
 
+    let supports_ui = target
+        .as_deref()
+        .or_else(|| manifest.as_ref().map(|m| m.flavour.as_str()))
+        .is_some_and(|t| t.split('@').next() == Some("wowf"));
     let worker = Worker::spawn(SessionConfig {
         client_install,
         manifest,
@@ -258,6 +262,24 @@ fn main() -> ExitCode {
         }
         let _ = out.flush();
     };
+    let settings = game::Settings::load();
+    let source = settings
+        .default_ui_source
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("E:/Development/wow-ui-source"));
+    if supports_ui && source.join("Interface/ui-toc-list.txt").is_file() {
+        match settings.ui_mode {
+            game::UiMode::None => {}
+            game::UiMode::Core => emit(
+                worker.call(Command::LoadCoreUi {
+                    source,
+                    roots: settings.core_ui_addons,
+                }),
+                &mut out,
+            ),
+            game::UiMode::Full => emit(worker.call(Command::LoadDefaultUi { source }), &mut out),
+        }
+    }
     for dir in addons {
         emit(worker.call(Command::LoadAddon { dir }), &mut out);
     }

@@ -1544,6 +1544,11 @@ impl Studio {
         self.ensure_clients();
         let mut open = true;
         let mut changed = false;
+        let previous_ui = (
+            self.game_settings.ui_mode,
+            self.game_settings.core_ui_addons.clone(),
+            self.game_settings.default_ui_source.clone(),
+        );
         let mut rescan = false;
         egui::Window::new(egui::RichText::new("Game Installs").size(15.0).strong())
             .open(&mut open)
@@ -1641,9 +1646,13 @@ impl Studio {
                 });
                 ui.add_space(6.0);
                 ui.label("Client assets (takes effect after restarting Studio)");
-                let mut enabled = !self.game_settings.disable_default_ui;
-                if ui.checkbox(&mut enabled, "Default UI (applies on next project load)").changed() {
-                    self.game_settings.disable_default_ui = !enabled; changed = true;
+                for mode in [crate::game::UiMode::None, crate::game::UiMode::Core, crate::game::UiMode::Full] {
+                    changed |= ui.radio_value(&mut self.game_settings.ui_mode,mode,format!("{mode:?}")).changed();
+                }
+                let mut roots=self.game_settings.core_ui_addons.join(", ");
+                if ui.text_edit_singleline(&mut roots).changed() {
+                    self.game_settings.core_ui_addons=roots.split([',',' ']).filter(|s|!s.is_empty()).map(str::to_owned).collect();
+                    changed=true;
                 }
                 let mut source=self.game_settings.default_ui_source.as_ref().map(|p|p.display().to_string()).unwrap_or_else(|| "E:/Development/wow-ui-source".into());
                 if ui.text_edit_singleline(&mut source).changed() {
@@ -1685,6 +1694,15 @@ impl Studio {
             });
         if changed && let Err(e) = self.game_settings.save() {
             self.line(LineKind::Error, format!("cannot save game settings: {e}"));
+        }
+        if previous_ui
+            != (
+                self.game_settings.ui_mode,
+                self.game_settings.core_ui_addons.clone(),
+                self.game_settings.default_ui_source.clone(),
+            )
+        {
+            self.restart_session();
         }
         if rescan {
             self.game_scanned = false;
@@ -1891,7 +1909,7 @@ impl Studio {
     }
 
     fn queue_default_ui(&mut self) {
-        if self.game_settings.disable_default_ui {
+        if self.game_settings.ui_mode == crate::game::UiMode::None {
             return;
         }
         let source = self
@@ -1906,9 +1924,18 @@ impl Studio {
             .map(selu_manifest::Manifest::target_string)
             .or_else(|| self.opts.target.clone());
         if source.join("Interface/ui-toc-list.txt").is_file()
-            && target.as_deref().is_some_and(|s| s.starts_with("wowf@"))
+            && target
+                .as_deref()
+                .is_some_and(|s| s.split('@').next() == Some("wowf"))
         {
-            self.send(Command::LoadDefaultUi { source });
+            if self.game_settings.ui_mode == crate::game::UiMode::Core {
+                self.send(Command::LoadCoreUi {
+                    source,
+                    roots: self.game_settings.core_ui_addons.clone(),
+                });
+            } else {
+                self.send(Command::LoadDefaultUi { source });
+            }
         }
     }
 

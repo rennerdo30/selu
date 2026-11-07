@@ -33,6 +33,10 @@ pub enum Command {
     LoadDefaultUi {
         source: PathBuf,
     },
+    LoadCoreUi {
+        source: PathBuf,
+        roots: Vec<String>,
+    },
     SeedSaved {
         dir: PathBuf,
         values: std::collections::BTreeMap<String, selu_sim::saved::SavedValue>,
@@ -224,10 +228,15 @@ fn run(config: SessionConfig, inbox: Receiver<Command>, outbox: Sender<Update>) 
         }
         let before = session.generation();
         let result: Result<Option<Update>, String> = match command {
-            Command::LoadDefaultUi { source } => {
+            command @ (Command::LoadDefaultUi { .. } | Command::LoadCoreUi { .. }) => {
+                let (source, roots) = match command {
+                    Command::LoadDefaultUi { source } => (source, None),
+                    Command::LoadCoreUi { source, roots } => (source, Some(roots)),
+                    _ => unreachable!(),
+                };
                 default_ui_start = std::time::Instant::now().checked_sub(session_creation);
                 session
-                    .load_default_ui(&source, |name| {
+                    .load_blizzard_ui(&source, roots.as_deref(), |name| {
                         eprintln!("Default UI: loading {name}");
                         let _ = outbox.send(Update::Logs {
                             lines: vec![format!("Default UI: loading {name}")],

@@ -147,10 +147,20 @@ pub fn battlenet_exe() -> Option<PathBuf> {
 }
 
 /// User settings for game testing, kept in `%APPDATA%\Selu\studio.toml`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum UiMode {
+    None,
+    #[default]
+    Core,
+    Full,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
-    #[serde(default = "default_ui_disabled")]
-    pub disable_default_ui: bool,
+    #[serde(default)]
+    pub ui_mode: UiMode,
+    #[serde(default = "core_ui_roots")]
+    pub core_ui_addons: Vec<String>,
     #[serde(default)]
     pub default_ui_source: Option<PathBuf>,
     #[serde(default)]
@@ -178,13 +188,17 @@ pub struct Settings {
     pub recent_projects: Vec<PathBuf>,
 }
 
-fn default_ui_disabled() -> bool {
-    true
+fn core_ui_roots() -> Vec<String> {
+    selu_sim::loader::CORE_UI_ADDONS
+        .iter()
+        .map(|s| (*s).into())
+        .collect()
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            disable_default_ui: true,
+            ui_mode: UiMode::Core,
+            core_ui_addons: core_ui_roots(),
             default_ui_source: None,
             wtf_override: String::new(),
             saved_choices: BTreeMap::new(),

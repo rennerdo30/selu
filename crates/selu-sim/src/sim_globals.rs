@@ -537,8 +537,10 @@ mod sg_tests {
 #[cfg(test)]
 mod minimap_tests {
     #[test]
-    fn undeclared_ui_objects_are_not_synthesized_by_name() {
+    fn none_mode_does_not_synthesize_blizzard_objects_by_name() {
         let session = crate::Session::new(Default::default()).unwrap();
+        // A Session with no explicit Blizzard load is None mode, even though
+        // Studio now defaults to the real Core subset.
         session.eval("assert(Minimap == nil); local f=CreateFrame('Minimap','SourceMap'); f:SetSize(198,198); f:SetPoint('CENTER'); assert(f:GetRect() ~= nil)").unwrap();
     }
 }

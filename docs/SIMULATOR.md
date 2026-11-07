@@ -576,12 +576,12 @@ nameplate template is loaded here. Vignette positions return a vector with
 `x`, `y`, `GetXY` and zero facing on the configured map only. Bag setups model
 item IDs per slot, not inventory metadata or item stack counts.
 
-## Default UI startup (stage 1, opt-in)
+## Blizzard UI startup (None / Core / Full)
 
-The Default UI setting remains **off by default until visual acceptance**.
+Studio offers **None**, **Core** (default), and **Full** Blizzard UI modes. None loads no Blizzard addons; Core loads real Blizzard addon roots and their required TOC dependencies; Full loads the complete default UI. CLI `selu test` and simulator Sessions remain None unless explicitly loaded.
 To enable it, open Studio's **Run > Game installs...** window, enable
-**Default UI (applies on next project load)**, and set the UI source checkout
-and client install paths there. Reopen the project to start a new session.
+**Core** or **Full**, and set the UI source checkout
+and client install paths there. Changing the UI mode, roots or source restarts the project session.
 The install root contains `.build.info`; the source root contains `Interface`.
 Keep **Disable client fonts and art** unchecked for client-backed rendering.
 
@@ -800,3 +800,9 @@ hover use that manifest, including namespace members and colon widget methods.
 Project identifiers are collected with a tolerant scan; receiver types and Lua
 programs are not type checked. Lua and XML files have syntax colours. Runtime
 errors with a known project file and line appear in the clickable Problems list.
+
+### Lean Core environment (SL-31)
+
+The default root list is defined once in crates/selu-sim/src/loader.rs as CORE_UI_ADDONS: Blizzard_UIParent, Blizzard_GameTooltip, Blizzard_Minimap and Blizzard_ChatFrameBase. Studio exposes an override list in Run > Game Installs. Required TOC dependencies and the native shared-library pass use the same loader and ordering as Full; no named-frame substitutes are installed. Root lists survive reload. Basic unit frames are not an additional Core root: dependency size and startup cost take priority here. Missing source leaves the environment unavailable rather than manufacturing frames.
+
+The client-backed core_ui integration test uses SELU_DEFAULT_UI_SOURCE and SELU_CLIENT_INSTALL and records elapsed startup. Run it separately with --ignored --test-threads=1. Full interaction tests still explicitly request Full. Neither test reads account data or starts the game.

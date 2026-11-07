@@ -194,6 +194,7 @@ impl std::error::Error for SavedFixtureError {}
 
 pub struct Session {
     default_ui_source: Option<PathBuf>,
+    default_ui_roots: Option<Vec<String>>,
     default_ui_report: Option<loader::DefaultUiReport>,
     default_ui_log_end: usize,
     config: SessionConfig,
@@ -442,6 +443,16 @@ impl Session {
     pub fn load_default_ui(
         &mut self,
         source: &Path,
+        progress: impl FnMut(&str),
+    ) -> SimResult<crate::loader::DefaultUiReport> {
+        self.load_blizzard_ui(source, None, progress)
+    }
+
+    /// Load selected real Blizzard addon roots and their TOC dependencies.
+    pub fn load_blizzard_ui(
+        &mut self,
+        source: &Path,
+        roots: Option<&[String]>,
         mut progress: impl FnMut(&str),
     ) -> SimResult<crate::loader::DefaultUiReport> {
         let _profile = crate::profile::Span::new("startup.unattributed");
@@ -569,6 +580,7 @@ impl Session {
             &source_root,
             self.config.target.as_deref(),
             storage.as_deref(),
+            roots,
         )
         .map_err(runtime)?;
         report.notes.extend(source_notes);
@@ -583,6 +595,7 @@ impl Session {
             }
         }
         self.default_ui_source = Some(source.to_path_buf());
+        self.default_ui_roots = roots.map(<[String]>::to_vec);
         let api = self
             .sim
             .lua
@@ -702,6 +715,7 @@ impl Session {
         let sim = Self::start_vm(&config)?;
         Ok(Session {
             default_ui_source: None,
+            default_ui_roots: None,
             default_ui_report: None,
             default_ui_log_end: 0,
             config,
@@ -1176,7 +1190,8 @@ impl Session {
         self.sim = replacement;
         self.generation = self.generation.next();
         if let Some(source) = self.default_ui_source.clone() {
-            self.load_default_ui(&source, |_| {})?;
+            let roots = self.default_ui_roots.clone();
+            self.load_blizzard_ui(&source, roots.as_deref(), |_| {})?;
         }
         for dir in &addons {
             self.load_addon_dir(dir)?;
