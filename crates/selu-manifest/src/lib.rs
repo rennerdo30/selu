@@ -300,6 +300,112 @@ pub fn product(name: &str) -> &str {
         _ => name,
     }
 }
+/// How a client of one product selects and filters addon files: the TOC
+/// `AllowLoadGameType` token it answers to, the `[Game]` and `[Family]`
+/// folder names Blizzard's TOCs use, and the TOC file suffixes it tries, in
+/// order, before the plain `Name.toc`. This is the one table for every
+/// product; loaders and tools never match product codes themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientUi {
+    pub game_type: &'static str,
+    pub game_folder: &'static str,
+    pub family: &'static str,
+    pub toc_suffixes: &'static [&'static str],
+}
+
+/// The `wow-ui-source` branch that mirrors each product's interface code,
+/// verified against the exporter's TACT product set and each branch's
+/// workflow. The manifest updater and Studio's source-checkout check share it.
+pub const SOURCE_BRANCHES: &[(&str, &str)] = &[
+    ("live", "wow"),
+    ("ptr", "wowt"),
+    ("ptr2", "wowxptr"),
+    ("beta", "wow_beta"),
+    ("forever", "wowf"),
+    ("classic", "wow_classic"),
+    ("classic_ptr", "wow_classic_ptr"),
+    ("classic_beta", "wow_classic_beta"),
+    ("classic_era", "wow_classic_era"),
+    ("classic_era_ptr", "wow_classic_era_ptr"),
+    ("classic_anniversary", "wow_anniversary"),
+    ("classic_titan", "wow_classic_titan"),
+];
+
+/// The source branch for a product code or alias.
+pub fn source_branch(product_or_alias: &str) -> Option<&'static str> {
+    let product = product(product_or_alias);
+    SOURCE_BRANCHES
+        .iter()
+        .find(|(_, p)| *p == product)
+        .map(|(branch, _)| *branch)
+}
+
+/// The live product a PTR or beta channel tests (`wowt` → `wow`).
+pub fn base_product(product: &str) -> &str {
+    match product {
+        "wowt" | "wowxptr" | "wow_beta" => "wow",
+        "wow_classic_ptr" | "wow_classic_beta" => "wow_classic",
+        "wow_classic_era_ptr" => "wow_classic_era",
+        "wow_anniversary_ptr" => "wow_anniversary",
+        other => other,
+    }
+}
+
+/// [`ClientUi`] for a product (code or transitional alias) at a client major
+/// version. Classic products follow the expansion their build replays, so a
+/// channel that moves to the next expansion needs no code change. `None` when
+/// the product is unknown, or a Classic product's version is not known.
+pub fn client_ui(product_or_alias: &str, major: Option<u32>) -> Option<ClientUi> {
+    const fn ui(
+        game_type: &'static str,
+        game_folder: &'static str,
+        family: &'static str,
+        toc_suffixes: &'static [&'static str],
+    ) -> ClientUi {
+        ClientUi {
+            game_type,
+            game_folder,
+            family,
+            toc_suffixes,
+        }
+    }
+    let product = base_product(product(product_or_alias));
+    Some(match product {
+        "wow" => ui("mainline", "Mainline", "Mainline", &["Mainline"]),
+        // Forever answers to `camelot`; its addons often still ship Mainline
+        // or Vanilla TOCs, which the client accepts after its own suffix.
+        "wowf" => ui(
+            "camelot",
+            "Camelot",
+            "Mainline",
+            &["Camelot", "Mainline", "Vanilla"],
+        ),
+        "wow_classic" | "wow_classic_era" | "wow_anniversary" | "wow_classic_titan" => {
+            let major = match (product, major) {
+                (_, Some(major)) => major,
+                ("wow_classic_era", None) => 1,
+                _ => return None,
+            };
+            match major {
+                1 => ui("vanilla", "Vanilla", "Classic", &["Vanilla", "Classic"]),
+                2 => ui("tbc", "TBC", "Classic", &["TBC", "BCC", "Classic"]),
+                3 => ui("wrath", "Wrath", "Classic", &["Wrath", "WOTLKC", "Classic"]),
+                4 => ui("cata", "Cata", "Classic", &["Cata", "Classic"]),
+                5 => ui("mists", "Mists", "Classic", &["Mists", "Classic"]),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// [`client_ui`] for a target string such as `wow_classic@5.5.4.70631`.
+pub fn client_ui_for_target(target: &str) -> Option<ClientUi> {
+    let (product, version) = target.split_once('@').unwrap_or((target, ""));
+    let major = version.split('.').next().and_then(|m| m.parse().ok());
+    client_ui(product, major)
+}
+
 /// The expansion a Classic client's major version replays, for display only.
 fn classic_expansion(major: u32) -> Option<&'static str> {
     Some(match major {
@@ -471,6 +577,82 @@ pub fn resolve<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn client_ui_covers_every_product() {
+        let ui = |t: &str| {
+            client_ui_for_target(t).map(|u| (u.game_type, u.game_folder, u.toc_suffixes[0]))
+        };
+        assert_eq!(
+            ui("wow@12.0.5.1"),
+            Some(("mainline", "Mainline", "Mainline"))
+        );
+        assert_eq!(ui("retail"), Some(("mainline", "Mainline", "Mainline")));
+        assert_eq!(
+            ui("wowt@12.1.0.1"),
+            Some(("mainline", "Mainline", "Mainline"))
+        );
+        assert_eq!(
+            ui("wowf@1.60.1.70790"),
+            Some(("camelot", "Camelot", "Camelot"))
+        );
+        assert_eq!(ui("forever"), Some(("camelot", "Camelot", "Camelot")));
+        assert_eq!(
+            ui("wow_classic_era@1.15.8.1"),
+            Some(("vanilla", "Vanilla", "Vanilla"))
+        );
+        assert_eq!(
+            ui("wow_classic_era"),
+            Some(("vanilla", "Vanilla", "Vanilla"))
+        );
+        assert_eq!(
+            ui("wow_classic_era_ptr@1.15.9.1"),
+            Some(("vanilla", "Vanilla", "Vanilla"))
+        );
+        assert_eq!(ui("wow_anniversary@2.5.5.1"), Some(("tbc", "TBC", "TBC")));
+        assert_eq!(
+            ui("wow_classic_titan@3.80.0.1"),
+            Some(("wrath", "Wrath", "Wrath"))
+        );
+        assert_eq!(ui("wow_classic@4.4.2.1"), Some(("cata", "Cata", "Cata")));
+        assert_eq!(
+            ui("wow_classic@5.5.4.70631"),
+            Some(("mists", "Mists", "Mists"))
+        );
+        assert_eq!(
+            ui("wow_classic_beta@5.5.5.1"),
+            Some(("mists", "Mists", "Mists"))
+        );
+        // A Classic channel without a build cannot know its expansion.
+        assert_eq!(ui("wow_classic"), None);
+        assert_eq!(ui("unknown@1.0.0.1"), None);
+        for (_, product) in SOURCE_BRANCHES {
+            let major = if product.starts_with("wow_") {
+                "1"
+            } else {
+                "12"
+            };
+            assert!(
+                client_ui_for_target(&format!("{product}@{major}.0.0.1")).is_some(),
+                "{product} has no client UI entry"
+            );
+        }
+        for suffixes in [&client_ui("wow_classic", Some(5)).unwrap().toc_suffixes] {
+            assert_eq!(suffixes.last(), Some(&"Classic"));
+        }
+    }
+
+    #[test]
+    fn source_branches_map_products_and_aliases() {
+        assert_eq!(source_branch("wow"), Some("live"));
+        assert_eq!(source_branch("forever"), Some("forever"));
+        assert_eq!(
+            source_branch("wow_anniversary"),
+            Some("classic_anniversary")
+        );
+        assert_eq!(source_branch("classic-era"), Some("classic_era"));
+        assert_eq!(source_branch("nope"), None);
+    }
+
     use super::*;
 
     fn fixture() -> Manifest {

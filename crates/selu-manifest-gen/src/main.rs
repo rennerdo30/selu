@@ -202,21 +202,7 @@ fn generate(args: &[String]) -> Result<()> {
     );
     Ok(())
 }
-// Verified against the exporter's TACT product set and each branch's workflow.
-const CLIENTS: &[(&str, &str)] = &[
-    ("live", "wow"),
-    ("ptr", "wowt"),
-    ("ptr2", "wowxptr"),
-    ("beta", "wow_beta"),
-    ("forever", "wowf"),
-    ("classic", "wow_classic"),
-    ("classic_ptr", "wow_classic_ptr"),
-    ("classic_beta", "wow_classic_beta"),
-    ("classic_era", "wow_classic_era"),
-    ("classic_era_ptr", "wow_classic_era_ptr"),
-    ("classic_anniversary", "wow_anniversary"),
-    ("classic_titan", "wow_classic_titan"),
-];
+const CLIENTS: &[(&str, &str)] = selu_manifest::SOURCE_BRANCHES;
 fn build_title(title: &str) -> Option<Build> {
     let (version, build) = title.split_once(" (")?;
     Build::parse(&format!("{version}.{}", build.strip_suffix(')')?)).ok()

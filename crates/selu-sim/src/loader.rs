@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 
 /// Real Blizzard addon roots for the lean compatibility environment. Required
 /// TOC dependencies and the client's shared-library pass are resolved below.
+/// Blizzard addons whose frames addons most often touch. Each product's own
+/// `ui-toc-list.txt` and TOCs supply their dependencies and files. Checked
+/// 2026-11-07: all four ship in the installed wow, wowf, wow_classic,
+/// wow_classic_era and wow_anniversary clients. A root a product lacks is
+/// reported as missing, never stood in for.
 pub const CORE_UI_ADDONS: &[&str] = &[
     "Blizzard_UIParent",
     "Blizzard_GameTooltip",
@@ -55,6 +60,62 @@ pub(crate) fn read_ui_text(
     Ok(text)
 }
 
+/// The canonical path of a UI input. A file on disk canonicalizes as usual.
+/// With client storage, a path below the source root that exists only inside
+/// the client (Blizzard's interface read from CASC, no source checkout) is
+/// normalized lexically instead, so the same loader serves every product.
+pub(crate) fn ui_path(
+    path: &Path,
+    client: Option<(&selu_gamedata::Storage, &Path)>,
+) -> std::io::Result<std::path::PathBuf> {
+    let error = match path.canonicalize() {
+        Ok(path) => return Ok(path),
+        Err(e) => e,
+    };
+    let Some((storage, root)) = client else {
+        return Err(error);
+    };
+    let normal = normalize(path);
+    let name = normal
+        .strip_prefix(root)
+        .ok()
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .filter(|name| name.starts_with("Interface/"));
+    match name {
+        Some(name) if storage.resolve(&name).is_ok() => Ok(normal),
+        _ => Err(error),
+    }
+}
+
+/// The canonical folder of an addon: on disk when it exists, else (client
+/// storage only) its lexically normalized path. CASC stores files, not
+/// folders, so a folder read from the client cannot be looked up itself.
+pub(crate) fn ui_dir(
+    path: &Path,
+    client: Option<(&selu_gamedata::Storage, &Path)>,
+) -> std::io::Result<std::path::PathBuf> {
+    match path.canonicalize() {
+        Err(_) if client.is_some_and(|(_, root)| normalize(path).starts_with(root)) => {
+            Ok(normalize(path))
+        }
+        other => other,
+    }
+}
+
+fn normalize(path: &Path) -> std::path::PathBuf {
+    let mut normal = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normal.pop();
+            }
+            other => normal.push(other),
+        }
+    }
+    normal
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct DefaultUiReport {
     pub addons_loaded: usize,
@@ -96,25 +157,15 @@ pub(crate) fn default_ui_order_client(
         .filter(|s| !s.is_empty() && !s.starts_with('#'))
     {
         let path = root.join(row.replace('\\', "/"));
-        let dir = path
-            .parent()
-            .ok_or("invalid UI TOC path")?
-            .canonicalize()
-            .map_err(|e| e.to_string())?;
-        if !dir.starts_with(&root) {
+        let dir = path.parent().ok_or("invalid UI TOC path")?.to_path_buf();
+        if !dir.starts_with(&root) || row.split(['/', '\\']).any(|part| part == "..") {
             return Err("UI TOC path escapes source".into());
         }
         match read_toc_target_client(&dir, target, client, &mut |n| report.notes.push(n)) {
             Ok(toc) => {
-                let game = match target.unwrap_or("").split('@').next().unwrap_or("") {
-                    "wowf" | "forever" => "camelot",
-                    "wow" | "retail" => "mainline",
-                    "classic-era" => "vanilla",
-                    "classic-anniversary" => "tbc",
-                    "classic-titan" => "wrath",
-                    "classic" => "mists",
-                    _ => "",
-                };
+                let game = target
+                    .and_then(selu_manifest::client_ui_for_target)
+                    .map_or("", |ui| ui.game_type);
                 if !toc.allowed_game(game) {
                     continue;
                 }
@@ -364,50 +415,22 @@ fn read_toc_target_client(
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("{} is not an addon folder", dir.display()))?
         .to_string();
-    let suffix = match target.unwrap_or("").split('@').next().unwrap_or("") {
-        "retail" => "Mainline",
-        "wowf" | "forever" => "Camelot",
-        "classic-era" => "Vanilla",
-        "classic" => "Mists",
-        "classic-anniversary" => "TBC",
-        "classic-titan" => "Wrath",
-        _ => "",
-    };
-    let flavoured = dir.join(format!("{name}_{suffix}.toc"));
-    let family = dir.join(format!("{name}_Mainline.toc"));
-    let legacy = dir.join(format!("{name}_Vanilla.toc"));
-    let path = if !suffix.is_empty() && flavoured.is_file() {
-        flavoured
-    } else if matches!(suffix, "Camelot" | "Mainline") && family.is_file() {
-        family
-    } else if suffix == "Camelot" && legacy.is_file() {
-        // Existing Forever addons use Vanilla TOCs; prefer the current client
-        // suffixes when present, while preserving that legacy fallback.
-        legacy
-    } else {
-        dir.join(format!("{name}.toc"))
-    };
+    // The client tries its own TOC suffixes in order, then the plain name.
+    let ui = target.and_then(selu_manifest::client_ui_for_target);
+    let suffixes = ui.map_or(&[][..], |ui| ui.toc_suffixes);
+    let suffix = suffixes.first().copied().unwrap_or("");
+    let path = suffixes
+        .iter()
+        .map(|suffix| dir.join(format!("{name}_{suffix}.toc")))
+        .find(|path| path.is_file() || (client.is_some() && ui_path(path, client).is_ok()))
+        .unwrap_or_else(|| dir.join(format!("{name}.toc")));
     let text = read_ui_text(&path, client, diagnostic)?;
-    let game = match target.unwrap_or("").split('@').next().unwrap_or("") {
-        "wowf" | "forever" => Some("camelot"),
-        "retail" | "wow" => Some("mainline"),
-        "classic-era" => Some("vanilla"),
-        _ => None,
-    };
-    let mut toc = parse_toc_game(&name, dir, &text, game);
-    if let Some(game) = game {
-        let family = if game == "camelot" || game == "mainline" {
-            "Mainline"
-        } else {
-            "Classic"
-        };
-        let folder = match game {
-            "camelot" => "Camelot",
-            "mainline" => "Mainline",
-            _ => "Vanilla",
-        };
+    let mut toc = parse_toc_game(&name, dir, &text, ui.map(|ui| ui.game_type));
+    if let Some(ui) = ui {
         for file in &mut toc.files {
-            *file = file.replace("[Family]", family).replace("[Game]", folder);
+            *file = file
+                .replace("[Family]", ui.family)
+                .replace("[Game]", ui.game_folder);
         }
     }
     // Bindings XML is an implicit addon file, selected by client flavour.
@@ -441,9 +464,9 @@ pub(crate) fn read_files_client(
 ) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
     for file in &toc.files {
-        let root = toc.dir.canonicalize().map_err(|e| e.to_string())?;
+        let root = ui_dir(&toc.dir, client).map_err(|e| format!("{}: {e}", toc.dir.display()))?;
         let listed = toc.dir.join(file);
-        let path = match listed.canonicalize() {
+        let path = match ui_path(&listed, client) {
             Ok(path) => path,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 diagnostic(format!(
@@ -528,6 +551,120 @@ mod tests {
         std::fs::remove_dir(&dir).unwrap();
         std::fs::remove_dir(dir.parent().unwrap()).unwrap();
     }
+    #[test]
+    fn every_product_picks_its_own_toc_and_game_folder() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir()
+            .join(format!("selu-toc-products-{unique}"))
+            .join("Demo");
+        std::fs::create_dir_all(&dir).unwrap();
+        for suffix in [
+            "",
+            "_Mainline",
+            "_Vanilla",
+            "_TBC",
+            "_Wrath",
+            "_Mists",
+            "_Classic",
+        ] {
+            std::fs::write(
+                dir.join(format!("Demo{suffix}.toc")),
+                format!(
+                    "## Title: Demo{suffix}\n[Game]\\a.lua\n[Family]\\b.lua\n\
+                     mists.lua [AllowLoadGameType mists]\n\
+                     classic.lua [AllowLoadGameType classic]\n"
+                ),
+            )
+            .unwrap();
+        }
+        for (target, title, game, family, mists, classic) in [
+            (
+                "wow@12.0.5.1",
+                "Demo_Mainline",
+                "Mainline",
+                "Mainline",
+                false,
+                false,
+            ),
+            (
+                "wow_classic_era@1.15.8.1",
+                "Demo_Vanilla",
+                "Vanilla",
+                "Classic",
+                false,
+                true,
+            ),
+            (
+                "wow_anniversary@2.5.5.1",
+                "Demo_TBC",
+                "TBC",
+                "Classic",
+                false,
+                true,
+            ),
+            (
+                "wow_classic_titan@3.80.0.1",
+                "Demo_Wrath",
+                "Wrath",
+                "Classic",
+                false,
+                true,
+            ),
+            (
+                "wow_classic@5.5.4.1",
+                "Demo_Mists",
+                "Mists",
+                "Classic",
+                true,
+                true,
+            ),
+            (
+                "wow_classic@4.4.2.1",
+                "Demo_Classic",
+                "Cata",
+                "Classic",
+                false,
+                true,
+            ),
+            (
+                "wowf@1.60.1.1",
+                "Demo_Mainline",
+                "Camelot",
+                "Mainline",
+                false,
+                false,
+            ),
+            ("unknown@1.0.0.1", "Demo", "[Game]", "[Family]", true, true),
+        ] {
+            let toc = read_toc_target(&dir, Some(target)).unwrap();
+            assert_eq!(toc.get("Title"), Some(title), "{target}");
+            assert!(
+                toc.files.contains(&format!("{game}/a.lua")),
+                "{target}: {:?}",
+                toc.files
+            );
+            assert!(
+                toc.files.contains(&format!("{family}/b.lua")),
+                "{target}: {:?}",
+                toc.files
+            );
+            assert_eq!(
+                toc.files.contains(&"mists.lua".to_string()),
+                mists,
+                "{target}"
+            );
+            assert_eq!(
+                toc.files.contains(&"classic.lua".to_string()),
+                classic,
+                "{target}"
+            );
+        }
+        std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
+
     #[test]
     fn global_environment_directive_is_not_part_of_the_filename() {
         let toc = parse_toc_game(
