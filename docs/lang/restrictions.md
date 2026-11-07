@@ -216,12 +216,24 @@ hookScript(owned, "OnShow", () => {});    // owned receiver
 Ownership is a conservative source-origin proof, following the lowering
 purity analysis: a unique binding initialized by `CreateFrame`, a visible
 Selu constructor, or an object/array literal is owned. Aliases retain proof;
-any assignment or ambiguous/shadowed binding invalidates it. A frame created
-with an owned parent is owned. Unique initialized class fields (including a single direct constructor store) and fields of
-owned object literals retain their initializer's proof; writes invalidate
-field proof. Imported values, manifest globals, API returns such as
-`GetParent` and `GetFrame`, fields of foreign objects, and anything unproven
-are foreign. Structural types alone never prove ownership.
+a reassigned binding loses proof. Binding and class-field identities come
+from the checker, so unrelated names in another scope do not invalidate proof. A frame created
+with an owned parent is owned. Class fields retain proof when every visible non-null initializer or store
+produces an owned value. Foreign stores invalidate that proof. Fields of
+owned object literals can retain their initializer's proof.
+
+Only manifest game types can be foreign: widgets, widget-like API types,
+manifest API tables and manifest namespace receivers. A game value from a
+manifest global, an API return such as `GetParent` or `GetFrame`, a foreign
+field, or an unproven origin is foreign. Selu class instances (including
+`this`), interfaces, source object types, arrays, maps, sets and functions
+are never foreign. A union is a game boundary only if an arm is a manifest
+game type; collection element types and object fields do not make the
+containing collection or object foreign. Selu collection callbacks and
+Selu-defined methods therefore do not trigger SELU0605.
+
+Hook checks apply only to the checker-resolved `hook` and `hookScript`
+built-ins. A local declaration shadows the built-in throughout its scope.
 
 SELU0605 warns when a function value is passed to a method on a foreign
 receiver or assigned to a foreign field (including indexed fields):

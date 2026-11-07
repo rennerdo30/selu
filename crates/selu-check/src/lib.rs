@@ -679,6 +679,15 @@ impl Ctx<'_> {
                 let written = self.annotation(ty);
                 let ty = self.declared_type(*is_const, name, name_span, written, init.as_deref());
                 self.finish_decl(name, ty);
+                if let Some(e) = init
+                    && let Some((_, b)) = self.lookup(name)
+                {
+                    let path = access_paths::AccessPath {
+                        root: access_paths::Root::Binding(b.id),
+                        steps: vec![],
+                    };
+                    self.types.origin_initializers.insert(path, *e.clone());
+                }
             }
             StmtKind::Global {
                 name,
@@ -1234,6 +1243,9 @@ impl Ctx<'_> {
         let t = self.restriction_value_type(e, t);
         let t = self.refined_access(e).unwrap_or(t);
         self.types.set(e.id, t.clone());
+        if let Some(path) = self.access_path(e) {
+            self.types.origin_paths.insert(e.id, path);
+        }
         t
     }
 

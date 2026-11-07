@@ -85,6 +85,8 @@ struct Origins {
     fields: HashMap<String, Expr>,
     duplicate_fields: HashSet<String>,
     constructor_stores: HashSet<selu_syntax::ExprId>,
+    resolved_values: HashMap<crate::access_paths::AccessPath, Vec<Expr>>,
+    resolved_writes: HashSet<crate::access_paths::AccessPath>,
 }
 fn walk<'a>(c: Child<'a>, f: &mut impl FnMut(Child<'a>)) {
     match c {
@@ -93,6 +95,55 @@ fn walk<'a>(c: Child<'a>, f: &mut impl FnMut(Child<'a>)) {
     }
 }
 impl Origins {
+    fn resolve(&mut self, c: Child<'_>, types: &TypeTable) {
+        if let Child::Expr(e) = &c {
+            match &e.kind {
+                ExprKind::Assign { target, value } => {
+                    if let Some(path) = types.origin_path(target) {
+                        if path.steps.is_empty() {
+                            self.resolved_writes.insert(path);
+                        } else {
+                            self.resolved_values
+                                .entry(path)
+                                .or_default()
+                                .push(*value.clone());
+                        }
+                    }
+                }
+                ExprKind::CompoundAssign { target, .. } | ExprKind::Update { target, .. } => {
+                    if let Some(path) = types.origin_path(target) {
+                        self.resolved_writes.insert(path);
+                    }
+                }
+                _ => {}
+            }
+        }
+        walk(c, &mut |c| self.resolve(c, types));
+    }
+    fn owned_checked(&self, e: &Expr, types: &TypeTable, depth: usize) -> bool {
+        if depth > 32 {
+            return false;
+        }
+        if let ExprKind::Call { callee, .. } = &e.kind
+            && matches!(types.get(callee.id), Some(Type::Function { api_semantics, .. }) if api_semantics.frame_factory || api_semantics.plain_result)
+        {
+            return true;
+        }
+        if let Some(path) = types.origin_path(e) {
+            if self.resolved_writes.contains(&path) {
+                return false;
+            }
+            return self.resolved_values.get(&path).is_some_and(|values| {
+                values.iter().any(|v| !matches!(v.kind, ExprKind::Null))
+                    && values.iter().all(|v| {
+                        matches!(v.kind, ExprKind::Null) || self.owned_checked(v, types, depth + 1)
+                    })
+            });
+        }
+        // Unchecked unit probes retain the spelling-based purity proof. Checked
+        // bindings always use the checker's existing declaration/access identities.
+        self.owned(e, depth)
+    }
     fn api_name(&self, e: &Expr, depth: usize) -> Option<String> {
         if depth > 32 {
             return None;
@@ -282,6 +333,34 @@ impl Origins {
         }
     }
 }
+/// Only manifest game types form a foreign boundary. A Selu object that
+/// contains game values is not itself a game object; inspect only union arms,
+/// optional wrappers and aliases, never fields or collection element types.
+pub(crate) fn is_game_type(t: &Type) -> bool {
+    fn visit(t: &Type, seen: &mut HashSet<String>) -> bool {
+        match t {
+            Type::Widget(..) => true,
+            Type::ApiOpaque(_, members) => members.is_empty(),
+            Type::Optional(t) | Type::Secret(t) => visit(t, seen),
+            Type::Union(ts) => ts.iter().any(|t| visit(t, seen)),
+            Type::Named(_, shape) if seen.insert(shape.key.clone()) => {
+                shape.key.starts_with("@manifest:")
+                    || shape.key.starts_with("@selu_closed:")
+                    || shape.get().is_some_and(|t| visit(&t, seen))
+            }
+            _ => false,
+        }
+    }
+    visit(t, &mut HashSet::new())
+}
+fn safe_registry(callee: &Expr, types: &TypeTable) -> bool {
+    matches!(types.get(callee.id), Some(Type::Function { api, .. }) if api.0.as_ref().is_some_and(|s| s.name.starts_with("C_Timer.") || SAFE_REGISTRIES.contains(&s.name.as_str())))
+}
+fn foreign(e: &Expr, o: &Origins, types: &TypeTable) -> bool {
+    !matches!(e.kind, ExprKind::This)
+        && types.is_game_receiver(e.id)
+        && !o.owned_checked(e, types, 0)
+}
 /// Run on checked syntax; project entries augment the shipped list.
 pub fn check(
     program: &Program,
@@ -292,6 +371,16 @@ pub fn check(
     let mut origins = Origins::default();
     for s in &program.stmts {
         origins.collect(Child::Stmt(s));
+    }
+    for (path, e) in &types.origin_initializers {
+        origins
+            .resolved_values
+            .entry(path.clone())
+            .or_default()
+            .push(e.clone());
+    }
+    for s in &program.stmts {
+        origins.resolve(Child::Stmt(s), types);
     }
     let mut out = Vec::new();
     fn scan(
@@ -314,7 +403,7 @@ pub fn check(
             match &e.kind {
                 ExprKind::Call { callee, args, .. } => {
                     let n = callee.dotted_name().unwrap_or_default();
-                    if n == "allowTaint" && !o.counts.contains_key(&n) && !o.writes.contains(&n) {
+                    if n == "allowTaint" && types.is_builtin_call(callee.id) {
                         if !matches!(args.first().map(|e| &e.kind), Some(ExprKind::Str(s)) if !s.trim().is_empty())
                         {
                             emit(
@@ -343,11 +432,13 @@ pub fn check(
                             "use a safe alternative or allowTaint with a written reason",
                         );
                     }
-                    if (n == "hook"
-                        && (args.len() == 2 || args.first().is_some_and(|e| !o.owned(e, 0))))
-                        || (n == "hookScript"
-                            && args.first().is_some_and(|e| !o.owned(e, 0))
-                            && matches!(args.get(1).map(|e| &e.kind), Some(ExprKind::Str(s)) if matches!(s.as_str(), "OnShow"|"OnHide"|"OnEnable"|"OnDisable")))
+                    if types.is_builtin_call(callee.id)
+                        && ((n == "hook"
+                            && (args.len() == 2
+                                || args.first().is_some_and(|e| foreign(e, o, types))))
+                            || (n == "hookScript"
+                                && args.first().is_some_and(|e| foreign(e, o, types))
+                                && matches!(args.get(1).map(|e| &e.kind), Some(ExprKind::Str(s)) if matches!(s.as_str(), "OnShow"|"OnHide"|"OnEnable"|"OnDisable"))))
                     {
                         emit(
                             "SELU0604",
@@ -356,9 +447,8 @@ pub fn check(
                         );
                     }
                     if let ExprKind::Member { object, .. } = &callee.kind
-                        && !o.owned(object, 0)
-                        && !n.starts_with("C_Timer.")
-                        && !SAFE_REGISTRIES.contains(&n.as_str())
+                        && foreign(object, o, types)
+                        && !safe_registry(callee, types)
                         && args.iter().any(|a| {
                             matches!(
                                 types.get(a.id).map(crate::shape_of),
@@ -374,10 +464,10 @@ pub fn check(
                     }
                 }
                 ExprKind::Assign { target, value } => {
-                    let allowed_value = matches!(&value.kind, ExprKind::Call { callee, args } if callee.dotted_name().as_deref() == Some("allowTaint") && !o.counts.contains_key("allowTaint") && !o.writes.contains("allowTaint") && args.len() == 2 && matches!(&args[0].kind, ExprKind::Str(s) if !s.trim().is_empty()));
+                    let allowed_value = matches!(&value.kind, ExprKind::Call { callee, args } if callee.dotted_name().as_deref() == Some("allowTaint") && types.is_builtin_call(callee.id) && args.len() == 2 && matches!(&args[0].kind, ExprKind::Str(s) if !s.trim().is_empty()));
                     if let ExprKind::Member { object, .. } | ExprKind::Index { object, .. } =
                         &target.kind
-                        && !o.owned(object, 0)
+                        && foreign(object, o, types)
                         && !allowed_value
                         && (matches!(value.kind, ExprKind::Function { .. })
                             || matches!(
@@ -406,12 +496,146 @@ pub fn check(
 mod tests {
     use super::*;
     fn lint(src: &str, strict: bool, deny: &[(String, String)]) -> Vec<Diagnostic> {
-        check(
-            &selu_syntax::parse("taint.selu", src).unwrap(),
-            &TypeTable::default(),
-            strict,
-            deny,
+        let program = selu_syntax::parse("taint.selu", src).unwrap();
+        let mut types = TypeTable::default();
+        fn annotate(c: Child<'_>, types: &mut TypeTable) {
+            if let Child::Expr(e) = &c {
+                if matches!(&e.kind, ExprKind::Ident(n) if matches!(n.as_str(), "foreign"|"UIParent"|"frame"|"f"))
+                {
+                    types.set(e.id, Type::Widget("Frame".into(), vec![]));
+                }
+                if let ExprKind::Call { callee, .. } = &e.kind
+                    && matches!(
+                        callee.dotted_name().as_deref(),
+                        Some("hook" | "hookScript" | "allowTaint")
+                    )
+                {
+                    types.mark_builtin_call(callee.id);
+                }
+            }
+            walk(c, &mut |c| annotate(c, types));
+        }
+        for s in &program.stmts {
+            annotate(Child::Stmt(s), &mut types);
+        }
+        check(&program, &types, strict, deny)
+    }
+    fn checked_source(src: &str) -> Vec<Diagnostic> {
+        let m = selu_manifest::load_manifest(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../manifests/fixtures/forever-1.0.0.1000.json"),
         )
+        .unwrap();
+        crate::check(&selu_syntax::parse("regression.selu", src).unwrap(), &m)
+    }
+    #[test]
+    fn selu_constructor_callback_fields_are_not_foreign() {
+        let ds = checked_source(
+            r#"class Hud {
+            clock: () => number; text: () => string;
+            constructor(clock: () => number, text: () => string) { this.clock = clock; this.text = text; }
+        }"#,
+        );
+        assert!(ds.is_empty(), "{ds:?}");
+    }
+    #[test]
+    fn selu_interface_callbacks_are_not_foreign() {
+        let ds = checked_source(
+            r#"interface Scheduler { after: (seconds: number, callback: () => void) => void; }
+        class Hud { scheduler: Scheduler;
+            constructor(scheduler: Scheduler) { this.scheduler = scheduler; }
+            run() { this.scheduler.after(0, () => {}); }
+        }"#,
+        );
+        assert!(ds.is_empty(), "{ds:?}");
+    }
+    #[test]
+    fn selu_array_sort_callback_is_not_foreign() {
+        let ds = checked_source("function rank(files: number[]) { files.sort((a, b) => b - a); }");
+        assert!(ds.is_empty(), "{ds:?}");
+    }
+    #[test]
+    fn shadowed_hook_names_are_not_builtins() {
+        let ds = checked_source(
+            r#"function run(hook: ((state: number) => boolean)?) { return hook != null ? hook(1) : false; }
+            { const hookScript = (state: number) => state; hookScript(1); }
+            hook("GetTime", () => {});
+            { const hook = (value: number) => value; hook(1); }
+        "#,
+        );
+        assert_eq!(ds.len(), 1, "{ds:?}");
+        assert_eq!(ds[0].code, "SELU0604");
+    }
+    #[test]
+    fn manifest_tables_and_namespaces_remain_foreign() {
+        let mut m = selu_manifest::load_manifest(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../manifests/fixtures/forever-1.0.0.1000.json"),
+        )
+        .unwrap();
+        m.tables.push(
+            serde_json::from_value(
+                serde_json::json!({"name":"TaintFixtureCallback","type":"CallbackType"}),
+            )
+            .unwrap(),
+        );
+        let callback = serde_json::json!({"name":"callback","type":"TaintFixtureCallback"});
+        m.tables.push(serde_json::from_value(serde_json::json!({"name":"TaintFixtureTable", "type":"Structure", "fields":[{"name":"install","type":"Function","arguments":[callback.clone()]}]})).unwrap());
+        m.globals.push(serde_json::from_value(serde_json::json!({"name":"TaintFixtureGlobal", "type":"TaintFixtureTable", "evidence":"verified"})).unwrap());
+        for name in ["C_TaintFixture.Install", "C_Timer.After"] {
+            m.functions.push(serde_json::from_value(serde_json::json!({"name":name,"params":["callback"],"evidence":"verified","signature":{"name":name,"arguments":[callback.clone()]}})).unwrap());
+        }
+        m.functions.push(serde_json::from_value(serde_json::json!({"name":"TaintFixtureGetTable","params":[],"evidence":"verified","signature":{"name":"TaintFixtureGetTable","returns":[{"name":"result","type":"TaintFixtureTable"}]}})).unwrap());
+        let src = r#"TaintFixtureGlobal.install(() => {}); const t = TaintFixtureGetTable(); t.install(() => {}); C_TaintFixture.Install(() => {}); C_Timer.After(() => {});"#;
+        let p = selu_syntax::parse("manifest-taint.selu", src).unwrap();
+        let ds = crate::check(&p, &m);
+        assert_eq!(ds.len(), 3, "{ds:?}");
+        assert!(ds.iter().all(|d| d.code == "SELU0605"), "{ds:?}");
+    }
+    #[test]
+    fn ownership_uses_binding_and_class_identities() {
+        let m = selu_manifest::store::load_build(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+            "wow@12.1.5.70391",
+        )
+        .unwrap();
+        let src = r#"
+            function unrelated(frame: Frame) { frame.GetName(); }
+            class Owned {
+                frame: Frame;
+                constructor() { const frame = CreateFrame("Frame"); this.frame = frame; frame.SetScript("OnShow", () => {}); }
+                install() { this.frame.SetScript("OnHide", () => {}); }
+            }
+            class Foreign {
+                frame: Frame;
+                constructor() { this.frame = UIParent; }
+                install() { this.frame.SetScript("OnShow", () => {}); }
+            }
+        "#;
+        let p = selu_syntax::parse("identity.selu", src).unwrap();
+        let ds = crate::check(&p, &m);
+        assert_eq!(ds.len(), 1, "{ds:?}");
+        assert_eq!(ds[0].code, "SELU0605");
+        assert!(src[ds[0].span.as_ref().unwrap().start..].starts_with("this.frame.SetScript"));
+    }
+    #[test]
+    fn only_manifest_arms_of_unions_are_game_types() {
+        let widget = Type::Widget("Frame".into(), vec![]);
+        let object = Type::Object(Default::default());
+        assert!(is_game_type(&Type::Union(vec![
+            object.clone(),
+            widget.clone()
+        ])));
+        for t in [
+            object,
+            Type::Array(Box::new(widget.clone())),
+            Type::Map(Box::new(Type::Number), Box::new(widget.clone())),
+            Type::Set(Box::new(widget)),
+            Type::Unknown,
+            Type::Untyped,
+        ] {
+            assert!(!is_game_type(&t), "{t:?}");
+        }
     }
     #[test]
     fn foreign_and_owned_hooks() {

@@ -939,9 +939,51 @@ pub struct TypeTable {
     frame_families: std::collections::HashSet<ExprId>,
     method_calls: std::collections::HashSet<ExprId>,
     single_values: std::collections::HashSet<ExprId>,
+    game_types: std::collections::HashSet<ExprId>,
+    api_receivers: std::collections::HashSet<ExprId>,
+    builtin_calls: std::collections::HashSet<ExprId>,
+    pub(crate) origin_paths: HashMap<ExprId, crate::access_paths::AccessPath>,
+    pub(crate) origin_initializers: HashMap<crate::access_paths::AccessPath, selu_syntax::Expr>,
 }
 
 impl TypeTable {
+    pub(crate) fn origin_path(
+        &self,
+        e: &selu_syntax::Expr,
+    ) -> Option<crate::access_paths::AccessPath> {
+        use crate::access_paths::{AccessPath, Root, Step};
+        if let selu_syntax::ExprKind::Member { object, name } = &e.kind {
+            match self.get(object.id) {
+                Some(Type::Class(key, _, _)) => {
+                    return Some(AccessPath {
+                        root: Root::Receiver(key.clone(), false),
+                        steps: vec![Step::Field(name.clone())],
+                    });
+                }
+                Some(Type::ClassObject(key)) => {
+                    return Some(AccessPath {
+                        root: Root::Receiver(key.clone(), true),
+                        steps: vec![Step::Field(name.clone())],
+                    });
+                }
+                _ => {}
+            }
+        }
+        self.origin_paths.get(&e.id).cloned()
+    }
+    pub(crate) fn mark_builtin_call(&mut self, id: ExprId) {
+        self.builtin_calls.insert(id);
+    }
+    pub(crate) fn is_builtin_call(&self, id: ExprId) -> bool {
+        self.builtin_calls.contains(&id)
+    }
+    pub(crate) fn mark_api_receiver(&mut self, id: ExprId) {
+        self.api_receivers.insert(id);
+    }
+    pub(crate) fn is_game_receiver(&self, id: ExprId) -> bool {
+        self.game_types.contains(&id) || self.api_receivers.contains(&id)
+    }
+
     pub fn mark_frame_family(&mut self, id: ExprId) {
         self.frame_families.insert(id);
     }
@@ -964,6 +1006,11 @@ impl TypeTable {
     }
 
     pub fn set(&mut self, id: ExprId, t: Type) {
+        if crate::taint::is_game_type(&t) {
+            self.game_types.insert(id);
+        } else {
+            self.game_types.remove(&id);
+        }
         self.types
             .insert(id, std::sync::Arc::new(crate::aliases::shape_of(&t)));
     }

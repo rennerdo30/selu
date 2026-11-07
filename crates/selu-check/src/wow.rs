@@ -78,6 +78,7 @@ impl Ctx<'_> {
         }
         let n = self.wow_name(callee)?;
         if n == "allowTaint" {
+            self.types.mark_builtin_call(callee.id);
             if args.len() != 2 {
                 self.out.push(err(
                     "SELU0607",
@@ -132,6 +133,7 @@ impl Ctx<'_> {
         if !matches!(n.as_str(), "command" | "hook" | "hookScript") {
             return None;
         }
+        self.types.mark_builtin_call(callee.id);
         let count_ok = if n == "command" {
             args.len() >= 2
         } else {

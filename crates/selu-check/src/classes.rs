@@ -443,6 +443,11 @@ impl Ctx<'_> {
                             self.fn_depth += 1;
                         }
                         let t = self.value_expected(e, want);
+                        let path = crate::access_paths::AccessPath {
+                            root: crate::access_paths::Root::Receiver(key.clone(), m.is_static),
+                            steps: vec![crate::access_paths::Step::Field(name.clone())],
+                        };
+                        self.types.origin_initializers.insert(path, *e.clone());
                         if !m.is_static {
                             self.fn_depth -= 1;
                             // Instance initializers execute at construction, not

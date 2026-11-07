@@ -167,6 +167,9 @@ impl Ctx<'_> {
         }
     }
     pub(crate) fn commit_write(&mut self, target: &Expr, prepared: &PreparedWrite, value: &Type) {
+        if let Some(path) = self.access_path(target) {
+            self.types.origin_paths.insert(target.id, path);
+        }
         self.saved_write_value(target, value, &target.span);
         if let ExprKind::Ident(name) = &target.kind {
             self.write(name, &target.span, value);
