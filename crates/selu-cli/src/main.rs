@@ -76,6 +76,9 @@ enum Command {
         /// Blizzard's UI from the installed client: core (default), full or none.
         #[arg(long, value_enum, default_value = "core")]
         ui: TestUiArg,
+        /// Test files run at once, each in its own session (default: half the cores, at most 4).
+        #[arg(long, short = 'j')]
+        jobs: Option<usize>,
     },
     /// Build, then start Selu Studio, the virtual WoW simulator (window not implemented yet).
     Debug {
@@ -166,8 +169,10 @@ fn main() -> ExitCode {
             strict,
             json,
             ui,
+            jobs,
         } => test(
             *ui,
+            jobs.unwrap_or(0),
             client_install.clone(),
             *no_client_assets,
             path.as_deref().unwrap_or(Path::new(".")),
@@ -359,6 +364,7 @@ enum TestUiArg {
 #[allow(clippy::too_many_arguments)]
 fn test(
     ui: TestUiArg,
+    jobs: usize,
     client_install: Option<PathBuf>,
     no_client_assets: bool,
     project_dir: &Path,
@@ -380,6 +386,7 @@ fn test(
             TestUiArg::Core => selu_test::TestUi::Core,
             TestUiArg::Full => selu_test::TestUi::Full,
         },
+        jobs,
     };
     match selu_test::run(&options) {
         Ok(report) => {

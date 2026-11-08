@@ -146,16 +146,68 @@ fn overlay(m: &mut selu_manifest::Manifest) {
     }
 }
 
-/// Build the addon with the same compiler used by `selu build`, then run each file.
-pub fn run(options: &RunOptions) -> Result<Report, RunError> {
-    let trace = std::env::var_os("SELU_TEST_TIMINGS").is_some();
-    let mut phase = trace.then(std::time::Instant::now);
-    let mut timing = |label: &str| {
-        if let Some(start) = phase.as_mut() {
-            eprintln!("selu test timing {label}: {:?}", start.elapsed());
+/// Phase timings and memory for `SELU_TEST_TIMINGS`.
+struct Clock(Option<std::time::Instant>);
+impl Clock {
+    fn new() -> Self {
+        Self(
+            std::env::var_os("SELU_TEST_TIMINGS")
+                .is_some()
+                .then(std::time::Instant::now),
+        )
+    }
+    fn mark(&mut self, label: &str) {
+        if let Some(start) = self.0.as_mut() {
+            let memory = private_mb()
+                .map(|mb| format!(" ({mb} MB private)"))
+                .unwrap_or_default();
+            eprintln!("selu test timing {label}: {:?}{memory}", start.elapsed());
             *start = std::time::Instant::now();
         }
+    }
+}
+
+/// How many test files run at once. Each file has its own session, and a
+/// session with Blizzard's UI holds about 2 GB, so the default stays small.
+fn worker_count(requested: usize, files: usize) -> usize {
+    let wanted = if requested > 0 {
+        requested
+    } else {
+        std::thread::available_parallelism()
+            .map(|n| n.get() / 2)
+            .unwrap_or(1)
+            .clamp(1, 4)
     };
+    wanted.clamp(1, files.max(1))
+}
+
+/// One compiled test file, ready for a session on any worker.
+struct Job {
+    index: usize,
+    file: String,
+    chunk: String,
+    lua: String,
+    maps: Vec<selu_sourcemap::SourceMap>,
+}
+
+/// What every file's session shares, read-only.
+#[derive(Clone, Copy)]
+struct Shared<'a> {
+    options: &'a RunOptions,
+    manifest: &'a selu_manifest::Manifest,
+    addon: &'a std::path::Path,
+    name: &'a str,
+    sources: &'a [String],
+    blizzard_ui: &'a Option<crate::client_assets::UiSource>,
+}
+
+type FileResult = Result<Vec<TestResult>, RunError>;
+
+/// Build the addon with the same compiler used by `selu build`, then run each
+/// file in its own session. Files run on a few worker threads at once; the
+/// report keeps file order.
+pub fn run(options: &RunOptions) -> Result<Report, RunError> {
+    let mut clock = Clock::new();
     let files = discover(&options.project_dir).map_err(|e| RunError::Io(e.to_string()))?;
     if files.is_empty() {
         return Err(RunError::NoTests);
@@ -209,26 +261,49 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
     let manifest = selu_manifest::resolution::compiled_manifest(&addon)
         .map_err(|d| build_error(&d.message))?
         .ok_or_else(|| build_error("missing checked manifest"))?;
-    let manifest = &manifest;
     let modules = project::project_sources_roots(&options.project_dir.join("src"), &roots)
         .map_err(|_| build_error("module discovery failed"))?;
-    timing("build and discovery");
+    clock.mark("build and discovery");
+    // One prepared target for every module, as `selu build` does: preparing
+    // the manifest again for each module cost more than checking them.
+    let prepared = selu_check::PreparedTarget::new(&manifest, std::slice::from_ref(&manifest));
     let mut exports = BTreeMap::<String, selu_check::ModuleExports>::new();
     for module in &modules {
         let mut bindings = selu_check::ModuleBindings::default();
         for (from, key) in &module.dependencies {
             bindings.imports.insert(from.clone(), exports[key].clone());
         }
-        let (_, signature) = selu_check::check_module(&module.program, manifest, bindings);
+        let (_, signature) = prepared.check_module(
+            &module.program,
+            bindings,
+            selu_check::CheckOptions::default(),
+        );
         exports.insert(module.key.clone(), signature);
     }
-    timing("module signatures");
-    let mut report = Report {
-        target: Some(target.clone()),
-        results: vec![],
-    };
+    drop(prepared);
+    clock.mark("module signatures");
     let mut test_manifest = manifest.clone();
     overlay(&mut test_manifest);
+    let tests_target =
+        selu_check::PreparedTarget::new(&test_manifest, std::slice::from_ref(&test_manifest));
+    // Read once; every file's failures map through the same module maps.
+    let mut module_maps = Vec::new();
+    for module in &modules {
+        let path = options
+            .project_dir
+            .join("dist/.selu")
+            .join(name)
+            .join(format!("{}.lua.map", module.key));
+        if let Ok(text) = std::fs::read_to_string(path) {
+            module_maps.push(selu_sourcemap::SourceMap::from_json(&text).map_err(build_error)?);
+        }
+    }
+    let sources: Vec<String> = modules
+        .iter()
+        .map(|m| format!("{}.lua", m.key))
+        .chain(["Selu.lua".into(), "__selu_runtime.lua".into()])
+        .collect();
+    drop(modules);
     let blizzard_ui = match crate::client_assets::ui_source(options, &target) {
         Ok(found) => found,
         Err(why) => {
@@ -236,212 +311,350 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
             None
         }
     };
-    for file in files {
-        let source =
-            std::fs::read_to_string(options.project_dir.join(&file)).map_err(build_error)?;
-        let program =
-            selu_syntax::parse(&file, &source).map_err(|d| build_error(d.render(&source)))?;
-        let mut imports = selu_check::ModuleBindings::default();
-        let mut lower_imports = BTreeMap::new();
-        for stmt in &program.stmts {
-            if let selu_syntax::StmtKind::Import { from, .. } = &stmt.kind {
-                let key = project::import_key(file.trim_end_matches(".selu"), from)
-                    .and_then(|s| s.strip_prefix("src/").map(String::from))
-                    .ok_or_else(|| {
-                        build_error("SELU0621: tests must import project modules under src/")
-                    })?;
-                let signature = exports
-                    .get(&key)
-                    .ok_or_else(|| {
-                        build_error(format!("SELU0621: module {key} is not in the addon build"))
-                    })?
-                    .clone();
-                imports.imports.insert(from.clone(), signature.clone());
-                lower_imports.insert(from.clone(), (key, signature));
+    clock.mark("test setup");
+    let shared = Shared {
+        options,
+        manifest: &manifest,
+        addon: &addon,
+        name,
+        sources: &sources,
+        blizzard_ui: &blizzard_ui,
+    };
+    let total = files.len();
+    let workers = worker_count(options.jobs, total);
+    let (job_tx, job_rx) = std::sync::mpsc::channel::<Job>();
+    let job_rx = std::sync::Mutex::new(job_rx);
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<(usize, FileResult)>();
+    let compiled = std::thread::scope(|scope| -> Result<(), RunError> {
+        for worker in 0..workers {
+            let done = done_tx.clone();
+            let jobs = &job_rx;
+            std::thread::Builder::new()
+                .name(format!("selu-test-{worker}"))
+                // Blizzard's UI nests deep Lua and native calls.
+                .stack_size(16 * 1024 * 1024)
+                .spawn_scoped(scope, move || {
+                    loop {
+                        let next = jobs.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                        let Ok(job) = next else { break };
+                        let index = job.index;
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            run_file(shared, job)
+                        }))
+                        .unwrap_or_else(|panic| {
+                            let why = panic
+                                .downcast_ref::<String>()
+                                .cloned()
+                                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                                .unwrap_or_else(|| "unknown panic".into());
+                            Err(build_error(format!("test session panicked: {why}")))
+                        });
+                        if done.send((index, result)).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .map_err(|e| RunError::Io(e.to_string()))?;
+        }
+        // Compile here while the workers run earlier files. A compile error
+        // stops handing out files; files already handed out finish.
+        let mut compiled = Ok(());
+        for (index, file) in files.iter().enumerate() {
+            match compile_file(options, &tests_target, &exports, name, &module_maps, index, file) {
+                Ok(job) => {
+                    if job_tx.send(job).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    compiled = Err(e);
+                    break;
+                }
             }
         }
-        let (checked, _) = selu_check::check_module_with_options(
-            &program,
-            &test_manifest,
-            imports,
-            selu_check::CheckOptions { strict_api: true },
-        );
-        if checked.has_errors() {
-            return Err(build_error(
-                checked
-                    .diagnostics
-                    .iter()
-                    .map(|d| d.render(&source))
-                    .collect::<String>(),
-            ));
+        drop(job_tx);
+        compiled
+    });
+    drop(done_tx);
+    let mut finished: Vec<Option<FileResult>> = (0..total).map(|_| None).collect();
+    for (index, result) in done_rx {
+        finished[index] = Some(result);
+    }
+    compiled?;
+    let mut report = Report {
+        target: Some(target.clone()),
+        results: vec![],
+    };
+    for result in finished.into_iter().flatten() {
+        report.results.extend(result?);
+    }
+    clock.mark("test files");
+    Ok(report)
+}
+
+fn compile_file(
+    options: &RunOptions,
+    tests_target: &selu_check::PreparedTarget,
+    exports: &BTreeMap<String, selu_check::ModuleExports>,
+    name: &str,
+    module_maps: &[selu_sourcemap::SourceMap],
+    index: usize,
+    file: &str,
+) -> Result<Job, RunError> {
+    let source = std::fs::read_to_string(options.project_dir.join(file)).map_err(build_error)?;
+    let program = selu_syntax::parse(file, &source).map_err(|d| build_error(d.render(&source)))?;
+    let mut imports = selu_check::ModuleBindings::default();
+    let mut lower_imports = BTreeMap::new();
+    for stmt in &program.stmts {
+        if let selu_syntax::StmtKind::Import { from, .. } = &stmt.kind {
+            let key = project::import_key(file.trim_end_matches(".selu"), from)
+                .and_then(|s| s.strip_prefix("src/").map(String::from))
+                .ok_or_else(|| {
+                    build_error("SELU0621: tests must import project modules under src/")
+                })?;
+            let signature = exports
+                .get(&key)
+                .ok_or_else(|| {
+                    build_error(format!("SELU0621: module {key} is not in the addon build"))
+                })?
+                .clone();
+            imports.imports.insert(from.clone(), signature.clone());
+            lower_imports.insert(from.clone(), (key, signature));
         }
-        let mut bindings = selu_lower::ModuleBindings::new(file.clone(), lower_imports, &program);
-        bindings.addon_name = name.into();
-        let lowered = selu_lower::lower_module(&program, &test_manifest, &checked.types, bindings);
-        let chunk = format!("{file}.lua");
-        let mut maps = vec![lowered.source_map(&chunk, &file, &source)];
-        for module in &modules {
-            let path = options
-                .project_dir
-                .join("dist/.selu")
-                .join(name)
-                .join(format!("{}.lua.map", module.key));
-            if let Ok(text) = std::fs::read_to_string(path) {
-                maps.push(selu_sourcemap::SourceMap::from_json(&text).map_err(build_error)?);
-            }
-        }
-        timing("test compile");
-        let session = Rc::new(RefCell::new(
-            Session::new(SessionConfig {
-                client_install: crate::client_assets::resolve(options, &manifest.target_string()),
-                target: Some(manifest.target_string()),
-                manifest: Some(manifest.clone()),
-                ..Default::default()
-            })
-            .map_err(build_error)?,
+    }
+    let (checked, _) = tests_target.check_module(
+        &program,
+        imports,
+        selu_check::CheckOptions { strict_api: true },
+    );
+    if checked.has_errors() {
+        return Err(build_error(
+            checked
+                .diagnostics
+                .iter()
+                .map(|d| d.render(&source))
+                .collect::<String>(),
         ));
-        let fixture = options
-            .project_dir
-            .join(&file)
-            .with_extension("scenario.json");
-        let scenario = crate::scenario::load(&fixture)?;
-        if let Some(character) = &scenario.data.character {
-            session
-                .borrow_mut()
-                .switch_character(character.clone())
-                .map_err(|e| scenario.error(e, &["character".into()]))?;
-        }
+    }
+    let mut bindings = selu_lower::ModuleBindings::new(file.to_string(), lower_imports, &program);
+    bindings.addon_name = name.into();
+    let lowered =
+        selu_lower::lower_module(&program, tests_target.manifest(), &checked.types, bindings);
+    let chunk = format!("{file}.lua");
+    let mut maps = vec![lowered.source_map(&chunk, file, &source)];
+    maps.extend(module_maps.iter().cloned());
+    Ok(Job {
+        index,
+        file: file.to_string(),
+        chunk,
+        lua: lowered.lua,
+        maps,
+    })
+}
+
+/// Runs one compiled test file in a fresh session on the current thread.
+fn run_file(shared: Shared, job: Job) -> FileResult {
+    let Shared {
+        options,
+        manifest,
+        addon,
+        name,
+        sources,
+        blizzard_ui,
+    } = shared;
+    let Job {
+        file,
+        chunk,
+        lua: lowered_lua,
+        maps,
+        ..
+    } = job;
+    let mut clock = Clock::new();
+    let mut results = Vec::new();
+    let session = Rc::new(RefCell::new(
+        Session::new(SessionConfig {
+            client_install: crate::client_assets::resolve(options, &manifest.target_string()),
+            target: Some(manifest.target_string()),
+            manifest: Some(manifest.clone()),
+            ..Default::default()
+        })
+        .map_err(build_error)?,
+    ));
+    let fixture = options
+        .project_dir
+        .join(&file)
+        .with_extension("scenario.json");
+    let scenario = crate::scenario::load(&fixture)?;
+    if let Some(character) = &scenario.data.character {
         session
             .borrow_mut()
-            .seed_saved(&addon, &scenario.data.saved)
-            .map_err(|e| {
-                let mut key = vec!["saved".into()];
-                if let Some(cause) = e.downcast_ref::<selu_sim::session::SavedFixtureError>() {
-                    key.push(cause.global.clone());
-                }
-                scenario.error(e, &key)
-            })?;
-        if let Some((source, roots)) = &blizzard_ui {
-            // Blizzard's own startup errors are the client's, not the test's:
-            // they stay in the session log, as in Studio.
-            if let Err(e) = session
-                .borrow_mut()
-                .load_blizzard_ui(source, roots.as_deref(), |_| {})
-            {
-                report.results.push(failure(
-                    &file,
-                    vec!["setup".into()],
-                    mlua::Error::runtime(format!("Blizzard UI did not load: {e}")),
-                    &maps,
-                    &session,
-                ));
-                continue;
+            .switch_character(character.clone())
+            .map_err(|e| scenario.error(e, &["character".into()]))?;
+    }
+    session
+        .borrow_mut()
+        .seed_saved(addon, &scenario.data.saved)
+        .map_err(|e| {
+            let mut key = vec!["saved".into()];
+            if let Some(cause) = e.downcast_ref::<selu_sim::session::SavedFixtureError>() {
+                key.push(cause.global.clone());
             }
-            timing("Blizzard UI");
-        }
-        let loaded = { session.borrow_mut().load_addon_dir(&addon) };
-        let setup = loaded.and_then(|_| session.borrow_mut().login());
-        let setup_failures = session.borrow().sim().ctx().runtime_failures();
-        if let Err(error) = setup.and_then(|_| failures_result(setup_failures)) {
-            report
-                .results
-                .push(failure(&file, vec!["setup".into()], error, &maps, &session));
-            continue;
-        }
-        timing("session and addon load");
-        let lua = session.borrow().sim().lua().clone();
-        let test_ctx = session.borrow().sim().ctx().clone();
-        let registrations = Rc::new(RefCell::new(Registrations::default()));
-        registrations.borrow_mut().sources = modules
-            .iter()
-            .map(|m| format!("{}.lua", m.key))
-            .chain(["Selu.lua".into(), "__selu_runtime.lua".into()])
-            .collect();
-        let _bridge = BridgeLifetime(lua.clone(), registrations.clone());
-        install(&lua, session.clone(), registrations.clone()).map_err(build_error)?;
-        let namespace = session
-            .borrow()
-            .sim()
-            .addon_namespace(name)
-            .map_err(build_error)?;
-        let load = selu_sim::core::dispatch(&lua, &test_ctx, || {
-            lua.load(&lowered.lua)
-                .set_name(&chunk)
-                .call::<()>((name, namespace))
-        });
-        let mut registration_failures = registrations.borrow().failures.clone();
-        registration_failures.extend(test_ctx.runtime_failures());
-        registration_failures.extend(session.borrow().sim().ctx().runtime_failures());
-        let load = load.and_then(|_| failures_result(registration_failures));
-        if let Err(e) = load {
-            report.results.push(failure(
+            scenario.error(e, &key)
+        })?;
+    clock.mark(&format!("{file} session"));
+    if let Some((source, roots)) = blizzard_ui {
+        // Blizzard's own startup errors are the client's, not the test's:
+        // they stay in the session log, as in Studio.
+        if let Err(e) = session
+            .borrow_mut()
+            .load_blizzard_ui(source, roots.as_deref(), |_| {})
+        {
+            results.push(failure(
                 &file,
-                vec!["registration".into()],
-                e,
+                vec!["setup".into()],
+                mlua::Error::runtime(format!("Blizzard UI did not load: {e}")),
                 &maps,
                 &session,
             ));
+            return Ok(results);
+        }
+        clock.mark(&format!("{file} Blizzard UI"));
+    }
+    let loaded = { session.borrow_mut().load_addon_dir(addon) };
+    let setup = loaded.and_then(|_| session.borrow_mut().login());
+    let setup_failures = session.borrow().sim().ctx().runtime_failures();
+    if let Err(error) = setup.and_then(|_| failures_result(setup_failures)) {
+        results.push(failure(&file, vec!["setup".into()], error, &maps, &session));
+        return Ok(results);
+    }
+    clock.mark(&format!("{file} addon load"));
+    let lua = session.borrow().sim().lua().clone();
+    let test_ctx = session.borrow().sim().ctx().clone();
+    let registrations = Rc::new(RefCell::new(Registrations::default()));
+    registrations.borrow_mut().sources = sources.to_vec();
+    let bridge = BridgeLifetime(lua.clone(), registrations.clone());
+    install(&lua, session.clone(), registrations.clone()).map_err(build_error)?;
+    let namespace = session
+        .borrow()
+        .sim()
+        .addon_namespace(name)
+        .map_err(build_error)?;
+    let load = selu_sim::core::dispatch(&lua, &test_ctx, || {
+        lua.load(&lowered_lua)
+            .set_name(&chunk)
+            .call::<()>((name, namespace))
+    });
+    let mut registration_failures = registrations.borrow().failures.clone();
+    registration_failures.extend(test_ctx.runtime_failures());
+    registration_failures.extend(session.borrow().sim().ctx().runtime_failures());
+    let load = load.and_then(|_| failures_result(registration_failures));
+    if let Err(e) = load {
+        results.push(failure(
+            &file,
+            vec!["registration".into()],
+            e,
+            &maps,
+            &session,
+        ));
+        return Ok(results);
+    }
+    let boot_notes = gaps(&session);
+    let tests = std::mem::take(&mut registrations.borrow_mut().tests);
+    for (path, body, hooks) in tests {
+        if options
+            .filter
+            .as_ref()
+            .is_some_and(|f| !path.join(" > ").contains(f))
+        {
             continue;
         }
-        let boot_notes = gaps(&session);
-        let tests = std::mem::take(&mut registrations.borrow_mut().tests);
-        for (path, body, hooks) in tests {
-            if options
-                .filter
-                .as_ref()
-                .is_some_and(|f| !path.join(" > ").contains(f))
-            {
-                continue;
-            }
-            registrations.borrow_mut().notes.clear();
-            registrations.borrow_mut().failures.clear();
-            test_ctx.begin_observation();
-            session.borrow().sim().ctx().begin_observation();
-            // The Lua handle and Rust registrations stay alive when reload replaces Session's VM.
-            let result = selu_sim::core::dispatch(&lua, &test_ctx, || {
-                for scope in hooks {
-                    let hooks = scope.borrow().clone();
-                    for hook in hooks {
-                        hook.call::<()>(())?;
-                    }
+        registrations.borrow_mut().notes.clear();
+        registrations.borrow_mut().failures.clear();
+        test_ctx.begin_observation();
+        session.borrow().sim().ctx().begin_observation();
+        // The Lua handle and Rust registrations stay alive when reload replaces Session's VM.
+        let result = selu_sim::core::dispatch(&lua, &test_ctx, || {
+            for scope in hooks {
+                let hooks = scope.borrow().clone();
+                for hook in hooks {
+                    hook.call::<()>(())?;
                 }
-                body.call::<()>(())
-            });
-            let mut errors = registrations.borrow().failures.clone();
-            errors.extend(test_ctx.runtime_failures());
-            errors.extend(session.borrow().sim().ctx().runtime_failures());
-            let result = result.and_then(|_| failures_result(errors));
-            match result {
-                Ok(()) => report.results.push(TestResult {
-                    file: file.clone(),
-                    path,
-                    outcome: Outcome::Passed,
-                    not_simulated: gaps(&session),
-                    replay: None,
-                }),
-                Err(e) => report
-                    .results
-                    .push(failure(&file, path, e, &maps, &session)),
             }
-            let mut notes = boot_notes.clone();
-            notes.extend(registrations.borrow().notes.clone());
-            notes.extend(
-                test_ctx
-                    .logs
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .iter()
-                    .filter(|s| s.contains("not simulated"))
-                    .cloned(),
-            );
-            notes.extend(gaps(&session));
-            notes.sort();
-            notes.dedup();
-            report.results.last_mut().unwrap().not_simulated = notes;
+            body.call::<()>(())
+        });
+        let mut errors = registrations.borrow().failures.clone();
+        errors.extend(test_ctx.runtime_failures());
+        errors.extend(session.borrow().sim().ctx().runtime_failures());
+        let result = result.and_then(|_| failures_result(errors));
+        match result {
+            Ok(()) => results.push(TestResult {
+                file: file.clone(),
+                path,
+                outcome: Outcome::Passed,
+                not_simulated: gaps(&session),
+                replay: None,
+            }),
+            Err(e) => results.push(failure(&file, path, e, &maps, &session)),
         }
-        timing("test registration and execution");
+        let mut notes = boot_notes.clone();
+        notes.extend(registrations.borrow().notes.clone());
+        notes.extend(
+            test_ctx
+                .logs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter(|s| s.contains("not simulated"))
+                .cloned(),
+        );
+        notes.extend(gaps(&session));
+        notes.sort();
+        notes.dedup();
+        results.last_mut().unwrap().not_simulated = notes;
     }
-    Ok(report)
+    clock.mark(&format!("{file} tests"));
+    drop(bridge);
+    drop(lua);
+    drop(test_ctx);
+    drop(session);
+    clock.mark(&format!("{file} teardown"));
+    Ok(results)
+}
+
+/// The process's private memory, for `SELU_TEST_TIMINGS` only.
+#[cfg(windows)]
+fn private_mb() -> Option<u64> {
+    #[repr(C)]
+    #[derive(Default)]
+    struct Counters {
+        size: u32,
+        page_faults: u32,
+        peak_working_set: usize,
+        working_set: usize,
+        quota_peak_paged: usize,
+        quota_paged: usize,
+        quota_peak_nonpaged: usize,
+        quota_nonpaged: usize,
+        pagefile: usize,
+        peak_pagefile: usize,
+        private: usize,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "GetCurrentProcess"]
+        fn current_process() -> *mut std::ffi::c_void;
+        #[link_name = "K32GetProcessMemoryInfo"]
+        fn memory_info(process: *mut std::ffi::c_void, counters: *mut Counters, size: u32) -> i32;
+    }
+    let mut counters = Counters { size: std::mem::size_of::<Counters>() as u32, ..Default::default() };
+    // SAFETY: the pseudo handle needs no closing; the struct matches
+    // PROCESS_MEMORY_COUNTERS_EX and its size is passed.
+    let ok = unsafe { memory_info(current_process(), &mut counters, counters.size) };
+    (ok != 0).then_some((counters.private / (1024 * 1024)) as u64)
+}
+#[cfg(not(windows))]
+fn private_mb() -> Option<u64> {
+    None
 }
 
 type HookScope = Rc<RefCell<Vec<Function>>>;
@@ -647,12 +860,14 @@ fn install(
             // Retirement dispatch and its final flush can add failures, even on Err.
             let mut observations = observations.borrow_mut();
             observations.failures.extend(old.runtime_failures());
+            // The retired session's own Blizzard UI notes are the client's.
+            let client = old.client_notes();
             observations.notes.extend(
                 old.logs
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .iter()
-                    .filter(|s| s.contains("not simulated"))
+                    .filter(|s| s.contains("not simulated") && !client.contains(*s))
                     .cloned(),
             );
             result
@@ -683,12 +898,14 @@ fn install(
             // Retirement dispatch and its final flush can add failures, even on Err.
             let mut observations = observations.borrow_mut();
             observations.failures.extend(old.runtime_failures());
+            // The retired session's own Blizzard UI notes are the client's.
+            let client = old.client_notes();
             observations.notes.extend(
                 old.logs
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .iter()
-                    .filter(|s| s.contains("not simulated"))
+                    .filter(|s| s.contains("not simulated") && !client.contains(*s))
                     .cloned(),
             );
             result
@@ -859,6 +1076,15 @@ fn failures_result(errors: Vec<selu_sim::core::RuntimeFailure>) -> mlua::Result<
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
+    #[test]
+    fn worker_count_follows_the_request_and_never_exceeds_the_files() {
+        assert_eq!(worker_count(3, 10), 3);
+        assert_eq!(worker_count(8, 2), 2);
+        assert_eq!(worker_count(1, 0), 1);
+        let auto = worker_count(0, 100);
+        assert!((1..=4).contains(&auto));
+    }
+
     #[test]
     fn bridge_releases_the_session_and_spy_vm() {
         let session = Rc::new(RefCell::new(

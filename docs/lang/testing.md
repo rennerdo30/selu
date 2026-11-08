@@ -1,10 +1,17 @@
 # Testing addons
 
-Run `selu test [project] [--target flavour@version] [--filter text] [--ui core|full|none] [--json]`.
+Run `selu test [project] [--target flavour@version] [--filter text] [--ui core|full|none] [--jobs n] [--json]`.
 The default target is the first configured target. The runner discovers sorted
 `*.test.selu` files under `src/` and `tests/`. It builds the project with the same
 compiler as `selu build`, including project modules imported by tests, then loads
 the generated addon through its TOC. Test files are not shipped in the addon.
+
+Each test file runs in its own fresh session. `--jobs n` (`-j n`) runs that
+many files at once on worker threads; the default is half the cores, at most
+4. A session with Blizzard's Core UI holds about 1 to 2 GB, so more jobs need
+that much more memory. The report keeps file order whatever the job count,
+and `--jobs 1` runs one file after another. `SELU_TEST_TIMINGS=1` prints each
+phase's time and the process's private memory to stderr.
 
 ```selu
 import { total } from "../src/prices";
@@ -32,7 +39,7 @@ Without an installed client (for example on CI) the run prints
 `running without Blizzard's UI: <reason>` and continues. Tests that use
 Blizzard frames (such as `Minimap`) then fail honestly instead of passing
 against a stand-in. Use `--ui none` for tests that never touch Blizzard's
-UI; it is also faster, because Core takes a few seconds to start per file.
+UI; it is also faster, because Core takes about 3 seconds to start per file.
 
 "not simulated" notes are filed by who reached the gap. Notes from
 Blizzard's own startup, or reached only by Blizzard's secure code afterwards,

@@ -143,6 +143,9 @@ pub struct RunOptions {
     pub filter: Option<String>,
     /// Blizzard's UI loaded from the user's client before the addon.
     pub ui: TestUi,
+    /// Test files run at once, each in its own session; 0 picks a small
+    /// default (half the cores, at most 4).
+    pub jobs: usize,
 }
 
 /// Which of Blizzard's own UI a test session runs, read from the user's
@@ -206,6 +209,7 @@ mod tests {
             target: None,
             filter: None,
             ui: TestUi::None,
+            jobs: 1,
         })
         .unwrap_err();
         let _ = std::fs::remove_dir_all(&root);
