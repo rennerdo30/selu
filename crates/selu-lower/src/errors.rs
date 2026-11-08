@@ -653,7 +653,7 @@ pub(crate) const ON_ERROR_RUNTIME: &str = r#"local function __selu_on_error(call
     state.handle.ensureInstalled()
     return state.handle
   end
-  state = { callback = callback, busy = false, original = geterrorhandler(), failures = 0 }
+  state = { callback = callback, busy = false, original = geterrorhandler(), failures = 0, forward = true }
   local function downstream(fn, ...)
     local ok, result = __selu_pcall(fn, ...)
     if not ok then
@@ -668,7 +668,10 @@ pub(crate) const ON_ERROR_RUNTIME: &str = r#"local function __selu_on_error(call
     return downstream(state.original, unpack(state.arguments, 1, state.arguments.n))
   end
   local function handler(...)
-    if state.busy then return original() end
+    if state.busy then
+      if not state.forward then return nil end
+      return original()
+    end
     state.busy = true
     state.originalForwarded = false
     state.arguments = { n = select('#', ...), ... }
@@ -699,7 +702,8 @@ pub(crate) const ON_ERROR_RUNTIME: &str = r#"local function __selu_on_error(call
     __selu_pcall(state.callback, normalized)
     __selu_errors.depth = depth
     local result
-    if state.previous == state.original then result = original()
+    if not state.forward then result = nil
+    elseif state.previous == state.original then result = original()
     else result = downstream(state.previous, ...) end
     state.arguments = nil
     state.busy = false
@@ -708,6 +712,7 @@ pub(crate) const ON_ERROR_RUNTIME: &str = r#"local function __selu_on_error(call
   state.handle = {
     isInstalled = function() return geterrorhandler() == handler end,
     downstreamFailureCount = function() return state.failures end,
+    setForwarding = function(enabled) state.forward = enabled == true end,
     ensureInstalled = function()
       local current = geterrorhandler()
       if current ~= handler then

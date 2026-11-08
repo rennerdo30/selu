@@ -141,6 +141,20 @@ pub struct RunOptions {
     pub target: Option<String>,
     /// Only tests whose joined path contains this text.
     pub filter: Option<String>,
+    /// Blizzard's UI loaded from the user's client before the addon.
+    pub ui: TestUi,
+}
+
+/// Which of Blizzard's own UI a test session runs, read from the user's
+/// installed client (never shipped). `Core` is the lean real subset Studio
+/// uses by default; without an installed client the run says so and goes on
+/// without Blizzard's UI.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TestUi {
+    None,
+    #[default]
+    Core,
+    Full,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -191,6 +205,7 @@ mod tests {
             project_dir: root.clone(),
             target: None,
             filter: None,
+            ui: TestUi::None,
         })
         .unwrap_err();
         let _ = std::fs::remove_dir_all(&root);

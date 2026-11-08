@@ -172,6 +172,25 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    // Whether a timer or OnUpdate callback counts for `sim.callbackCounts`:
+    // once an addon is loaded only addon code counts, so Blizzard's own UI
+    // does not hide what the addon under test schedules.
+    let taint = ctx.taint.clone();
+    globals.raw_set(
+        "__selu_counts_callback",
+        lua.create_function(move |_, f: Value| {
+            let t = taint.borrow();
+            let Value::Function(f) = f else {
+                return Ok(!t.tracking());
+            };
+            if !t.tracking() {
+                return Ok(true);
+            }
+            Ok(f.info()
+                .source
+                .is_some_and(|source| t.owner_of_source(source_name(&source)).is_some()))
+        })?,
+    )?;
     let context = ctx.clone();
     globals.raw_set(
         "issecurevalue",

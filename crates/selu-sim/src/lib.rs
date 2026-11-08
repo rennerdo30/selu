@@ -15,7 +15,6 @@
 //! Endpoint comparisons allow an absolute 1 ns rounding tolerance.
 
 use mlua::Value;
-use std::collections::HashSet;
 
 // Module ownership for round 8 (docs/WORK-PACKAGES.md): `core` is S0's
 // contract; `frames` and `regions` belong to S1; `session`, `loader`,
@@ -45,6 +44,7 @@ pub mod text;
 mod timers;
 mod trace;
 mod ui_metadata;
+pub mod ui_source;
 pub mod world;
 mod wow_api;
 mod xml;
@@ -70,13 +70,6 @@ pub(crate) fn value_string(v: &Value) -> String {
         Value::Function(_) => "function".into(),
         Value::Thread(_) => "thread".into(),
         _ => "userdata".into(),
-    }
-}
-
-pub(crate) fn log_once(logs: &Shared<Vec<String>>, warned: &Shared<HashSet<String>>, what: &str) {
-    let mut w = warned.lock().unwrap();
-    if w.insert(what.to_string()) {
-        logs.lock().unwrap().push(format!("not simulated: {what}"));
     }
 }
 

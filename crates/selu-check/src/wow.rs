@@ -123,6 +123,19 @@ impl Ctx<'_> {
                     ("ensureInstalled".into(), handle_method(Type::Void)),
                     ("isInstalled".into(), handle_method(Type::Boolean)),
                     ("downstreamFailureCount".into(), handle_method(Type::Number)),
+                    (
+                        "setForwarding".into(),
+                        Type::Function {
+                            multiple_results: false,
+                            unspecified_callback: false,
+                            api: Default::default(),
+                            api_semantics: Default::default(),
+                            params: vec![Type::Boolean],
+                            required: 1,
+                            rest: None,
+                            ret: Box::new(Type::Void),
+                        },
+                    ),
                 ]
                 .into(),
             ));

@@ -148,7 +148,7 @@ fn overlay(m: &mut selu_manifest::Manifest) {
 
 /// Build the addon with the same compiler used by `selu build`, then run each file.
 pub fn run(options: &RunOptions) -> Result<Report, RunError> {
-    let trace = cfg!(debug_assertions) && std::env::var_os("SELU_TEST_TIMINGS").is_some();
+    let trace = std::env::var_os("SELU_TEST_TIMINGS").is_some();
     let mut phase = trace.then(std::time::Instant::now);
     let mut timing = |label: &str| {
         if let Some(start) = phase.as_mut() {
@@ -229,6 +229,13 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
     };
     let mut test_manifest = manifest.clone();
     overlay(&mut test_manifest);
+    let blizzard_ui = match crate::client_assets::ui_source(options, &target) {
+        Ok(found) => found,
+        Err(why) => {
+            eprintln!("selu test: running without Blizzard's UI: {why}");
+            None
+        }
+    };
     for file in files {
         let source =
             std::fs::read_to_string(options.project_dir.join(&file)).map_err(build_error)?;
@@ -314,6 +321,24 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
                 }
                 scenario.error(e, &key)
             })?;
+        if let Some((source, roots)) = &blizzard_ui {
+            // Blizzard's own startup errors are the client's, not the test's:
+            // they stay in the session log, as in Studio.
+            if let Err(e) = session
+                .borrow_mut()
+                .load_blizzard_ui(source, roots.as_deref(), |_| {})
+            {
+                report.results.push(failure(
+                    &file,
+                    vec!["setup".into()],
+                    mlua::Error::runtime(format!("Blizzard UI did not load: {e}")),
+                    &maps,
+                    &session,
+                ));
+                continue;
+            }
+            timing("Blizzard UI");
+        }
         let loaded = { session.borrow_mut().load_addon_dir(&addon) };
         let setup = loaded.and_then(|_| session.borrow_mut().login());
         let setup_failures = session.borrow().sim().ctx().runtime_failures();
@@ -457,11 +482,18 @@ impl Drop for BridgeLifetime {
         let _ = self.0.gc_collect();
     }
 }
+/// Simulator gaps the test reached. Notes logged while Blizzard's own UI
+/// loaded, or reached only by Blizzard's secure code afterwards, are the
+/// client's, not the addon's under test (Studio still shows them).
 fn gaps(s: &Rc<RefCell<Session>>) -> Vec<String> {
-    s.borrow()
+    let session = s.borrow();
+    let skip = session.default_ui_log_end();
+    let client = session.sim().ctx().client_notes();
+    session
         .logs()
         .into_iter()
-        .filter(|s| s.contains("not simulated"))
+        .skip(skip)
+        .filter(|s| s.contains("not simulated") && !client.contains(s))
         .collect()
 }
 fn failure(
@@ -854,6 +886,37 @@ mod ownership_tests {
 }
 
 #[cfg(test)]
+mod guard_tests {
+    use super::*;
+    #[test]
+    fn guards_native_apis_only_and_survives_a_large_global_table() {
+        let session = Rc::new(RefCell::new(
+            Session::new(SessionConfig::default()).unwrap(),
+        ));
+        let lua = session.borrow().sim().lua().clone();
+        // More globals than mlua has reference slots (about 8000), as with
+        // Blizzard's UI loaded, plus one Blizzard-style Lua function.
+        lua.load(
+            "for i = 1, 9000 do rawset(_G, 'SeluFixtureGlobal' .. i, {}) end
+             function SeluFixtureLua() end
+             SeluFixtureLuaRef = SeluFixtureLua
+             SeluFixtureNativeRef = GetTime",
+        )
+        .exec()
+        .unwrap();
+        let registrations = Rc::new(RefCell::new(Registrations::default()));
+        let _bridge = BridgeLifetime(lua.clone(), registrations.clone());
+        install(&lua, session, registrations).unwrap();
+        lua.load(
+            "assert(SeluFixtureLua == SeluFixtureLuaRef, 'Lua functions keep their identity')
+             assert(GetTime ~= SeluFixtureNativeRef, 'native APIs are guarded')",
+        )
+        .exec()
+        .unwrap();
+    }
+}
+
+#[cfg(test)]
 mod hook_order_tests {
     use super::*;
     #[test]
@@ -890,34 +953,51 @@ fn guard_game_apis(lua: &Lua, stale: Rc<std::cell::Cell<bool>>) -> mlua::Result<
             lua.registry_value::<Function>(&f)?.call::<mlua::MultiValue>(args)
         })?)
     }
+    // Only the client's native API is guarded. Blizzard's own Lua functions
+    // keep their identity: wrapping them would change what hooks and secure
+    // calls see. Names are collected first, without their values: with
+    // Blizzard's UI loaded there are more globals than mlua has reference
+    // slots.
+    fn native(v: &Value) -> bool {
+        matches!(v, Value::Function(f) if f.info().what == "C")
+    }
     let standard = Lua::new();
     let globals = lua.globals();
-    let entries = globals
-        .clone()
-        .pairs::<String, Value>()
-        .collect::<mlua::Result<Vec<_>>>()?;
-    for (name, v) in entries {
+    let mut functions = Vec::new();
+    let mut namespaces = Vec::new();
+    for pair in globals.clone().pairs::<Value, Value>() {
+        let (name, v) = pair?;
+        let Value::String(name) = name else { continue };
+        let name = name.to_str()?.to_string();
         if name.starts_with("__")
             || ["test", "describe", "beforeEach", "expect"].contains(&name.as_str())
         {
             continue;
         }
-        if matches!(v, Value::Function(_))
-            && (name == "print" || standard.globals().get::<Value>(name.clone())?.is_nil())
-        {
+        if native(&v) || (name == "print" && matches!(v, Value::Function(_))) {
+            functions.push(name);
+        } else if name.starts_with("C_") && matches!(v, Value::Table(_)) {
+            namespaces.push(name);
+        }
+    }
+    for name in functions {
+        if name == "print" || standard.globals().get::<Value>(name.as_str())?.is_nil() {
             wrap(lua, &globals, name, stale.clone())?;
-        } else if name.starts_with("C_")
-            && let Value::Table(t) = v
-        {
-            let methods = t
-                .clone()
-                .pairs::<String, Value>()
-                .collect::<mlua::Result<Vec<_>>>()?;
-            for (key, v) in methods {
-                if matches!(v, Value::Function(_)) {
-                    wrap(lua, &t, key, stale.clone())?;
-                }
+        }
+    }
+    for name in namespaces {
+        let t: mlua::Table = globals.get(name.as_str())?;
+        let mut methods = Vec::new();
+        for pair in t.clone().pairs::<Value, Value>() {
+            let (key, v) = pair?;
+            if let Value::String(key) = key
+                && native(&v)
+            {
+                methods.push(key.to_str()?.to_string());
             }
+        }
+        for key in methods {
+            wrap(lua, &t, key, stale.clone())?;
         }
     }
     Ok(())

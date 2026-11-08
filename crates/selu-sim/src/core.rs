@@ -415,6 +415,11 @@ pub struct Ctx {
     pub(crate) depth: Shared<u32>,
     /// Execution taint: which addon's code the current call has run.
     pub taint: crate::taint::SharedTaint,
+    /// "not simulated" lines reached only by Blizzard's own secure code
+    /// (never by an addon's): the client's gaps, not the addon's.
+    pub(crate) client_notes: Shared<HashSet<String>>,
+    /// The deferred queue is being drained further up the stack.
+    pub(crate) draining: Shared<bool>,
 }
 
 impl Ctx {
@@ -442,6 +447,8 @@ impl Ctx {
             tolerant_ui: shared(false),
             depth: shared(0),
             taint: Default::default(),
+            client_notes: shared(HashSet::new()),
+            draining: shared(false),
         }
     }
 
@@ -471,11 +478,70 @@ impl Ctx {
     }
 
     /// Log `not simulated: what` the first time only (SPEC 8).
+    /// Log a simulator gap once per origin. A gap reached while Blizzard's
+    /// secure code runs (inside a host call, no addon taint) is the client's;
+    /// one reached by an addon's code, or outside Lua, is the addon's. A gap
+    /// the client already reported is logged again only when addon code
+    /// reaches it, so an addon still sees its own.
     pub fn not_simulated(&self, what: &str) {
-        if lock(&self.warned).insert(what.to_string()) {
-            self.log(format!("not simulated: {what}"));
-            self.record(TraceKind::NotSimulated, what, Vec::new());
+        let (client, addon_code) = self.taint.try_borrow().map_or((false, false), |t| {
+            (
+                t.tracking() && t.lua_depth > 0 && t.current.is_none(),
+                t.current.is_some(),
+            )
+        });
+        let key = if client {
+            format!("[client] {what}")
+        } else {
+            what.to_string()
+        };
+        let mut warned = lock(&self.warned);
+        // Host actions and test bodies do not repeat a gap the client already
+        // reported; addon code reaching it does.
+        if !client && !addon_code && warned.contains(&format!("[client] {what}")) {
+            return;
         }
+        if !warned.insert(key) {
+            return;
+        }
+        let addon_saw = warned.contains(what);
+        drop(warned);
+        let line = format!("not simulated: {what}");
+        {
+            let mut notes = lock(&self.client_notes);
+            if client && !addon_saw {
+                notes.insert(line.clone());
+            } else if !client {
+                notes.remove(&line);
+            }
+        }
+        self.log(line);
+        self.record(TraceKind::NotSimulated, what, Vec::new());
+    }
+
+    /// File every gap logged from `log_start` on as the client's: called
+    /// after Blizzard's UI loaded, before any addon code ran.
+    pub(crate) fn claim_client_notes(&self, log_start: usize) {
+        let lines: Vec<String> = lock(&self.logs)
+            .iter()
+            .skip(log_start)
+            .filter(|l| l.starts_with("not simulated:"))
+            .cloned()
+            .collect();
+        let mut warned = lock(&self.warned);
+        let mut notes = lock(&self.client_notes);
+        for line in lines {
+            let what = line["not simulated: ".len()..].to_string();
+            if warned.remove(&what) {
+                warned.insert(format!("[client] {what}"));
+            }
+            notes.insert(line);
+        }
+    }
+
+    /// Gap lines only Blizzard's own code reached so far.
+    pub fn client_notes(&self) -> HashSet<String> {
+        lock(&self.client_notes).clone()
     }
 
     pub fn record(&self, kind: TraceKind, target: &str, args: Vec<String>) {
@@ -1048,7 +1114,22 @@ pub(crate) fn script_callback<R>(
 /// callbacks a callback queues run in the same flush.
 pub(crate) fn flush(lua: &Lua, ctx: &Ctx) {
     let _ = flush_scripts(lua, ctx);
-    let _ = flush_queue(lua, ctx, &ctx.pending);
+    // Deferred work drains in one loop. A handler run by that loop may flush
+    // again (hook continuations, event subscribers); it leaves the queue to
+    // the running loop, so queued handlers run one after another instead of
+    // each inside the previous one (sixty hooked OnSizeChanged handlers
+    // nested past the callback cap).
+    let draining = std::mem::replace(&mut *lock(&ctx.draining), true);
+    if !draining {
+        struct Done<'a>(&'a Ctx);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                *lock(&self.0.draining) = false;
+            }
+        }
+        let _done = Done(ctx);
+        let _ = flush_queue(lua, ctx, &ctx.pending);
+    }
     let _ = flush_scripts(lua, ctx);
 }
 /// API transitions wait only until arena borrows are released. They do not
@@ -1071,6 +1152,7 @@ pub(crate) fn flush_scripts(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
         if pending.is_empty() {
             return Ok(());
         }
+
         if let Err(error) = flush_queue(lua, ctx, &shared(pending))
             && (!*lock(&ctx.tolerant_ui) || ctx.budget.borrow_mut().exhausted)
         {
@@ -1084,19 +1166,22 @@ fn flush_queue(lua: &Lua, ctx: &Ctx, queue: &Shared<VecDeque<Pending>>) -> mlua:
         let Some(next) = lock(queue).pop_front() else {
             break;
         };
-        let stop = {
+        let (stop, cause) = {
             let mut b = ctx.budget.borrow_mut();
             b.pending_tasks += 1;
             if b.pending_tasks > 10_000 {
                 b.exhausted = true;
                 b.failure = Some("dispatch callback/task budget exhausted");
             }
-            b.exhausted
+            (b.exhausted, b.failure.unwrap_or(BUDGET_ERROR))
         };
         if stop {
-            ctx.runtime_failure("flush", "dispatch callback/instruction budget exhausted");
+            // Name which limit ran out: instructions ("script ran too long"),
+            // callbacks, nesting or queued tasks.
+            let message = format!("dispatch budget exhausted: {cause}");
+            ctx.runtime_failure("flush", message.clone());
             lock(queue).clear();
-            ctx.log("error: dispatch callback/instruction budget exhausted");
+            ctx.log(format!("error: {message}"));
             ctx.record(
                 TraceKind::Error,
                 "flush",
@@ -1221,6 +1306,52 @@ mod tests {
         ctx.not_simulated("Frame:Wiggle");
         ctx.not_simulated("Frame:Wiggle");
         assert_eq!(lock(&ctx.logs).as_slice(), ["not simulated: Frame:Wiggle"]);
+    }
+
+    #[test]
+    fn gaps_are_filed_by_who_reached_them() {
+        let ctx = Ctx::new();
+        ctx.taint.borrow_mut().register("Addon.lua", "Addon");
+        // Blizzard's secure code inside a host call: the client's gap.
+        ctx.taint.borrow_mut().lua_depth = 1;
+        ctx.not_simulated("C_Blizzard.Only");
+        ctx.not_simulated("C_Shared.Read");
+        assert!(ctx.client_notes().contains("not simulated: C_Shared.Read"));
+        // The addon reaches the same gap: logged again, now the addon's.
+        ctx.taint.borrow_mut().current = Some("Addon".into());
+        ctx.not_simulated("C_Shared.Read");
+        ctx.not_simulated("C_Shared.Read");
+        let notes = ctx.client_notes();
+        assert!(notes.contains("not simulated: C_Blizzard.Only"));
+        assert!(!notes.contains("not simulated: C_Shared.Read"));
+        assert_eq!(
+            lock(&ctx.logs)
+                .iter()
+                .filter(|l| l.as_str() == "not simulated: C_Shared.Read")
+                .count(),
+            2
+        );
+        // Outside Lua (a test body, a host action) a gap is the addon's.
+        ctx.taint.borrow_mut().current = None;
+        ctx.taint.borrow_mut().lua_depth = 0;
+        ctx.not_simulated("C_Host.Path");
+        assert!(!ctx.client_notes().contains("not simulated: C_Host.Path"));
+    }
+
+    #[test]
+    fn notes_from_the_blizzard_load_become_the_clients() {
+        let ctx = Ctx::new();
+        ctx.not_simulated("C_Loaded.Early");
+        ctx.claim_client_notes(0);
+        assert!(ctx.client_notes().contains("not simulated: C_Loaded.Early"));
+        // A host action does not repeat it; addon code reaching it later
+        // still sees its own note.
+        ctx.taint.borrow_mut().register("Addon.lua", "Addon");
+        ctx.not_simulated("C_Loaded.Early");
+        assert!(ctx.client_notes().contains("not simulated: C_Loaded.Early"));
+        ctx.taint.borrow_mut().current = Some("Addon".into());
+        ctx.not_simulated("C_Loaded.Early");
+        assert!(!ctx.client_notes().contains("not simulated: C_Loaded.Early"));
     }
 
     #[test]

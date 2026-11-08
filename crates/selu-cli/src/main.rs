@@ -73,6 +73,9 @@ enum Command {
         strict: bool,
         #[arg(long)]
         json: bool,
+        /// Blizzard's UI from the installed client: core (default), full or none.
+        #[arg(long, value_enum, default_value = "core")]
+        ui: TestUiArg,
     },
     /// Build, then start Selu Studio, the virtual WoW simulator (window not implemented yet).
     Debug {
@@ -162,7 +165,9 @@ fn main() -> ExitCode {
             filter,
             strict,
             json,
+            ui,
         } => test(
+            *ui,
             client_install.clone(),
             *no_client_assets,
             path.as_deref().unwrap_or(Path::new(".")),
@@ -341,11 +346,19 @@ fn not_yet(cmd: &str, what: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum TestUiArg {
+    None,
+    Core,
+    Full,
+}
+
 /// `selu test` (docs/SIMULATOR.md decision 11). The runner lives in the
 /// `selu-test` crate; until package S4 lands it discovers test files and
 /// says that it can't run them yet.
 #[allow(clippy::too_many_arguments)]
 fn test(
+    ui: TestUiArg,
     client_install: Option<PathBuf>,
     no_client_assets: bool,
     project_dir: &Path,
@@ -362,6 +375,11 @@ fn test(
         project_dir: project_dir.to_path_buf(),
         target,
         filter,
+        ui: match ui {
+            TestUiArg::None => selu_test::TestUi::None,
+            TestUiArg::Core => selu_test::TestUi::Core,
+            TestUiArg::Full => selu_test::TestUi::Full,
+        },
     };
     match selu_test::run(&options) {
         Ok(report) => {

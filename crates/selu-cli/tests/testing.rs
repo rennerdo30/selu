@@ -29,7 +29,10 @@ fn project(tag: &str, tests: &str) -> PathBuf {
 }
 fn run(dir: &Path, filter: Option<&str>) -> std::process::Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_selu"));
-    cmd.arg("test").arg(dir).arg("--json");
+    cmd.arg("test")
+        .args(["--ui", "none"])
+        .arg(dir)
+        .arg("--json");
     if let Some(filter) = filter {
         cmd.args(["--filter", filter]);
     }
@@ -118,6 +121,7 @@ fn saved_adoption_scenarios_hydrate_after_chunks_including_reload() {
     let strict = || {
         Command::new(env!("CARGO_BIN_EXE_selu"))
             .arg("test")
+            .args(["--ui", "none"])
             .arg(&dir)
             .args(["--strict", "--json"])
             .bounded_output()
@@ -658,6 +662,7 @@ fn sb_seed_character_reload_and_strict_gate() {
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_selu"))
         .arg("test")
+        .args(["--ui", "none"])
         .arg(&dir)
         .arg("--strict")
         .bounded_output()
@@ -670,6 +675,7 @@ fn sb_seed_character_reload_and_strict_gate() {
     );
     let out = Command::new(env!("CARGO_BIN_EXE_selu"))
         .arg("test")
+        .args(["--ui", "none"])
         .arg(&dir)
         .args(["--strict", "--filter", "does not exist"])
         .bounded_output()
@@ -682,6 +688,7 @@ fn sb_seed_character_reload_and_strict_gate() {
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_selu"))
         .arg("test")
+        .args(["--ui", "none"])
         .arg(&dir)
         .args(["--strict", "--json"])
         .bounded_output()
@@ -819,6 +826,7 @@ fn client_assets_opt_out_prevents_opening_explicit_invalid_install() {
     );
     let output = Command::new(env!("CARGO_BIN_EXE_selu"))
         .arg("test")
+        .args(["--ui", "none"])
         .arg(&dir)
         .arg("--json")
         .arg("--client-install")

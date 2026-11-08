@@ -377,6 +377,7 @@ fn recheck_external_manifest_build_runs_and_tests_with_exact_manifest() {
         let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_selu"));
         cmd.current_dir(&root)
             .arg("test")
+            .args(["--ui", "none"])
             .arg(&project)
             .env_remove("SELU_MANIFEST_DIR");
         match mode {

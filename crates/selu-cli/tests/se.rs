@@ -164,6 +164,20 @@ fn review_wrapper_keeps_original_sink() {
     assert_eq!(sim.prints(), ["x"]);
 }
 #[test]
+fn error_forwarding_can_be_muted_and_restored() {
+    // The toolkit's "mute Blizzard's error popups" setting: errors are still
+    // captured, but not handed on to the previous handler (the popup).
+    let lua = compile(
+        r#"global custody = onError(e => { print(e.message); }); export global mute = (quiet: boolean) => { custody.setForwarding(!quiet); };"#,
+    );
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("prior=0; seterrorhandler(function() prior=prior+1 end)")
+        .unwrap();
+    sim.load_files(&[("probe.lua".into(), lua)]).unwrap();
+    sim.eval("mute(true); geterrorhandler()('quiet'); assert(prior==0, 'muted errors reached the predecessor'); mute(false); geterrorhandler()('loud'); assert(prior==1)").unwrap();
+    assert_eq!(sim.prints(), ["quiet", "loud"]);
+}
+#[test]
 fn review_throwing_predecessor_is_contained() {
     let lua = compile(
         r#"global custody = onError(e => { print(e.message); }); const failures: number = custody.downstreamFailureCount();"#,

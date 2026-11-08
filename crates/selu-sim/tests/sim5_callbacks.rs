@@ -179,3 +179,33 @@ fn many_sibling_visibility_hooks_are_ordered_and_synchronous() {
     )
     .unwrap();
 }
+
+#[test]
+fn hooked_size_handlers_run_one_after_another_not_nested() {
+    // Sixty frames with a hooked OnSizeChanged, all resized in one dispatch.
+    // Their deferred handlers run in the outer flush; a hook draining the
+    // deferred queue itself nested each handler inside the previous one and
+    // hit the 32-level callback cap (found through the toolkit's options).
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval(
+        r#"
+        ran = 0
+        frames = {}
+        for i = 1, 60 do
+            local f = CreateFrame("Frame"); f:SetSize(10, 10)
+            f:SetScript("OnSizeChanged", function() end)
+            f:HookScript("OnSizeChanged", function() ran = ran + 1 end)
+            frames[i] = f
+        end
+    "#,
+    )
+    .unwrap();
+    sim.eval("for i = 1, 60 do frames[i]:SetSize(20 + i, 20) end")
+        .unwrap();
+    sim.eval("assert(ran == 60, 'ran ' .. ran)").unwrap();
+    assert!(
+        !sim.logs().iter().any(|l| l.contains("nested too deeply")),
+        "{:?}",
+        sim.logs()
+    );
+}

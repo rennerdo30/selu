@@ -277,7 +277,8 @@ fn callback_count_bounds_small_callback_chains() {
     assert!(
         s.logs()
             .iter()
-            .any(|l| l.contains("callback/instruction budget exhausted")),
+            .any(|l| l
+                .contains("dispatch budget exhausted: dispatch callback/task budget exhausted")),
         "{:?}",
         s.logs()
     );

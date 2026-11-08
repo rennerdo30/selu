@@ -3,7 +3,7 @@ if rawget(_G,'__selu_xml_declare') then return end
 local templates, intrinsic, warned = {}, {}, {}
 local inheritedParents={}
 local function note(s)
-    if not warned[s] then warned[s]=true; print('not simulated: XML '..s) end
+    if not warned[s] then warned[s]=true; __selu_note_gap('XML '..s) end
 end
 local parsedNames={}
 local emptyNames={}

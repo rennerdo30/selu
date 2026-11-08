@@ -1,6 +1,6 @@
 # Testing addons
 
-Run `selu test [project] [--target flavour@version] [--filter text] [--json]`.
+Run `selu test [project] [--target flavour@version] [--filter text] [--ui core|full|none] [--json]`.
 The default target is the first configured target. The runner discovers sorted
 `*.test.selu` files under `src/` and `tests/`. It builds the project with the same
 compiler as `selu build`, including project modules imported by tests, then loads
@@ -16,6 +16,30 @@ describe("prices", () => {
   });
 });
 ```
+
+## Blizzard's UI in tests
+
+`--ui core` (the default), `--ui full` or `--ui none` chooses how much of
+Blizzard's own UI each session runs before the addon loads. It is read at
+runtime from the user's installed client of the target's product, found as
+Studio finds it (`--client-install`, Studio's settings, or the usual install
+folders), or from a configured source checkout on the product's branch.
+Nothing of Blizzard's is shipped or cached in the project. Core is the same
+lean real subset Studio loads by default, and Studio's `core_ui_addons`
+setting applies too.
+
+Without an installed client (for example on CI) the run prints
+`running without Blizzard's UI: <reason>` and continues. Tests that use
+Blizzard frames (such as `Minimap`) then fail honestly instead of passing
+against a stand-in. Use `--ui none` for tests that never touch Blizzard's
+UI; it is also faster, because Core takes a few seconds to start per file.
+
+"not simulated" notes are filed by who reached the gap. Notes from
+Blizzard's own startup, or reached only by Blizzard's secure code afterwards,
+belong to the client. They stay out of the test's report and out of
+`--strict`, though Studio still shows them. Notes reached by the addon's
+code, by Blizzard code the addon called into, or by the test itself are the
+addon's.
 
 Each file has a fresh deterministic Session, seeded with 1. Tests within a file
 share that Session. Hooks run outermost first before each test. Describe blocks

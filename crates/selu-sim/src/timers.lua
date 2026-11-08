@@ -63,7 +63,7 @@ function __selu_sim_step()
  end
  for _, t in ipairs(due) do
   if not t.handle.cancelled then
-   __selu_sim_counts.timers = __selu_sim_counts.timers + 1
+   if __selu_counts_callback(t.fn) then __selu_sim_counts.timers = __selu_sim_counts.timers + 1 end
    local ok
    if t.after then ok = safe('timer',t.fn) else ok = safe('timer',t.fn,t.handle) end
    if t.remaining then t.remaining = t.remaining - 1 end
@@ -83,7 +83,7 @@ function __selu_sim_step()
    cursor=index
    local fn = f.__scripts.OnUpdate
    if fn then
-    __selu_sim_counts.updates = __selu_sim_counts.updates + 1
+    if __selu_counts_callback(fn) then __selu_sim_counts.updates = __selu_sim_counts.updates + 1 end
     safe('OnUpdate',fn,f,frameTime)
    end
   end

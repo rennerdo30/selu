@@ -152,7 +152,9 @@ Native seterrorhandler/geterrorhandler semantics are sourced in the toolkit's
 WOW_LUA_API.md:1887-1888; normalization is a Selu compiler contract.
 
 Use GetTime for deterministic logical timestamps. `sim.callbackCounts()` reports
-actual timer and OnUpdate callback dispatch counts for the current generation;
+actual timer and OnUpdate callback dispatch counts for the current generation.
+Once an addon is loaded, only callbacks defined by addon code count: Blizzard's
+own UI (`--ui core`) runs its own timers and OnUpdates;
 it is an observation, not CPU time or allocations. Native debugprofilestop's
 millisecond contract comes from Blizzard FrameScriptDocumentation.lua. Simulator
 clock advancement does not establish CPU precision or a performance improvement.
@@ -184,3 +186,10 @@ are contained and the guard is cleaned up. `downstreamFailureCount(): number`
 on the handle reports the cumulative number of failed downstream invocations;
 it records no potentially secret error payload. Re-registration retains this
 counter along with the handle.
+
+`setForwarding(enabled: boolean)` chooses whether captured errors are still
+handed on to the previous handler (by default they are). With forwarding off
+the callback still runs for every error, but Blizzard's error popup, or any
+other downstream handler, is not called; this backs "show errors only in our
+log" settings. It also applies when a wrapping handler calls back into the
+adapter.

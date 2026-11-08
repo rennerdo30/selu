@@ -58,6 +58,24 @@ fn animation_orders_loops_scripts_and_stop_restore() {
     sim.eval("assert(finished==1 and not g:IsPlaying() and t:GetAlpha()==.75)")
         .unwrap();
 }
+
+#[test]
+fn an_animation_group_parent_is_its_region() {
+    // Blizzard's OnFinished handlers (casting bar fade, status bar container)
+    // reach their frame through self:GetParent().
+    let sim = Sim::new().unwrap();
+    sim.eval(
+        r#"
+        t=CreateFrame('Frame');g=t:CreateAnimationGroup()
+        g:SetScript('OnFinished',function(self) self:GetParent():Hide() end)
+        local a=g:CreateAnimation('Alpha');a:SetDuration(.1);g:Play()
+        assert(g:GetParent()==t and a:GetParent()==g)
+    "#,
+    )
+    .unwrap();
+    sim.advance_time(0.3);
+    sim.eval("assert(not t:IsShown())").unwrap();
+}
 #[test]
 fn incremental_anchor_dependants_and_live_font_invalidation() {
     let sim = Sim::new().unwrap();

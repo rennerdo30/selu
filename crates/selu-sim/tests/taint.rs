@@ -187,3 +187,58 @@ fn attribute_handlers_run_with_their_own_security() {
     s.eval("forceinsecure(); SecureShowFrame:Show()").unwrap();
     s.eval("assert(ShowSecure == false)").unwrap();
 }
+
+#[test]
+fn a_reinstalled_hook_still_stops_a_runaway_loop() {
+    // Every addon load re-installs the native hook (call events for taint).
+    // A re-install must keep delegating to mlua's hook, not to itself: a
+    // runaway loop then fails with the budget error instead of overflowing
+    // the native stack (found through `sim.reload()` with Blizzard's UI).
+    let mut s = session(Some("SeluFirst = true"));
+    let root = std::env::temp_dir().join(format!("selu-taint-second-{}", std::process::id()));
+    let dir = root.join("SecondFixture");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SecondFixture.toc"),
+        "## Interface: 1\nsecond.lua\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("second.lua"), "SeluSecond = true").unwrap();
+    s.load_addon_dir(&dir).unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+    let error = s.eval("while true do end").unwrap_err().to_string();
+    assert!(error.contains("script ran too long"), "{error}");
+}
+
+#[test]
+fn callback_counts_include_only_addon_callbacks_once_an_addon_is_loaded() {
+    // Blizzard's own UI schedules timers and OnUpdates; sim.callbackCounts
+    // must still show what the addon under test does.
+    let s = session(Some(
+        r#"local f = CreateFrame("Frame"); f:SetScript("OnUpdate", function() end)
+           C_Timer.After(0.05, function() end)"#,
+    ));
+    s.sim()
+        .load_files(&[(
+            "Blizzard_Ticker.lua".into(),
+            r#"SecureTicker = C_Timer.NewTicker(0.05, function() end)
+               local f = CreateFrame("Frame"); f:SetScript("OnUpdate", function() end)"#
+                .into(),
+        )])
+        .unwrap();
+    s.eval("__selu_sim_counts.timers = 0; __selu_sim_counts.updates = 0")
+        .unwrap();
+    s.sim().advance_time(0.5);
+    s.eval("assert(__selu_sim_counts.timers == 1, 'timers ' .. __selu_sim_counts.timers)")
+        .unwrap();
+    s.eval("assert(__selu_sim_counts.updates > 0 and __selu_sim_counts.updates <= 31, 'updates ' .. __selu_sim_counts.updates)")
+        .unwrap();
+}
+
+#[test]
+fn break_up_large_numbers_groups_digits_like_the_client() {
+    let s = session(None);
+    s.eval("assert(BreakUpLargeNumbers(0) == '0'); assert(BreakUpLargeNumbers(999) == '999'); assert(BreakUpLargeNumbers(1234567) == '1,234,567'); assert(BreakUpLargeNumbers(-1000) == '-1,000')").unwrap();
+    s.eval("LARGE_NUMBER_SEPERATOR = '.'; assert(BreakUpLargeNumbers(1234567) == '1.234.567')")
+        .unwrap();
+}

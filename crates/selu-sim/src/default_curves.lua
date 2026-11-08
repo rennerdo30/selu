@@ -22,7 +22,7 @@ local function curve(colour)
         public(value); kind=value
         local types=Enum and Enum.LuaCurveType or {}
         if value~=types.Linear and value~=types.Step and not warned[value] then
-            warned[value]=true; print('not simulated: curve interpolation '..value..' (linear approximation)')
+            warned[value]=true; __selu_note_gap('curve interpolation '..value..' (linear approximation)')
         end
     end
     function object:GetType() return kind end

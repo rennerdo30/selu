@@ -538,7 +538,19 @@ pub fn create(
                 "SetRotation",
                 "GetRotation",
                 "SetPortraitZoom",
+                "AddMessage",
+                "GetNumMessages",
+                "Clear",
+                "Click",
             ]) {
+                if method == "Click" && !matches!(kind, "Button" | "CheckButton") {
+                    continue;
+                }
+                if matches!(method, "AddMessage" | "GetNumMessages" | "Clear")
+                    && !matches!(kind, "ScrollingMessageFrame" | "MessageFrame")
+                {
+                    continue;
+                }
                 if method == "GetMapID"
                     && !matches!(
                         kind,
@@ -748,6 +760,67 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         // No terrain coordinates are available to paint or hit-test units.
         ctx.not_simulated("native unit-position map rendering");
         return ().into_lua_multi(lua);
+    }
+    // Button:Click(button, down) runs the click handlers synchronously, as
+    // the client does, while the button is enabled. A check button toggles
+    // first. Visibility and click registration do not matter for Click().
+    if method == "Click" {
+        let enabled = {
+            let mut arena = a.borrow_mut();
+            let region = &mut arena.regions[i];
+            if region.enabled && region.kind == "CheckButton" {
+                region.checked = !region.checked;
+            }
+            region.enabled
+        };
+        if !enabled {
+            return ().into_lua_multi(lua);
+        }
+        let button = match v.first() {
+            Some(Value::String(s)) => Value::String(s.clone()),
+            _ => Value::String(lua.create_string("LeftButton")?),
+        };
+        let down = matches!(v.get(1), Some(Value::Boolean(true)));
+        let scripts: Table = t.raw_get("__scripts")?;
+        for name in ["PreClick", "OnClick", "PostClick"] {
+            if let Some(f) = scripts.raw_get::<Option<Function>>(name)? {
+                crate::core::call_lua::<()>(
+                    lua,
+                    f,
+                    (t.clone(), button.clone(), down).into_lua_multi(lua)?,
+                )?;
+            }
+        }
+        return ().into_lua_multi(lua);
+    }
+    // Native message frames keep their lines. (Prints are recorded at the
+    // print handler, see Session::load_blizzard_ui.)
+    if matches!(method, "AddMessage" | "GetNumMessages" | "Clear")
+        && matches!(
+            a.borrow().regions[i].kind.as_str(),
+            "ScrollingMessageFrame" | "MessageFrame"
+        )
+    {
+        let lines = match t.raw_get::<Option<Table>>("__selu_messages")? {
+            Some(lines) => lines,
+            None => {
+                let lines = lua.create_table()?;
+                t.raw_set("__selu_messages", lines.clone())?;
+                lines
+            }
+        };
+        return match method {
+            "AddMessage" => {
+                let text = v.first().map(crate::value_string).unwrap_or_default();
+                lines.raw_set(lines.raw_len() + 1, text.as_str())?;
+                ().into_lua_multi(lua)
+            }
+            "GetNumMessages" => lines.raw_len().into_lua_multi(lua),
+            _ => {
+                t.raw_set("__selu_messages", lua.create_table()?)?;
+                ().into_lua_multi(lua)
+            }
+        };
     }
     if matches!(method, "GetUiMapID" | "GetPlayerPingScale") {
         let setter = if method == "GetUiMapID" {

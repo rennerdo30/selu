@@ -172,15 +172,22 @@ mod tests {
             .exec()
             .unwrap();
         crate::host_lua::load(sim.lua(),"__selu_xml_declare({tag='Frame',a={},children={{tag='UnsupportedProbe',a={},children={}}}})").exec().unwrap();
+        // Engine gaps are notes, not prints.
         assert!(
-            sim.prints()
+            sim.logs()
                 .iter()
-                .any(|line| line.contains("XML element UnsupportedProbe"))
+                .any(|line| line == "not simulated: XML element UnsupportedProbe")
         );
         for name in ["TimerSurvived", "EventSurvived", "UpdateSurvived"] {
             assert!(sim.lua().globals().get::<bool>(name).unwrap(), "{name}");
         }
-        assert!(sim.logs().is_empty(), "{:?}", sim.logs());
+        // Only the probe's own XML gap; no helper failed.
+        assert_eq!(
+            sim.logs(),
+            ["not simulated: XML element UnsupportedProbe"],
+            "{:?}",
+            sim.logs()
+        );
     }
     use crate::Sim;
     #[test]

@@ -183,8 +183,15 @@ pub(crate) fn install(lua: &Lua, budget: SharedBudget, quantum: u32, thread: Opt
             } else {
                 ffi::lua_tothread(caller, 1)
             };
+            // A re-install (refresh) finds this hook already in place: keep
+            // the recorded mlua hook. Recording ourselves would make every
+            // delegation (budget faults, stale sources) call itself until
+            // the native stack overflows.
             let original = ffi::lua_gethook(target);
-            owner.0.original.set(original);
+            let ours: ffi::lua_Hook = hook;
+            if original.map(|h| h as usize) != Some(ours as usize) {
+                owner.0.original.set(original);
+            }
             owner.0.active.set(target as usize);
             ACTIVE.with(|active| active.set((target as usize, pointer)));
             owner.0.quantum.set(quantum);

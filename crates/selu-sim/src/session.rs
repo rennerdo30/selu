@@ -7,7 +7,7 @@
 use crate::core::{Generation, Snapshot, TraceRecord, lock};
 use crate::core::{Shared, dispatch};
 use crate::frames::LuaTableModel;
-use crate::{Ctx, TraceKind, core, frames, log_once, regions, timers, value_string, wow_api};
+use crate::{Ctx, TraceKind, core, frames, regions, timers, value_string, wow_api};
 use crate::{SimResult, loader, snapshot};
 use mlua::Value;
 use mlua::{Function, Lua, MultiValue, Table};
@@ -259,6 +259,36 @@ fn validate_snapshots(checked: &CheckedManifests) -> SimResult<()> {
     }
     Ok(())
 }
+/// Blizzard's UI replaces the engine's `print` with its own, which hands
+/// the text to the active print handler (Blizzard_PrintHandler: the chat
+/// frame). Chain a recorder in front of that handler through Blizzard's
+/// public setprinthandler API, so `prints()` still sees what was printed
+/// while the chat frame receives it as before. Arguments are joined with a
+/// space, as the client shows them.
+fn record_prints_through_handler(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
+    let globals = lua.globals();
+    let (Some(get), Some(set)) = (
+        globals.raw_get::<Option<Function>>("getprinthandler")?,
+        globals.raw_get::<Option<Function>>("setprinthandler")?,
+    ) else {
+        return Ok(());
+    };
+    let previous: Value = get.call(())?;
+    let ctx = ctx.clone();
+    let recorder = lua.create_function(move |_, args: MultiValue| {
+        let parts: Vec<String> = args.iter().map(value_string).collect();
+        let line = parts.join(" ");
+        ctx.record(TraceKind::Print, "print", vec![line.clone()]);
+        lock(&ctx.prints).push(line);
+        if let Value::Function(previous) = &previous {
+            return previous.call::<MultiValue>(args);
+        }
+        Ok(MultiValue::new())
+    })?;
+    set.call::<()>(recorder)?;
+    Ok(())
+}
+
 fn install_snapshots(vm: &Vm, checked: CheckedManifests) -> SimResult<()> {
     validate_snapshots(&checked)?;
     let manual = lock(&vm.state).manual_frame_families.clone();
@@ -443,6 +473,10 @@ impl Session {
     /// Manifest native stand-ins ranked by calls in this default UI session.
     pub fn missing_natives(&self) -> Vec<(String, u64)> {
         crate::native_defaults::counts(&self.sim.lua)
+    }
+    /// Log lines written while Blizzard's UI loaded; 0 without it.
+    pub fn default_ui_log_end(&self) -> usize {
+        self.default_ui_log_end
     }
     pub fn default_ui_startup_errors(&self) -> Vec<String> {
         lock(&self.sim.logs)
@@ -789,6 +823,8 @@ impl Session {
         }
         report.notes.sort();
         report.notes.dedup();
+        self.sim.ctx.claim_client_notes(log_start);
+        record_prints_through_handler(&self.sim.lua, &self.sim.ctx)?;
         self.default_ui_log_end = lock(&self.sim.logs).len();
         self.default_ui_report = Some(report.clone());
         Ok(report)
@@ -1397,7 +1433,6 @@ impl Vm {
         regions::install(&lua)?;
         let prints = ctx.prints.clone();
         let logs = ctx.logs.clone();
-        let warned = ctx.warned.clone();
         let clock = ctx.clock.clone();
         let globals = lua.globals();
         globals.set("__selu_saved_names", lua.create_table()?)?;
@@ -1435,8 +1470,6 @@ impl Vm {
         {
             let mt = lua.create_table()?;
             let shape_ctx = ctx.clone();
-            let logs = logs.clone();
-            let warned = warned.clone();
             mt.set(
                 "__index",
                 lua.create_function(move |lua, (_t, key): (Value, Value)| {
@@ -1470,7 +1503,7 @@ impl Vm {
                     if let Some(value) = crate::sim_globals::lookup(lua, &key, &shape_ctx)? {
                         return Ok(value);
                     }
-                    log_once(&logs, &warned, &key);
+                    shape_ctx.not_simulated(&key);
                     Ok(Value::Nil)
                 })?,
             )?;
@@ -1982,5 +2015,28 @@ mod tests {
             s.prints()
         };
         assert_eq!(roll(7), roll(7));
+    }
+}
+
+#[cfg(test)]
+mod print_handler_tests {
+    #[test]
+    fn prints_are_recorded_in_front_of_blizzards_print_handler() {
+        // A self-written stand-in for Blizzard_PrintHandler: print() hands its
+        // arguments to the active handler, which writes to a chat frame.
+        let session = super::Session::new(Default::default()).unwrap();
+        session
+            .eval(
+                "CHAT = {}; local handler = function(...) CHAT[#CHAT + 1] = table.concat({...}, ' ') end
+                 function setprinthandler(f) handler = f end
+                 function getprinthandler() return handler end
+                 function print(...) handler(...) end",
+            )
+            .unwrap();
+        super::record_prints_through_handler(&session.sim.lua, &session.sim.ctx).unwrap();
+        session.eval("print('hello', 'world')").unwrap();
+        assert!(session.prints().iter().any(|p| p == "hello world"));
+        // The chat frame still receives it.
+        session.eval("assert(CHAT[1] == 'hello world')").unwrap();
     }
 }

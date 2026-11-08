@@ -457,6 +457,15 @@ pub fn lookup(lua: &Lua, key: &str, ctx: &Ctx) -> SimResult<Option<Value>> {
 }
 
 pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
+    // Engine Lua below reports its own gaps through the session's notes.
+    let notes = ctx.clone();
+    lua.globals().raw_set(
+        "__selu_note_gap",
+        lua.create_function(move |_, what: String| {
+            notes.not_simulated(&what);
+            Ok(())
+        })?,
+    )?;
     crate::host_lua::load(
         lua,
         r#"
@@ -466,6 +475,24 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> SimResult<()> {
             return (text:gsub("^["..chars.."]+", ""):gsub("["..chars.."]+$", ""))
         end
         function strjoin(separator, ...) return table.concat({...}, separator) end
+        -- Native in the client: digits grouped by the client's own
+        -- LARGE_NUMBER_SEPERATOR text (GlobalStrings), "," without it.
+        function BreakUpLargeNumbers(value)
+            value = tonumber(value) or 0
+            local separator = type(LARGE_NUMBER_SEPERATOR) == "string" and LARGE_NUMBER_SEPERATOR or ","
+            local sign = value < 0 and "-" or ""
+            local whole = math.floor(math.abs(value))
+            local fraction = math.abs(value) - whole
+            local digits = string.format("%d", whole)
+            local grouped = digits:reverse():gsub("(%d%d%d)", "%1" .. separator:reverse()):reverse()
+            if grouped:sub(1, #separator) == separator then grouped = grouped:sub(#separator + 1) end
+            if fraction > 0 then
+                __selu_note_gap("BreakUpLargeNumbers (fractional values)")
+                local decimal = type(DECIMAL_SEPERATOR) == "string" and DECIMAL_SEPERATOR or "."
+                grouped = grouped .. decimal .. string.format("%.2f", fraction):sub(3)
+            end
+            return sign .. grouped
+        end
         function strsplit(separator, text, limit)
             local result, start = {}, 1
             while not limit or #result < limit - 1 do

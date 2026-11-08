@@ -119,3 +119,21 @@ fn idle_and_paused_animation_groups_do_not_receive_ticks() {
     sim.eval("assert(__selu_sim_counts.updates==before)")
         .unwrap();
 }
+
+#[test]
+fn click_runs_the_click_handlers_synchronously_while_enabled() {
+    let sim = Sim::new().unwrap();
+    sim.eval(r#"
+        order = {}
+        b = CreateFrame("Button"); b:Hide()
+        b:SetScript("PreClick", function(_, button, down) order[#order + 1] = "pre " .. button .. " " .. tostring(down) end)
+        b:SetScript("OnClick", function(_, button) order[#order + 1] = "click " .. button end)
+        b:SetScript("PostClick", function() order[#order + 1] = "post" end)
+        b:Click()
+        assert(table.concat(order, ",") == "pre LeftButton false,click LeftButton,post", table.concat(order, ","))
+        b:Disable(); b:Click("RightButton"); assert(#order == 3)
+        b:Enable(); b:Click("RightButton"); assert(order[5] == "click RightButton")
+        c = CreateFrame("CheckButton"); c:Click(); assert(c:GetChecked() == true)
+        f = CreateFrame("Frame"); assert(f.Click == nil)
+    "#).unwrap();
+}

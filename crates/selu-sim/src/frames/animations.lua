@@ -8,6 +8,8 @@ return function(target, note, translate)
     function g:GetScript(name) return self.scripts[name] end
     function g:SetLooping(v) assert(v=="NONE" or v=="REPEAT" or v=="BOUNCE");self.looping=v end
     function g:GetLooping() return self.looping end
+    -- The region that owns the group (Blizzard's OnFinished handlers use it).
+    function g:GetParent() return target end
     function g:IsPlaying() return self.state=="playing" end
     function g:IsPaused() return self.state=="paused" end
     function g:IsStopped() return self.state=="stopped" end
