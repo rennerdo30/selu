@@ -21,10 +21,7 @@ pub type UiSource = (PathBuf, Option<Vec<String>>);
 
 /// Where Blizzard's UI for `target` is read, and the Core roots, using the
 /// same lookup and Studio settings as Studio. `Err` explains why there is none.
-pub fn ui_source(
-    options: &crate::RunOptions,
-    target: &str,
-) -> Result<Option<UiSource>, String> {
+pub fn ui_source(options: &crate::RunOptions, target: &str) -> Result<Option<UiSource>, String> {
     if options.ui == crate::TestUi::None {
         return Ok(None);
     }

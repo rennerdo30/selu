@@ -360,7 +360,15 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
         // stops handing out files; files already handed out finish.
         let mut compiled = Ok(());
         for (index, file) in files.iter().enumerate() {
-            match compile_file(options, &tests_target, &exports, name, &module_maps, index, file) {
+            match compile_file(
+                options,
+                &tests_target,
+                &exports,
+                name,
+                &module_maps,
+                index,
+                file,
+            ) {
                 Ok(job) => {
                     if job_tx.send(job).is_err() {
                         break;
@@ -646,7 +654,10 @@ fn private_mb() -> Option<u64> {
         #[link_name = "K32GetProcessMemoryInfo"]
         fn memory_info(process: *mut std::ffi::c_void, counters: *mut Counters, size: u32) -> i32;
     }
-    let mut counters = Counters { size: std::mem::size_of::<Counters>() as u32, ..Default::default() };
+    let mut counters = Counters {
+        size: std::mem::size_of::<Counters>() as u32,
+        ..Default::default()
+    };
     // SAFETY: the pseudo handle needs no closing; the struct matches
     // PROCESS_MEMORY_COUNTERS_EX and its size is passed.
     let ok = unsafe { memory_info(current_process(), &mut counters, counters.size) };
