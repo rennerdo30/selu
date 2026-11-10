@@ -330,6 +330,7 @@ pub fn install_manifest(lua: &Lua, manifest: &selu_manifest::Manifest, ctx: &Ctx
             globals.raw_set(global.name.as_str(), table)?;
         }
     }
+    crate::world::install_player_world(lua)?;
     Ok(())
 }
 

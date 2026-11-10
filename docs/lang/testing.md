@@ -73,7 +73,11 @@ Helpers:
 | `sim.now()` | Read the current Session clock in seconds |
 | `sim.setMoney(copper)` | Set player money |
 | `sim.setCombat(boolean)` | Enter or leave combat |
-| `sim.setUnit(token, fields)` | Set name, class, level, health, maxHealth, power, maxPower and combat |
+| `sim.setUnit(token, fields)` | Set name, class, level, health, maxHealth, power, maxPower and combat; also `xp`, `maxXp`, `xpDisabled` (player), `distance` (yards), `distanceChecked` and `visible`. A changed player XP fires PLAYER_XP_UPDATE |
+| `sim.setSpell(id, { name, icon, known })` | Define a spell for IsPlayerSpell, IsSpellKnown and C_Spell (self-written test data; fires SPELLS_CHANGED) |
+| `sim.setTracking([{ name, texture, active, type, spellID }])` | The minimap tracking list for C_Minimap.GetNumTrackingTypes/GetTrackingInfo (fires MINIMAP_UPDATE_TRACKING) |
+| `sim.setZone({ zone, subzone, map, instance })` | Zone text, map and IsInInstance's type ("none", "party", "raid", ...) |
+| `sim.setCVar(name, value)` | Change a CVar as the game's own settings would (fires CVAR_UPDATE); SetCVar from the addon fires it too |
 | `sim.prints()` | Read captured prints as an array |
 | `sim.frame(name)` | Look up a named frame; null if missing |
 
@@ -158,3 +162,9 @@ Fixture failures retain a structured diagnostic with the fixture pathname and a
 source span. Schema failures underline the relevant JSON key where available;
 saved-global validation underlines that global's key within `saved`, including
 escaped JSON keys. Invalid JSON retains its parser position.
+
+A scenario's `"character": "Name-Realm"` names the player and the realm
+separately, as `UnitName("player")` and `GetRealmName()` answer in game, so a
+realm with spaces (`"Kripz-Camp Realm 5"`) can be tested. Spells and tracking
+not defined by a test keep the simulator's stand-in answers.
+

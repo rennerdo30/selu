@@ -187,6 +187,41 @@ pub(crate) fn bag_slots(lua: &Lua) -> SimResult<BagSlots> {
         reagent: state.raw_get("reagent")?,
     })
 }
+/// What a unit's player can see beyond its frame: XP, how far it is and
+/// whether the client tracks it (UnitXP, UnitDistanceSquared, UnitIsVisible).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UnitStatus {
+    pub xp: Option<u32>,
+    pub max_xp: Option<u32>,
+    /// Yards; None leaves the distance unknown (unchecked).
+    pub distance: Option<f64>,
+    /// False models a distance the client does not vouch for (instances).
+    pub distance_checked: Option<bool>,
+    pub visible: Option<bool>,
+    /// The player's XP switch (IsXPUserDisabled).
+    pub xp_disabled: Option<bool>,
+}
+
+/// A spell the simulated character may know (self-written test data).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SpellInfo {
+    pub id: u32,
+    pub name: String,
+    pub icon: u32,
+    pub known: bool,
+}
+
+/// One minimap tracking entry (C_Minimap.GetTrackingInfo).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TrackingInfo {
+    pub name: String,
+    pub texture: u32,
+    pub active: bool,
+    /// "spell" for a tracking spell, "other" for town tracking.
+    pub kind: String,
+    pub spell_id: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Unit {
@@ -322,6 +357,123 @@ impl Vm {
     /// Opaque sentinel; only the secret predicates may inspect it.
     pub fn secret_value(&self) -> Value {
         Value::LightUserData(mlua::LightUserData(std::ptr::null_mut()))
+    }
+
+    /// XP, distance and visibility of an existing unit; PLAYER_XP_UPDATE
+    /// when the player's XP changed.
+    pub fn set_unit_status(&self, token: &str, status: &UnitStatus) -> SimResult<()> {
+        if !valid_token(token) {
+            return Err(mlua::Error::runtime("unsupported unit token"));
+        }
+        let units: Table = self.lua.globals().raw_get("__selu_world_units")?;
+        let Some(unit) = units.raw_get::<Option<Table>>(token)? else {
+            return Err(mlua::Error::runtime("set the unit before its status"));
+        };
+        let old_xp = unit.raw_get::<Option<u32>>("xp")?;
+        if let Some(xp) = status.xp {
+            unit.raw_set("xp", xp)?;
+        }
+        if let Some(max) = status.max_xp {
+            unit.raw_set("max_xp", max)?;
+        }
+        if let Some(distance) = status.distance {
+            unit.raw_set("distance", distance)?;
+        }
+        if let Some(checked) = status.distance_checked {
+            unit.raw_set("distance_checked", checked)?;
+        }
+        if let Some(visible) = status.visible {
+            unit.raw_set("visible", visible)?;
+        }
+        if let Some(disabled) = status.xp_disabled {
+            let flags: Table = self.lua.globals().raw_get("__selu_world_flags")?;
+            flags.raw_set("xp_disabled", disabled)?;
+        }
+        if token == "player" && status.xp.is_some() && status.xp != old_xp {
+            self.fire(
+                "PLAYER_XP_UPDATE",
+                vec![Value::String(self.lua.create_string("player")?)],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Defines (or replaces) a spell; SPELLS_CHANGED as when the character
+    /// learns one.
+    pub fn set_spell(&self, spell: &SpellInfo) -> SimResult<()> {
+        let spells: Table = self.lua.globals().raw_get("__selu_world_spells")?;
+        let entry = self.lua.create_table()?;
+        entry.raw_set("name", spell.name.as_str())?;
+        entry.raw_set("icon", spell.icon)?;
+        entry.raw_set("known", spell.known)?;
+        spells.raw_set(spell.id, entry)?;
+        self.fire("SPELLS_CHANGED", vec![])?;
+        Ok(())
+    }
+
+    /// The minimap tracking list; MINIMAP_UPDATE_TRACKING.
+    pub fn set_tracking(&self, entries: &[TrackingInfo]) -> SimResult<()> {
+        let globals = self.lua.globals();
+        let list: Table = globals.raw_get("__selu_world_tracking")?;
+        list.clear()?;
+        for (i, t) in entries.iter().enumerate() {
+            let entry = self.lua.create_table()?;
+            entry.raw_set("name", t.name.as_str())?;
+            entry.raw_set("texture", t.texture)?;
+            entry.raw_set("active", t.active)?;
+            entry.raw_set("type", t.kind.as_str())?;
+            entry.raw_set("spellID", t.spell_id)?;
+            list.raw_set(i + 1, entry)?;
+        }
+        let flags: Table = globals.raw_get("__selu_world_flags")?;
+        flags.raw_set("tracking", true)?;
+        self.fire("MINIMAP_UPDATE_TRACKING", vec![])?;
+        Ok(())
+    }
+
+    /// The zone, map and instance type; ZONE_CHANGED_NEW_AREA when the map
+    /// changes, PLAYER_ENTERING_WORLD when the instance type changes (the
+    /// client loads a new world for an instance).
+    pub fn set_zone(
+        &self,
+        zone_text: &str,
+        subzone: &str,
+        map: u32,
+        instance: &str,
+    ) -> SimResult<()> {
+        let zone: Table = self.lua.globals().get("__selu_zone")?;
+        let map_changed = zone.get::<u32>("map")? != map;
+        let zone_changed = zone.get::<String>("zone")? != zone_text;
+        let instance = if instance.is_empty() {
+            "none"
+        } else {
+            instance
+        };
+        let instance_changed = zone.get::<Option<String>>("instance")?.as_deref() != Some(instance);
+        zone.set("zone", zone_text)?;
+        zone.set("subzone", subzone)?;
+        zone.set("map", map)?;
+        zone.set("instance", instance)?;
+        if instance_changed {
+            self.fire(
+                "PLAYER_ENTERING_WORLD",
+                vec![Value::Boolean(false), Value::Boolean(false)],
+            )?;
+        }
+        if map_changed {
+            self.fire("ZONE_CHANGED_NEW_AREA", vec![])?;
+        }
+        if zone_changed {
+            self.fire("ZONE_CHANGED", vec![])?;
+        }
+        Ok(())
+    }
+
+    /// A CVar changed outside the addon (the game's own settings); fires
+    /// CVAR_UPDATE like any change.
+    pub fn set_cvar(&self, name: &str, value: &str) -> SimResult<()> {
+        let set: mlua::Function = self.lua.globals().raw_get("SetCVar")?;
+        set.call::<()>((name, value))
     }
 
     pub fn set_unit(&self, token: &str, unit: Unit) -> SimResult<()> {
@@ -479,7 +631,8 @@ pub(crate) fn install(lua: &Lua) -> SimResult<()> {
     crate::host_lua::load(lua,r#"
 __selu_world_units = {}; __selu_world_money = 0; __selu_world_bags = {}
 local units = __selu_world_units
-__selu_vignettes = {}; __selu_plates = {}; __selu_zone = {zone='',subzone='',map=0}
+__selu_vignettes = {}; __selu_plates = {}; __selu_zone = {zone='',subzone='',map=0,instance='none'}
+function IsInInstance() local kind = __selu_zone.instance or 'none'; if kind == '' then kind = 'none' end; return kind ~= 'none', kind end
 function __selu_add_plate(u) local f=CreateFrame('Frame'); f.namePlateUnitToken=u; __selu_plates[u]=f end
 C_NamePlate = {}
 function C_NamePlate.GetNamePlateForUnit(u) return __selu_plates[u] end
@@ -525,6 +678,43 @@ function math.random(a,b)
  assert(a<=b, 'interval is empty'); return a+math.floor(n*(b-a+1))
 end
 function UnitAura(u,i) return units[u] and units[u].auras[i] end
+-- XP, distance and visibility (sim.setUnit's xp/maxXp/distance/visible).
+__selu_world_flags = {xp_disabled=false, tracking=false}
+__selu_world_spells = {}; __selu_world_tracking = {}
+function UnitXP(u) local x=units[u]; return x and x.xp or 0 end
+function UnitXPMax(u) local x=units[u]; return x and x.max_xp or 0 end
+function IsXPUserDisabled() return __selu_world_flags.xp_disabled == true end
+function UnitDistanceSquared(u)
+ local x=units[u]
+ if not x or x.distance == nil then return 0, false end
+ return x.distance * x.distance, x.distance_checked ~= false
+end
+function UnitIsVisible(u) local x=units[u]; if x == nil then return false end; if x.visible ~= nil then return x.visible end; return true end
+-- Client CVars, kept across reload like the client keeps them. Setting one
+-- fires CVAR_UPDATE(name, value), as the client does.
+__selu_world_cvars = {uiScale='1',useUiScale='0',scriptErrors='0',cameraFov='90',statusText='1',statusTextDisplay='BOTH',
+    ActionButtonUseKeyDown='1',chatStyle='classic',chatMouseScroll='1',nameplateShowEnemies='0',
+    minimapZoom='0',rotateMinimap='0',showTutorials='0',countdownForCooldowns='0'}
+local function cvarText(value) if value == true then return '1' elseif value == false then return '0' end; return tostring(value) end
+function GetCVar(name)
+ local value = __selu_world_cvars[name]
+ if value == nil and name == 'textLocale' and GetLocale then return GetLocale() end
+ if value == nil then if __selu_unknown_cvar then __selu_unknown_cvar(name) end; return '0' end
+ return value
+end
+function GetCVarBool(name) return GetCVar(name)=='1' end
+function GetCVarNumber(name) return tonumber(GetCVar(name)) or 0 end
+function SetCVar(name,value)
+ local text = cvarText(value)
+ local changed = __selu_world_cvars[name] ~= text
+ __selu_world_cvars[name] = text
+ if changed and __selu_world_event then __selu_world_event('CVAR_UPDATE', name, text) end
+ return true
+end
+C_CVar = rawget(_G, 'C_CVar') or {}
+C_CVar.GetCVar=GetCVar; C_CVar.GetCVarBool=GetCVarBool; C_CVar.GetCVarNumber=GetCVarNumber; C_CVar.SetCVar=SetCVar
+function C_CVar.AreCVarsLoaded() return true end
+function C_CVar.GetCVarDefault(name) return GetCVar(name) end
 function time() return 946684800 + math.floor(GetTime()) end
 function date(format, timestamp)
  local t = timestamp or time()
@@ -594,6 +784,9 @@ pub struct Scenario {
     pub zone: String,
     pub subzone: String,
     pub map: u32,
+    /// The instance type IsInInstance reports: "" or "none" outdoors, else
+    /// "party", "raid", "pvp", "arena" or "scenario".
+    pub instance: String,
 }
 impl Scenario {
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
@@ -687,6 +880,14 @@ impl Scenario {
         zone.set("zone", self.zone.clone())?;
         zone.set("subzone", self.subzone.clone())?;
         zone.set("map", self.map)?;
+        zone.set(
+            "instance",
+            if self.instance.is_empty() {
+                "none"
+            } else {
+                self.instance.as_str()
+            },
+        )?;
         // MapDocumentation.lua: ZONE_CHANGED*, no payload.
         if map_changed {
             vm.fire("ZONE_CHANGED_NEW_AREA", vec![])?;
@@ -852,6 +1053,10 @@ impl Scenario {
         result.zone = zone.get("zone")?;
         result.subzone = zone.get("subzone")?;
         result.map = zone.get("map")?;
+        result.instance = zone
+            .get::<Option<String>>("instance")?
+            .filter(|i| i != "none")
+            .unwrap_or_default();
         let list: Table = globals.get("__selu_vignettes")?;
         for pair in list.pairs::<String, Table>() {
             let (guid, v) = pair?;
@@ -890,4 +1095,53 @@ mod bag_keys {
             .map(|(k, v)| Ok((k.parse().map_err(serde::de::Error::custom)?, v)))
             .collect()
     }
+}
+
+/// Spells and minimap tracking from the simulated world, over the manifest's
+/// stand-ins: a spell or tracking list the session defined answers from the
+/// world; anything else keeps the stand-in answer. Runs once per VM, after
+/// the manifest is installed.
+pub(crate) fn install_player_world(lua: &Lua) -> mlua::Result<()> {
+    if lua
+        .globals()
+        .raw_get::<bool>("__selu_player_world")
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    lua.globals().raw_set("__selu_player_world", true)?;
+    crate::host_lua::load(
+        lua,
+        r#"
+local function spell(id) return __selu_world_spells[id] end
+local prevPlayer, prevKnown = rawget(_G, 'IsPlayerSpell'), rawget(_G, 'IsSpellKnown')
+function IsPlayerSpell(id, ...) local s=spell(id); if s then return s.known == true end; if prevPlayer then return prevPlayer(id, ...) end; return false end
+function IsSpellKnown(id, ...) local s=spell(id); if s then return s.known == true end; if prevKnown then return prevKnown(id, ...) end; return false end
+C_Spell = rawget(_G, 'C_Spell') or {}
+local prevName, prevTexture, prevInfo = rawget(C_Spell, 'GetSpellName'), rawget(C_Spell, 'GetSpellTexture'), rawget(C_Spell, 'GetSpellInfo')
+C_Spell.GetSpellName = function(id, ...) local s=spell(id); if s then return s.name end; if prevName then return prevName(id, ...) end end
+C_Spell.GetSpellTexture = function(id, ...) local s=spell(id); if s then return s.icon, s.icon end; if prevTexture then return prevTexture(id, ...) end end
+C_Spell.GetSpellInfo = function(id, ...)
+ local s=spell(id)
+ if s then return {name=s.name, iconID=s.icon, originalIconID=s.icon, spellID=id, castTime=0, minRange=0, maxRange=0} end
+ if prevInfo then return prevInfo(id, ...) end
+end
+C_Minimap = rawget(_G, 'C_Minimap') or {}
+local prevCount, prevTracking = rawget(C_Minimap, 'GetNumTrackingTypes'), rawget(C_Minimap, 'GetTrackingInfo')
+C_Minimap.GetNumTrackingTypes = function(...)
+ if __selu_world_flags.tracking then return #__selu_world_tracking end
+ if prevCount then return prevCount(...) end
+ return 0
+end
+C_Minimap.GetTrackingInfo = function(i, ...)
+ if __selu_world_flags.tracking then
+  local t=__selu_world_tracking[i]
+  if t then return {name=t.name, texture=t.texture, active=t.active == true, type=t.type, subType=t.subType or -1, spellID=t.spellID} end
+  return nil
+ end
+ if prevTracking then return prevTracking(i, ...) end
+end
+"#,
+    )
+    .exec()
 }

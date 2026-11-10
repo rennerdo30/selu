@@ -80,6 +80,26 @@ fn overlay(m: &mut selu_manifest::Manifest) {
             json!([]),
         ),
         (
+            "sim.setSpell",
+            json!([{"name":"id","type":"number"},{"name":"spell","type":"unknown"}]),
+            json!([]),
+        ),
+        (
+            "sim.setTracking",
+            json!([{"name":"entries","type":"unknown"}]),
+            json!([]),
+        ),
+        (
+            "sim.setZone",
+            json!([{"name":"zone","type":"unknown"}]),
+            json!([]),
+        ),
+        (
+            "sim.setCVar",
+            json!([{"name":"name","type":"string"},{"name":"value","type":"string"}]),
+            json!([]),
+        ),
+        (
             "sim.prints",
             json!([]),
             json!([{"name":"prints","type":"table","attributes":{"InnerType":"string"}}]),
@@ -964,7 +984,72 @@ fn install(
                         .get::<Option<String>>("guid")?
                         .unwrap_or_else(|| format!("Creature-scenario-{token}")),
                 },
+            )?;
+            let status = selu_sim::world::UnitStatus {
+                xp: unit.get::<Option<u32>>("xp")?,
+                max_xp: unit.get::<Option<u32>>("maxXp")?,
+                distance: unit.get::<Option<f64>>("distance")?,
+                distance_checked: unit.get::<Option<bool>>("distanceChecked")?,
+                visible: unit.get::<Option<bool>>("visible")?,
+                xp_disabled: unit.get::<Option<bool>>("xpDisabled")?,
+            };
+            if status != selu_sim::world::UnitStatus::default() {
+                s.borrow().set_unit_status(&token, status)?;
+            }
+            Ok(())
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "setSpell",
+        lua.create_function(move |_, (id, spell): (u32, mlua::Table)| {
+            s.borrow().set_spell(selu_sim::world::SpellInfo {
+                id,
+                name: spell.get::<Option<String>>("name")?.unwrap_or_default(),
+                icon: spell.get::<Option<u32>>("icon")?.unwrap_or(134400),
+                known: spell.get::<Option<bool>>("known")?.unwrap_or(true),
+            })
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "setTracking",
+        lua.create_function(move |_, entries: mlua::Table| {
+            let mut list = Vec::new();
+            for entry in entries.sequence_values::<mlua::Table>() {
+                let entry = entry?;
+                list.push(selu_sim::world::TrackingInfo {
+                    name: entry.get::<Option<String>>("name")?.unwrap_or_default(),
+                    texture: entry.get::<Option<u32>>("texture")?.unwrap_or(0),
+                    active: entry.get::<Option<bool>>("active")?.unwrap_or(false),
+                    kind: entry
+                        .get::<Option<String>>("type")?
+                        .unwrap_or_else(|| "spell".into()),
+                    spell_id: entry.get::<Option<u32>>("spellID")?,
+                });
+            }
+            s.borrow().set_tracking(list)
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "setZone",
+        lua.create_function(move |_, zone: mlua::Table| {
+            s.borrow().set_zone(
+                &zone.get::<Option<String>>("zone")?.unwrap_or_default(),
+                &zone.get::<Option<String>>("subzone")?.unwrap_or_default(),
+                zone.get::<Option<u32>>("map")?.unwrap_or(0),
+                &zone
+                    .get::<Option<String>>("instance")?
+                    .unwrap_or_else(|| "none".into()),
             )
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "setCVar",
+        lua.create_function(move |_, (name, value): (String, String)| {
+            s.borrow().set_cvar(&name, &value)
         })?,
     )?;
     let s = session.clone();

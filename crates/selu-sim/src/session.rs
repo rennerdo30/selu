@@ -29,6 +29,26 @@ pub enum HostCommand {
     SetCombat {
         combat: bool,
     },
+    SetUnitStatus {
+        token: String,
+        status: crate::world::UnitStatus,
+    },
+    SetSpell {
+        spell: crate::world::SpellInfo,
+    },
+    SetTracking {
+        entries: Vec<crate::world::TrackingInfo>,
+    },
+    SetCVar {
+        name: String,
+        value: String,
+    },
+    SetZone {
+        zone: String,
+        subzone: String,
+        map: u32,
+        instance: String,
+    },
     SetMoney {
         copper: u64,
     },
@@ -876,12 +896,20 @@ impl Session {
         lock(&sim.state).ui_size = Some(config.ui_size);
         frames::configure_ui_size(sim.lua(), config.ui_size)?;
         crate::sim_globals::configure_screen(sim.lua(), config.ui_size)?;
-        let realm = config.realm.clone();
+        // "Name-Realm" (the client's character key) names the player and the
+        // realm separately, as UnitName and GetRealmName answer in game; a
+        // bare name keeps the session's realm.
+        let (player, realm) = match config.character.split_once('-') {
+            Some((name, realm)) if !name.is_empty() && !realm.is_empty() => {
+                (name.to_string(), realm.to_string())
+            }
+            _ => (config.character.clone(), config.realm.clone()),
+        };
         sim.lua().globals().raw_set(
             "GetRealmName",
             sim.lua().create_function(move |_, ()| Ok(realm.clone()))?,
         )?;
-        sim.lua().load("local name = ...; __selu_world_units.player = { name=name, class='WARRIOR', level=1, health=100, max_health=100, power=0, max_power=100, auras={}, combat=false }").call::<()>(config.character.as_str())?;
+        sim.lua().load("local name = ...; __selu_world_units.player = { name=name, class='WARRIOR', level=1, health=100, max_health=100, power=0, max_power=100, auras={}, combat=false }").call::<()>(player.as_str())?;
         sim.lua()
             .load(format!("math.randomseed({})", config.seed))
             .exec()?;
@@ -943,6 +971,45 @@ impl Session {
             .commands
             .push(HostCommand::SetCombat { combat });
         self.sim.set_combat(combat)
+    }
+    pub fn set_unit_status(&self, token: &str, status: crate::world::UnitStatus) -> SimResult<()> {
+        lock(&self.sim.state)
+            .commands
+            .push(HostCommand::SetUnitStatus {
+                token: token.into(),
+                status: status.clone(),
+            });
+        self.sim.set_unit_status(token, &status)
+    }
+    pub fn set_spell(&self, spell: crate::world::SpellInfo) -> SimResult<()> {
+        lock(&self.sim.state).commands.push(HostCommand::SetSpell {
+            spell: spell.clone(),
+        });
+        self.sim.set_spell(&spell)
+    }
+    pub fn set_tracking(&self, entries: Vec<crate::world::TrackingInfo>) -> SimResult<()> {
+        lock(&self.sim.state)
+            .commands
+            .push(HostCommand::SetTracking {
+                entries: entries.clone(),
+            });
+        self.sim.set_tracking(&entries)
+    }
+    pub fn set_zone(&self, zone: &str, subzone: &str, map: u32, instance: &str) -> SimResult<()> {
+        lock(&self.sim.state).commands.push(HostCommand::SetZone {
+            zone: zone.into(),
+            subzone: subzone.into(),
+            map,
+            instance: instance.into(),
+        });
+        self.sim.set_zone(zone, subzone, map, instance)
+    }
+    pub fn set_cvar(&self, name: &str, value: &str) -> SimResult<()> {
+        lock(&self.sim.state).commands.push(HostCommand::SetCVar {
+            name: name.into(),
+            value: value.into(),
+        });
+        self.sim.set_cvar(name, value)
     }
     pub fn set_money(&self, copper: u64) -> SimResult<()> {
         lock(&self.sim.state)
@@ -1304,6 +1371,10 @@ impl Session {
             "__selu_bag_slots",
             "__selu_edit_mode_preset",
             "__selu_sim_combat",
+            "__selu_world_flags",
+            "__selu_world_spells",
+            "__selu_world_tracking",
+            "__selu_world_cvars",
         ] {
             world.push((
                 name,
@@ -1337,8 +1408,15 @@ impl Session {
             .call::<()>(self.now())?;
         for (name, value) in world {
             let restored = crate::saved::restore(&replacement.lua, &value)?;
-            // Unit API closures hold the original units table.
-            if name == "__selu_world_units" {
+            // World API closures hold the original tables.
+            if matches!(
+                name,
+                "__selu_world_units"
+                    | "__selu_world_flags"
+                    | "__selu_world_spells"
+                    | "__selu_world_tracking"
+                    | "__selu_world_cvars"
+            ) {
                 let table: Table = replacement.lua.globals().raw_get(name)?;
                 if let Value::Table(values) = restored {
                     for pair in values.pairs::<Value, Value>() {
@@ -1542,6 +1620,28 @@ impl Vm {
             .set("__selu_loaded_dirs", lua.create_table()?)?;
         crate::world::install(&lua)?;
         crate::bindings::install(&lua)?;
+        let world_ctx = ctx.clone();
+        lua.globals().raw_set(
+            "__selu_world_event",
+            lua.create_function(move |lua, values: MultiValue| {
+                let mut values = values.into_iter();
+                let Some(Value::String(event)) = values.next() else {
+                    return Ok(());
+                };
+                let event = event.to_string_lossy();
+                let args: Vec<Value> = values.collect();
+                world_ctx.record(
+                    TraceKind::Event,
+                    &event,
+                    args.iter().map(value_string).collect(),
+                );
+                let tolerant = *lock(&world_ctx.tolerant_ui);
+                dispatch(lua, &world_ctx, || {
+                    crate::events::deliver(lua, &world_ctx, &event, &args, tolerant)
+                })?;
+                Ok(())
+            })?,
+        )?;
         let item_ctx = ctx.clone();
         lua.globals().raw_set(
             "__selu_item_data_result",

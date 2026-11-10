@@ -866,3 +866,51 @@ test("package", () => {
     assert_eq!(report.results.len(), 1);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn world_controls_drive_spells_tracking_xp_distance_cvars_and_zones() {
+    let dir = project(
+        "world-controls",
+        r#"
+test("world", () => {
+  sim.setSpell(2580, { name: "Find Minerals", icon: 136025, known: true });
+  expect(IsPlayerSpell(2580)).toBe(true);
+  expect(C_Spell.GetSpellName(2580)).toBe("Find Minerals");
+  sim.setTracking([{ name: "Find Minerals", texture: 136025, active: true, type: "spell", spellID: 2580 }]);
+  expect(C_Minimap.GetNumTrackingTypes()).toBe(1);
+  const info = C_Minimap.GetTrackingInfo(1);
+  expect(info != null && info.spellID == 2580 && info.active == true).toBe(true);
+  sim.setUnit("player", { xp: 300, maxXp: 1000 });
+  expect(UnitXP("player")).toBe(300);
+  expect(UnitXPMax("player")).toBe(1000);
+  sim.setUnit("party1", { name: "Friend", distance: 30 });
+  const [d, checked] = UnitDistanceSquared("party1");
+  expect(d).toBe(900);
+  expect(checked).toBe(true);
+  sim.setUnit("party2", { name: "Far", visible: false });
+  expect(UnitIsVisible("party2")).toBe(false);
+  sim.setCVar("countdownForCooldowns", "1");
+  expect(C_CVar.GetCVar("countdownForCooldowns")).toBe("1");
+  sim.setZone({ zone: "Deadmines", map: 291, instance: "party" });
+  const [inside, kind] = IsInInstance();
+  expect(inside).toBe(true);
+  expect(kind).toBe("party");
+  expect(GetRealmName()).toBe("Realm");
+});
+"#,
+    );
+    // The fixture manifest has none of these APIs; the pinned Forever build does.
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"Runner\"\ntargets = [\"wowf@1.60.1.70790\"]\n",
+    )
+    .unwrap();
+    let out = run(&dir, None);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
