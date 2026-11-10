@@ -1725,6 +1725,34 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 .map(|index| a.borrow().regions[index].table.get())
         );
     }
+    // SimpleHTML keeps one colour per text type: SetTextColor(textType, r, g,
+    // b, a) and GetTextColor(textType).
+    if matches!(method, "SetTextColor" | "GetTextColor")
+        && a.borrow().regions[i].kind == "SimpleHTML"
+        && let Some(Value::String(text_type)) = v.first()
+    {
+        let key = format!(
+            "__selu_html_color_{}",
+            text_type.to_string_lossy().to_uppercase()
+        );
+        if method == "GetTextColor" {
+            if let Some(color) = t.raw_get::<Option<Table>>(key.as_str())? {
+                out!((
+                    color.raw_get::<f64>(1)?,
+                    color.raw_get::<f64>(2)?,
+                    color.raw_get::<f64>(3)?,
+                    color.raw_get::<f64>(4)?
+                ));
+            }
+            out!((1.0, 1.0, 1.0, 1.0));
+        }
+        let color = lua.create_table()?;
+        for index in 1..=4 {
+            color.raw_set(index, number(v.get(index), 1.0))?;
+        }
+        t.raw_set(key, color)?;
+        out!(());
+    }
     if method == "GetFontObject" {
         out!(t.raw_get::<Value>("__font_object")?);
     }
