@@ -1,6 +1,6 @@
 # Packages
 
-Status: design, owner-approved 2026-11-10 (SL-42). Package 0 of the UI
+Status: implemented 2026-11-10 (SL-42; owner-approved). Package 0 of the UI
 toolkit and standard-library work: the mechanism only, plus one small test
 package. `selu-ui` and the standard-library modules come after it.
 
@@ -20,10 +20,17 @@ packages/<name>/
   src/**.selu       # internal modules, reachable only from inside the package
 ```
 
-The CLI embeds every package's files at compile time (for example with a
-`build.rs` that includes `packages/**`), so `selu.exe` alone is enough on a
-user's machine and Studio, `selu build`, `selu check` and `selu test` all see
-the same sources.
+The compiler embeds every package's `package.toml` and `src/**.selu` at
+compile time (`crates/selu-test/build.rs`), so `selu.exe` alone is enough on a
+user's machine, and Studio, `selu build`, `selu check` and `selu test` all see
+the same sources. `packages/<name>/tests/` is not embedded.
+
+`SELU_PACKAGES_DIR=<folder>` replaces the embedded set with the package
+folders in `<folder>`, read from disk. Package authors use it to try changes
+without rebuilding the compiler; the compiler's tests use it for packages that
+must not ship. A bad `package.toml`, a folder whose name differs from its
+`name`, or a package without `src/index.selu` is left out, and the first such
+problem is named in the "unknown package" help.
 
 `package.toml`:
 
@@ -51,8 +58,10 @@ import { CreateButton } from "@selu/ui";
   SELU0403 like any module cycle.
 - An unknown package is SELU0407 with the list of available packages in the
   help text.
-- Project paths may not start with `@` (SELU0318 already covers `__selu`;
-  extend the reserved check), so package keys never collide with project keys.
+- Any other `@` specifier is SELU0407 ("not a Selu package"). Project path
+  segments may not start with `@` (SELU0318, like `__selu`), so package keys
+  never collide with project keys.
+- A relative path that would leave a package's `src/` is SELU0400.
 
 ## Checking and output
 
@@ -87,10 +96,11 @@ Packages are libraries; the addon that imports them owns its global state.
 
 ## Tests
 
-- Package tests live in `packages/<name>/tests/*.test.selu` and run with
-  `selu test` from the package directory (the package acts as its own
-  project with `src/index.selu` as the root).
-- CLI tests cover: import by name; unknown package; internal path refused;
+- A `selu test` file may import a package by name, like project code.
+- Running `packages/<name>/tests/` as a package's own suite comes with
+  `selu-ui`, the first real package.
+- CLI tests (`crates/selu-cli/tests/packages.rs`, and the runner case in
+  `testing.rs`) cover: import by name; unknown package; internal path refused;
   package-to-package import; package cycle; `saved` and `export global`
   refused; output paths, TOC order and namespace keys; source-map paths;
   SELU0404 silence; product restriction.

@@ -1,0 +1,21 @@
+import { clamp } from "./math";
+
+// The value limited to [min, max].
+export function limit(value: number, min: number, max: number): number {
+  return clamp(value, min, max);
+}
+
+// A counter that never leaves its range.
+export class Counter {
+  value = 0;
+  max: number;
+
+  constructor(max: number) {
+    this.max = max;
+  }
+
+  Add(amount: number): number {
+    this.value = clamp(this.value + amount, 0, this.max);
+    return this.value;
+  }
+}

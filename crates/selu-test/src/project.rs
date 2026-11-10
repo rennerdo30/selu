@@ -216,6 +216,7 @@ fn build_impl(
         eprintln!("selu: {e}");
         ExitCode::FAILURE
     })?;
+    check_package_products(&sources, &selected)?;
     if !check_only {
         lock.write(project_dir).map_err(|e| {
             eprintln!("selu: {e}");
@@ -476,7 +477,7 @@ fn build_impl(
             asset_roots(&lowered.lua, &project.name, &mut referenced);
         }
         for ((module, _), lowered) in compiled.into_iter().zip(lowered_files) {
-            let lua_name = format!("{}.lua", module.key);
+            let lua_name = format!("{}.lua", crate::packages::output_key(&module.key));
             let output = out_dir.join(&lua_name);
             let map = map_dir.join(format!("{lua_name}.map"));
             for path in [&output, &map] {
@@ -487,7 +488,7 @@ fn build_impl(
             }
             let source_map = lowered.source_map(
                 &lua_name,
-                &format!("src/{}.selu", module.key),
+                &crate::packages::source_name(&module.key),
                 &module.source,
             );
             // The debug toggle keeps line counts, so the map stays valid.
@@ -588,6 +589,45 @@ fn build_impl(
         eprintln!("SELU0466: cannot write saved shapes: {e}");
         ExitCode::FAILURE
     })?;
+    Ok(())
+}
+
+/// A package used on a product outside its `products` list (SELU0408),
+/// reported at the first import of that package.
+fn check_package_products(sources: &[ModuleSource], selected: &[Manifest]) -> Result<(), ExitCode> {
+    let packages = crate::packages::packages();
+    for module in sources {
+        let Some(name) = crate::packages::package_of(&module.key) else {
+            continue;
+        };
+        let Some(package) = packages.packages.get(name) else {
+            continue;
+        };
+        for manifest in selected {
+            let product = selu_manifest::product(&manifest.flavour);
+            if package.products.iter().any(|p| p == product) {
+                continue;
+            }
+            let entry = format!("{}{name}", crate::packages::PREFIX);
+            let site = sources.iter().find_map(|m| {
+                m.program.stmts.iter().find_map(|s| match &s.kind {
+                    selu_syntax::StmtKind::Import {
+                        from, from_span, ..
+                    } if *from == entry => Some((m, from_span.clone())),
+                    _ => None,
+                })
+            });
+            let d = Diagnostic::error(
+                "SELU0408",
+                format!("package `{entry}` does not support the product `{product}`"),
+            )
+            .with_help(format!("it supports: {}", package.products.join(", ")));
+            return Err(match site {
+                Some((m, span)) => fail(&d.with_span(span), &m.source),
+                None => fail(&d, ""),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -781,6 +821,113 @@ fn actual_module_key(src: &Path, key: &str) -> Option<String> {
     }
     Some(actual.join("/").strip_suffix(".selu")?.to_string())
 }
+/// The source of a module key: a package module, or a file below `src/`.
+fn read_module(src: &Path, key: &str) -> Result<String, String> {
+    if crate::packages::is_package_key(key) {
+        return crate::packages::source(key)
+            .map(str::to_string)
+            .ok_or_else(|| format!("package module `{key}` does not exist"));
+    }
+    let path = src.join(format!("{key}.selu"));
+    std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+}
+
+/// Resolves an import written in module `key` to a module key: `@selu/<name>`
+/// to the package entry point, a relative path within the project or within
+/// the importing package (docs/lang/packages.md).
+pub fn resolve_import(key: &str, from: &str) -> Result<String, Diagnostic> {
+    let packages = crate::packages::packages();
+    if let Some(rest) = from.strip_prefix(crate::packages::PREFIX) {
+        if let Some((name, path)) = rest.split_once('/') {
+            return Err(Diagnostic::error(
+                "SELU0407",
+                format!("`{path}` is internal to package `{name}`"),
+            )
+            .with_help(format!("import the package by its name: \"@selu/{name}\"")));
+        }
+        if !packages.packages.contains_key(rest) {
+            let known: Vec<_> = packages
+                .packages
+                .keys()
+                .map(|n| format!("@selu/{n}"))
+                .collect();
+            let mut help = if known.is_empty() {
+                "this compiler ships no packages".to_string()
+            } else {
+                format!("available packages: {}", known.join(", "))
+            };
+            if let Some(problem) = packages.errors.first() {
+                help = format!("{help} ({problem})");
+            }
+            return Err(
+                Diagnostic::error("SELU0407", format!("unknown package `{from}`")).with_help(help),
+            );
+        }
+        return Ok(format!("{}{rest}/index", crate::packages::PREFIX));
+    }
+    if from.starts_with('@') {
+        return Err(Diagnostic::error(
+            "SELU0407",
+            format!("`{from}` is not a Selu package"),
+        )
+        .with_help(
+            "packages are imported as \"@selu/<name>\"; project modules with a relative path such as ./other",
+        ));
+    }
+    let dep = import_key(key, from).ok_or_else(|| {
+        Diagnostic::error(
+            "SELU0400",
+            "module paths must be relative and omit the extension",
+        )
+        .with_help("use a path such as ./other")
+    })?;
+    match crate::packages::package_of(key) {
+        Some(name) => {
+            if !dep.starts_with(&format!("{}{name}/", crate::packages::PREFIX)) {
+                return Err(Diagnostic::error(
+                    "SELU0400",
+                    format!("module paths in package `{name}` cannot leave the package"),
+                )
+                .with_help("import another package by its name, such as \"@selu/<name>\""));
+            }
+        }
+        None => {
+            if dep.split('/').any(|part| part.starts_with('@')) {
+                return Err(Diagnostic::error(
+                    "SELU0318",
+                    "project module path names starting with @ are reserved for packages",
+                )
+                .with_help("rename the file or directory so no path segment starts with @"));
+            }
+        }
+    }
+    Ok(dep)
+}
+
+/// Packages are libraries: the addon owns its saved data and globals.
+fn package_rules(program: &selu_syntax::Program, source: &str) -> Result<(), ExitCode> {
+    for statement in &program.stmts {
+        let inner = match &statement.kind {
+            selu_syntax::StmtKind::Export(inner) => inner.as_ref(),
+            _ => statement,
+        };
+        let what = match inner.kind {
+            selu_syntax::StmtKind::Saved { .. } => "saved data",
+            selu_syntax::StmtKind::Global { .. } => "globals",
+            _ => continue,
+        };
+        return Err(fail(
+            &Diagnostic::error("SELU0409", format!("a package cannot declare {what}"))
+                .with_span(statement.span.clone())
+                .with_help(
+                    "the addon that imports the package owns its saved data and globals; take the value from the caller",
+                ),
+            source,
+        ));
+    }
+    Ok(())
+}
+
 pub fn project_sources(src: &Path) -> Result<Vec<ModuleSource>, ExitCode> {
     project_sources_roots(src, &[])
 }
@@ -795,13 +942,15 @@ pub fn project_sources_roots(src: &Path, roots: &[String]) -> Result<Vec<ModuleS
         if modules.contains_key(key) {
             return Ok(());
         }
-        let path = src.join(format!("{key}.selu"));
-        let source = std::fs::read_to_string(&path).map_err(|e| {
-            eprintln!("SELU0400: cannot read {}: {e}", path.display());
+        let source = read_module(src, key).map_err(|message| {
+            eprintln!("SELU0400: {message}");
             ExitCode::FAILURE
         })?;
         let program =
             selu_syntax::parse(&format!("{key}.selu"), &source).map_err(|d| fail(&d, &source))?;
+        if crate::packages::is_package_key(key) {
+            package_rules(&program, &source)?;
+        }
         stack.push(key.into());
         let mut dependencies = BTreeMap::new();
         for s in &program.stmts {
@@ -822,18 +971,23 @@ pub fn project_sources_roots(src: &Path, roots: &[String]) -> Result<Vec<ModuleS
                 if let Some(diagnostic) = selu_check::reserved_module_path(from, from_span) {
                     return Err(fail(&diagnostic, &source));
                 }
-                let dep = import_key(key, from).ok_or_else(|| {
-                    fail(
-                        &Diagnostic::error(
-                            "SELU0400",
-                            "module paths must be relative and omit the extension",
-                        )
-                        .with_span(from_span.clone())
-                        .with_help("use a path such as ./other"),
-                        &source,
-                    )
-                })?;
-                if let Some(actual) = actual_module_key(src, &dep)
+                let dep = match resolve_import(key, from) {
+                    Ok(dep) => dep,
+                    Err(d) => return Err(fail(&d.with_span(from_span.clone()), &source)),
+                };
+                if crate::packages::is_package_key(&dep) {
+                    if crate::packages::source(&dep).is_none() {
+                        return Err(fail(
+                            &Diagnostic::error(
+                                "SELU0400",
+                                format!("module `{from}` does not exist"),
+                            )
+                            .with_span(from_span.clone())
+                            .with_help("check the relative module path"),
+                            &source,
+                        ));
+                    }
+                } else if let Some(actual) = actual_module_key(src, &dep)
                     && actual != dep
                 {
                     return Err(fail(
@@ -848,7 +1002,9 @@ pub fn project_sources_roots(src: &Path, roots: &[String]) -> Result<Vec<ModuleS
                         &source,
                     ));
                 }
-                if !src.join(format!("{dep}.selu")).is_file() {
+                if !crate::packages::is_package_key(&dep)
+                    && !src.join(format!("{dep}.selu")).is_file()
+                {
                     return Err(fail(
                         &Diagnostic::error("SELU0400", format!("module `{from}` does not exist"))
                             .with_span(from_span.clone())
@@ -867,15 +1023,14 @@ pub fn project_sources_roots(src: &Path, roots: &[String]) -> Result<Vec<ModuleS
                             .render(&source)
                     );
                     for pair in cycle.windows(2).take(cycle.len() - 2) {
-                        let text = std::fs::read_to_string(src.join(format!("{}.selu", pair[0])))
-                            .map_err(|_| ExitCode::FAILURE)?;
+                        let text = read_module(src, &pair[0]).map_err(|_| ExitCode::FAILURE)?;
                         let p = selu_syntax::parse(&format!("{}.selu", pair[0]), &text)
                             .map_err(|d| fail(&d, &text))?;
                         for s in p.stmts {
                             if let selu_syntax::StmtKind::Import {
                                 from, from_span, ..
                             } = s.kind
-                                && import_key(&pair[0], &from).as_ref() == Some(&pair[1])
+                                && resolve_import(&pair[0], &from).ok().as_ref() == Some(&pair[1])
                             {
                                 eprint!(
                                     "{}",

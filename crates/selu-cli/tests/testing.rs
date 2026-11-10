@@ -841,3 +841,28 @@ fn client_assets_opt_out_prevents_opening_explicit_invalid_install() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("passed"));
 }
+
+#[test]
+fn test_files_import_packages() {
+    let dir = project(
+        "package",
+        r#"
+import { limit, Counter } from "@selu/test-package";
+test("package", () => {
+  expect(limit(9, 0, 4)).toBe(4);
+  const counter = new Counter(3);
+  expect(counter.Add(5)).toBe(3);
+});
+"#,
+    );
+    let out = run(&dir, None);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: selu_test::Report = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report.results.len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}

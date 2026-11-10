@@ -238,8 +238,7 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
             selu_syntax::parse(file, &source).map_err(|d| build_error(d.render(&source)))?;
         for stmt in &program.stmts {
             if let selu_syntax::StmtKind::Import { from, .. } = &stmt.kind {
-                let key = project::import_key(file.trim_end_matches(".selu"), from)
-                    .and_then(|s| s.strip_prefix("src/").map(String::from))
+                let key = test_import_key(file, from)
                     .ok_or_else(|| build_error("SELU0621: tests must import modules under src/"))?;
                 roots.push(key);
             }
@@ -293,14 +292,17 @@ pub fn run(options: &RunOptions) -> Result<Report, RunError> {
             .project_dir
             .join("dist/.selu")
             .join(name)
-            .join(format!("{}.lua.map", module.key));
+            .join(format!(
+                "{}.lua.map",
+                crate::packages::output_key(&module.key)
+            ));
         if let Ok(text) = std::fs::read_to_string(path) {
             module_maps.push(selu_sourcemap::SourceMap::from_json(&text).map_err(build_error)?);
         }
     }
     let sources: Vec<String> = modules
         .iter()
-        .map(|m| format!("{}.lua", m.key))
+        .map(|m| format!("{}.lua", crate::packages::output_key(&m.key)))
         .chain(["Selu.lua".into(), "__selu_runtime.lua".into()])
         .collect();
     drop(modules);
@@ -415,11 +417,9 @@ fn compile_file(
     let mut lower_imports = BTreeMap::new();
     for stmt in &program.stmts {
         if let selu_syntax::StmtKind::Import { from, .. } = &stmt.kind {
-            let key = project::import_key(file.trim_end_matches(".selu"), from)
-                .and_then(|s| s.strip_prefix("src/").map(String::from))
-                .ok_or_else(|| {
-                    build_error("SELU0621: tests must import project modules under src/")
-                })?;
+            let key = test_import_key(file, from).ok_or_else(|| {
+                build_error("SELU0621: tests must import project modules under src/")
+            })?;
             let signature = exports
                 .get(&key)
                 .ok_or_else(|| {
@@ -1266,4 +1266,14 @@ mod scenario_tests {
             .unwrap();
         std::fs::remove_file(path).unwrap();
     }
+}
+
+/// The module key a test file's import names: a project module under
+/// `src/`, or a package entry point (`@selu/<name>`).
+fn test_import_key(file: &str, from: &str) -> Option<String> {
+    if from.starts_with(crate::packages::PREFIX) {
+        return project::resolve_import("main", from).ok();
+    }
+    project::import_key(file.trim_end_matches(".selu"), from)
+        .and_then(|s| s.strip_prefix("src/").map(String::from))
 }
