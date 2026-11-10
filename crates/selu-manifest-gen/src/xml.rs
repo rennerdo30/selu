@@ -1,11 +1,13 @@
 //! XML names and template metadata, never XML text.
 use quick_xml::{Reader, events::Event};
-use selu_manifest::{Declaration, Evidence, GlobalEntry, Manifest};
+use selu_manifest::{ChildKey, Declaration, Evidence, GlobalEntry, Manifest};
 use std::collections::BTreeMap;
 pub fn declaration(name: &str, ty: &str, file: &str) -> Declaration {
     serde_json::from_value(serde_json::json!({"name":name,"type":ty,"evidence":"source","attributes":{"file":file.strip_prefix("Interface/AddOns/").unwrap_or(file)}})).unwrap()
 }
-type ChildDefinitions = BTreeMap<String, Vec<(String, String, Vec<String>)>>;
+/// Per template: its named children as (name pattern, type, templates,
+/// the owner of the child's keyed children when it has a key).
+type ChildDefinitions = BTreeMap<String, Vec<(String, String, Vec<String>, Option<String>)>>;
 #[derive(Default)]
 pub struct Xml {
     globals: BTreeMap<String, (String, Vec<String>)>,
@@ -18,6 +20,57 @@ pub struct Xml {
     own_inherits: BTreeMap<String, Vec<String>>,
     numbers: BTreeMap<String, BTreeMap<String, f64>>,
     strings: BTreeMap<String, BTreeMap<String, String>>,
+    /// Keyed children (`parentKey`) per element: a named frame, a template,
+    /// or a keyed child as `<owner>.<key>`.
+    keys: BTreeMap<String, Vec<ChildKey>>,
+    /// Globals a template's named child becomes per instance, with the
+    /// owner of that child's keyed children.
+    key_aliases: BTreeMap<String, String>,
+}
+/// Region and animation tags that can carry a `parentKey` but are not in the
+/// schema's widget substitution group, with the widget type each creates.
+fn keyed_region(tag: &str) -> Option<&'static str> {
+    Some(match tag {
+        "NormalTexture"
+        | "PushedTexture"
+        | "DisabledTexture"
+        | "HighlightTexture"
+        | "CheckedTexture"
+        | "DisabledCheckedTexture"
+        | "ThumbTexture"
+        | "BarTexture"
+        | "ColorWheelTexture"
+        | "ColorWheelThumbTexture"
+        | "ColorValueTexture"
+        | "ColorValueThumbTexture"
+        | "ColorAlphaTexture"
+        | "ColorAlphaThumbTexture"
+        | "SwipeTexture"
+        | "EdgeTexture"
+        | "BlingTexture" => "Texture",
+        "ButtonText" => "FontString",
+        "MaskTexture" => "MaskTexture",
+        "Line" => "Line",
+        "AnimationGroup" => "AnimationGroup",
+        // Animations are documented under their Simple* names.
+        "Animation" => "SimpleAnim",
+        "Alpha" => "SimpleAnimAlpha",
+        "Scale" => "SimpleAnimScale",
+        "Translation" => "SimpleAnimTranslation",
+        "Rotation" => "SimpleAnimRotation",
+        "Path" => "SimpleAnimPath",
+        "FlipBook" => "SimpleAnimFlipBook",
+        "TextureCoordTranslation" => "SimpleAnimTextureCoordTranslation",
+        "VertexColor" => "SimpleAnimVertexColor",
+        _ => return None,
+    })
+}
+fn identifier(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 impl Xml {
     /// Read widget tag identities from this pin's schema, including intrinsic aliases.
@@ -55,7 +108,8 @@ impl Xml {
     }
     pub fn parse(&mut self, file: &str, text: &str) -> Result<(), String> {
         let mut reader = Reader::from_str(text.trim_start_matches('\u{feff}'));
-        let mut stack: Vec<(Option<String>, bool, Option<String>)> = vec![];
+        // (nearest named widget, inside a template, template root, element owner)
+        let mut stack: Vec<(Option<String>, bool, Option<String>, Option<String>)> = vec![];
         let mut key_value_owner: Option<String> = None;
         loop {
             let event = reader.read_event().map_err(|e| format!("{file}: {e}"))?;
@@ -149,6 +203,38 @@ impl Xml {
                     {
                         inherits.insert(0, tag.clone());
                     }
+                    // Keyed children: `parent.<key>` is this element. A named
+                    // frame or template owns its keys under its name, a keyed
+                    // child under `<owner>.<key>`; an unkeyed anonymous child
+                    // cannot be reached, so nothing below it is recorded.
+                    let region = keyed_region(&tag);
+                    let keyed = widget && !font || region.is_some();
+                    let key = attrs.get("parentKey").filter(|k| identifier(k));
+                    let path = match (&parent.3, key) {
+                        (Some(owner), Some(key)) => Some(format!("{owner}.{key}")),
+                        _ => None,
+                    };
+                    let named = widget && !font && (!virtual_node || !parent.1);
+                    let element = if !keyed {
+                        parent.3.clone()
+                    } else if named && resolved.is_some() {
+                        resolved.clone()
+                    } else {
+                        path.clone()
+                    };
+                    if keyed && let (Some(owner), Some(key)) = (&parent.3, key) {
+                        let children = self.keys.entry(owner.clone()).or_default();
+                        if !children.iter().any(|c| &c.key == key) {
+                            children.push(ChildKey {
+                                key: key.clone(),
+                                ty: region.map(str::to_owned).unwrap_or_else(|| {
+                                    self.types.get(&tag).cloned().unwrap_or(tag.clone())
+                                }),
+                                templates: inherits.clone(),
+                                element: element.clone().filter(|e| Some(e) != path.as_ref()),
+                            });
+                        }
+                    }
                     if widget && let Some(n) = &resolved {
                         if let Some(mixins) = attrs.get("mixin") {
                             self.own_mixins.entry(n.clone()).or_insert_with(|| {
@@ -180,6 +266,7 @@ impl Xml {
                                     pattern,
                                     self.types.get(&tag).cloned().unwrap_or(tag.clone()),
                                     inherits.clone(),
+                                    path.clone(),
                                 ));
                             }
                         } else {
@@ -199,7 +286,12 @@ impl Xml {
                         } else {
                             parent.2
                         };
-                        stack.push((if widget { resolved } else { parent.0 }, virtual_node, root));
+                        stack.push((
+                            if widget { resolved } else { parent.0 },
+                            virtual_node,
+                            root,
+                            element,
+                        ));
                     }
                 }
                 Event::End(_) => {
@@ -276,6 +368,7 @@ impl Xml {
                     &self.templates,
                     &self.children,
                     &mut self.globals,
+                    &mut self.key_aliases,
                     &mut Vec::new(),
                 );
             }
@@ -304,6 +397,36 @@ impl Xml {
                 });
             }
         }
+        // Children of unknown widget types are dropped in `encode`, once the
+        // overlays have added the canonical widgets.
+        // A template's named child is a global per instance: that global
+        // has the keyed children its template definition gave it inline.
+        for (global, element) in std::mem::take(&mut self.key_aliases) {
+            if self.keys.contains_key(&global) {
+                continue;
+            }
+            if let Some(children) = self.keys.get(&element) {
+                let children = children
+                    .iter()
+                    .map(|child| ChildKey {
+                        element: Some(
+                            child
+                                .element
+                                .clone()
+                                .unwrap_or_else(|| format!("{element}.{}", child.key)),
+                        ),
+                        ..child.clone()
+                    })
+                    .collect();
+                self.keys.insert(global, children);
+            }
+        }
+        let mut child_keys = Vec::new();
+        for (owner, mut children) in std::mem::take(&mut self.keys) {
+            children.sort_by(|a, b| a.key.cmp(&b.key));
+            child_keys.push(selu_manifest::ChildKeys { owner, children });
+        }
+        m.child_keys = child_keys;
         for (_, mut template) in self.templates {
             if let Some(mixins) = template.attributes.get("mixins").and_then(|v| v.as_array()) {
                 for mixin in mixins {
@@ -335,6 +458,7 @@ fn expand_children(
     definitions: &BTreeMap<String, Declaration>,
     children: &ChildDefinitions,
     globals: &mut BTreeMap<String, (String, Vec<String>)>,
+    aliases: &mut BTreeMap<String, String>,
     path: &mut Vec<String>,
 ) {
     if path.iter().any(|t| t == template) {
@@ -343,17 +467,28 @@ fn expand_children(
     path.push(template.into());
     if let Some(definition) = definitions.get(template) {
         for parent in &definition.inherits {
-            expand_children(parent, instance, definitions, children, globals, path);
+            expand_children(
+                parent,
+                instance,
+                definitions,
+                children,
+                globals,
+                aliases,
+                path,
+            );
         }
     }
     if let Some(children_of_template) = children.get(template) {
-        for (pattern, ty, parents) in children_of_template {
+        for (pattern, ty, parents, element) in children_of_template {
             let name = pattern.replace("$parent", instance);
             globals
                 .entry(name.clone())
                 .or_insert((ty.clone(), parents.clone()));
+            if let Some(element) = element {
+                aliases.entry(name.clone()).or_insert(element.clone());
+            }
             for parent in parents.iter().chain(std::iter::once(ty)) {
-                expand_children(parent, &name, definitions, children, globals, path);
+                expand_children(parent, &name, definitions, children, globals, aliases, path);
             }
         }
     }
@@ -445,6 +580,135 @@ mod tests {
         for n in ["Base", "Derived", "BaseName", "ButtonBaseIcon"] {
             assert!(!m.has_global(n), "{n}");
         }
+    }
+    #[test]
+    fn keyed_children_of_frames_templates_and_nested_children() {
+        let mut xml = Xml::default();
+        xml.parse(
+            "keys.xml",
+            r#"<Ui>
+            <Frame name="PortraitBase" virtual="true">
+              <Frames>
+                <Frame parentKey="PortraitContainer">
+                  <Layers><Layer><Texture parentKey="portrait"/><Texture/></Layer></Layers>
+                </Frame>
+                <Frame name="$parentInset" parentKey="Inset" inherits="InsetBase"/>
+                <Frame name="$parentCard" parentKey="Card"><Layers><Layer><Texture parentKey="Icon"/></Layer></Layers></Frame>
+                <Frame><Layers><Layer><Texture parentKey="Unreachable"/></Layer></Layers></Frame>
+              </Frames>
+              <Layers><Layer><FontString parentKey="TitleText"/><Texture parentKey="1bad"/></Layer></Layers>
+            </Frame>
+            <Frame name="InsetBase" virtual="true">
+              <Layers><Layer><Texture parentKey="Bg"/></Layer></Layers>
+            </Frame>
+            <Frame name="Shop" inherits="PortraitBase">
+              <Frames>
+                <Button name="$parentBuy" parentKey="Buy">
+                  <NormalTexture parentKey="Art"/>
+                  <ButtonText parentKey="Label"/>
+                  <Animations><AnimationGroup parentKey="Pulse"><Alpha parentKey="Fade"/></AnimationGroup></Animations>
+                </Button>
+                <Frame parentKey="Odd"><Frames><Frame parentKey="Nested"/></Frames></Frame>
+                <Unknown parentKey="Skipped"/>
+              </Frames>
+            </Frame></Ui>"#,
+        )
+        .unwrap();
+        let mut m = manifest();
+        for widget in [
+            "Frame",
+            "Button",
+            "Texture",
+            "FontString",
+            "AnimationGroup",
+            "SimpleAnimAlpha",
+        ] {
+            let mut d = declaration(widget, "ScriptObject", "");
+            d.attributes.clear();
+            m.widgets.push(d);
+        }
+        xml.extend_manifest(&mut m);
+        let bytes = crate::encode(&mut m).unwrap();
+        let keys = |owner: &str| -> Vec<(String, String, Vec<String>, Option<String>)> {
+            m.child_keys
+                .iter()
+                .find(|c| c.owner == owner)
+                .map(|c| {
+                    c.children
+                        .iter()
+                        .map(|k| {
+                            (
+                                k.key.clone(),
+                                k.ty.clone(),
+                                k.templates.clone(),
+                                k.element.clone(),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let plain = |key: &str, ty: &str| (key.to_owned(), ty.to_owned(), vec![], None);
+        assert_eq!(
+            keys("PortraitBase"),
+            [
+                plain("Card", "Frame"),
+                (
+                    "Inset".to_owned(),
+                    "Frame".to_owned(),
+                    vec!["InsetBase".to_owned()],
+                    None
+                ),
+                plain("PortraitContainer", "Frame"),
+                plain("TitleText", "FontString"),
+            ]
+        );
+        assert_eq!(
+            keys("PortraitBase.PortraitContainer"),
+            [plain("portrait", "Texture")]
+        );
+        assert_eq!(keys("InsetBase"), [plain("Bg", "Texture")]);
+        // A template's named child is a global per instance; its inline keys follow it.
+        assert_eq!(
+            keys("ShopCard"),
+            [(
+                "Icon".to_owned(),
+                "Texture".to_owned(),
+                vec![],
+                Some("PortraitBase.Card.Icon".to_owned())
+            )]
+        );
+        assert_eq!(keys("PortraitBase.Card"), [plain("Icon", "Texture")]);
+        // A named global child owns its keys under its global name.
+        assert_eq!(
+            keys("Shop"),
+            [
+                (
+                    "Buy".to_owned(),
+                    "Button".to_owned(),
+                    vec![],
+                    Some("ShopBuy".to_owned())
+                ),
+                plain("Odd", "Frame"),
+            ]
+        );
+        assert_eq!(
+            keys("ShopBuy"),
+            [
+                plain("Art", "Texture"),
+                plain("Label", "FontString"),
+                plain("Pulse", "AnimationGroup"),
+            ]
+        );
+        assert_eq!(keys("ShopBuy.Pulse"), [plain("Fade", "SimpleAnimAlpha")]);
+        assert_eq!(keys("Shop.Odd"), [plain("Nested", "Frame")]);
+        let owners: Vec<_> = m.child_keys.iter().map(|c| c.owner.as_str()).collect();
+        let mut sorted = owners.clone();
+        sorted.sort();
+        assert_eq!(owners, sorted);
+        assert!(!owners.iter().any(|o| o.contains("Unreachable")));
+        let decoded: Manifest = selu_manifest::format::decode(&bytes).unwrap();
+        assert_eq!(decoded, m);
     }
     #[test]
     fn review_truncated_xml() {

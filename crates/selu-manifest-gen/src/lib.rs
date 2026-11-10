@@ -608,6 +608,20 @@ pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
     }
     m.templates.sort_by(|a, b| a.name.cmp(&b.name));
     m.data_globals.sort_by(|a, b| a.name.cmp(&b.name));
+    // Keyed children keep only widget types this client knows; the overlays
+    // have added the canonical widgets (Frame, Texture, ...) by now.
+    let known: BTreeSet<String> = m
+        .widgets
+        .iter()
+        .flat_map(|w| [Some(w.name.as_str()), w.name.strip_suffix("API")])
+        .flatten()
+        .map(str::to_owned)
+        .collect();
+    for entry in &mut m.child_keys {
+        entry.children.retain(|c| known.contains(&c.ty));
+    }
+    m.child_keys.retain(|entry| !entry.children.is_empty());
+    m.child_keys.sort_by(|a, b| a.owner.cmp(&b.owner));
     selu_manifest::format::encode_manifest(m)
 }
 #[cfg(test)]

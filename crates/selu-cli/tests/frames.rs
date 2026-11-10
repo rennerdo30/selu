@@ -143,6 +143,154 @@ fn review_global_children_are_not_fields_and_run_as_globals() {
     assert_eq!(sim.prints(), vec!["ok"]);
 }
 
+fn keyed(
+    owner: &str,
+    children: &[(&str, &str, &[&str], Option<&str>)],
+) -> selu_manifest::ChildKeys {
+    selu_manifest::ChildKeys {
+        owner: owner.into(),
+        children: children
+            .iter()
+            .map(|(key, ty, templates, element)| selu_manifest::ChildKey {
+                key: (*key).into(),
+                ty: (*ty).into(),
+                templates: templates.iter().map(|t| (*t).to_owned()).collect(),
+                element: element.map(str::to_owned),
+            })
+            .collect(),
+    }
+}
+/// The vendor window with keyed children as the generator records them: own
+/// keys, a template's keys, a nested keyed child and a named global child.
+fn keyed_manifest() -> Manifest {
+    let mut m = retail();
+    let merchant = m
+        .globals
+        .iter_mut()
+        .find(|g| g.name == "MerchantFrame")
+        .unwrap();
+    merchant.templates = vec!["KeyedShell".into()];
+    m.templates.push(selu_manifest::DataEntry {
+        name: "KeyedShell".into(),
+        source: 0,
+        evidence: selu_manifest::Evidence::Source,
+        ty: Some("Frame".into()),
+        fields: vec!["TitleText".into()],
+        methods: vec![],
+        inherits: vec!["KeyedBase".into()],
+        mixins: vec![],
+        values: Default::default(),
+    });
+    m.templates.push(selu_manifest::DataEntry {
+        name: "KeyedBase".into(),
+        source: 0,
+        evidence: selu_manifest::Evidence::Source,
+        ty: Some("Frame".into()),
+        fields: vec![],
+        methods: vec![],
+        inherits: vec![],
+        mixins: vec![],
+        values: Default::default(),
+    });
+    m.child_keys = vec![
+        keyed("KeyedBase", &[("Bg", "Texture", &[], None)]),
+        keyed(
+            "KeyedBase.PortraitContainer",
+            &[("portrait", "Texture", &[], None)],
+        ),
+        keyed(
+            "KeyedShell",
+            &[
+                (
+                    "PortraitContainer",
+                    "Frame",
+                    &[],
+                    Some("KeyedBase.PortraitContainer"),
+                ),
+                ("TitleText", "FontString", &[], None),
+            ],
+        ),
+        keyed(
+            "MerchantFrame",
+            &[("Inset", "Frame", &["KeyedBase"], Some("MerchantFrameInset"))],
+        ),
+        keyed("MerchantFrameInset", &[("Rule", "Texture", &[], None)]),
+    ];
+    m
+}
+
+#[test]
+fn keyed_children_are_typed_fields_through_templates_and_nesting() {
+    let m = keyed_manifest();
+    let src = r#"
+        const frame = MerchantFrame;
+        frame.Inset.Bg.SetAlpha(0);
+        frame.Inset.Rule.SetAlpha(0.5);
+        frame.Bg.SetAlpha(0);
+        frame.PortraitContainer.portrait.SetAlpha(0);
+        frame.TitleText.SetText("shop");
+        function fade(texture: Texture) { texture.SetAlpha(0); }
+        fade(frame.Inset.Bg);
+        print(readable(frame.TitleText.GetText()) ?? "");
+    "#;
+    let p = selu_syntax::parse("frames.selu", src).unwrap();
+    let c = check(src, std::slice::from_ref(&m), true);
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    let lua = selu_lower::lower(&p, &m, &c.types).lua;
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval(
+        "MerchantFrame = CreateFrame('Frame'); local f = MerchantFrame
+         f.Inset = CreateFrame('Frame', nil, f); f.Inset.Bg = f.Inset:CreateTexture(); f.Inset.Rule = f.Inset:CreateTexture()
+         f.Bg = f:CreateTexture(); f.PortraitContainer = CreateFrame('Frame', nil, f)
+         f.PortraitContainer.portrait = f.PortraitContainer:CreateTexture(); f.TitleText = f:CreateFontString()",
+    )
+    .unwrap();
+    sim.load_files(&[("frames.lua".into(), lua)]).unwrap();
+    assert_eq!(sim.prints(), vec!["shop"]);
+    sim.eval("assert(MerchantFrame.Inset.Bg:GetAlpha() == 0 and MerchantFrame.Inset.Rule:GetAlpha() == 0.5)")
+        .unwrap();
+    for (src, code) in [
+        // A key nobody records stays an error.
+        ("MerchantFrame.Missing.SetAlpha(0);", "SELU0582"),
+        ("MerchantFrame.Inset.portrait.SetAlpha(0);", "SELU0582"),
+        // The child keeps its own widget type.
+        ("MerchantFrame.Bg.SetText(\"no\");", "SELU0582"),
+    ] {
+        let d = check(src, std::slice::from_ref(&m), false);
+        assert!(
+            d.diagnostics.iter().any(|d| d.code == code),
+            "{src}: {:?}",
+            d.diagnostics
+        );
+    }
+    // A keyed child cannot be replaced.
+    let d = check(
+        "MerchantFrame.Inset = MerchantFrame;",
+        std::slice::from_ref(&m),
+        false,
+    );
+    assert!(d.has_errors(), "{:?}", d.diagnostics);
+    // A child only one selected target records is an error naming the other.
+    let plain = retail();
+    let d = check(
+        "MerchantFrame.Bg.SetAlpha(0);",
+        &[m.clone(), {
+            let mut other = plain;
+            other.flavour = "wow_classic".into();
+            other.child_keys.clear();
+            other
+        }],
+        false,
+    );
+    assert!(
+        d.diagnostics
+            .iter()
+            .any(|d| d.code == "SELU0581" && d.message.contains("child frame `Bg`")),
+        "{:?}",
+        d.diagnostics
+    );
+}
+
 #[test]
 fn review_scoped_guards_filter_named_and_created_frames() {
     let mut m = retail();
@@ -360,4 +508,36 @@ fn cached_manifests() -> &'static Vec<selu_manifest::Manifest> {
         )
         .unwrap()
     })
+}
+
+#[test]
+fn repeating_results_are_collected_into_an_array() {
+    let m = retail();
+    let src = r#"
+        const frame = CreateFrame("Frame");
+        const first = frame.CreateTexture();
+        const label = frame.CreateFontString();
+        const child = CreateFrame("Button", null, frame);
+        let textures = 0;
+        const regions = frame.GetRegions();
+        for (const secret of regions) {
+            const region = readable(secret);
+            if (region != null && readable(region.IsObjectType("Texture"))) { region.SetAlpha(0); textures += 1; }
+        }
+        let buttons = 0;
+        for (const secret of frame.GetChildren()) {
+            const kid = readable(secret);
+            if (kid != null && readable(kid.IsObjectType("Button"))) { buttons += 1; }
+        }
+        frame.GetRegions();
+        print(regions.length, textures, buttons, CreateFrame("Frame").GetChildren().length);
+    "#;
+    let p = selu_syntax::parse("frames.selu", src).unwrap();
+    let c = check(src, std::slice::from_ref(&m), true);
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    let lua = selu_lower::lower(&p, &m, &c.types).lua;
+    assert!(lua.contains("{ frame:GetRegions() }"), "{lua}");
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.load_files(&[("frames.lua".into(), lua)]).unwrap();
+    assert_eq!(sim.prints(), vec!["2	1	1	0"]);
 }

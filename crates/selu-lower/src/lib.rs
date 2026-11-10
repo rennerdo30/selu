@@ -681,6 +681,17 @@ impl Lowerer<'_> {
             }
             ExprKind::Call { callee, args } => {
                 let v = self.restricted_call(callee, args, pre);
+                // One repeating result: `{ frame:GetRegions() }` collects
+                // every value the engine returns.
+                if matches!(v, LExpr::Call(..) | LExpr::Method(..))
+                    && matches!(
+                        self.types.get(callee.id),
+                        Some(selu_check::Type::Function { api_semantics, .. })
+                            if api_semantics.packed_results
+                    )
+                {
+                    return LExpr::Table(vec![crate::lua::LField::Pos(v)]);
+                }
                 if self.types.is_single_value(e.id)
                     && matches!(v, LExpr::Call(..) | LExpr::Method(..))
                     && matches!(

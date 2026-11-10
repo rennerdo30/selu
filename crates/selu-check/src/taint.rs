@@ -415,7 +415,9 @@ pub(crate) fn is_game_type(t: &Type) -> bool {
     visit(t, &mut HashSet::new())
 }
 fn safe_registry(callee: &Expr, types: &TypeTable) -> bool {
-    matches!(types.get(callee.id), Some(Type::Function { api, .. }) if api.0.as_ref().is_some_and(|s| s.name.starts_with("C_Timer.") || SAFE_REGISTRIES.contains(&s.name.as_str())))
+    // A Lua table operation (`table.sort`) runs its callback at once, inside
+    // the addon's own call; nothing is installed anywhere.
+    matches!(types.get(callee.id), Some(Type::Function { api, api_semantics, .. }) if api_semantics.table_operation.is_some() || api_semantics.pure_callback || api.0.as_ref().is_some_and(|s| s.name.starts_with("C_Timer.") || SAFE_REGISTRIES.contains(&s.name.as_str())))
 }
 /// A game receiver this check reports. By default only values proven to come
 /// from the game; `strict` also reports values of unknown origin (anything

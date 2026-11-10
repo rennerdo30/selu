@@ -42,6 +42,9 @@ pub struct ApiSemantics {
     pub dynamic_protected: bool,
     pub accepts_secrets: bool,
     pub plain_result: bool,
+    /// The call returns one repeating value (`StrideIndex = 1`, for example
+    /// `GetRegions()`): its results are collected into an array.
+    pub packed_results: bool,
     pub overloads: Vec<Type>,
 }
 impl PartialEq for ApiSemantics {
@@ -621,6 +624,7 @@ impl Type {
                 result.dynamic_protected = left.dynamic_protected || right.dynamic_protected;
                 result.accepts_secrets = left.accepts_secrets && right.accepts_secrets;
                 result.plain_result = left.plain_result && right.plain_result;
+                result.packed_results = left.packed_results && right.packed_results;
                 result.frame_factory = left.frame_factory && right.frame_factory;
                 result.animation_factory = left.animation_factory && right.animation_factory;
                 result.date_factory = left.date_factory && right.date_factory;

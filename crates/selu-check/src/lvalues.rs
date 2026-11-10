@@ -29,6 +29,16 @@ impl Ctx<'_> {
                         &target.span,
                     ));
                 }
+                if members.iter().any(|t| self.keyed_child(t, name)) {
+                    self.out.push(
+                        err(
+                            "SELU0355",
+                            format!("`{name}` is a child frame from the game's XML and is read-only"),
+                            &target.span,
+                        )
+                        .with_help("change the child through its methods; keep addon state in typed objects"),
+                    );
+                }
                 let contexts: Vec<_> = members
                     .iter()
                     .map(|t| self.member(t, name, target))

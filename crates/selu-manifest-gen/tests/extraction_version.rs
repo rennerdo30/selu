@@ -64,6 +64,12 @@ const CONTRACTS: &[(u32, &str)] = &[
         14,
         "39ecbc96e343600764cbd29f6c1e6d5a7ab87ec0cc4f7f9b38f4c7843af2eda5",
     ),
+    // 15: keyed children (XML parentKey) per frame, template and nested child;
+    // the overlays alias SimpleRegion to Region.
+    (
+        15,
+        "90c02798899cba4e32d00cfae797a4a5322893aee9b0039481351d6412d9f14b",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

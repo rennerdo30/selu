@@ -152,11 +152,39 @@ pub struct FrameFamily {
     pub widget: String,
 }
 
+/// One child a frame's XML attaches to its parent under a key
+/// (`parentKey`): `parent.<key>` is that child.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildKey {
+    pub key: String,
+    #[serde(rename = "type")]
+    pub ty: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<String>,
+    /// The owner under which this child's own keyed children are recorded,
+    /// when it is not `<owner>.<key>` (a named global child).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element: Option<String>,
+}
+
+/// The keyed children of one element: a named frame, a template, or a
+/// keyed child reached as `<owner>.<key>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildKeys {
+    pub owner: String,
+    pub children: Vec<ChildKey>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frame_families: Vec<FrameFamily>,
+    /// Sorted by owner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_keys: Vec<ChildKeys>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

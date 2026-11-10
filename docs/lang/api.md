@@ -161,6 +161,27 @@ contract, so consumers must check them before using boolean/string operations.
 Popup flags follow stored native values: numeric flags are numbers, and fields
 with evidenced boolean and numeric values use their sourced scalar union.
 
+### Repeating results are arrays
+
+A function that returns one repeating value (the API data marks it with
+`StrideIndex = 1` and it is the only result) returns an array in Selu. The
+compiler collects the results: `frame.GetRegions()` becomes
+`{ frame:GetRegions() }`.
+
+```selu
+for (const secret of frame.GetRegions()) {
+    const region = readable(secret);
+    if (region != null && readable(region.IsObjectType("Texture"))) {
+        region.SetAlpha(0);
+    }
+}
+```
+
+`GetRegions()` gives `Region` values and `GetChildren()` gives `Frame`
+values. Both are marked as possibly secret by the API data, so each element
+needs `readable(...)` before use; narrow it with `IsObjectType` to reach
+texture or font string methods. An empty result is an empty array.
+
 ### Checked native object and payload guards
 
 A callback payload narrowed by `typeof value == "table"` permits field reads.

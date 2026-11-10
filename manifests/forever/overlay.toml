@@ -215,6 +215,11 @@ evidence = "source"
 note = "Pinned ca8368f2f2380cbe696854f7f2646387c278a61b: generated factory return SimpleAnimGroup and canonical widget AnimationGroup share the documented SimpleAnimGroupAPI method group."
 entry = { name = "SimpleAnimGroup", type = "ScriptObject", inherits = ["AnimationGroup"], attributes = { SeluAliasOf = "AnimationGroup" } }
 
+[[widgets]]
+evidence = "source"
+note = "Pinned ca8368f2f2380cbe696854f7f2646387c278a61b: the documented return type SimpleRegion of SimpleFrameAPI.GetRegions names the engine's region objects (textures, font strings, lines); the canonical widget Region carries the documented SimpleRegionAPI method group."
+entry = { name = "SimpleRegion", type = "ScriptObject", inherits = ["Region"], attributes = { SeluAliasOf = "Region" } }
+
 [[globals]]
 name = "UIParent"
 type = "Frame"

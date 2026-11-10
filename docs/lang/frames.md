@@ -23,14 +23,45 @@ in both layouts and both strict modes. Widget members must be declared: unknown
 reads, writes and calls report SELU0582 in both modes. An annotation, parameter,
 return type or conditional cannot grant additional members.
 
-Named XML globals retain their template members. M3 records global child names,
-but not parentKey relationships. A global-only child has no implied parent
-field: use MerchantFrameTab1 directly, rather than MerchantFrame.Tab1. A suffix
-access matching a recorded global is rejected with SELU0582 and a help line
-naming that global. GameTooltipTexture1 follows the same rule. Store addon state
-in typed Selu classes or objects instead of attaching undeclared frame fields.
-Parent fields can be modeled when manifests
-record actual parentKey relationships; this package does not invent them.
+Named XML globals retain their template members. A global-only child has no
+implied parent field: use MerchantFrameTab1 directly, rather than
+MerchantFrame.Tab1. A suffix access matching a recorded global is rejected with
+SELU0582 and a help line naming that global. GameTooltipTexture1 follows the
+same rule. Store addon state in typed Selu classes or objects instead of
+attaching undeclared frame fields.
+
+## Child frames by key
+
+A child that the game's XML attaches to its parent under a key (`parentKey`)
+is a typed, read-only field of the parent:
+
+```selu
+const inset = MerchantFrame.Inset;          // Frame, with InsetFrameTemplate
+inset.Bg.SetAlpha(0);                        // Texture from the template
+MerchantFrame.PortraitContainer.portrait.SetAlpha(0);
+```
+
+The manifests record, per extraction 15, the keyed children of every named
+frame, every template and every keyed child below them (frames, textures,
+font strings, lines, mask textures, animation groups and animations). A frame
+has its own keys and those of its templates; a template's own key wins over
+an inherited one and a later template over an earlier one. The child keeps
+its widget type, its templates and its own keyed children, so chains work.
+A named child of a template (`$parentInset`) is also a global per instance
+(`MerchantFrameInset`) and has the same keyed children there.
+
+Rules:
+
+- The field is read-only (SELU0355). Change the child through its methods.
+- A key recorded on only some selected targets is SELU0581, naming the
+  targets without it. Guard with `has(...)` or use keys every target has.
+- Only XML is read. A key that Blizzard's Lua assigns at runtime (for
+  example the pieces of a `NineSlice`, or `frame.buttonPool`) is not
+  recorded and stays SELU0582.
+- An unkeyed anonymous child cannot be reached, so nothing below it is
+  recorded.
+- The child exists when its parent exists. For a frame of a load-on-demand
+  addon, check the parent global first.
 
 Template and mixin lists apply in order: later definitions override earlier
 ones. An untyped override blocks access rather than falling back to an earlier

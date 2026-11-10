@@ -269,7 +269,18 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         })
         .collect();
 
-    if flag(d, "MayReturnNothing") {
+    // One repeating result (`GetRegions`, `GetChildren`): the engine returns
+    // any number of values of this type, which the call collects into an array.
+    let packed = d.ty.as_deref() != Some("CallbackType")
+        && d.returns.len() == 1
+        && d.returns[0]
+            .attributes
+            .get("StrideIndex")
+            .and_then(|v| v.as_u64())
+            == Some(1);
+    if packed {
+        returns = vec![Type::Array(Box::new(returns.remove(0)))];
+    } else if flag(d, "MayReturnNothing") {
         returns = returns.into_iter().map(Type::optional).collect();
     }
     Type::Function {
@@ -342,6 +353,7 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
             dynamic_protected: false,
             accepts_secrets: crate::restrictions::accepts_secrets(d),
             plain_result: false,
+            packed_results: packed,
             overloads: d
                 .overloads
                 .iter()

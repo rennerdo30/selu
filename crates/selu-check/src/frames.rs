@@ -1,6 +1,6 @@
 //! Template identities travel with nominal widgets, including aliases/imports.
 use crate::{Ctx, Type, api, err};
-use selu_manifest::{Declaration, Manifest};
+use selu_manifest::{ChildKey, Declaration, Manifest};
 use selu_syntax::{Expr, ExprKind};
 
 // Outer Some means the member exists. Inner None is an untyped override and
@@ -56,6 +56,68 @@ fn applied<'a>(m: &'a Manifest, templates: &[&str], name: &str) -> Option<Option
         .iter()
         .rev()
         .find_map(|t| effective(m, t, name, &mut Vec::new()))
+}
+/// The keyed children one element (a named frame, a template, or a keyed
+/// child `<owner>.<key>`) records itself.
+fn own_key<'a>(m: &'a Manifest, owner: &str, key: &str) -> Option<(&'a ChildKey, String)> {
+    let entry = m.child_keys.iter().find(|c| c.owner == owner)?;
+    let child = entry.children.iter().find(|c| c.key == key)?;
+    Some((
+        child,
+        child
+            .element
+            .clone()
+            .unwrap_or_else(|| format!("{owner}.{key}")),
+    ))
+}
+/// A template's own keyed child, else the one it inherits; a later base
+/// overrides an earlier one, as for template members.
+fn template_key<'a>(
+    m: &'a Manifest,
+    template: &str,
+    key: &str,
+    path: &mut Vec<String>,
+) -> Option<(&'a ChildKey, String)> {
+    if path.iter().any(|s| s == template) {
+        return None;
+    }
+    if let Some(found) = own_key(m, template, key) {
+        return Some(found);
+    }
+    let d = m.templates.iter().find(|d| d.name == template)?;
+    path.push(template.into());
+    let found = d
+        .inherits
+        .iter()
+        .rev()
+        .find_map(|base| template_key(m, base, key, path));
+    path.pop();
+    found
+}
+/// `frame.<key>` for a frame whose XML attaches a child under that key
+/// (`parentKey`): the child with its element identity and templates.
+fn child_key<'a>(m: &'a Manifest, bases: &[String], key: &str) -> Option<(&'a ChildKey, String)> {
+    let mut templates: Vec<&str> = Vec::new();
+    for base in bases {
+        if let Some(element) = base.strip_prefix("@element:") {
+            if let Some(found) = own_key(m, element, key) {
+                return Some(found);
+            }
+        } else if let Some(global) = base.strip_prefix("@global:") {
+            if let Some(found) = own_key(m, global, key) {
+                return Some(found);
+            }
+            if let Some(g) = m.globals.iter().find(|g| g.name == global) {
+                templates.extend(g.templates.iter().map(String::as_str));
+            }
+        } else if let Some(template) = base.strip_prefix("@template:") {
+            templates.push(template);
+        }
+    }
+    templates
+        .iter()
+        .rev()
+        .find_map(|t| template_key(m, t, key, &mut Vec::new()))
 }
 impl Ctx<'_> {
     pub(crate) fn frame_type_names(&self) -> std::collections::HashMap<String, Type> {
@@ -126,6 +188,18 @@ impl Ctx<'_> {
         }
         base
     }
+    /// True when `name` is a keyed child (`parentKey`) of this widget on a
+    /// selected target.
+    pub(crate) fn keyed_child(&self, ty: &Type, name: &str) -> bool {
+        let Type::Widget(_, bases) = ty else {
+            return false;
+        };
+        self.availability
+            .manifests()
+            .iter()
+            .filter(|m| self.target_is_active(m))
+            .any(|m| child_key(m, bases, name).is_some())
+    }
     pub(crate) fn frame_member(&mut self, ty: &Type, name: &str, object: &Expr) -> Option<Type> {
         let Type::Widget(_, bases) = ty else {
             return None;
@@ -135,6 +209,38 @@ impl Ctx<'_> {
             .filter_map(|s| s.strip_prefix("@template:"))
             .collect();
         let global = bases.iter().find_map(|s| s.strip_prefix("@global:"));
+        // A keyed child (`parentKey`) is typed and takes precedence over a
+        // member a mixin only names.
+        let keyed: Vec<_> = self
+            .availability
+            .manifests()
+            .iter()
+            .filter(|m| self.target_is_active(m))
+            .map(|m| (m, child_key(m, bases, name)))
+            .collect();
+        if keyed.iter().any(|(_, child)| child.is_some()) {
+            let missing: Vec<_> = keyed
+                .iter()
+                .filter(|(_, child)| child.is_none())
+                .map(|(m, _)| m.target_string())
+                .collect();
+            if !missing.is_empty() {
+                self.out.push(err("SELU0581", format!("child frame `{name}` is unavailable on {}", missing.join(", ")), &object.span)
+                    .with_help("use child frames available on every selected target, or guard with has(...)"));
+                return Some(Type::Error);
+            }
+            let (m, child) = keyed
+                .iter()
+                .find(|(m, _)| m.target_string() == self.target())
+                .unwrap_or(&keyed[0]);
+            let (child, element) = child.as_ref().expect("present on every target");
+            let mut ty = api::named(m, &child.ty, 0);
+            if let Type::Widget(_, child_bases) = &mut ty {
+                child_bases.push(format!("@element:{element}"));
+                child_bases.extend(child.templates.iter().map(|t| format!("@template:{t}")));
+            }
+            return Some(ty);
+        }
         let present: Vec<_> = self
             .availability
             .manifests()
