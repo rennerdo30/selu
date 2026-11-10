@@ -480,6 +480,11 @@ mod fidelity_tests {
             assert(select(5, turned:GetTexCoord()) == 0.75)
             local f = CreateFont('FixtureFont'); f:SetFont('Media/font.ttf', 18, 'OUTLINE')
             local label = b:CreateFontString('Label'); label:SetFontObject(f); label:SetTextColor(1,0,0,1)
+            local button = CreateFrame('Button', nil, b)
+            assert(button:GetNormalFontObject() == nil)
+            button:SetNormalFontObject(f); button:SetDisabledFontObject(f)
+            assert(button:GetNormalFontObject() == f and button:GetDisabledFontObject() == f)
+            assert(button:GetHighlightFontObject() == nil)
         "#).unwrap();
         let snap = sim.snapshot().unwrap();
         let tint = snap

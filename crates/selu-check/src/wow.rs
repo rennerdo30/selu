@@ -88,6 +88,12 @@ impl Ctx<'_> {
                 return Some(Type::Error);
             }
             self.value(&args[0]);
+            // A wrapped call may return nothing (`hookScript`, a setter):
+            // the wrapper is then a statement. The caller's own value check
+            // still rejects it where a value is needed.
+            if matches!(args[1].kind, ExprKind::Call { .. }) {
+                return Some(self.expr(&args[1]));
+            }
             return Some(self.value(&args[1]));
         }
         if n == "onError" {

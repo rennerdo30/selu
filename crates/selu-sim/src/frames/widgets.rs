@@ -532,6 +532,9 @@ pub fn create(
                 "SetFontString",
                 "GetFontString",
                 "SetNormalFontObject",
+                "GetNormalFontObject",
+                "GetHighlightFontObject",
+                "GetDisabledFontObject",
                 "SetHighlightFontObject",
                 "SetDisabledFontObject",
                 "SetFormattedText",
@@ -1244,6 +1247,13 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             v.first().cloned().unwrap_or(Value::Nil),
         )?;
         out!(());
+    }
+    if matches!(
+        method,
+        "GetNormalFontObject" | "GetHighlightFontObject" | "GetDisabledFontObject"
+    ) {
+        // The font object the matching setter stored; nil when none was set.
+        out!(t.raw_get::<Value>(format!("__selu_S{}", &method[1..]))?);
     }
     if matches!(
         method,

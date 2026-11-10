@@ -22,6 +22,23 @@ fn hooks() {
     assert_eq!(sim.prints(), ["hook", "0", "shown"]);
 }
 #[test]
+fn a_reviewed_hook_has_no_warning_and_no_value() {
+    // allowTaint may wrap a call that returns nothing; it is then a statement.
+    let lua = compile(
+        "allowTaint(\"reviewed: only repaints\", hookScript(UIParent, \"OnShow\", (self) => { print(\"shown\"); })); UIParent.Hide(); UIParent.Show();",
+    );
+    let sim = Sim::new().unwrap();
+    sim.load_files(&[("t.lua".into(), lua)]).unwrap();
+    assert_eq!(sim.prints(), ["shown"]);
+    // Where a value is needed, a wrapped call without one is still an error.
+    assert!(
+        !codes(
+            "const x = allowTaint(\"reviewed\", hookScript(UIParent, \"OnShow\", (self) => {}));"
+        )
+        .is_empty()
+    );
+}
+#[test]
 fn logging_and_locale() {
     assert_eq!(
         run(
