@@ -147,6 +147,10 @@ pub struct VisualStyle {
     #[serde(default)]
     pub wrap_modes: [String; 2],
     pub uv: [f32; 4],
+    /// The eight corner coordinates of the last `SetTexCoord` call that
+    /// gave eight (UL, LL, UR, LR); `uv` then holds their bounding box.
+    #[serde(default)]
+    pub uv_corners: Option<[f32; 8]>,
     pub tint: [f32; 4],
     #[serde(default)]
     pub desaturated: bool,
@@ -185,6 +189,7 @@ impl Default for VisualStyle {
             tile: [false; 2],
             wrap_modes: ["CLAMP".into(), "CLAMP".into()],
             uv: [0.0, 1.0, 0.0, 1.0],
+            uv_corners: None,
             tint: [1.0; 4],
             desaturated: false,
             blend: "BLEND".into(),

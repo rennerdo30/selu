@@ -665,7 +665,7 @@ pub fn create(
     }
     Ok(t)
 }
-const METHODS: &str = "UpdateMouseOverTooltip DrawNone DrawAll DrawBlob GetMapID ClearUnits AddUnit FinalizeUnits GetMouseOverUnits StartPlayerPing StopPlayerPing GetUiMapID GetPlayerPingScale RegisterForMouse SetParentKey ClearParentKey GetParentKey SetPlayerPingTexture SetUiMapID SetPlayerPingScale SetUnitColor SetFillTexture SetBorderTexture SetFillAlpha SetBorderAlpha SetBorderScalar SetQuestID SetMapID SetPassThroughButtons SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected IsForbidden SetForbidden SetText GetText ClearText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript GetWindow SetWindow GetButtonState SetButtonState HasScript RegisterEvent IsEventRegistered UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled SetMouseClickEnabled SetMouseMotionEnabled IsMouseClickEnabled IsMouseMotionEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
+const METHODS: &str = "GetTexCoord UpdateMouseOverTooltip DrawNone DrawAll DrawBlob GetMapID ClearUnits AddUnit FinalizeUnits GetMouseOverUnits StartPlayerPing StopPlayerPing GetUiMapID GetPlayerPingScale RegisterForMouse SetParentKey ClearParentKey GetParentKey SetPlayerPingTexture SetUiMapID SetPlayerPingScale SetUnitColor SetFillTexture SetBorderTexture SetFillAlpha SetBorderAlpha SetBorderScalar SetQuestID SetMapID SetPassThroughButtons SetDesaturated IsDesaturated IsMovable IsClampedToScreen SetMotionScriptsWhileDisabled SetCursorPosition GetCursorPosition HighlightText IsAutoFocus SetThumbTexture GetThumbTexture SetHorizTile SetVertTile GetHorizTile GetVertTile GetTextColor GetShadowColor GetVertexColor EnableKeyboard IsKeyboardEnabled SetPropagateKeyboardInput GetPropagateKeyboardInput EnableMouseWheel IsMouseWheelEnabled SetOrientation GetOrientation SetValueStep GetValueStep SetObeyStepOnDrag GetObeyStepOnDrag SetID GetID CreateAnimationGroup SetTextInsets GetTextInsets SetGradient SetGradientAlpha SetNonSpaceWrap SetEllipsis SetSpacing GetSpacing CanWordWrap CanNonSpaceWrap GetMaxLines IsTruncated SetFontObject GetFontObject Raise Lower SetClipsChildren DoesClipChildren GetScrollChild GetHorizontalScroll GetVerticalScroll GetHorizontalScrollRange GetVerticalScrollRange UpdateScrollChildRect SetShadowColor SetShadowOffset SetWordWrap SetMaxLines SetBlendMode GetName GetObjectType IsObjectType GetParent SetParent SetSize SetWidth SetHeight GetWidth GetHeight GetSize SetPoint GetPoint GetNumPoints ClearAllPoints SetAllPoints GetRect GetLeft GetRight GetTop GetBottom GetCenter SetScale GetScale GetEffectiveScale SetAlpha GetAlpha GetEffectiveAlpha SetFrameStrata GetFrameStrata SetFrameLevel GetFrameLevel SetDrawLayer GetDrawLayer Show Hide SetShown IsShown IsVisible IsProtected IsForbidden SetForbidden SetText GetText ClearText SetFont GetFont GetUnboundedStringWidth GetStringWidth GetStringHeight GetLineHeight SetTexture GetTexture SetAtlas SetColorTexture SetScript GetScript HookScript GetWindow SetWindow GetButtonState SetButtonState HasScript RegisterEvent IsEventRegistered UnregisterEvent UnregisterAllEvents CreateTexture CreateMaskTexture CreateFontString EnableMouse IsMouseEnabled SetMouseClickEnabled SetMouseMotionEnabled IsMouseClickEnabled IsMouseMotionEnabled Enable Disable IsEnabled SetChecked GetChecked SetValue GetValue SetMinMaxValues GetMinMaxValues SetFocus ClearFocus HasFocus StartMoving StopMovingOrSizing RegisterForClicks RegisterForDrag SetMovable SetClampedToScreen SetNormalTexture SetHighlightTexture SetPushedTexture SetAutoFocus SetMultiLine SetJustifyH SetJustifyV SetTextColor SetTexCoord SetVertexColor SetScrollChild SetHorizontalScroll SetVerticalScroll SetCooldown SetOwner GetOwner GetTextureFileID";
 fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     let _profile = crate::profile::Span::new("frames.methods");
     if !ctx
@@ -1958,12 +1958,54 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             }
         }
         "SetTexCoord" => {
-            r.visual.uv = [
-                n as f32,
-                number(v.get(1), 1.0) as f32,
-                number(v.get(2), 0.0) as f32,
-                number(v.get(3), 1.0) as f32,
-            ]
+            let exact = lua.create_table()?;
+            let given: Vec<f64> = if v.len() >= 8 {
+                (0..8).map(|index| number(v.get(index), 0.0)).collect()
+            } else {
+                let (left, right) = (n, number(v.get(1), 1.0));
+                let (top, bottom) = (number(v.get(2), 0.0), number(v.get(3), 1.0));
+                vec![left, top, left, bottom, right, top, right, bottom]
+            };
+            for (index, value) in given.iter().enumerate() {
+                exact.raw_set(index + 1, *value)?;
+            }
+            t.raw_set("__selu_tex_coord", exact)?;
+            if v.len() >= 8 {
+                // (ULx, ULy, LLx, LLy, URx, URy, LRx, LRy)
+                let mut c = [0.0f32; 8];
+                for (index, slot) in c.iter_mut().enumerate() {
+                    *slot = number(v.get(index), 0.0) as f32;
+                }
+                let xs = [c[0], c[2], c[4], c[6]];
+                let ys = [c[1], c[3], c[5], c[7]];
+                r.visual.uv = [
+                    xs.iter().copied().fold(f32::INFINITY, f32::min),
+                    xs.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+                    ys.iter().copied().fold(f32::INFINITY, f32::min),
+                    ys.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+                ];
+                r.visual.uv_corners = Some(c);
+            } else {
+                r.visual.uv = [
+                    n as f32,
+                    number(v.get(1), 1.0) as f32,
+                    number(v.get(2), 0.0) as f32,
+                    number(v.get(3), 1.0) as f32,
+                ];
+                r.visual.uv_corners = None;
+            }
+        }
+        "GetTexCoord" => {
+            // The numbers as the caller gave them (the render state keeps
+            // single precision): UL, LL, UR, LR.
+            let exact = t.raw_get::<Option<Table>>("__selu_tex_coord")?;
+            let mut c = [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0];
+            if let Some(exact) = exact {
+                for (index, slot) in c.iter_mut().enumerate() {
+                    *slot = exact.raw_get::<f64>(index + 1)?;
+                }
+            }
+            out!((c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]));
         }
         "SetOwner" => {
             t.raw_set("__tooltip_owner", v.first().cloned().unwrap_or(Value::Nil))?;

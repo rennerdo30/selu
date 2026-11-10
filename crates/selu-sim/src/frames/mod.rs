@@ -469,6 +469,15 @@ mod fidelity_tests {
             b:SetFrameLevel(50)
             local t = b:CreateTexture('Tint', 'OVERLAY', nil, -3)
             t:SetVertexColor(0.2,0.4,0.6,0.8); t:SetTexCoord(0.1,0.9,0.2,0.8)
+            -- GetTexCoord gives the four corners: UL, LL, UR, LR.
+            local fresh = b:CreateTexture()
+            assert(table.concat({fresh:GetTexCoord()}, ',') == '0,0,0,1,1,0,1,1')
+            assert(table.concat({t:GetTexCoord()}, ',') == '0.1,0.2,0.1,0.8,0.9,0.2,0.9,0.8')
+            local turned = b:CreateTexture()
+            turned:SetTexCoord(0,1, 1,1, 0,0, 1,0)
+            assert(table.concat({turned:GetTexCoord()}, ',') == '0,1,1,1,0,0,1,0')
+            turned:SetTexCoord(0.25,0.75,0,1)
+            assert(select(5, turned:GetTexCoord()) == 0.75)
             local f = CreateFont('FixtureFont'); f:SetFont('Media/font.ttf', 18, 'OUTLINE')
             local label = b:CreateFontString('Label'); label:SetFontObject(f); label:SetTextColor(1,0,0,1)
         "#).unwrap();
