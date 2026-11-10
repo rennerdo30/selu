@@ -1419,7 +1419,14 @@ impl Ctx<'_> {
             }
             "??" => {
                 let l = self.value(left);
-                let r = self.value(right);
+                // An empty array fallback takes its element type from the
+                // left side (`names ?? []`).
+                let empty_array = matches!(&right.kind, ExprKind::Array(items) if items.is_empty());
+                let r = if empty_array && l.is_optional() && !l.is_open() {
+                    self.value_expected(right, Some(&l.non_null()))
+                } else {
+                    self.value(right)
+                };
                 if let Some(inner) = restrictions::secret_inner(&l) {
                     return Type::join(&inner.non_null(), &r).unwrap_or_else(|| {
                         self.out.push(
@@ -1998,6 +2005,24 @@ mod tests {
         assert!(codes("const b = true;\nif (b && !b) {}\n").is_empty());
         // Untyped game values are not checked yet.
         assert!(codes("if (UnitHealth(\"player\")) {}\n").is_empty());
+    }
+
+    #[test]
+    fn empty_array_fallback_takes_the_left_type() {
+        assert!(
+            codes(
+                "function f(xs: number[]?): number { const ys = xs ?? []; return ys.length; }
+"
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            codes(
+                "const ys = null ?? [];
+"
+            ),
+            ["SELU0351"]
+        );
     }
 
     #[test]

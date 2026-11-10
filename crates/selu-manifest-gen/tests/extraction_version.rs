@@ -54,6 +54,11 @@ const CONTRACTS: &[(u32, &str)] = &[
         12,
         "b6d0a91b476472a10154dcef78b75fe26dbe15b27e8ecde6af3188c7eaf86ec9",
     ),
+    // 13: the overlays type GetNumClasses and the colour object's GetRGB/GetRGBA.
+    (
+        13,
+        "a4a0fa80693d771d79374629a5dac0c77e98f8ab4cb930859ba932babd6a765e",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

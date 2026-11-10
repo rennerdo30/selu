@@ -158,3 +158,4 @@ all specified data constructs are implemented.
 by position (`a` and `b` have the tuple's slot types); over an array of
 arrays each name is the element type or null.
 
+An empty array as the fallback of `??` takes its type from the left side: `const names = saved ?? [];`.

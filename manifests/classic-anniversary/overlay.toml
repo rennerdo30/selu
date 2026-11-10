@@ -533,3 +533,27 @@ note="Lua 5.1 Reference Manual 5.6 math.huge; retain the native value, not a gue
 evidence="source"
 note="Pinned storage alternatives: 68e0a2ec559d9761dfc4e7f864c3944f9d758a49:Interface/AddOns/Blizzard_StaticPopup/SharedDialogDefs.lua:23:\thideOnEscape = 1,; 68e0a2ec559d9761dfc4e7f864c3944f9d758a49:Interface/AddOns/Blizzard_StaticPopup_Game/Classic/GameDialogDefs.lua:397:\thideOnEscape = false,"
 entry={"name"="StaticPopupFlag","attributes"={"SeluScalarUnion"=["boolean","number"]}}
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_ClassMenu/Blizzard_ClassMenu.lua:99 loops `for index = 1, GetNumClasses() do`: an engine global without generated documentation that returns the number of classes."
+[functions.entry]
+name = "GetNumClasses"
+params = []
+evidence = "source"
+[functions.entry.signature]
+name = "GetNumClasses"
+[[functions.entry.signature.returns]]
+name = "numClasses"
+type = "number"
+[[methods]]
+widget = "SourceObject_CreateColor"
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_SharedXMLBase/Color.lua:23 returns the colour channels that CreateColor (:3) stored; the API documentation names them colorRGB and colorRGBA, whose channels are numbers."
+entry = { name = "GetRGB", type = "Function", returns = [{ name = "r", type = "number" }, { name = "g", type = "number" }, { name = "b", type = "number" }], attributes = { file = "Blizzard_SharedXMLBase/Color.lua" } }
+
+[[methods]]
+widget = "SourceObject_CreateColor"
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_SharedXMLBase/Color.lua:37 returns the colour channels that CreateColor (:3) stored; the API documentation names them colorRGB and colorRGBA, whose channels are numbers."
+entry = { name = "GetRGBA", type = "Function", returns = [{ name = "r", type = "number" }, { name = "g", type = "number" }, { name = "b", type = "number" }, { name = "a", type = "number" }], attributes = { file = "Blizzard_SharedXMLBase/Color.lua" } }

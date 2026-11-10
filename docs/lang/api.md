@@ -183,3 +183,12 @@ by a widget guard before using frame-only methods.
 through `ContainerFrameItemButtonTemplate`; a plain Button has no such contract.
 Font globals and documented SimpleFont parameters share the documented font
 interface. The parameter remains specific to that interface.
+
+## Colour values
+
+The API documentation names colour values (`colorRGB`, `colorRGBA`) without
+defining them. They are the objects the client's own `CreateColor` makes, so
+they take that object's type from the manifest: pass `CreateColor(r, g, b, a)`
+where an API wants a colour, and read a returned colour with
+`const [r, g, b] = color.GetRGB();` (or `GetRGBA`). The overlays type both
+getters as numbers. `GetNumClasses()` is typed there too.
