@@ -429,6 +429,31 @@ impl Ctx<'_> {
             (Type::Array(t) | Type::Set(t), ForBinding::Name(n, sp)) => {
                 vec![(n.clone(), sp.clone(), (**t).clone())]
             }
+            // `for (const [a, b] of pairs)` over an array of tuples (or of
+            // arrays): each element is destructured by position.
+            (Type::Array(element), ForBinding::Pattern(Pattern::Array(items)))
+                if match crate::shape_of(element) {
+                    Type::Tuple(slots) => items.len() <= slots.len(),
+                    Type::Array(_) => true,
+                    _ => false,
+                } =>
+            {
+                let element = crate::shape_of(element);
+                items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, item)| {
+                        item.as_ref().map(|(n, s)| {
+                            let t = match &element {
+                                Type::Tuple(slots) => slots[i].clone(),
+                                Type::Array(inner) => Type::optional((**inner).clone()),
+                                _ => Type::Error,
+                            };
+                            (n.clone(), s.clone(), t)
+                        })
+                    })
+                    .collect()
+            }
             (Type::Map(k, v) | Type::WeakMap(k, v), ForBinding::Pattern(Pattern::Array(items)))
                 if items.len() == 2 =>
             {
@@ -445,7 +470,7 @@ impl Ctx<'_> {
                         "iteration needs an array or set value, or a map key/value pair",
                         &iter.span,
                     )
-                    .with_help("use `x of xs` or `[key, value] of map`"),
+                    .with_help("use `x of xs`, `[a, b] of tuples` or `[key, value] of map`"),
                 );
                 return;
             }

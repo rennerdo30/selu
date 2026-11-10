@@ -997,6 +997,8 @@ fn install(
                 distance_checked: unit.get::<Option<bool>>("distanceChecked")?,
                 visible: unit.get::<Option<bool>>("visible")?,
                 xp_disabled: unit.get::<Option<bool>>("xpDisabled")?,
+                played: unit.get::<Option<f64>>("played")?,
+                level_played: unit.get::<Option<f64>>("levelPlayed")?,
             };
             if status != selu_sim::world::UnitStatus::default() {
                 s.borrow().set_unit_status(&token, status)?;

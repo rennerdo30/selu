@@ -73,7 +73,7 @@ Helpers:
 | `sim.now()` | Read the current Session clock in seconds |
 | `sim.setMoney(copper)` | Set player money |
 | `sim.setCombat(boolean)` | Enter or leave combat |
-| `sim.setUnit(token, fields)` | Set name, class, level, health, maxHealth, power, maxPower and combat; also `xp`, `maxXp`, `xpDisabled` (player), `distance` (yards), `distanceChecked` and `visible`. A changed player XP fires PLAYER_XP_UPDATE |
+| `sim.setUnit(token, fields)` | Set name, class, level, health, maxHealth, power, maxPower and combat; also `xp`, `maxXp`, `xpDisabled`, `played` and `levelPlayed` (player; `RequestTimePlayed()` answers with TIME_PLAYED_MSG on the next frame), `distance` (yards), `distanceChecked` and `visible`. A changed player XP fires PLAYER_XP_UPDATE |
 | `sim.setSpell(id, { name, icon, known })` | Define a spell for IsPlayerSpell, IsSpellKnown and C_Spell (self-written test data; fires SPELLS_CHANGED) |
 | `sim.setTracking([{ name, texture, active, type, spellID }])` | The minimap tracking list for C_Minimap.GetNumTrackingTypes/GetTrackingInfo (fires MINIMAP_UPDATE_TRACKING) |
 | `sim.setZone({ zone, subzone, map, instance })` | Zone text, map and IsInInstance's type ("none", "party", "raid", ...) |

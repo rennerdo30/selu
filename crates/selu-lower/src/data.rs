@@ -681,8 +681,30 @@ impl Lowerer<'_> {
         let mut body = self.loop_body(body, &s.span);
         let kind = match self.types.get(iter.id) {
             Some(Type::Array(_)) => {
-                let ForBinding::Name(n, _) = binding else {
-                    unreachable!()
+                // A pattern binds the element to a temporary, then each
+                // name to its 1-based slot.
+                let element;
+                let n = match binding {
+                    ForBinding::Name(n, _) => n,
+                    ForBinding::Pattern(Pattern::Array(items)) => {
+                        element = self.temp();
+                        for (slot, item) in items.iter().enumerate().rev() {
+                            if let Some((n, _)) = item {
+                                body.insert(
+                                    0,
+                                    LStmt::new(
+                                        LStmtKind::Local(
+                                            vec![n.clone()],
+                                            vec![index(name(&element), num(slot + 1))],
+                                        ),
+                                        &s.span,
+                                    ),
+                                );
+                            }
+                        }
+                        &element
+                    }
+                    _ => unreachable!(),
                 };
                 let i = self.temp();
                 body.insert(

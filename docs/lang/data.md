@@ -153,3 +153,8 @@ Every deliberate break was restored. The obsolete pending-arrow SELU0390 fixture
 is replaced by runtime coverage. All 150 tests, cargo fmt --check and strict clippy
 passed. Only unknown/unsupported library method names still emit SELU0390 in B;
 all specified data constructs are implemented.
+
+`for (const [a, b] of pairs)` destructures each element of an array of tuples
+by position (`a` and `b` have the tuple's slot types); over an array of
+arrays each name is the element type or null.
+

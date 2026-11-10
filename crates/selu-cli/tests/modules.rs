@@ -768,3 +768,15 @@ fn generic_bodies_are_opaque_and_calls_are_checked() {
         assert!(stderr.contains(code), "{label}: {stderr}");
     }
 }
+
+#[test]
+fn for_of_destructures_tuples_in_an_array() {
+    let (prints, _) = run(
+        "for-tuples",
+        &[(
+            "main.selu",
+            "const stamps: [number, string][] = [[1, \"a\"], [2, \"b\"]]; let sum = 0; let text = \"\"; for (const [n, s] of stamps) { sum += n; text += s; } print(sum, text); const rows: number[][] = [[1, 2], [3]]; for (const [x, y] of rows) { print(x ?? -1, y ?? -1); }",
+        )],
+    );
+    assert_eq!(prints, ["3\tab", "1\t2", "3\t-1"]);
+}

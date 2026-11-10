@@ -200,6 +200,9 @@ pub struct UnitStatus {
     pub visible: Option<bool>,
     /// The player's XP switch (IsXPUserDisabled).
     pub xp_disabled: Option<bool>,
+    /// The player's /played seconds: total and in the current level.
+    pub played: Option<f64>,
+    pub level_played: Option<f64>,
 }
 
 /// A spell the simulated character may know (self-written test data).
@@ -385,6 +388,12 @@ impl Vm {
         if let Some(visible) = status.visible {
             unit.raw_set("visible", visible)?;
         }
+        if let Some(played) = status.played {
+            unit.raw_set("played", played)?;
+        }
+        if let Some(played) = status.level_played {
+            unit.raw_set("level_played", played)?;
+        }
         if let Some(disabled) = status.xp_disabled {
             let flags: Table = self.lua.globals().raw_get("__selu_world_flags")?;
             flags.raw_set("xp_disabled", disabled)?;
@@ -528,6 +537,20 @@ impl Vm {
         next.set("max_power", unit.max_power)?;
         next.set("combat", unit.combat)?;
         next.set("auras", self.lua.create_sequence_from(unit.auras)?)?;
+        // Status set separately (set_unit_status) stays with the same unit.
+        if let (Some(old), false) = (&old, identity_changed) {
+            for field in [
+                "xp",
+                "max_xp",
+                "distance",
+                "distance_checked",
+                "visible",
+                "played",
+                "level_played",
+            ] {
+                next.raw_set(field, old.raw_get::<Value>(field)?)?;
+            }
+        }
         let changes = [
             ("classification", "UNIT_CLASSIFICATION_CHANGED"),
             ("reaction", "UNIT_FACTION"),
@@ -711,6 +734,16 @@ function UnitDistanceSquared(u)
  return x.distance * x.distance, x.distance_checked ~= false
 end
 function UnitIsVisible(u) local x=units[u]; if x == nil then return false end; if x.visible ~= nil then return x.visible end; return true end
+-- /played: the client answers a request with TIME_PLAYED_MSG(total, level)
+-- on a later frame (sim.setUnit's played/levelPlayed, seconds).
+local timerAfter = rawget(_G, 'C_Timer') and rawget(C_Timer, 'After')
+function RequestTimePlayed()
+ local function answer()
+  local p = units.player or {}
+  __selu_world_event('TIME_PLAYED_MSG', p.played or 0, p.level_played or 0)
+ end
+ if timerAfter then timerAfter(0, answer) else answer() end
+end
 -- Client CVars, kept across reload like the client keeps them. Setting one
 -- fires CVAR_UPDATE(name, value), as the client does.
 __selu_world_cvars = {uiScale='1',useUiScale='0',scriptErrors='0',cameraFov='90',statusText='1',statusTextDisplay='BOTH',
