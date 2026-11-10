@@ -1409,6 +1409,22 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
                 MultiValue::from_vec(vec![Value::Table(child.clone())]),
             )?;
         }
+        // The client draws a highlight texture additively unless the call
+        // names another blend mode (Button:SetHighlightTexture(asset, blendMode)).
+        if method == "SetHighlightTexture"
+            && let Some(child) = &child
+        {
+            let mode = match v.get(1) {
+                Some(Value::String(mode)) => Value::String(mode.clone()),
+                _ => Value::String(lua.create_string("ADD")?),
+            };
+            call(
+                lua,
+                ctx,
+                "SetBlendMode",
+                MultiValue::from_vec(vec![Value::Table(child.clone()), mode]),
+            )?;
+        }
         t.raw_set(key, child)?;
         sync_button_textures(lua, ctx, t)?;
         out!(());

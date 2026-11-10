@@ -137,3 +137,21 @@ fn click_runs_the_click_handlers_synchronously_while_enabled() {
         f = CreateFrame("Frame"); assert(f.Click == nil)
     "#).unwrap();
 }
+
+#[test]
+fn highlight_textures_blend_additively_unless_told_otherwise() {
+    let sim = Sim::new().unwrap();
+    sim.eval("local b=CreateFrame('Button');b:SetSize(20,20);b:SetPoint('CENTER');local h=b:CreateTexture('DefaultHighlight');b:SetHighlightTexture(h);local c=CreateFrame('Button');c:SetSize(20,20);c:SetPoint('CENTER');local k=c:CreateTexture('BlendHighlight');c:SetHighlightTexture(k,'BLEND');local p=CreateFrame('Button');p:CreateTexture('PlainTexture')").unwrap();
+    let snapshot = sim.snapshot().unwrap();
+    let blend = |name: &str| {
+        snapshot
+            .regions
+            .iter()
+            .find(|r| r.name.as_deref() == Some(name))
+            .map(|r| r.visual.blend.clone())
+            .unwrap()
+    };
+    assert_eq!(blend("DefaultHighlight"), "ADD");
+    assert_eq!(blend("BlendHighlight"), "BLEND");
+    assert_eq!(blend("PlainTexture"), "BLEND");
+}

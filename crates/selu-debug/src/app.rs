@@ -3399,7 +3399,7 @@ impl Studio {
             |r: &RegionSnapshot| r.widget != "MaskTexture" && (r.visible || self.show_hidden);
         let fade = |r: &RegionSnapshot, c: Color32| {
             let a = r.alpha.clamp(0.0, 1.0) as f32 * if r.visible { 1.0 } else { 0.3 };
-            c.gamma_multiply(a)
+            blended(&r.visual.blend, c.gamma_multiply(a))
         };
         if self.glyphs.len() > 8192 {
             self.glyphs.clear();
@@ -4797,4 +4797,31 @@ fn saved_dirs(path: &Path) -> Result<Vec<String>, String> {
         .collect();
     names.sort();
     Ok(names)
+}
+
+/// The colour a region is painted with under its blend mode. egui blends
+/// premultiplied colours as `src + dst * (1 - src.a)`, so a colour with
+/// alpha 0 adds to what is below: the client's ADD (highlights, glows,
+/// rings on black). Other modes paint with normal alpha blending.
+pub(crate) fn blended(mode: &str, c: Color32) -> Color32 {
+    if mode.eq_ignore_ascii_case("ADD") {
+        Color32::from_rgba_premultiplied(c.r(), c.g(), c.b(), 0)
+    } else {
+        c
+    }
+}
+
+#[cfg(test)]
+mod blend_tests {
+    use super::*;
+    #[test]
+    fn add_paints_without_covering_what_is_below() {
+        let ring = Color32::from_rgba_unmultiplied(40, 120, 255, 255);
+        let added = blended("ADD", ring);
+        assert_eq!(added.a(), 0, "additive colours keep the destination");
+        assert_eq!((added.r(), added.g(), added.b()), (40, 120, 255));
+        assert_eq!(blended("BLEND", ring), ring);
+        // Black adds nothing: a black square disappears.
+        assert_eq!(blended("ADD", Color32::BLACK), Color32::TRANSPARENT);
+    }
 }
