@@ -102,6 +102,7 @@ fn generate(args: &[String]) -> Result<()> {
     )?;
     let mut source_globals = selu_manifest_gen::source::Sources::default();
     let mut xml = selu_manifest_gen::xml::Xml::default();
+    let mut mixin_loops = selu_manifest_gen::mixin_loops::MixinLoops::default();
     xml.schema(&git(
         repo,
         &[
@@ -133,6 +134,7 @@ fn generate(args: &[String]) -> Result<()> {
             continue;
         }
         source_globals.parse(&path, &text)?;
+        mixin_loops.parse(&path, &text)?;
         // Helper bodies are needed for bounded factory effect proofs too.
         factory_sources.push((path.clone(), text.clone()));
         files += 1;
@@ -151,6 +153,24 @@ fn generate(args: &[String]) -> Result<()> {
     let source_methods = source_globals.source_methods.clone();
     let (defined, called) = source_globals.extend_manifest(&mut m);
     eprintln!("source globals: {defined} defined, {called} called; parsed {files} Lua files");
+    // Frames a mixin creates per bar, named and counted by each XML frame.
+    let instances = xml.instances();
+    if std::env::var_os("SELU_GEN_DEBUG").is_some() {
+        for i in instances
+            .iter()
+            .filter(|i| i.name == "MainActionBar" || i.name == "MultiBarLeft")
+        {
+            eprintln!("debug instance {i:?}");
+        }
+    }
+    let before = m.frame_families.len();
+    mixin_loops.extend_manifest(&instances, &mut m);
+    eprintln!(
+        "mixin creation loops: {} recognised, {} families over {} named frames",
+        mixin_loops.len(),
+        m.frame_families.len() - before,
+        instances.len()
+    );
     xml.extend_manifest(&mut m);
     selu_manifest_gen::factory::extend(&mut m, &factory_sources);
     let overlay = output

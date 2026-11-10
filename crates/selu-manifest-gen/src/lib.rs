@@ -2,6 +2,7 @@ pub mod native;
 pub use selu_manifest::store::EXTRACTION_VERSION;
 pub mod coverage;
 pub mod factory;
+pub mod mixin_loops;
 pub mod pools;
 pub mod xml;
 use mlua::{Lua, LuaOptions, StdLib, Table, Value};
@@ -744,6 +745,32 @@ pub fn detect_frame_families(m: &mut Manifest) {
             })
         })
         .collect();
+    // A creation loop proves its family exactly, also where the prefix itself
+    // contains a number (`MultiBar5Button1`..`12`) and the name-based split
+    // above cuts at the wrong run. Keep it when every member is a typed global.
+    for family in runtime {
+        if family.max_index <= family.min_index
+            || m.frame_families
+                .iter()
+                .any(|f| f.prefix == family.prefix && f.suffix == family.suffix)
+        {
+            continue;
+        }
+        let complete = (family.min_index..=family.max_index).all(|i| {
+            let name = format!("{}{i}{}", family.prefix, family.suffix);
+            let mut types = m
+                .globals
+                .iter()
+                .filter(|g| g.name == name)
+                .map(|g| g.ty.as_deref());
+            types.next() == Some(Some(family.widget.as_str())) && types.next().is_none()
+        });
+        if complete {
+            m.frame_families.push(family);
+        }
+    }
+    m.frame_families
+        .sort_by(|a, b| (&a.prefix, &a.suffix).cmp(&(&b.prefix, &b.suffix)));
 }
 
 #[cfg(test)]
@@ -760,6 +787,39 @@ mod family_tests {
         assert_eq!(m.frame_families.len(), 1);
         assert_eq!(m.frame_families[0].min_index, 1);
         assert_eq!(m.frame_families[0].max_index, 3);
+    }
+}
+
+#[cfg(test)]
+mod mixin_loop_family_tests {
+    #[test]
+    fn a_proven_family_keeps_a_prefix_with_a_number() {
+        let mut m: selu_manifest::Manifest = serde_json::from_str(r#"{"flavour":"fixture","build":{"major":1,"minor":0,"patch":0,"build":1},"interface":1,"widgets":[{"name":"CheckButton"}]}"#).unwrap();
+        let mut loops = crate::mixin_loops::MixinLoops::default();
+        loops
+            .parse(
+                "Bar.lua",
+                "function BarMixin:OnLoad() local n = self:GetName() for i = 1, self.count do CreateFrame(\"CheckButton\", n..\"Button\"..i, self) end end",
+            )
+            .unwrap();
+        let bar = crate::mixin_loops::Instance {
+            name: "MultiBar5".into(),
+            mixins: vec!["BarMixin".into()],
+            numbers: [("count".to_string(), 12.0)].into(),
+            ..Default::default()
+        };
+        loops.extend_manifest(&[bar], &mut m);
+        super::detect_frame_families(&mut m);
+        let family = m
+            .frame_families
+            .iter()
+            .find(|f| f.prefix == "MultiBar5Button")
+            .expect("the loop's own prefix");
+        assert_eq!(
+            (family.min_index, family.max_index, family.suffix.as_str()),
+            (1, 12, "")
+        );
+        assert_eq!(family.sources, ["Bar.lua:1"]);
     }
 }
 

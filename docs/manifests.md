@@ -423,7 +423,7 @@ iterator wrapper is generated.
 | `wow_classic_titan` | `classic_titan` | 3.80.2.70522 | 38002 | `7014c309a25338905c41dc3799a93f9719ebb533` |
 | `wow_classic` | `classic` | 5.5.4.70631 | 50504 | `e5d9b3a22c3f0f6f41ebac0e454f4969594261cf` |
 | `wow` | `live` | 12.1.5.70783 | 120105 | `297d7aaaa736f346b3e036f38ee088eaf7f8c07f` |
-| `wowf` | `forever` | 1.60.1.70790 | 16001 | `eac30af597e5aaa43a60f6675ef5fdcea100375f` |
+| `wowf` | `forever` | 1.60.1.70862 | 16001 | `9dc84f0d3bbae1768ac3405b3716000bd93eda06` |
 | `wowt` | `ptr` | 12.1.7.70740 | 120107 | `e927c305f67ed6b3b460bc00d0c39055747b9119` |
 | `wowxptr` | `ptr2` | 12.1.5.70340 | 120105 | `12380f8cdc541b7f0963f74cbe0874c21a857fbb` |
 <!-- selu-store-builds:end -->

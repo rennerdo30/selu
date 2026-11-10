@@ -12,6 +12,12 @@ pub struct Xml {
     templates: BTreeMap<String, Declaration>,
     types: BTreeMap<String, String>,
     children: ChildDefinitions,
+    /// Per named element (template or frame): its own mixins, inherited
+    /// templates and KeyValues, for `mixin_loops`.
+    own_mixins: BTreeMap<String, Vec<String>>,
+    own_inherits: BTreeMap<String, Vec<String>>,
+    numbers: BTreeMap<String, BTreeMap<String, f64>>,
+    strings: BTreeMap<String, BTreeMap<String, String>>,
 }
 impl Xml {
     /// Read widget tag identities from this pin's schema, including intrinsic aliases.
@@ -50,6 +56,7 @@ impl Xml {
     pub fn parse(&mut self, file: &str, text: &str) -> Result<(), String> {
         let mut reader = Reader::from_str(text.trim_start_matches('\u{feff}'));
         let mut stack: Vec<(Option<String>, bool, Option<String>)> = vec![];
+        let mut key_value_owner: Option<String> = None;
         loop {
             let event = reader.read_event().map_err(|e| format!("{file}: {e}"))?;
             match event {
@@ -66,6 +73,34 @@ impl Xml {
                         );
                     }
                     let parent = stack.last().cloned().unwrap_or_default();
+                    // <KeyValue key= value= type=> belongs to the nearest named widget.
+                    // The schema lists KeyValues among the layout fields, so its
+                    // own stack entry has no name: remember the widget above it.
+                    if tag == "KeyValues" {
+                        key_value_owner = parent.0.clone();
+                    }
+                    if tag == "KeyValue"
+                        && let (Some(owner), Some(key), Some(value)) =
+                            (&key_value_owner, attrs.get("key"), attrs.get("value"))
+                    {
+                        match attrs.get("type").map(String::as_str) {
+                            Some("number") => {
+                                if let Ok(number) = value.parse::<f64>() {
+                                    self.numbers
+                                        .entry(owner.clone())
+                                        .or_default()
+                                        .insert(key.clone(), number);
+                                }
+                            }
+                            Some("string") | None => {
+                                self.strings
+                                    .entry(owner.clone())
+                                    .or_default()
+                                    .insert(key.clone(), value.clone());
+                            }
+                            _ => {}
+                        }
+                    }
                     let font = tag == "Font" || tag == "FontFamily";
                     let virtual_node = parent.1
                         || (!font
@@ -115,6 +150,14 @@ impl Xml {
                         inherits.insert(0, tag.clone());
                     }
                     if widget && let Some(n) = &resolved {
+                        if let Some(mixins) = attrs.get("mixin") {
+                            self.own_mixins.entry(n.clone()).or_insert_with(|| {
+                                mixins.split(',').map(|s| s.trim().to_owned()).collect()
+                            });
+                        }
+                        self.own_inherits
+                            .entry(n.clone())
+                            .or_insert_with(|| inherits.clone());
                         if virtual_node {
                             if !parent.1 {
                                 let mut d = declaration(n, &tag, file);
@@ -173,6 +216,52 @@ impl Xml {
         }
         Ok(())
     }
+    /// Every named, non-virtual frame with its effective mixins and
+    /// KeyValues: its own, then those of the templates it inherits (nearest
+    /// first, so an instance overrides its template).
+    pub fn instances(&self) -> Vec<crate::mixin_loops::Instance> {
+        self.globals
+            .keys()
+            .map(|name| {
+                let mut instance = crate::mixin_loops::Instance {
+                    name: name.clone(),
+                    ..Default::default()
+                };
+                let mut seen = Vec::new();
+                self.collect(name, &mut instance, &mut seen);
+                instance
+            })
+            .collect()
+    }
+
+    fn collect(
+        &self,
+        element: &str,
+        out: &mut crate::mixin_loops::Instance,
+        seen: &mut Vec<String>,
+    ) {
+        if seen.iter().any(|s| s == element) {
+            return;
+        }
+        seen.push(element.to_owned());
+        for mixin in self.own_mixins.get(element).into_iter().flatten() {
+            if !out.mixins.contains(mixin) {
+                out.mixins.push(mixin.clone());
+            }
+        }
+        for (key, value) in self.numbers.get(element).into_iter().flatten() {
+            out.numbers.entry(key.clone()).or_insert(*value);
+        }
+        for (key, value) in self.strings.get(element).into_iter().flatten() {
+            out.strings
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+        for parent in self.own_inherits.get(element).into_iter().flatten() {
+            self.collect(parent, out, seen);
+        }
+    }
+
     pub fn extend_manifest(mut self, m: &mut Manifest) {
         let instances: Vec<_> = self
             .globals

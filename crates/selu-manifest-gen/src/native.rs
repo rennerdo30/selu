@@ -161,9 +161,17 @@ mod checking_tests {
             )],
         );
         let p = selu_syntax::parse("native.selu", source).unwrap();
+        // These cases check script typing; the taint warnings for scripts on
+        // game frames (SELU0604-0607) have their own tests.
         selu_check::check(&p, &m)
             .iter()
             .map(|d| d.code.to_string())
+            .filter(|c| {
+                !matches!(
+                    c.as_str(),
+                    "SELU0604" | "SELU0605" | "SELU0606" | "SELU0607"
+                )
+            })
             .collect()
     }
     #[test]

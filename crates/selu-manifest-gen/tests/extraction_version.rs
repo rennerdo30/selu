@@ -48,6 +48,12 @@ const CONTRACTS: &[(u32, &str)] = &[
         11,
         "ddbf884fc3ad023d5be03491826ae594f579b44adf6329ef115a3c75ea18a4e4",
     ),
+    // 12: frames a mixin creates per XML frame (mixin_loops.rs); the digest
+    // input now runs up to the product table (the old marker comment is gone).
+    (
+        12,
+        "b6d0a91b476472a10154dcef78b75fe26dbe15b27e8ecde6af3188c7eaf86ec9",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {
@@ -95,10 +101,9 @@ fn extraction_sources_and_overlays_require_version_bump() {
         if name == "crates/selu-manifest-gen/src/main.rs" {
             // CLI imports/reports are not extraction rules. Cover generation and
             // its git/archive helpers, branch identity, and product/overlay setup.
-            let generation = content
-                .split_once("// Verified against the exporter's")
-                .unwrap()
-                .0;
+            // Everything before the product table: the git/archive helpers
+            // and `generate`.
+            let generation = content.split_once("const CLIENTS:").unwrap().0;
             let clients = content
                 .split_once("const CLIENTS:")
                 .unwrap()

@@ -109,6 +109,17 @@ Blizzard_UIPanels_Game/Mainline/QuestFrame.lua:303 and supplies no numbered
 creation evidence. Retail runtime evidence does include
 AchievementFrameSummaryAchievement, created in Mainline/Blizzard_AchievementUI.lua:2391.
 
+The generator also follows frames a mixin method creates for each frame that
+uses the mixin (`mixin_loops.rs`): a loop `for i = 1, self.<count>` whose
+`CreateFrame` name is `"Literal"..i` or `self:GetName().."Infix"..i`, also
+through a local assigned in an `if self == Frame` chain. The count and the
+template are the XML `KeyValue`s of each named frame that inherits the mixin.
+This types the action buttons (`ActionButton`, `MultiBarBottomLeftButton`,
+`MultiBar5Button`, `StanceButton`, `PetActionButton`, ...) with their real
+counts per product. A family proven this way keeps its prefix even when the
+prefix contains a number. Shapes outside this pattern are skipped, never
+guessed.
+
 Family values retain their family identity through inferred aliases and null
 narrowing. A named child global is not a proven field: after narrowing a
 `frameFamily("MailItem", index)` value, `.Subject` reports SELU0582. Use
