@@ -68,6 +68,24 @@ otherwise they are warnings. Availability failures remain errors in both modes.
 Guarded fallback declarations retain API signatures, referenced structures and
 widgets, multiple-result semantics, and factory specialization through aliases.
 
+## Addon metadata
+
+Optional `[addon]` fields become TOC lines that the AddOns list shows and the
+addon can read with `C_AddOns.GetAddOnMetadata(addonName(), field)`:
+
+```toml
+[addon]
+name = "MyAddon"
+title = "My Addon"          # ## Title (default: the name)
+notes = "What it does."     # ## Notes (default: "Built with Selu")
+version = "1.2.0"           # ## Version
+author = "Someone"          # ## Author
+icon = "Interface\\AddOns\\MyAddon\\Media\\Logo"   # ## IconTexture
+```
+
+A value with a line break is SELU0506: it would end the field and start
+another TOC line.
+
 ## Media and other addon files
 
 `selu build` writes a complete addon, so the addon's media are copied into it.

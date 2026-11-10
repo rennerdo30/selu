@@ -1,0 +1,205 @@
+// @selu/comm: addon messages between players running the same addon.
+//
+// What every protocol needs and gets wrong alone: registering the prefix at
+// load (so early messages are not lost), reading the client's result codes
+// (enums, not booleans), choosing the group channel (INSTANCE_CHAT for
+// instance-only groups, then RAID, then PARTY), keeping messages under the
+// 255-byte limit, treating every incoming value as untrusted, and pacing
+// sends per channel. Senders are optional and untrusted: a protocol may never
+// read them.
+
+export type Log = (level: string, message: string) => void;
+
+export type ChannelOptions = {
+  // Channels whose messages reach the handlers; default the group channels
+  // and GUILD. WHISPER and custom channels must be listed explicitly.
+  accept?: string[];
+  // Longest message accepted on receive (bytes, at most 255).
+  maxLength?: number;
+  // Incoming messages per minute before the rest of that minute is dropped:
+  // overall, and per sender when the client names one.
+  perMinute?: number;
+  perSenderPerMinute?: number;
+  log?: Log
+};
+
+export type Incoming = { text: string; channel: string; sender?: string };
+export type SendResult = "sent" | "throttled" | "failed";
+
+export const MAX_MESSAGE_BYTES = 255;
+const GROUP_CHANNELS = ["PARTY", "RAID", "INSTANCE_CHAT", "GUILD"];
+
+// The channel for a message to the group, or null when solo.
+export function groupChannel(): string? {
+  try {
+    const instance = readable(IsInGroup(Enum.PartyCategory.Instance)) == true;
+    const home = readable(IsInGroup(Enum.PartyCategory.Home)) == true;
+    if (instance && !home) { return "INSTANCE_CHAT"; }
+    if (readable(IsInRaid()) == true) { return "RAID"; }
+    if (readable(IsInGroup()) == true) { return "PARTY"; }
+  } catch {}
+  return null;
+}
+
+export function inGuild(): boolean {
+  try { return readable(IsInGuild()) == true; } catch { return false; }
+}
+
+export function inCombat(): boolean {
+  try { return readable(InCombatLockdown()) != false; } catch { return true; }
+}
+
+function now(): number {
+  return readable(GetTime()) ?? 0;
+}
+
+export class Channel {
+  prefix: string;
+  registered: boolean? = null;
+  handlers: ((message: Incoming) => void)[] = [];
+  accept = new Set<string>();
+  maxLength: number;
+  perMinute: number;
+  perSenderPerMinute: number;
+  log: Log? = null;
+  minute = -1;
+  received = 0;
+  bySender = new Map<string, number>();
+  warned = new Set<string>();
+
+  constructor(prefix: string, options: ChannelOptions = {}) {
+    this.prefix = prefix;
+    for (const channel of options.accept ?? GROUP_CHANNELS) { this.accept.add(channel); }
+    this.maxLength = math.min(options.maxLength ?? MAX_MESSAGE_BYTES, MAX_MESSAGE_BYTES);
+    this.perMinute = options.perMinute ?? 120;
+    this.perSenderPerMinute = options.perSenderPerMinute ?? 30;
+    this.log = options.log;
+    if (prefix.length == 0 || prefix.length > 16) {
+      this.registered = false;
+      this.Warn("prefix", `comm: prefix ${prefix} must be 1 to 16 characters`);
+      return;
+    }
+    // At load, so a message that arrives before our first send is not lost.
+    this.Register();
+    const events = CreateFrame("Frame");
+    events.RegisterEvent("CHAT_MSG_ADDON");
+    events.SetScript("OnEvent", (_self, _event, a, b, c, d) => {
+      this.Receive(a, b, c, d);
+    });
+  }
+
+  Warn(key: string, message: string) {
+    if (this.warned.has(key)) { return; }
+    this.warned.add(key);
+    const log = this.log;
+    if (log != null) { log("WARN", message); }
+  }
+
+  Register(): boolean {
+    const known = this.registered;
+    if (known != null) { return known; }
+    let ok = false;
+    try {
+      const result = readable(C_ChatInfo.RegisterAddonMessagePrefix(this.prefix));
+      // Success, or already registered (after a reload): the prefix is ours.
+      ok = result == Enum.RegisterAddonMessagePrefixResult.Success
+        || result == Enum.RegisterAddonMessagePrefixResult.DuplicatePrefix;
+    } catch (error) {
+      this.Warn("register", `comm: the prefix ${this.prefix} could not be registered (${error.message})`);
+    }
+    if (!ok) { this.Warn("register", `comm: the client refused the prefix ${this.prefix}`); }
+    this.registered = ok;
+    return ok;
+  }
+
+  // Calls handler for every accepted incoming message.
+  OnMessage(handler: (message: Incoming) => void) {
+    this.handlers.push(handler);
+  }
+
+  // Every argument is copied only when readable and a string.
+  Receive(prefixValue: unknown, textValue: unknown, channelValue: unknown, senderValue: unknown) {
+    if (typeof prefixValue != "string" || typeof textValue != "string" || typeof channelValue != "string") { return; }
+    const prefix = readable(prefixValue);
+    const text = readable(textValue);
+    const channel = readable(channelValue);
+    if (prefix == null || text == null || channel == null) { return; }
+    if (prefix != this.prefix || !this.accept.has(channel)) { return; }
+    if (text.length == 0 || text.length > this.maxLength) { return; }
+    let sender: string? = null;
+    if (typeof senderValue == "string") { sender = readable(senderValue); }
+    if (!this.Admit(sender)) { return; }
+    const message: Incoming = { text: text, channel: channel, sender: sender };
+    for (const handler of this.handlers) {
+      try {
+        handler(message);
+      } catch (error) {
+        this.Warn("handler", `comm: a ${this.prefix} handler failed: ${error.message}`);
+      }
+    }
+  }
+
+  Admit(sender: string?): boolean {
+    const minute = math.floor(now() / 60);
+    if (minute != this.minute) {
+      this.minute = minute;
+      this.received = 0;
+      this.bySender = new Map<string, number>();
+    }
+    if (this.received >= this.perMinute) { return false; }
+    if (sender != null) {
+      const count = this.bySender.get(sender) ?? 0;
+      if (count >= this.perSenderPerMinute) { return false; }
+      this.bySender.set(sender, count + 1);
+    }
+    this.received += 1;
+    return true;
+  }
+
+  // Sends one message. "throttled": the client asked to wait (a later send
+  // may succeed); "failed": refused, too long, unregistered or not in that
+  // channel.
+  Send(text: string, channel: string): SendResult {
+    if (!this.Register()) { return "failed"; }
+    if (text.length == 0 || text.length > MAX_MESSAGE_BYTES) {
+      this.Warn("length", `comm: a ${this.prefix} message of ${text.length} bytes was not sent (limit ${MAX_MESSAGE_BYTES})`);
+      return "failed";
+    }
+    try {
+      const result = readable(C_ChatInfo.SendAddonMessage(this.prefix, text, channel));
+      if (result == null || result == Enum.SendAddonMessageResult.Success) { return "sent"; }
+      if (result == Enum.SendAddonMessageResult.AddonMessageThrottle
+          || result == Enum.SendAddonMessageResult.ChannelThrottle
+          || result == Enum.SendAddonMessageResult.AddOnMessageLockdown) {
+        return "throttled";
+      }
+      return "failed";
+    } catch (error) {
+      this.Warn("send", `comm: sending on ${this.prefix} failed (${error.message})`);
+      return "failed";
+    }
+  }
+}
+
+// At most one send per channel per interval. The time is taken before the
+// send, so a failing or throttled channel also waits instead of retrying on
+// every event.
+export class ChannelPacer {
+  interval: number;
+  last = new Map<string, number>();
+
+  constructor(intervalSeconds: number) {
+    this.interval = intervalSeconds;
+  }
+
+  Ready(channel: string): boolean {
+    const last = this.last.get(channel);
+    return last == null || now() - last >= this.interval;
+  }
+
+  Take(channel: string): boolean {
+    if (!this.Ready(channel)) { return false; }
+    this.last.set(channel, now());
+    return true;
+  }
+}

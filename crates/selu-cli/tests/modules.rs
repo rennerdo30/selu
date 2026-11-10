@@ -646,3 +646,50 @@ fn addon_name_is_the_built_folder_name() {
     assert!(!result.status.success());
     assert!(stderr.contains("SELU0649"), "{stderr}");
 }
+
+#[test]
+fn addon_metadata_reaches_the_toc() {
+    let dir = std::env::temp_dir().join(format!("selu-toc-meta-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"Meta\"\ntargets = [\"wowf@1.0.0.1000\"]\ntitle = \"Meta Addon\"\nnotes = \"Does things.\"\nversion = \"1.2.3-beta.4\"\nauthor = \"Someone\"\nicon = \"Interface\\\\AddOns\\\\Meta\\\\Logo\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/main.selu"), "print(1);").unwrap();
+    let build = |dir: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_selu"))
+            .arg("build")
+            .arg(dir)
+            .arg("--manifest-dir")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"))
+            .output()
+            .unwrap()
+    };
+    let output = build(&dir);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let toc = std::fs::read_to_string(dir.join("dist/Meta/Meta.toc")).unwrap();
+    for line in [
+        "## Title: Meta Addon",
+        "## Notes: Does things.",
+        "## Version: 1.2.3-beta.4",
+        "## Author: Someone",
+        "## IconTexture: Interface\\AddOns\\Meta\\Logo",
+    ] {
+        assert!(toc.lines().any(|l| l == line), "{line} missing from\n{toc}");
+    }
+    assert!(!toc.contains("Built with Selu"), "{toc}");
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"Meta\"\ntargets = [\"wowf@1.0.0.1000\"]\nversion = \"1\\n## Title: Injected\"\n",
+    )
+    .unwrap();
+    let output = build(&dir);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("SELU0506"));
+}

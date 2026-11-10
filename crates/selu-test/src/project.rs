@@ -82,6 +82,67 @@ struct AddonSection {
     name: String,
     #[serde(default)]
     targets: Vec<String>,
+    /// TOC metadata (docs/lang/targets.md): shown in the AddOns list and
+    /// read by the addon (`C_AddOns.GetAddOnMetadata`).
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    /// `IconTexture`: a texture path the client resolves.
+    #[serde(default)]
+    icon: Option<String>,
+}
+
+impl AddonSection {
+    /// The `[addon]` metadata as TOC lines; an error names a value with a
+    /// line break (it would end the TOC field and start another).
+    fn metadata(&self) -> Result<Vec<(&'static str, String)>, String> {
+        let mut lines = Vec::new();
+        for (field, label, value) in [
+            ("title", "Title", &self.title),
+            ("notes", "Notes", &self.notes),
+            ("version", "Version", &self.version),
+            ("author", "Author", &self.author),
+            ("icon", "IconTexture", &self.icon),
+        ] {
+            if let Some(value) = value {
+                if value.contains(['\n', '\r']) {
+                    return Err(format!("[addon] {field} must be a single line"));
+                }
+                lines.push((label, value.clone()));
+            }
+        }
+        Ok(lines)
+    }
+}
+
+/// Applies `[addon]` metadata to a generated TOC: Title and Notes replace
+/// the defaults, the other fields follow Notes.
+fn apply_metadata(toc: String, metadata: &[(&'static str, String)]) -> String {
+    let mut out = Vec::new();
+    for line in toc.lines() {
+        let replaced = metadata.iter().find(|(label, _)| {
+            matches!(*label, "Title" | "Notes") && line.starts_with(&format!("## {label}:"))
+        });
+        match replaced {
+            Some((label, value)) => out.push(format!("## {label}: {value}")),
+            None => out.push(line.to_string()),
+        }
+        if line.starts_with("## Notes:") {
+            for (label, value) in metadata {
+                if !matches!(*label, "Title" | "Notes") {
+                    out.push(format!("## {label}: {value}"));
+                }
+            }
+        }
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    text
 }
 
 fn fail(d: &Diagnostic, source: &str) -> ExitCode {
@@ -182,6 +243,10 @@ fn build_impl(
         eprintln!("selu: lint deny entries require an API and a written reason");
         return Err(ExitCode::FAILURE);
     }
+    let metadata = project.addon.metadata().map_err(|e| {
+        eprintln!("SELU0506: {e}");
+        ExitCode::FAILURE
+    })?;
     let shared = project.build.layout == BuildLayout::Shared;
     let debug = project.build.debug;
     let assets = project.build.assets;
@@ -513,11 +578,14 @@ fn build_impl(
             })?;
             lua_files.push(lua_name);
         }
-        let mut toc = if shared {
-            selu_lower::targets::generate_shared_toc(&project.name, &selected, &lua_files)
-        } else {
-            selu_lower::generate_toc(&project.name, manifest, &lua_files)
-        };
+        let mut toc = apply_metadata(
+            if shared {
+                selu_lower::targets::generate_shared_toc(&project.name, &selected, &lua_files)
+            } else {
+                selu_lower::generate_toc(&project.name, manifest, &lua_files)
+            },
+            &metadata,
+        );
         for (character, label) in [
             (false, "SavedVariables"),
             (true, "SavedVariablesPerCharacter"),

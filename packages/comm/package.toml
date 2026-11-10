@@ -1,0 +1,5 @@
+name = "comm"
+description = "Addon messages between players: prefix registration, group channel choice, size and result checks, hardened receiving and per-channel pacing."
+# Checked on Forever so far; each further product is added once the package
+# type-checks against that product's manifests.
+products = ["wowf"]
