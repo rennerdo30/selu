@@ -726,6 +726,9 @@ impl Parser {
             }
             Tok::LBrace => StmtKind::Block(self.block()?),
             Tok::Import => self.import(start)?,
+            Tok::Export if matches!(self.peek_at(1), Some(Tok::LBrace)) => {
+                self.import_names(start, true)?
+            }
             Tok::Export => {
                 self.bump();
                 let inner = self.stmt()?;
@@ -776,9 +779,18 @@ impl Parser {
 
     /// `import { a, b as c } from "./x";` / `import name from "./x";`
     fn import(&mut self, start: usize) -> PResult<StmtKind> {
+        self.import_names(start, false)
+    }
+
+    /// The import forms, and `export { a, b as c } from "./x";` when
+    /// `reexport` is set (after the `export` keyword, at `{`).
+    fn import_names(&mut self, start: usize, reexport: bool) -> PResult<StmtKind> {
         self.bump();
         let mut names = Vec::new();
         let mut default = None;
+        if reexport && !self.at(&Tok::LBrace) {
+            return Err(self.unexpected("`{` and the names to export"));
+        }
         if self.eat(&Tok::LBrace) {
             while !self.at(&Tok::RBrace) {
                 let (exported, exported_span) = self.field_name("a name to import")?;
@@ -798,7 +810,11 @@ impl Parser {
             default = Some(self.ident("`{` or a name to import")?);
         }
         if !self.at_ident("from") {
-            return Err(self.unexpected("`from` and the file to import from"));
+            return Err(self.unexpected(if reexport {
+                "`from` and the module to export from; `export { ... }` re-exports another module's names"
+            } else {
+                "`from` and the file to import from"
+            }));
         }
         self.bump();
         let (from, from_span) = match self.peek().clone() {
@@ -815,6 +831,7 @@ impl Parser {
             default,
             from,
             from_span,
+            reexport,
         })
     }
 

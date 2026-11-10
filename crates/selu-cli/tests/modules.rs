@@ -576,3 +576,51 @@ fn review_missing_export_help_is_generic() {
         &selu_diagnostics::Span::new("main.selu", 9, 16)
     );
 }
+
+#[test]
+fn reexports_publish_values_classes_types_and_live_bindings() {
+    let (prints, order) = run(
+        "reexport",
+        &[
+            (
+                "main.selu",
+                "import { label, inc as increase, Box, count, Point } from \"./kit/index\"; const p: Point = { x: 2, y: 3 }; const b = new Box(p.x + p.y); print(label); print(b.Get()); increase(); increase(); print(count);",
+            ),
+            (
+                "kit/index.selu",
+                "export { label, bump as inc, count, Point } from \"./state\"; export { Box } from \"./box\";",
+            ),
+            (
+                "kit/state.selu",
+                "export let count = 0; export const label = \"kit\"; export function bump(): void { count += 1; } export type Point = { x: number; y: number };",
+            ),
+            (
+                "kit/box.selu",
+                "export class Box { value: number; constructor(value: number) { this.value = value; } Get(): number { return this.value * 2; } }",
+            ),
+        ],
+    );
+    assert_eq!(prints, ["kit", "10", "2"]);
+    assert_eq!(
+        order,
+        ["kit/box.lua", "kit/state.lua", "kit/index.lua", "main.lua"]
+    );
+}
+
+#[test]
+fn reexport_of_a_missing_name_is_reported() {
+    let (_, result) = project(
+        "reexport-missing",
+        &[
+            (
+                "main.selu",
+                "import { nope } from \"./index\"; print(nope);",
+            ),
+            ("index.selu", "export { nope } from \"./state\";"),
+            ("state.selu", "export const there = 1;"),
+        ],
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success());
+    assert!(stderr.contains("SELU0401"), "{stderr}");
+}

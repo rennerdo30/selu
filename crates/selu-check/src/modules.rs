@@ -104,6 +104,7 @@ impl Ctx<'_> {
             from,
             from_span,
             default,
+            ..
         } = &s.kind
         {
             if let Some(diagnostic) = reserved_module_path(from, from_span) {
@@ -212,6 +213,27 @@ impl Ctx<'_> {
             true
         } else {
             false
+        }
+    }
+}
+
+/// `export { a, b as c } from "./x";`: each name joins this module's exports
+/// with the imported module's signature, under its local name.
+pub(crate) fn publish_reexports(stmts: &[Stmt], module: &mut ModuleBindings) {
+    for s in stmts {
+        if let StmtKind::Import {
+            names,
+            from,
+            reexport: true,
+            ..
+        } = &s.kind
+        {
+            for (remote, local, _, _) in names {
+                if let Some(export) = module.imports.get(from).and_then(|m| m.get(remote)) {
+                    let export = export.clone();
+                    module.exports.insert(local.clone(), export);
+                }
+            }
         }
     }
 }

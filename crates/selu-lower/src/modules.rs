@@ -286,6 +286,34 @@ impl Lowerer<'_> {
             kind: LStmtKind::Assign(vec![table(&self.module.key)], vec![LExpr::Table(vec![])]),
             span: None,
         });
+        // Re-exports publish the imported module's slot as is: a getter for
+        // a mutable export stays a getter.
+        for s in &self.module.declarations {
+            if let StmtKind::Import {
+                names,
+                from,
+                reexport: true,
+                ..
+            } = &s.kind
+                && let Some((key, exports)) = self.module.imports.get(from)
+            {
+                for (remote, local, _, _) in names {
+                    if exports.get(remote).is_some_and(|e| !e.has_value) {
+                        continue;
+                    }
+                    out.push(LStmt::new(
+                        LStmtKind::Assign(
+                            vec![LExpr::Field(
+                                Box::new(table(&self.module.key)),
+                                local.clone(),
+                            )],
+                            vec![LExpr::Field(Box::new(table(key)), remote.clone())],
+                        ),
+                        &s.span,
+                    ));
+                }
+            }
+        }
     }
     pub(crate) fn import_stmt(&mut self, _s: &Stmt, _out: &mut LBlock) {}
     fn emit_import(&self, s: &Stmt, out: &mut LBlock) {

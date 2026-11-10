@@ -255,6 +255,9 @@ impl PreparedTarget {
             e.type_contexts = type_contexts.clone();
             e.classes = classes.clone();
         }
+        // Re-exports keep the defining module's signature (its classes and
+        // type contexts), so they are added after the snapshot above.
+        modules::publish_reexports(&program.stmts, &mut ctx.module);
         if timing {
             eprintln!(
                 "timing checker setup {:.6}s body {:.6}s finish {:.6}s",

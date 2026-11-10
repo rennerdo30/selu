@@ -183,6 +183,9 @@ pub enum StmtKind {
         default: Option<(String, Span)>,
         from: String,
         from_span: Span,
+        /// `export { a, b as c } from "./x";`: the names are imported and
+        /// published as this module's exports under their local names.
+        reexport: bool,
     },
     /// `export` before a declaration (`function`, `const`, `let`, `class`,
     /// `global`).

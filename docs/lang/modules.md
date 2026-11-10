@@ -70,3 +70,15 @@ user bindings (SELU0318). The diagnostic underlines the import path and asks to
 rename the file or directory. This keeps named compiler runtime slots in the
 addon namespace separate from module tables. Both project path resolution and
 standalone module checking enforce the same validation.
+
+## Re-exports
+
+`export { a, b as c } from "./x";` imports names from another module and
+publishes them as this module's exports, `b` under the name `c`. Values,
+functions, classes and types all re-export with the defining module's
+signature, so `new C()` and type annotations work in the importer. A mutable
+export stays live: its getter is published as is. The names are also bound
+locally, read-only, like any import. A missing name is SELU0401. The form is
+how a package's `src/index.selu` offers an API that is spread over internal
+files (docs/lang/packages.md). `export { ... }` without `from` is not
+supported; export the declaration itself.
