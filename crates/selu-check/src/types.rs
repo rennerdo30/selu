@@ -937,6 +937,7 @@ pub struct TypeTable {
     types: HashMap<ExprId, std::sync::Arc<Type>>,
     stable: std::collections::HashSet<ExprId>,
     frame_families: std::collections::HashSet<ExprId>,
+    addon_names: std::collections::HashSet<ExprId>,
     method_calls: std::collections::HashSet<ExprId>,
     single_values: std::collections::HashSet<ExprId>,
     game_types: std::collections::HashSet<ExprId>,
@@ -986,6 +987,16 @@ impl TypeTable {
 
     pub fn mark_frame_family(&mut self, id: ExprId) {
         self.frame_families.insert(id);
+    }
+    /// `addonName()`: the built addon's folder name, from the WoW loader.
+    pub fn mark_addon_name(&mut self, id: ExprId) {
+        self.addon_names.insert(id);
+    }
+    pub fn is_addon_name(&self, id: ExprId) -> bool {
+        self.addon_names.contains(&id)
+    }
+    pub fn uses_addon_name(&self) -> bool {
+        !self.addon_names.is_empty()
     }
     pub fn is_frame_family(&self, id: ExprId) -> bool {
         self.frame_families.contains(&id)

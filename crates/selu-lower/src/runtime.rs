@@ -41,6 +41,7 @@ impl Lowerer<'_> {
         let entry = self.error_entry_setup(program, handlers);
         let wow = self.wow_prologue();
         let namespace = module
+            || self.types.uses_addon_name()
             || wow.is_some()
             || saved::has_saved(program)
             || errors::uses_errors(program)

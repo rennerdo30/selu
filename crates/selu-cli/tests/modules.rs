@@ -624,3 +624,25 @@ fn reexport_of_a_missing_name_is_reported() {
     assert!(!result.status.success());
     assert!(stderr.contains("SELU0401"), "{stderr}");
 }
+
+#[test]
+fn addon_name_is_the_built_folder_name() {
+    let (prints, _) = run(
+        "addon-name",
+        &[
+            (
+                "main.selu",
+                "import { label } from \"./label\"; print(addonName()); print(label());",
+            ),
+            (
+                "label.selu",
+                "export function label(): string { return addonName() + \"!\"; }",
+            ),
+        ],
+    );
+    assert_eq!(prints, ["Modules", "Modules!"]);
+    let (_, result) = project("addon-name-args", &[("main.selu", "print(addonName(1));")]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success());
+    assert!(stderr.contains("SELU0649"), "{stderr}");
+}

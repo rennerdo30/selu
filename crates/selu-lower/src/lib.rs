@@ -668,6 +668,8 @@ impl Lowerer<'_> {
                 object,
                 name: field,
             } => self.data_field(object, field, pre),
+            // The folder name the WoW loader passes as the first chunk argument.
+            ExprKind::Call { .. } if self.types.is_addon_name(e.id) => name("__selu_addon"),
             ExprKind::Call { callee: _, args } if self.types.is_frame_family(e.id) => {
                 let prefix = self.expr(&args[0], pre);
                 let index = self.expr(&args[1], pre);

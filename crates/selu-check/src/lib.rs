@@ -1585,6 +1585,20 @@ impl Ctx<'_> {
         if let Some(t) = self.frame_family(e, callee, args) {
             return t;
         }
+        if matches!(&callee.kind, ExprKind::Ident(n) if n == "addonName" && self.lookup(n).is_none())
+        {
+            self.types.mark_addon_name(e.id);
+            if !args.is_empty() {
+                for arg in args {
+                    self.value(arg);
+                }
+                self.out.push(
+                    err("SELU0649", "addonName takes no arguments", &e.span)
+                        .with_help("call addonName() for the name of the built addon"),
+                );
+            }
+            return Type::String;
+        }
         if let Some(t) = self.target_call(callee, args) {
             return t;
         }

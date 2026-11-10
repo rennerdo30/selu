@@ -82,3 +82,13 @@ locally, read-only, like any import. A missing name is SELU0401. The form is
 how a package's `src/index.selu` offers an API that is spread over internal
 files (docs/lang/packages.md). `export { ... }` without `from` is not
 supported; export the declaration itself.
+
+## The addon's own name
+
+`addonName()` returns the folder name the game loaded the addon from: the
+first argument the WoW loader passes to every file, which is `[addon] name` in
+`selu.toml` unless the folder was renamed. Use it where the client asks for
+the addon by name (`C_AddOns.GetAddOnMetadata(addonName(), "Version")`,
+`GetAddOnMemoryUsage(addonName())`, an `ADDON_LOADED` filter), so a copy
+installed under another folder name still finds itself. It takes no
+arguments (SELU0649). A local named `addonName` shadows it.
