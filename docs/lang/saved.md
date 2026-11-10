@@ -151,9 +151,21 @@ current data plus retained, distinct legacy data requiring explicit reconciliati
 
 A present current root takes precedence, including a corrupt one (it is never
 overwritten by a legacy value). Otherwise the legacy table is selected by
-identity. Empty or absent data starts at the current version. Populated data
-without the mapped key starts at 1. Non-table roots, malformed versions and
+identity. One exception: an empty current table holds nothing, so a filled
+legacy table is selected instead and the current name then points to it.
+Empty or absent data starts at the current version. Populated data
+without the mapped key starts at 1. A version stored as text that reads as a
+number (`"12"`) counts as that number and is written back as a number on
+success. Non-table roots, other malformed versions and
 future versions are preserved without defaults, migration or publication.
+
+At the current version, a string, number or boolean in a field whose default
+is a table (a record, array or map) is replaced by that default, with one
+`repaired` warning that names the field path. No code could use such a value,
+and refusing the whole save for it would disable the addon. Fields whose
+schema accepts the scalar (`SavedRepair`, unions) are kept. A wrong scalar in
+a scalar field is still refused. The same rule applies to ordinary saved
+declarations.
 
 Every migration in this mode requires an explicit finite serializable record
 type. Optional fields distinguish absent values from malformed present values.

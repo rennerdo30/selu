@@ -693,7 +693,7 @@ fn adoption_nested_validation_and_failed_step_recovery() {
     success(&dir);
     let built = files(&dir);
     for input in [
-        "DB={dbVersion='3'}",
+        "DB={dbVersion='three'}",
         "DB=false",
         "DB=false; OldDB={dbVersion=1,count=4,enabled=false,history={}}",
         "DB={dbVersion=1.5}",

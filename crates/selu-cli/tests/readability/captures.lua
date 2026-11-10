@@ -76,6 +76,7 @@ if __selu_saved_runtime.adopt == nil then
   local __selu_saved_ipairs = ipairs
   local __selu_saved_pcall = pcall
   local __selu_saved_tostring = tostring
+  local __selu_saved_tonumber = tonumber
   local function __selu_saved_opaque(__selu_value, __selu_seen, __selu_done)
     local __selu_kind = __selu_saved_type(__selu_value)
     if __selu_kind == "string" or __selu_kind == "boolean" then return true end
@@ -247,8 +248,46 @@ if __selu_saved_runtime.adopt == nil then
     end
     return __selu_count == #__selu_paths
   end
+  -- A scalar where the defaults hold a table cannot be used by any code. It is
+  -- dropped so the defaults fill the place; each repair is reported once the
+  -- load has committed. Values the schema accepts (repair unions) are kept.
+  local function __selu_saved_repair(__selu_data, __selu_defaults, __selu_schema, __selu_objects, __selu_path, __selu_repairs)
+    local __selu_fields = __selu_schema.fields
+    if not __selu_fields then return end
+    for __selu_key, __selu_default in __selu_saved_pairs(__selu_defaults) do
+      local __selu_field = __selu_fields[__selu_key]
+      if __selu_field ~= nil and __selu_saved_type(__selu_default) == "table" then
+        local __selu_saved = __selu_data[__selu_key]
+        local __selu_kind = __selu_saved_type(__selu_saved)
+        local __selu_child = __selu_path .. "." .. __selu_saved_tostring(__selu_key)
+        if __selu_kind == "table" then
+          local __selu_inner = __selu_objects and __selu_objects[__selu_key]
+          if __selu_inner ~= nil then
+            if __selu_saved_type(__selu_field) == "table" and __selu_field.optional then __selu_field = __selu_field.optional end
+            if __selu_saved_type(__selu_field) == "table" then
+              __selu_saved_repair(__selu_saved, __selu_default, __selu_field, __selu_inner, __selu_child, __selu_repairs)
+            end
+          end
+        elseif (__selu_kind == "string" or __selu_kind == "number" or __selu_kind == "boolean") and not __selu_saved_validate(__selu_saved, __selu_field, false, {}) then
+          __selu_data[__selu_key] = nil
+          __selu_repairs[#__selu_repairs + 1] = __selu_child .. " held a " .. __selu_kind .. " where a table belongs; replaced by the defaults"
+        end
+      end
+    end
+  end
+  -- A hand-edited stamp such as "12" is read as its number; anything else that
+  -- is no number stays malformed.
+  local function __selu_saved_stamp(__selu_value)
+    if __selu_saved_type(__selu_value) == "string" then return __selu_saved_tonumber(__selu_value) or __selu_value end
+    return __selu_value
+  end
   __selu_saved_runtime.adopt = function(__selu_database, __selu_current, __selu_legacy, __selu_version_key, __selu_latest, __selu_defaults, __selu_schema, __selu_default_objects, __selu_steps, __selu_readers, __selu_contexts, __selu_publish)
     local __selu_root = __selu_current
+    -- An empty current table holds nothing, so it never hides a filled legacy one.
+    if __selu_saved_type(__selu_root) == "table" and __selu_saved_next(__selu_root) == nil
+      and __selu_saved_type(__selu_legacy) == "table" and __selu_saved_next(__selu_legacy) ~= nil then
+      __selu_root = __selu_legacy
+    end
     if __selu_root == nil then __selu_root = __selu_legacy end
     if __selu_root == nil then __selu_root = {} end
     local __selu_phase = "load"
@@ -260,7 +299,7 @@ if __selu_saved_runtime.adopt == nil then
       __selu_publish({ status = __selu_status }, false)
     end
     if __selu_saved_type(__selu_root) ~= "table" then __selu_refuse("corrupt", "saved root expected table, got " .. __selu_saved_type(__selu_root)); return end
-    local __selu_version = __selu_root[__selu_version_key]
+    local __selu_version = __selu_saved_stamp(__selu_root[__selu_version_key])
     if __selu_version == nil then
       local __selu_empty = true
       for __selu_key in __selu_saved_pairs(__selu_root) do __selu_empty = false; break end
@@ -277,7 +316,7 @@ if __selu_saved_runtime.adopt == nil then
     local __selu_original = __selu_pending and __selu_pending.original or __selu_saved_clone(__selu_root, {}, {})
     if __selu_original[__selu_context_key] ~= nil then __selu_refuse("corrupt", "invalid retry context"); return end
     local __selu_deletions = __selu_saved_clone(__selu_pending and __selu_pending.removals or {}, {}, {})
-    local __selu_from = __selu_original[__selu_version_key]
+    local __selu_from = __selu_saved_stamp(__selu_original[__selu_version_key])
     if __selu_from == nil then __selu_from = 1 end
     if __selu_saved_type(__selu_from) ~= "number" or __selu_from < 1 or __selu_from % 1 ~= 0 or __selu_from > __selu_version then __selu_refuse("corrupt", "invalid retry context"); return end
     local __selu_has_context = false
@@ -341,12 +380,14 @@ if __selu_saved_runtime.adopt == nil then
       __selu_saved_commit(__selu_candidate, __selu_reverse, {})
       __selu_version = __selu_version + 1
     end
-    __selu_phase = "current validation"
-    local __selu_valid, __selu_reason = __selu_saved_validate(__selu_root, __selu_schema, true, {})
-    if not __selu_valid then __selu_refuse("corrupt", __selu_reason); return end
     -- Defaults are a graph transaction too: filling one record can change an aliased map.
     local __selu_reverse = {}
     local __selu_candidate = __selu_saved_clone(__selu_root, {}, __selu_reverse)
+    local __selu_repairs = {}
+    __selu_saved_repair(__selu_candidate, __selu_defaults, __selu_schema, __selu_default_objects, "$", __selu_repairs)
+    __selu_phase = "current validation"
+    local __selu_valid, __selu_reason = __selu_saved_validate(__selu_candidate, __selu_schema, true, {})
+    if not __selu_valid then __selu_refuse("corrupt", __selu_reason); return end
     __selu_saved_runtime.fill(__selu_candidate, __selu_defaults, __selu_default_objects)
     __selu_candidate[__selu_context_key] = nil
     __selu_candidate[__selu_version_key] = __selu_latest
@@ -354,6 +395,8 @@ if __selu_saved_runtime.adopt == nil then
     __selu_valid, __selu_reason = __selu_saved_validate(__selu_candidate, __selu_schema, false, {})
     if not __selu_valid then __selu_refuse("corrupt", __selu_reason); return end
     __selu_saved_commit(__selu_candidate, __selu_reverse, {})
+    __selu_phase = "defaults"
+    for __selu_index = 1, #__selu_repairs do __selu_diagnostic("repaired", __selu_repairs[__selu_index]) end
     local __selu_collision = __selu_legacy ~= nil and __selu_legacy ~= __selu_root
     __selu_phase = "publication"
     if __selu_collision then __selu_diagnostic("collision", "distinct current and legacy roots; legacy data retained") end

@@ -230,6 +230,80 @@ fn compatible_aliased_defaults_preserve_identity() {
 }
 
 #[test]
+fn empty_current_root_does_not_hide_a_filled_legacy_root() {
+    let sim = vm("DB={}; OldDB={dbVersion=1,count=7}; root=OldDB");
+    load(&sim, &source("{count:0}", 1, ""));
+    sim.eval("assert(DB==root and OldDB==nil and DB.count==7)")
+        .unwrap();
+    assert_eq!(sim.prints(), vec!["writer", "ready", "writer"]);
+    // An empty legacy table changes nothing: the current root stays.
+    let sim = vm("DB={dbVersion=1,count=3}; OldDB={}; root=DB");
+    load(&sim, &source("{count:0}", 1, ""));
+    sim.eval("assert(DB==root and DB.count==3)").unwrap();
+}
+
+#[test]
+fn text_version_stamp_is_read_as_its_number() {
+    let sim = vm("DB={dbVersion='1',count=7}; root=DB");
+    load(
+        &sim,
+        &source(
+            "{count:0}",
+            2,
+            "migrate DB 1 -> 2 (old:{count:number}) { old.count+=1; }",
+        ),
+    );
+    sim.eval("assert(DB==root and DB.count==8 and DB.dbVersion==2)")
+        .unwrap();
+    let sim = vm("DB={dbVersion='2',count=7}; root=DB");
+    load(
+        &sim,
+        &source("{count:0}", 2, "migrate DB 1 -> 2 (old:{count:number}) {}"),
+    );
+    sim.eval("assert(DB==root and DB.count==7 and DB.dbVersion==2)")
+        .unwrap();
+    for stamp in ["'twelve'", "'1.5'", "1.5", "true"] {
+        let sim = vm(&format!("DB={{dbVersion={stamp},count=7}}; root=DB"));
+        let before = sim.logout_saved(&["DB", "OldDB"]).unwrap();
+        load(&sim, &source("{count:0}", 1, ""));
+        assert_eq!(sim.logout_saved(&["DB", "OldDB"]).unwrap(), before);
+        assert!(sim.prints().iter().any(|s| s == "corrupt"), "{stamp}");
+    }
+}
+
+#[test]
+fn scalar_where_a_default_table_belongs_is_replaced_with_one_warning() {
+    let defaults = "{count:0, box:{a:1, inner:{b:2}}, names:new Map<string,number>()}";
+    let sim = vm("DB={dbVersion=1,count=7,box={a=5,inner='gone'},names=3}; root=DB; box=DB.box");
+    load(&sim, &source(defaults, 1, ""));
+    sim.eval("assert(DB==root and DB.box==box and box.a==5 and box.inner.b==2 and next(DB.names)==nil and DB.count==7)")
+        .unwrap();
+    let messages = sim.prints();
+    let warnings = messages
+        .iter()
+        .filter(|s| s.starts_with("[saved] DB:"))
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 2, "{messages:?}");
+    assert!(
+        warnings
+            .iter()
+            .any(|s| s.contains("$.box.inner held a string")),
+        "{messages:?}"
+    );
+    assert!(
+        warnings.iter().any(|s| s.contains("$.names held a number")),
+        "{messages:?}"
+    );
+    assert!(messages.iter().any(|s| s == "ready"));
+    // A scalar of the wrong type in a scalar field is still refused untouched.
+    let sim = vm("DB={dbVersion=1,count='bad',box=4}; root=DB");
+    let before = sim.logout_saved(&["DB", "OldDB"]).unwrap();
+    load(&sim, &source(defaults, 1, ""));
+    assert_eq!(sim.logout_saved(&["DB", "OldDB"]).unwrap(), before);
+    assert!(sim.prints().iter().any(|s| s == "corrupt"));
+}
+
+#[test]
 fn adoption_warns_once_with_database_reason_and_step() {
     for (input, version, migrations, status, reason, step, writers) in [
         (
@@ -524,8 +598,13 @@ fn sd_opaque_tables_do_not_expose_fields() {
 #[test]
 fn sd_opaque_values_require_serializable_tables() {
     let src = "saved global DB using dbVersion:{value:{}}={value:{}}; function attach(){DB.whenReady(data=>{print(\"ready\");});} attach(); on PLAYER_LOGIN(){print(DB.status);}";
+    // A scalar where the default is a table is replaced by the default.
+    let sim = vm("DB={dbVersion=1,value=7}");
+    load(&sim, src);
+    sim.eval("assert(type(DB.value)=='table' and next(DB.value)==nil)")
+        .unwrap();
+    assert_eq!(sim.prints().last().unwrap(), "ready");
     for input in [
-        "DB={dbVersion=1,value=7}",
         "DB={dbVersion=1,value={bad=function() end}}",
         "DB={dbVersion=1,value={}}; DB.value.self=DB.value",
         "DB={dbVersion=1,value={[{}]='bad'}}",
