@@ -670,6 +670,12 @@ impl Type {
         match (a, b) {
             (Type::Null, t) | (t, Type::Null) => Some(Type::optional(t.clone())),
             (Type::Optional(x), y) | (y, Type::Optional(x)) => Type::join(x, y).map(Type::optional),
+            // A union that kept its `null` member after narrowing
+            // (`"a" | "b" | null`) joins like the optional of the rest.
+            (Type::Union(ts), y) | (y, Type::Union(ts)) if ts.contains(&Type::Null) => {
+                let rest = Type::union(ts.iter().filter(|t| **t != Type::Null).cloned().collect());
+                Type::join(&rest, y).map(Type::optional)
+            }
             _ => None,
         }
     }

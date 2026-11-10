@@ -95,6 +95,16 @@ fn overlay(m: &mut selu_manifest::Manifest) {
             json!([]),
         ),
         (
+            "sim.setMap",
+            json!([{"name":"id","type":"number"},{"name":"map","type":"unknown"}]),
+            json!([]),
+        ),
+        (
+            "sim.setPlayerPosition",
+            json!([{"name":"position","type":"unknown"}]),
+            json!([]),
+        ),
+        (
             "sim.lockCVar",
             json!([{"name":"name","type":"string"}]),
             json!([]),
@@ -1036,6 +1046,65 @@ fn install(
                 });
             }
             s.borrow().set_tracking(list)
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "setMap",
+        lua.create_function(move |_, (id, map): (u32, mlua::Table)| {
+            let size = |key: &str| -> mlua::Result<f64> {
+                let value = map.get::<Option<f64>>(key)?.unwrap_or(1000.0);
+                if value > 0.0 {
+                    Ok(value)
+                } else {
+                    Err(mlua::Error::runtime(format!(
+                        "sim.setMap: `{key}` must be greater than 0"
+                    )))
+                }
+            };
+            s.borrow().set_map(
+                id,
+                selu_sim::world::MapArea {
+                    name: map.get::<Option<String>>("name")?.unwrap_or_default(),
+                    continent: map.get::<Option<u32>>("continent")?.unwrap_or(0),
+                    north: map.get::<Option<f64>>("north")?.unwrap_or(0.0),
+                    west: map.get::<Option<f64>>("west")?.unwrap_or(0.0),
+                    width: size("width")?,
+                    height: size("height")?,
+                    parent: map.get::<Option<u32>>("parent")?.unwrap_or(0),
+                    user_waypoints: map.get::<Option<bool>>("userWaypoints")?.unwrap_or(true),
+                },
+            )
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "setPlayerPosition",
+        lua.create_function(move |_, at: mlua::Table| {
+            let mut position = selu_sim::world::PlayerPosition {
+                continent: at.get("continent")?,
+                north: at.get("north")?,
+                west: at.get("west")?,
+                facing: at.get("facing")?,
+                speed: at.get("speed")?,
+                run_speed: at.get("runSpeed")?,
+                unknown: at.get("unknown")?,
+                facing_unknown: at.get("facingUnknown")?,
+            };
+            // Map coordinates (0..1) on a map set with sim.setMap.
+            if let Some(map) = at.get::<Option<u32>>("map")? {
+                let x = at.get::<Option<f64>>("x")?.unwrap_or(0.5);
+                let y = at.get::<Option<f64>>("y")?.unwrap_or(0.5);
+                let Some((continent, north, west)) = s.borrow().map_to_world(map, x, y)? else {
+                    return Err(mlua::Error::runtime(format!(
+                        "sim.setPlayerPosition: map {map} is not defined; call sim.setMap first"
+                    )));
+                };
+                position.continent = Some(continent);
+                position.north = Some(north);
+                position.west = Some(west);
+            }
+            s.borrow().set_player_position(position)
         })?,
     )?;
     let s = session.clone();

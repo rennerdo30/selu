@@ -21,7 +21,12 @@ fn closest<'a>(name: &str, choices: impl Iterator<Item = &'a str>) -> String {
         .unwrap_or("Frame")
         .into()
 }
-const COLOR_OBJECT: &str = "SourceObject_CreateColor";
+const MIXIN_VALUES: &[(&str, &str)] = &[
+    ("colorRGB", "SourceObject_CreateColor"),
+    ("colorRGBA", "SourceObject_CreateColor"),
+    ("vector2", "SourceObject_CreateVector2D"),
+    ("vector3", "SourceObject_CreateVector3D"),
+];
 // Scalar-union spellings are metadata, shared by argument and return checking.
 const SCALAR_UNIONS: &[(&str, &[Type])] = &[
     ("SpellIdentifier", &[Type::Number, Type::String]),
@@ -210,11 +215,14 @@ pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     if let Some((_, members)) = SCALAR_UNIONS.iter().find(|(name, _)| *name == n) {
         return Type::ApiOpaque(n.into(), members.to_vec());
     }
-    // The documentation names the engine's colour values without defining
-    // them. They are the colour objects the client's own `CreateColor` makes,
-    // so they take that object's type where the manifest has proven it.
-    if matches!(n, "colorRGB" | "colorRGBA") && widget_decl(m, COLOR_OBJECT).is_some() {
-        return widget(m, COLOR_OBJECT);
+    // The documentation names the engine's colour and vector values without
+    // defining them. They are the objects the client's own factories make
+    // (`CreateColor`, `CreateVector2D`, `CreateVector3D`), so they take that
+    // object's type where the manifest has proven it.
+    if let Some((_, object)) = MIXIN_VALUES.iter().find(|(name, _)| *name == n)
+        && widget_decl(m, object).is_some()
+    {
+        return widget(m, object);
     }
     // A referenced name is not a definition. Missing type documentation must
     // not reject valid engine values based on a guessed nominal identity.

@@ -57,6 +57,13 @@ pub enum HostCommand {
     LockCVar {
         name: String,
     },
+    SetMap {
+        id: u32,
+        map: crate::world::MapArea,
+    },
+    SetPlayerPosition {
+        position: crate::world::PlayerPosition,
+    },
     SetZone {
         zone: String,
         subzone: String,
@@ -1004,6 +1011,24 @@ impl Session {
             });
         self.sim.set_tracking(&entries)
     }
+    pub fn set_map(&self, id: u32, map: crate::world::MapArea) -> SimResult<()> {
+        lock(&self.sim.state).commands.push(HostCommand::SetMap {
+            id,
+            map: map.clone(),
+        });
+        self.sim.set_map(id, &map)
+    }
+    pub fn set_player_position(&self, position: crate::world::PlayerPosition) -> SimResult<()> {
+        lock(&self.sim.state)
+            .commands
+            .push(HostCommand::SetPlayerPosition {
+                position: position.clone(),
+            });
+        self.sim.set_player_position(&position)
+    }
+    pub fn map_to_world(&self, id: u32, x: f64, y: f64) -> SimResult<Option<(u32, f64, f64)>> {
+        self.sim.map_to_world(id, x, y)
+    }
     pub fn set_zone(&self, zone: &str, subzone: &str, map: u32, instance: &str) -> SimResult<()> {
         lock(&self.sim.state).commands.push(HostCommand::SetZone {
             zone: zone.into(),
@@ -1389,6 +1414,8 @@ impl Session {
             "__selu_world_flags",
             "__selu_world_spells",
             "__selu_world_tracking",
+            "__selu_world_maps",
+            "__selu_world_position",
             "__selu_world_cvars",
             "__selu_world_locked_cvars",
         ] {
@@ -1432,6 +1459,8 @@ impl Session {
                     | "__selu_world_flags"
                     | "__selu_world_spells"
                     | "__selu_world_tracking"
+                    | "__selu_world_maps"
+                    | "__selu_world_position"
                     | "__selu_world_cvars"
                     | "__selu_world_locked_cvars"
             ) {

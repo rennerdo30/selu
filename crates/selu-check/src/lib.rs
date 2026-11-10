@@ -2008,6 +2008,21 @@ mod tests {
     }
 
     #[test]
+    fn narrowed_optional_literal_union_still_compares() {
+        assert!(
+            codes(
+                "type Mode = \"fast\" | \"idle\" | \"hidden\";
+function pick(mode: Mode?): number {
+  if (mode == \"fast\") { return 1; } else if (mode == \"hidden\") { return 2; }
+  return 3;
+}
+"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn empty_array_fallback_takes_the_left_type() {
         assert!(
             codes(

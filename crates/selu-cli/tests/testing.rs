@@ -868,6 +868,83 @@ test("package", () => {
 }
 
 #[test]
+fn position_controls_drive_maps_facing_speed_and_the_user_waypoint() {
+    let dir = project(
+        "position-controls",
+        r#"
+test("positions", () => {
+  // A 1000 x 500 yard map whose top-left corner is at north 2000, west 3000.
+  sim.setMap(10, { name: "Testland", continent: 1, north: 2000, west: 3000, width: 1000, height: 500 });
+  sim.setMap(20, { name: "Elsewhere", continent: 2, north: 0, west: 0, width: 100, height: 100, userWaypoints: false });
+  sim.setPlayerPosition({ map: 10, x: 0.25, y: 0.5, facing: 1.5, speed: 0, runSpeed: 14 });
+  const at = C_Map.GetPlayerMapPosition(10, "player");
+  if (at == null) { throw new Error("no map position"); }
+  const [x, y] = at.GetXY();
+  expect(x).toBe(0.25);
+  expect(y).toBe(0.5);
+  const [continent, world] = C_Map.GetWorldPosFromMapPos(10, CreateVector2D(0.25, 0.5));
+  if (world == null) { throw new Error("no world position"); }
+  expect(continent).toBe(1);
+  const [north, west] = world.GetXY();
+  expect(north).toBe(1750);
+  expect(west).toBe(2750);
+  const [unitNorth, unitWest, _z, instance] = UnitPosition("player");
+  expect(unitNorth).toBe(1750);
+  expect(unitWest).toBe(2750);
+  expect(instance).toBe(1);
+  expect(GetPlayerFacing()).toBe(1.5);
+  const [current, run] = GetUnitSpeed("player");
+  expect(readable(current)).toBe(0);
+  expect(readable(run)).toBe(14);
+  // Another continent has no position on this map.
+  expect(C_Map.GetPlayerMapPosition(20, "player")).toBe(null);
+  const info = C_Map.GetMapInfo(10);
+  expect(info != null && info.name == "Testland").toBe(true);
+
+  let updates = 0;
+  const watcher = CreateFrame("Frame");
+  watcher.RegisterEvent("USER_WAYPOINT_UPDATED");
+  watcher.SetScript("OnEvent", () => { updates += 1; });
+  expect(C_Map.CanSetUserWaypointOnMap(10)).toBe(true);
+  expect(C_Map.CanSetUserWaypointOnMap(20)).toBe(false);
+  expect(C_Map.SetUserWaypoint({ uiMapID: 10, position: CreateVector2D(0.4, 0.6) })).toBe(true);
+  expect(C_Map.SetUserWaypoint({ uiMapID: 20, position: CreateVector2D(0.4, 0.6) })).toBe(false);
+  const pin = C_Map.GetUserWaypoint();
+  if (pin == null) { throw new Error("no pin"); }
+  expect(pin.uiMapID).toBe(10);
+  const [pinX, pinY] = pin.position.GetXY();
+  expect(pinX).toBe(0.4);
+  expect(pinY).toBe(0.6);
+  C_SuperTrack.SetSuperTrackedUserWaypoint(true);
+  expect(C_SuperTrack.IsSuperTrackingUserWaypoint()).toBe(true);
+  C_Map.ClearUserWaypoint();
+  expect(C_Map.GetUserWaypoint()).toBe(null);
+  expect(C_SuperTrack.IsSuperTrackingUserWaypoint()).toBe(false);
+  expect(updates).toBe(2);
+
+  sim.setPlayerPosition({ unknown: true, facingUnknown: true });
+  expect(C_Map.GetPlayerMapPosition(10, "player")).toBe(null);
+  expect(GetPlayerFacing()).toBe(null);
+});
+"#,
+    );
+    // The fixture manifest has none of these APIs; the pinned Forever build does.
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"Runner\"\ntargets = [\"wowf@1.60.1.70790\"]\n",
+    )
+    .unwrap();
+    let out = run(&dir, None);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn world_controls_drive_spells_tracking_xp_distance_cvars_and_zones() {
     let dir = project(
         "world-controls",

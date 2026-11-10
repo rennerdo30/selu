@@ -184,11 +184,16 @@ through `ContainerFrameItemButtonTemplate`; a plain Button has no such contract.
 Font globals and documented SimpleFont parameters share the documented font
 interface. The parameter remains specific to that interface.
 
-## Colour values
+## Colour and vector values
 
-The API documentation names colour values (`colorRGB`, `colorRGBA`) without
-defining them. They are the objects the client's own `CreateColor` makes, so
-they take that object's type from the manifest: pass `CreateColor(r, g, b, a)`
-where an API wants a colour, and read a returned colour with
-`const [r, g, b] = color.GetRGB();` (or `GetRGBA`). The overlays type both
-getters as numbers. `GetNumClasses()` is typed there too.
+The API documentation names colour and vector values (`colorRGB`, `colorRGBA`,
+`vector2`, `vector3`) without defining them. They are the objects the client's
+own factories make (`CreateColor`, `CreateVector2D`, `CreateVector3D`), so they
+take that object's type from the manifest: pass `CreateColor(r, g, b, a)` or
+`CreateVector2D(x, y)` where an API wants one, and read a returned value with
+`const [r, g, b] = color.GetRGB();` or `const [x, y] = position.GetXY();`. The
+overlays type these getters as numbers.
+
+The overlays also type `GetNumClasses()`, `InCombatLockdown()` and, where the
+client has user waypoints, the `UiMapPoint` value
+(`{ uiMapID, position: CreateVector2D(x, y) }`).

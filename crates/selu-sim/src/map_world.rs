@@ -43,6 +43,27 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
             owner.raw_set(
                 name.clone(),
                 lua.create_function(move |lua, id: Option<i64>| {
+                    // A map a test defined (sim.setMap) is known.
+                    if namespace == "C_Map"
+                        && name == "GetMapInfo"
+                        && let Some(id) = id
+                        && let Some(maps) = lua
+                            .globals()
+                            .raw_get::<Option<Table>>("__selu_world_maps")?
+                        && let Some(map) = maps.raw_get::<Option<Table>>(id)?
+                    {
+                        let info = lua.create_table()?;
+                        info.raw_set("mapID", id)?;
+                        info.raw_set("name", map.raw_get::<String>("name")?)?;
+                        info.raw_set("parentMapID", map.raw_get::<u32>("parent")?)?;
+                        info.raw_set("flags", 0)?;
+                        let enums: Table = lua.globals().raw_get("Enum")?;
+                        info.raw_set(
+                            "mapType",
+                            enums.get::<Table>("UIMapType")?.get::<Value>("Zone")?,
+                        )?;
+                        return Ok(Value::Table(info));
+                    }
                     ctx.not_simulated("map database records unavailable; synthetic world only");
                     if namespace == "C_Map" && name == "GetMapInfo" && id == Some(0) {
                         let info = lua.create_table()?;

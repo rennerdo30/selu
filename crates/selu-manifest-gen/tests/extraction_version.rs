@@ -59,6 +59,11 @@ const CONTRACTS: &[(u32, &str)] = &[
         13,
         "a4a0fa80693d771d79374629a5dac0c77e98f8ab4cb930859ba932babd6a765e",
     ),
+    // 14: the overlays type the vector's GetXY, InCombatLockdown and UiMapPoint.
+    (
+        14,
+        "39ecbc96e343600764cbd29f6c1e6d5a7ab87ec0cc4f7f9b38f4c7843af2eda5",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

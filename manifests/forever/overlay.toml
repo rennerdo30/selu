@@ -576,3 +576,26 @@ widget = "SourceObject_CreateColor"
 evidence = "source"
 note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_SharedXMLBase/Color.lua:37 returns the colour channels that CreateColor (:3) stored; the API documentation names them colorRGB and colorRGBA, whose channels are numbers."
 entry = { name = "GetRGBA", type = "Function", returns = [{ name = "r", type = "number" }, { name = "g", type = "number" }, { name = "b", type = "number" }, { name = "a", type = "number" }], attributes = { file = "Blizzard_SharedXMLBase/Color.lua" } }
+[[methods]]
+widget = "SourceObject_CreateVector2D"
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_SharedXML/Vector2D.lua:77 returns the two coordinates that CreateVector2D (:55) stored; the API documentation names the value vector2, whose coordinates are numbers."
+entry = { name = "GetXY", type = "Function", returns = [{ name = "x", type = "number" }, { name = "y", type = "number" }], attributes = { file = "Blizzard_SharedXML/Vector2D.lua" } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_AddOnPerformance/AddOnPerformance.lua:54 branches on `if InCombatLockdown() then`: an engine global without generated documentation that returns whether protected actions are locked."
+[functions.entry]
+name = "InCombatLockdown"
+params = []
+evidence = "source"
+[functions.entry.signature]
+name = "InCombatLockdown"
+[[functions.entry.signature.returns]]
+name = "locked"
+type = "bool"
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_ObjectAPI/Mainline/UiMapPoint.lua:3-6 builds the value as uiMapID, position (CreateVector2D) and an optional z; MapDocumentation names it UiMapPoint for SetUserWaypoint and GetUserWaypoint without defining it."
+entry = { name = "UiMapPoint", type = "Structure", fields = [{ name = "uiMapID", type = "number" }, { name = "position", type = "vector2" }, { name = "z", type = "number", attributes = { Nilable = true } }] }

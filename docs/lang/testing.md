@@ -77,6 +77,8 @@ Helpers:
 | `sim.setSpell(id, { name, icon, known })` | Define a spell for IsPlayerSpell, IsSpellKnown and C_Spell (self-written test data; fires SPELLS_CHANGED) |
 | `sim.setTracking([{ name, texture, active, type, spellID }])` | The minimap tracking list for C_Minimap.GetNumTrackingTypes/GetTrackingInfo (fires MINIMAP_UPDATE_TRACKING) |
 | `sim.setZone({ zone, subzone, map, instance })` | Zone text, map and IsInInstance's type ("none", "party", "raid", ...) |
+| `sim.setMap(id, { name, continent, north, west, width, height, parent, userWaypoints })` | One map as a rectangle on a continent: its top-left corner is at (`north`, `west`) yards, x runs east over `width`, y runs south over `height`. Drives C_Map.GetWorldPosFromMapPos, GetPlayerMapPosition, GetMapInfo and CanSetUserWaypointOnMap |
+| `sim.setPlayerPosition({ map, x, y, continent, north, west, facing, speed, runSpeed, unknown, facingUnknown })` | Where the player stands (map coordinates on a `sim.setMap` map, or a world position), the facing in radians, and the current and run speed. `unknown` makes the position unreadable (an instance), `facingUnknown` the facing. Omitted fields keep their value; no event fires, so fire `PLAYER_STARTED_MOVING` and the like yourself |
 | `sim.setCVar(name, value)` | Change a CVar as the game's own settings would (fires CVAR_UPDATE); SetCVar from the addon fires it too |
 | `sim.lockCVar(name)` | The addon's SetCVar on it returns but changes nothing, as for a CVar the client refuses |
 | `sim.prints()` | Read captured prints as an array |

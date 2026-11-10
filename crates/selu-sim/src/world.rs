@@ -214,6 +214,41 @@ pub struct SpellInfo {
     pub known: bool,
 }
 
+/// One map of the simulated world (sim.setMap): a rectangle on a continent.
+/// Its top-left corner is at (`north`, `west`) in yards; x runs east over
+/// `width` yards and y runs south over `height` yards.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MapArea {
+    pub name: String,
+    pub continent: u32,
+    pub north: f64,
+    pub west: f64,
+    pub width: f64,
+    pub height: f64,
+    pub parent: u32,
+    /// Whether C_Map.CanSetUserWaypointOnMap accepts this map.
+    pub user_waypoints: bool,
+}
+
+/// Where the player stands and looks (sim.setPlayerPosition). An omitted
+/// field keeps its current value.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PlayerPosition {
+    pub continent: Option<u32>,
+    pub north: Option<f64>,
+    pub west: Option<f64>,
+    /// Radians, counter-clockwise from north (GetPlayerFacing).
+    pub facing: Option<f64>,
+    /// Yards per second right now (0 while standing) and at a run.
+    pub speed: Option<f64>,
+    pub run_speed: Option<f64>,
+    /// The client will not report the position (an instance).
+    pub unknown: Option<bool>,
+    /// The client will not report the facing.
+    pub facing_unknown: Option<bool>,
+}
+
 /// One minimap tracking entry (C_Minimap.GetTrackingInfo).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TrackingInfo {
@@ -438,6 +473,66 @@ impl Vm {
         flags.raw_set("tracking", true)?;
         self.fire("MINIMAP_UPDATE_TRACKING", vec![])?;
         Ok(())
+    }
+
+    /// Defines one map rectangle for the C_Map position functions.
+    pub fn set_map(&self, id: u32, map: &MapArea) -> SimResult<()> {
+        let maps: Table = self.lua.globals().raw_get("__selu_world_maps")?;
+        let entry = self.lua.create_table()?;
+        entry.raw_set("name", map.name.as_str())?;
+        entry.raw_set("continent", map.continent)?;
+        entry.raw_set("north", map.north)?;
+        entry.raw_set("west", map.west)?;
+        entry.raw_set("width", map.width)?;
+        entry.raw_set("height", map.height)?;
+        entry.raw_set("parent", map.parent)?;
+        entry.raw_set("user_waypoints", map.user_waypoints)?;
+        maps.raw_set(id, entry)?;
+        Ok(())
+    }
+
+    /// Moves or turns the player. No event fires: the client reports
+    /// movement through its own events, which a test fires itself.
+    pub fn set_player_position(&self, position: &PlayerPosition) -> SimResult<()> {
+        let at: Table = self.lua.globals().raw_get("__selu_world_position")?;
+        if let Some(v) = position.continent {
+            at.raw_set("continent", v)?;
+        }
+        if let Some(v) = position.north {
+            at.raw_set("north", v)?;
+        }
+        if let Some(v) = position.west {
+            at.raw_set("west", v)?;
+        }
+        if let Some(v) = position.facing {
+            at.raw_set("facing", v)?;
+        }
+        if let Some(v) = position.speed {
+            at.raw_set("speed", v)?;
+        }
+        if let Some(v) = position.run_speed {
+            at.raw_set("run", v)?;
+        }
+        if let Some(v) = position.unknown {
+            at.raw_set("unknown", v)?;
+        }
+        if let Some(v) = position.facing_unknown {
+            at.raw_set("facing_unknown", v)?;
+        }
+        Ok(())
+    }
+
+    /// The world position of map coordinates on a map set with `set_map`.
+    pub fn map_to_world(&self, id: u32, x: f64, y: f64) -> SimResult<Option<(u32, f64, f64)>> {
+        let maps: Table = self.lua.globals().raw_get("__selu_world_maps")?;
+        let Some(map) = maps.raw_get::<Option<Table>>(id)? else {
+            return Ok(None);
+        };
+        Ok(Some((
+            map.raw_get("continent")?,
+            map.raw_get::<f64>("north")? - y * map.raw_get::<f64>("height")?,
+            map.raw_get::<f64>("west")? - x * map.raw_get::<f64>("width")?,
+        )))
     }
 
     /// The zone, map and instance type; ZONE_CHANGED_NEW_AREA when the map
@@ -725,6 +820,8 @@ end
 -- XP, distance and visibility (sim.setUnit's xp/maxXp/distance/visible).
 __selu_world_flags = {xp_disabled=false, tracking=false}
 __selu_world_spells = {}; __selu_world_tracking = {}
+-- Maps and the player's position (sim.setMap, sim.setPlayerPosition).
+__selu_world_maps = {}; __selu_world_position = {}
 function UnitXP(u) local x=units[u]; return x and x.xp or 0 end
 function UnitXPMax(u) local x=units[u]; return x and x.max_xp or 0 end
 function IsXPUserDisabled() return __selu_world_flags.xp_disabled == true end
@@ -1199,6 +1296,126 @@ C_Minimap.GetTrackingInfo = function(i, ...)
  end
  if prevTracking then return prevTracking(i, ...) end
 end
+-- Positions: maps are rectangles on a continent, world positions are
+-- (north, west) yards. Unset maps and positions fall back to what was there.
+local maps, where = __selu_world_maps, __selu_world_position
+local standins = rawget(_G, '__selu_native_standins')
+-- Without the client's own Lua the manifest gives CreateVector2D a stand-in
+-- that holds nothing. Positions need a vector that keeps its coordinates;
+-- the client's Lua replaces it like any other stand-in.
+local function plainVector(x, y)
+ local v = {x=x, y=y}
+ function v:GetXY() return self.x, self.y end
+ function v:SetXY(nx, ny) self.x, self.y = nx, ny end
+ function v:IsEqualTo(other) return self.x == other.x and self.y == other.y end
+ return v
+end
+local madeVector = rawget(_G, 'CreateVector2D')
+if madeVector == nil or (standins and standins.CreateVector2D == madeVector) then
+ CreateVector2D = plainVector
+ if standins then standins.CreateVector2D = plainVector end
+end
+local function vector(x, y)
+ local make = rawget(_G, 'CreateVector2D') or plainVector
+ return make(x, y)
+end
+local function xy(v)
+ if type(v) ~= 'table' then return nil end
+ if v.GetXY then return v:GetXY() end
+ return v.x, v.y
+end
+C_Map = rawget(_G, 'C_Map') or {}
+local prevWorldPos, prevPlayerPos, prevMapInfo = rawget(C_Map, 'GetWorldPosFromMapPos'), rawget(C_Map, 'GetPlayerMapPosition'), rawget(C_Map, 'GetMapInfo')
+C_Map.GetWorldPosFromMapPos = function(id, v, ...)
+ local m = maps[id]
+ if m then
+  local x, y = xy(v)
+  if not x then return end
+  return m.continent, vector(m.north - y * m.height, m.west - x * m.width)
+ end
+ if prevWorldPos then return prevWorldPos(id, v, ...) end
+end
+C_Map.GetPlayerMapPosition = function(id, unit, ...)
+ local m = maps[id]
+ if m then
+  if unit ~= 'player' or where.unknown or where.north == nil or where.continent ~= m.continent then return nil end
+  return vector((m.west - where.west) / m.width, (m.north - where.north) / m.height)
+ end
+ if prevPlayerPos then return prevPlayerPos(id, unit, ...) end
+end
+local function mapInfo(id, ...)
+ local m = maps[id]
+ if m then
+  local kinds = rawget(_G, 'Enum') and Enum.UIMapType
+  return {mapID=id, name=m.name, parentMapID=m.parent or 0, mapType=kinds and kinds.Zone, flags=0}
+ end
+ if prevMapInfo then return prevMapInfo(id, ...) end
+end
+C_Map.GetMapInfo = mapInfo
+local prevUnitPosition, prevFacing, prevSpeed = rawget(_G, 'UnitPosition'), rawget(_G, 'GetPlayerFacing'), rawget(_G, 'GetUnitSpeed')
+function UnitPosition(unit, ...)
+ if where.unknown then return nil end
+ if where.north ~= nil then
+  if unit ~= 'player' then return nil end
+  return where.north, where.west, 0, where.continent
+ end
+ if prevUnitPosition then return prevUnitPosition(unit, ...) end
+end
+function GetPlayerFacing(...)
+ if where.facing_unknown then return nil end
+ if where.facing ~= nil then return where.facing end
+ if prevFacing then return prevFacing(...) end
+ return 0
+end
+function GetUnitSpeed(unit, ...)
+ if where.speed ~= nil or where.run ~= nil then
+  if unit ~= 'player' then return 0, 7, 7, 4.722 end
+  return where.speed or 0, where.run or 7, 7, 4.722
+ end
+ if prevSpeed then return prevSpeed(unit, ...) end
+ return 0, 7, 7, 4.722
+end
+-- The player's own map pin and its super-tracking.
+local prevCanSet = rawget(C_Map, 'CanSetUserWaypointOnMap')
+C_Map.CanSetUserWaypointOnMap = function(id, ...)
+ local m = maps[id]
+ if m then return m.user_waypoints ~= false end
+ if prevCanSet then return prevCanSet(id, ...) end
+ return false
+end
+C_Map.SetUserWaypoint = function(point)
+ if type(point) ~= 'table' or type(point.uiMapID) ~= 'number' then error('Usage: C_Map.SetUserWaypoint(point)', 2) end
+ local x, y = xy(point.position)
+ if not x then error('Usage: C_Map.SetUserWaypoint(point)', 2) end
+ if not C_Map.CanSetUserWaypointOnMap(point.uiMapID) then return false end
+ where.user_waypoint = {uiMapID=point.uiMapID, x=x, y=y, z=point.z}
+ if __selu_world_event then __selu_world_event('USER_WAYPOINT_UPDATED') end
+ return true
+end
+C_Map.GetUserWaypoint = function()
+ local p = where.user_waypoint
+ if p then return {uiMapID=p.uiMapID, position=vector(p.x, p.y), z=p.z} end
+end
+C_Map.HasUserWaypoint = function() return where.user_waypoint ~= nil end
+C_Map.ClearUserWaypoint = function()
+ if where.user_waypoint == nil then return end
+ where.user_waypoint = nil
+ local tracked = where.super_tracked
+ where.super_tracked = nil
+ if __selu_world_event then
+  __selu_world_event('USER_WAYPOINT_UPDATED')
+  if tracked then __selu_world_event('SUPER_TRACKING_CHANGED') end
+ end
+end
+C_SuperTrack = rawget(_G, 'C_SuperTrack') or {}
+C_SuperTrack.SetSuperTrackedUserWaypoint = function(on)
+ local want = on == true and where.user_waypoint ~= nil
+ if (where.super_tracked == true) == want then return end
+ where.super_tracked = want or nil
+ if __selu_world_event then __selu_world_event('SUPER_TRACKING_CHANGED') end
+end
+C_SuperTrack.IsSuperTrackingUserWaypoint = function() return where.super_tracked == true end
+if standins then standins['C_Map.GetMapInfo'] = mapInfo end
 "#,
     )
     .exec()
