@@ -15,7 +15,8 @@ Package B starts at `c4d0580527550bdff44c1676053d5178d7b683a2`.
   multiple-return expansion. Other values print without extra brackets. Structural object fields use the existing checker.
   Optional access tests nil explicitly, evaluates the receiver once, and
   preserves false. Length is read-only; strings count bytes.
-- push, insert, set, add, clear and sort return void. pop/removeAt return T?.
+- push, unshift, insert, set, add, clear and sort return void. pop, shift and removeAt return T?.
+  `shift()` removes and returns the first element, `unshift(x)` puts x first.
   delete returns whether an entry existed. count walks the table in O(n).
   WeakMap uses a fresh metatable with __mode = "k". Map and Set iteration order
   follows Lua pairs and is unspecified. Array iteration uses numeric for;

@@ -105,12 +105,18 @@ impl Lowerer<'_> {
             unreachable!()
         };
         let v = self.expr(init, out);
+        // A call's tuple (or optional tuple: nothing returned binds nulls)
+        // arrives as multiple results.
+        let multiple_results = match self.types.get(init.id) {
+            Some(selu_check::Type::Tuple(_) | selu_check::Type::Untyped) => true,
+            Some(selu_check::Type::Optional(inner)) => {
+                matches!(selu_check::shape_of(inner), selu_check::Type::Tuple(_))
+            }
+            _ => false,
+        };
         if let Pattern::Array(items) = pattern
             && matches!(init.kind, ExprKind::Call { .. })
-            && matches!(
-                self.types.get(init.id),
-                Some(selu_check::Type::Tuple(_) | selu_check::Type::Untyped)
-            )
+            && multiple_results
         {
             if items.is_empty() {
                 out.push(LStmt::new(LStmtKind::Call(v), &s.span));

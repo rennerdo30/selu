@@ -693,3 +693,29 @@ fn addon_metadata_reaches_the_toc() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("SELU0506"));
 }
+
+#[test]
+fn literal_contexts_tuples_and_queue_methods_run() {
+    let (prints, _) = run(
+        "literal-contexts",
+        &[(
+            "main.selu",
+            "type R = \"in\" | \"out\"; function f(x: boolean): R { return x ? \"in\" : \"out\"; } const r: R = f(false); print(`${r}`); function pair(a: string?): [string, string]? { if (a == null) { return null; } return [a, \"b\"]; } const [x, y] = pair(\"a\"); print((x ?? \"-\") + (y ?? \"-\")); const [u, v] = pair(null); print((u ?? \"-\") + (v ?? \"-\")); const t: [number, string] = [1, \"x\"]; print(t[1]); const xs = [1, 2, 3]; const first = xs.shift(); xs.unshift(9); print(first ?? -1); print(xs.join(\",\"));",
+        )],
+    );
+    assert_eq!(prints, ["out", "ab", "--", "x", "1", "9,2,3"]);
+}
+
+#[test]
+fn an_optional_tuple_call_must_be_destructured() {
+    let (_, result) = project(
+        "optional-tuple",
+        &[(
+            "main.selu",
+            "function pair(): [string, string]? { return null; } const p = pair(); print(p);",
+        )],
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success());
+    assert!(stderr.contains("SELU0377"), "{stderr}");
+}

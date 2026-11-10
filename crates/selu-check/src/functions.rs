@@ -133,6 +133,67 @@ impl Ctx<'_> {
             }
         });
         let expected = shaped.as_ref();
+        // `cond ? a : b` with an expected type: each branch is checked
+        // against it, so literal branches keep their literal types
+        // (`return ok ? "in" : "out"` for a "in" | "out" result).
+        if let (
+            ExprKind::Conditional {
+                cond,
+                then,
+                otherwise,
+            },
+            Some(want),
+        ) = (&e.kind, expected)
+        {
+            let want = want.clone();
+            let (yes, no) = self.condition(cond);
+            self.restore_flow(yes);
+            let a = self.value_expected(then, Some(&want));
+            let then_out = self.flow_state();
+            self.restore_flow(no);
+            let b = self.value_expected(otherwise, Some(&want));
+            let else_out = self.flow_state();
+            self.restore_flow(crate::flow_state::intersect(vec![then_out, else_out]));
+            let t = if a.assignable_to(&want) && b.assignable_to(&want) {
+                Type::join(&a, &b).unwrap_or(want)
+            } else {
+                Type::join(&a, &b).unwrap_or_else(|| {
+                    self.out.push(
+                        err(
+                            "SELU0342",
+                            "both conditional branches must have a common type",
+                            &e.span,
+                        )
+                        .with_help(
+                            "return the same type on both sides, or use null for an optional value",
+                        ),
+                    );
+                    Type::Error
+                })
+            };
+            self.types.set(e.id, t.clone());
+            return t;
+        }
+        // `[a, b]` where a tuple is expected: each element against its slot.
+        if let (ExprKind::Array(items), Some(Type::Tuple(slots))) = (&e.kind, expected)
+            && items.len() == slots.len()
+        {
+            let mut checked = Vec::with_capacity(items.len());
+            for (item, slot) in items.iter().zip(slots) {
+                let got = self.value_expected(item, Some(slot));
+                if !got.assignable_to(slot) {
+                    self.out.push(err(
+                        "SELU0351",
+                        format!("tuple element {got} does not fit {slot}"),
+                        &item.span,
+                    ));
+                }
+                checked.push(slot.clone());
+            }
+            let t = Type::Tuple(checked);
+            self.types.set(e.id, t.clone());
+            return t;
+        }
         if let Some(Type::SavedRepair(table)) = expected
             && matches!(e.kind, ExprKind::Object(_) | ExprKind::Array(_))
         {
@@ -145,6 +206,7 @@ impl Ctx<'_> {
                 e.kind,
                 ExprKind::Object(_)
                     | ExprKind::Array(_)
+                    | ExprKind::Conditional { .. }
                     | ExprKind::Function { .. }
                     | ExprKind::Str(_)
                     | ExprKind::Number(_)
@@ -529,6 +591,13 @@ impl Ctx<'_> {
             None
         };
         let t = crate::shape_of(&t);
+        // `[A, B]?`: a call that returned nothing binds every element to null.
+        let (t, optional_tuple) = match &t {
+            Type::Optional(inner) if matches!(crate::shape_of(inner), Type::Tuple(_)) => {
+                (crate::shape_of(inner), true)
+            }
+            _ => (t, false),
+        };
         match pattern {
             Pattern::Array(items) => {
                 for (i, item) in items.iter().enumerate() {
@@ -564,6 +633,11 @@ impl Ctx<'_> {
                                 );
                                 Type::Error
                             }
+                        };
+                        let ty = if optional_tuple {
+                            Type::optional(ty)
+                        } else {
+                            ty
                         };
                         self.finish_decl(n, ty);
                     }
@@ -635,7 +709,12 @@ impl Ctx<'_> {
             return first;
         }
 
-        if matches!(e.kind, ExprKind::Call { .. }) && matches!(t, Type::Tuple(_)) {
+        let tuple_result = match &t {
+            Type::Tuple(_) => true,
+            Type::Optional(inner) => matches!(crate::shape_of(inner), Type::Tuple(_)),
+            _ => false,
+        };
+        if matches!(e.kind, ExprKind::Call { .. }) && tuple_result {
             self.out.push(
                 err(
                     "SELU0377",

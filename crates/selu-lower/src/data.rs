@@ -365,6 +365,8 @@ impl Lowerer<'_> {
                     LExpr::Nil
                 }
                 "pop" => LExpr::Paren(Box::new(lib("table", "remove", vec![obj]))),
+                "shift" => LExpr::Paren(Box::new(lib("table", "remove", vec![obj, num(1)]))),
+                "unshift" => lib("table", "insert", vec![obj, num(1), a[0].clone()]),
                 "insert" => lib(
                     "table",
                     "insert",

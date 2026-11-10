@@ -62,3 +62,15 @@ Tuple calls are also rejected as condition operands, including `!`, `&&` and
 `||`. Destructure first and test the desired result. Self-referential closures
 and references to later destructuring declarations share forward-declared Lua
 locals. Empty destructuring evaluates its initializer once without bindings.
+
+An optional tuple return (`[A, B]?`) returns either nothing (`return null`)
+or both values. Destructuring such a call binds each element as optional
+(`const [a, b] = f();` gives `a: A?`, `b: B?`); using the call as one value
+is SELU0377 like any tuple call. A typed tuple variable (`const t: [A, B] =
+[a, b];`) is a table: `t[0]` is `A`, `t[1]` is `B`, and a literal index past
+the end is SELU0352.
+
+A conditional with an expected type checks each branch against it, so
+`return ok ? "in" : "out";` fits a `"in" | "out"` result, and a template
+string accepts literal types and unions of strings, numbers and booleans.
+

@@ -66,7 +66,7 @@ impl Ctx<'_> {
         args: &[selu_syntax::Expr],
     ) {
         if let selu_syntax::ExprKind::Member { object, name } = &callee.kind
-            && matches!(name.as_str(), "push" | "insert" | "set" | "add")
+            && matches!(name.as_str(), "push" | "unshift" | "insert" | "set" | "add")
             && self.is_saved_root(object)
         {
             for arg in args {

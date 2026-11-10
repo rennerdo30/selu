@@ -53,6 +53,25 @@ impl Ctx<'_> {
                 }
                 match t {
                     Type::Array(t) => *t,
+                    Type::Tuple(slots) => match &index.kind {
+                        ExprKind::Number(n) => {
+                            match n.parse::<usize>().ok().and_then(|i| slots.get(i)) {
+                                Some(slot) => slot.clone(),
+                                None => {
+                                    self.out.push(
+                                        err(
+                                            "SELU0352",
+                                            format!("this tuple has {} elements", slots.len()),
+                                            &index.span,
+                                        )
+                                        .with_help("use an index from 0 to the last element"),
+                                    );
+                                    Type::Error
+                                }
+                            }
+                        }
+                        _ => Type::union(slots.clone()),
+                    },
                     Type::Union(arms)
                         if arms
                             .iter()
@@ -86,12 +105,23 @@ impl Ctx<'_> {
                 }
             }
             ExprKind::Template { exprs, .. } => {
+                fn interpolatable(t: &Type) -> bool {
+                    match crate::shape_of(t) {
+                        Type::Number
+                        | Type::String
+                        | Type::Boolean
+                        | Type::StringLiteral(_)
+                        | Type::NumberLiteral(_)
+                        | Type::BooleanLiteral(_)
+                        | Type::Error
+                        | Type::Untyped => true,
+                        Type::Union(arms) => arms.iter().all(interpolatable),
+                        _ => false,
+                    }
+                }
                 for x in exprs {
-                    let t = crate::shape_of(&self.value(x));
-                    if !matches!(
-                        t,
-                        Type::Number | Type::String | Type::Boolean | Type::Error | Type::Untyped
-                    ) {
+                    let t = self.value(x);
+                    if !interpolatable(&t) {
                         self.out.push(
                             err(
                                 "SELU0353",
@@ -237,7 +267,8 @@ impl Ctx<'_> {
                 Type::Array(item) => match name.as_str() {
                     "clear" => (vec![], Type::Void),
                     "push" => (vec![(**item).clone()], Type::Void),
-                    "pop" => (vec![], Type::optional((**item).clone())),
+                    "pop" | "shift" => (vec![], Type::optional((**item).clone())),
+                    "unshift" => (vec![(**item).clone()], Type::Void),
                     "insert" => (vec![Type::Number, (**item).clone()], Type::Void),
                     "removeAt" => (vec![Type::Number], Type::optional((**item).clone())),
                     "indexOf" => (vec![(**item).clone()], Type::Number),
