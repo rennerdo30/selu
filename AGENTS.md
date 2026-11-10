@@ -4,22 +4,26 @@ Read `E:/Development/AGENTS.md` and `E:/Development/general-agent-rules.md`
 first. These rules are specific to Selu and also apply to every brief written
 for a delegated job.
 
-## No Lua interop (owner, 2026-11-05)
+## No Lua interop with the game (owner, 2026-11-05; amended 2026-11-10)
 
-Selu is a closed, typed world. Every global a Selu program uses is either
-typed by the game's API data (`manifests/`) or defined by Selu code. "It
-compiles" must mean "it was checked".
+Selu is a closed, typed world towards World of Warcraft. Every game global a
+Selu program uses is typed by the game's API data (`manifests/`) or defined
+by Selu code. The interface to WoW is always fully typed, with no exception.
+"It compiles" must mean "it was checked".
 
 Never build, propose as a work package, or brief anything that pulls untyped
-Lua into a Selu program. In particular:
+Lua into a Selu program, except at the other-addon boundary below. In
+particular:
 
 - plain `.lua` files in a project (`lua = [...]` in `selu.toml`);
 - `*.d.selu` or any other hand-written declaration files, and `declare global`
   or `declare module`;
 - shipped declarations for Lua libraries (LibStub, CallbackHandler, Ace and
-  similar);
+  similar), other than a project's own checked declarations at the
+  other-addon boundary below;
 - dynamic global access (`_G[...]`, a lookup by a name built at runtime) or any
-  other escape hatch that returns `unknown` from the game;
+  other escape hatch that returns `unknown` from the game (other addons'
+  values enter as `unknown` only through the boundary below);
 - typing Lua mechanisms such as `setmetatable`, `getmetatable`, `Mixin` or
   `CreateFromMixins`.
 
@@ -32,6 +36,30 @@ families.
 Still allowed: `export global`, which publishes a Selu value as a Lua global,
 for example for keybindings, macros or other addons. It is Selu code defining
 its own global, not Selu consuming Lua.
+
+## Other addons: a checked boundary (owner, 2026-11-10)
+
+Talking to other addons (for example Questie's LibQuestieDB, LibStub
+libraries, another addon's API) must always be possible, so this one place
+is relaxed. It is a general mechanism for any addon, never a special case
+for one addon. Two levels:
+
+1. **Undeclared:** another addon's global or library value enters as
+   `unknown`. Field reads are allowed; each value must be narrowed with
+   `typeof` before use, enforced by the compiler.
+2. **Declared:** a project may declare the parts of another addon's public
+   Lua API it uses. The compiler generates runtime shape checks where values
+   cross the boundary; a wrong shape gives `null` and one warning, never an
+   unchecked value and never a Lua error.
+
+Rules that stay:
+
+- The boundary is only for other addons. Never declare or loosen Blizzard
+  globals, frames or APIs this way; the manifests stay their only source.
+- No plain `.lua` files in a project; interop happens only at this boundary.
+- Nothing from the other addon (code or data) is copied, cached or shipped.
+- Code inside a Selu addon stays fully typed; only values crossing the
+  boundary are `unknown` or checked.
 
 ## Only build what the owner asked for (owner, 2026-11-05)
 
