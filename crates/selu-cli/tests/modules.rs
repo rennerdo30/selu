@@ -719,3 +719,52 @@ fn an_optional_tuple_call_must_be_destructured() {
     assert!(!result.status.success());
     assert!(stderr.contains("SELU0377"), "{stderr}");
 }
+
+#[test]
+fn generic_functions_infer_across_modules_and_callbacks() {
+    let (prints, _) = run(
+        "generics",
+        &[
+            (
+                "main.selu",
+                "import { first, mapAll, adopt } from \"./util\"; const n = first([3, 4]) ?? 0; print(n + 1); const lens = mapAll([\"a\", \"bcd\"], (s) => s.length); print(lens[0] + lens[1]); const m = new Map<string, number>(); m.set(\"old\", 2); m.set(\"new\", 5); print(adopt(m, (a, b) => a + b)); print(m.get(\"new\") ?? -1);",
+            ),
+            (
+                "util.selu",
+                "export function first<T>(xs: T[]): T? { return xs.length > 0 ? xs[0] : null; } export function mapAll<T, U>(xs: T[], f: (x: T) => U): U[] { const out: U[] = []; for (const x of xs) { out.push(f(x)); } return out; } export function adopt<T>(t: Map<string, T>, merge: (a: T, b: T) => T): boolean { const old = t.get(\"old\"); if (old == null) { return false; } const cur = t.get(\"new\"); t.set(\"new\", cur != null ? merge(cur, old) : old); t.delete(\"old\"); return true; }",
+            ),
+        ],
+    );
+    assert_eq!(prints, ["4", "4", "true", "7"]);
+}
+
+#[test]
+fn generic_bodies_are_opaque_and_calls_are_checked() {
+    for (label, source, code) in [
+        (
+            "generic-opaque",
+            "function bad<T>(v: T): number { return v + 1; } print(bad(1));",
+            "SELU0323",
+        ),
+        (
+            "generic-mismatch",
+            "function id<T>(v: T): T { return v; } const s: string = id(1); print(s);",
+            "SELU0336",
+        ),
+        (
+            "generic-uninferred",
+            "function make<T>(): T[] { return []; } print(make());",
+            "SELU0651",
+        ),
+        (
+            "generic-twice",
+            "function two<T, T>(v: T): T { return v; } print(two(1));",
+            "SELU0650",
+        ),
+    ] {
+        let (_, result) = project(label, &[("main.selu", source)]);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success(), "{label}");
+        assert!(stderr.contains(code), "{label}: {stderr}");
+    }
+}

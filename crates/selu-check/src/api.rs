@@ -261,6 +261,7 @@ pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
         multiple_results: d.ty.as_deref() != Some("CallbackType"),
         unspecified_callback: false,
         api_semantics: crate::types::ApiSemantics {
+            type_params: Vec::new(),
             opaque_inputs: d
                 .arguments
                 .iter()

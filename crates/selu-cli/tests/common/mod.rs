@@ -144,6 +144,40 @@ pub fn compile(src: &str) -> String {
     selu_lower::lower(&program, &manifest, &checked.types).lua
 }
 
+/// The generated Lua for `src` whose only diagnostics are exactly the
+/// `expected` warning codes (each at least once); errors always fail.
+#[allow(dead_code)]
+pub fn compile_expecting(src: &str, expected: &[&str]) -> String {
+    let manifest = manifest();
+    let program = selu_syntax::parse("t.selu", src).unwrap_or_else(|d| panic!("{}", d.render(src)));
+    let checked = selu_check::check_program(&program, &manifest);
+    let rendered = || {
+        checked
+            .diagnostics
+            .iter()
+            .map(|d| d.render(src))
+            .collect::<String>()
+    };
+    assert!(
+        checked
+            .diagnostics
+            .iter()
+            .all(|d| expected.contains(&d.code.as_str())
+                && d.severity == selu_diagnostics::Severity::Warning),
+        "{}",
+        rendered()
+    );
+    for code in expected {
+        assert!(
+            checked.diagnostics.iter().any(|d| d.code == *code),
+            "expected {code}
+{}",
+            rendered()
+        );
+    }
+    selu_lower::lower(&program, &manifest, &checked.types).lua
+}
+
 /// Compiles `src`, loads it, fires PLAYER_LOGIN and returns the printed
 /// lines.
 pub fn run(src: &str) -> Vec<String> {

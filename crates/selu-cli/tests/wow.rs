@@ -11,8 +11,11 @@ fn slash_and_context() {
 }
 #[test]
 fn hooks() {
-    let lua = compile(
+    // Hooking a game function runs our code inside the game's call: the
+    // taint warning (SELU0604) is expected, and the hooks still run.
+    let lua = compile_expecting(
         "hook(\"GetTime\", () => { print(\"hook\"); }); print(GetTime()); const f = CreateFrame(\"Frame\"); hookScript(f, \"OnShow\", (self) => { print(\"shown\"); }); f.Hide(); f.Show();",
+        &["SELU0604"],
     );
     let sim = Sim::new().unwrap();
     sim.load_files(&[("t.lua".into(), lua)]).unwrap();

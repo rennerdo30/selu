@@ -649,12 +649,23 @@ impl Parser {
             Tok::Function => {
                 self.bump();
                 let (name, name_span) = self.ident("a function name")?;
+                let mut type_params = Vec::new();
+                if self.eat(&Tok::Lt) {
+                    loop {
+                        type_params.push(self.ident("a type parameter name")?);
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Tok::Gt, "`>` after the type parameters")?;
+                }
                 let params = self.params()?;
                 let ret = self.annotation()?;
                 let body = self.block()?;
                 StmtKind::FuncDecl {
                     name,
                     name_span,
+                    type_params,
                     params,
                     ret,
                     body,

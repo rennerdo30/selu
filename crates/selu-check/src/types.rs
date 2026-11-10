@@ -22,6 +22,9 @@ impl PartialEq for ApiOrigin {
 
 #[derive(Debug, Clone, Default)]
 pub struct ApiSemantics {
+    /// A generic function's type parameters, as the opaque slots its
+    /// signature uses (`function f<T>(x: T): T`); calls infer them.
+    pub type_params: Vec<String>,
     pub untyped_return_tail: bool,
     pub typed_return_tail: Option<Box<Type>>,
     pub frame_factory: bool,
@@ -683,7 +686,10 @@ impl fmt::Display for Type {
             }
             Type::ApiIterator(_) => write!(f, "API iterator"),
             Type::Unknown => write!(f, "unknown"),
-            Type::Opaque(slot) => write!(f, "opaque<{slot}>"),
+            Type::Opaque(slot) => match crate::generics::param_name(slot) {
+                Some(name) => write!(f, "{name}"),
+                None => write!(f, "opaque<{slot}>"),
+            },
             Type::Named(n, _) => write!(f, "{n}"),
             Type::Number => write!(f, "number"),
             Type::String => write!(f, "string"),

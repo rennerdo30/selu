@@ -118,6 +118,9 @@ pub enum StmtKind {
     FuncDecl {
         name: String,
         name_span: Span,
+        /// `function f<T, U>(...)`: the type parameters and their spans.
+        #[serde(default)]
+        type_params: Vec<(String, Span)>,
         params: Vec<Param>,
         /// The written return type, if any.
         ret: Option<TypeExpr>,

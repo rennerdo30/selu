@@ -74,3 +74,25 @@ A conditional with an expected type checks each branch against it, so
 `return ok ? "in" : "out";` fits a `"in" | "out"` result, and a template
 string accepts literal types and unions of strings, numbers and booleans.
 
+
+## Generic functions
+
+```selu
+export function first<T>(xs: T[]): T? { return xs.length > 0 ? xs[0] : null; }
+export function mapAll<T, U>(xs: T[], f: (x: T) => U): U[] { ... }
+
+const n = first([3, 4]) ?? 0;                     // T is number
+const lengths = mapAll(["a", "bc"], (s) => s.length); // T string, U number
+```
+
+- Inside the function a type parameter is opaque: values of `T` can be
+  passed along, stored in `T[]`, `Map<K, T>` or `Set<T>` and returned, but not
+  read as a number, string or table (`v + 1` on a `T` is SELU0323).
+- Each call infers the type arguments from its arguments. Literals bind their
+  base type (`first(["a"])` gives `string`). Callback arguments are checked
+  after the others, so `(s) => s.length` sees `s: string`; an uninferred
+  result type is taken from the callback's body.
+- A type parameter that appears in the result but in no argument is
+  SELU0651; one declared twice is SELU0650.
+- Generic functions are exported and imported like any function; the
+  generated Lua has no trace of the type parameters.

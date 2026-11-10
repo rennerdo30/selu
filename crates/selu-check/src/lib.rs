@@ -24,6 +24,7 @@ mod api;
 mod classes;
 mod frame_families;
 mod frames;
+mod generics;
 mod index;
 mod modules;
 pub mod restrictions;
@@ -542,14 +543,18 @@ impl Ctx<'_> {
                 StmtKind::FuncDecl {
                     name,
                     name_span,
+                    type_params,
                     params,
                     ret,
                     ..
                 } => {
                     // The return type is known only after the body; until then
                     // calls see an unchecked result.
+                    let slots = self.enter_type_params(name_span, type_params, true);
                     let ret = self.annotation(ret).unwrap_or(Type::Untyped);
                     let ty = self.function_signature(params, ret);
+                    self.leave_type_params(&slots);
+                    let ty = generics::with_type_params(ty, slots);
                     self.declare(name, name_span, Kind::Function, ty);
                 }
                 StmtKind::Global {
@@ -702,8 +707,16 @@ impl Ctx<'_> {
                 self.finish_decl(name, t);
             }
             StmtKind::FuncDecl {
-                name, params, body, ..
+                name,
+                name_span,
+                type_params,
+                params,
+                body,
+                ..
             } => {
+                // Inside a generic function its type parameters are opaque:
+                // values of T can be passed along, never read as something else.
+                let slots = self.enter_type_params(name_span, type_params, false);
                 // Ready before the body, so a function can call itself.
                 let declared = self.type_of(name);
                 self.finish_decl(name, declared.clone().unwrap_or(Type::Error));
@@ -724,20 +737,19 @@ impl Ctx<'_> {
                         body,
                     );
                     self.classes.receiver = saved_this;
-                    self.finish_decl(
-                        name,
-                        Type::Function {
-                            multiple_results: false,
-                            unspecified_callback: false,
-                            api: Default::default(),
-                            api_semantics: Default::default(),
-                            params: self.checked_parameter_types(params, param_types),
-                            ret: Box::new(ret),
-                            required,
-                            rest,
-                        },
-                    );
+                    let checked = Type::Function {
+                        multiple_results: false,
+                        unspecified_callback: false,
+                        api: Default::default(),
+                        api_semantics: Default::default(),
+                        params: self.checked_parameter_types(params, param_types),
+                        ret: Box::new(ret),
+                        required,
+                        rest,
+                    };
+                    self.finish_decl(name, generics::with_type_params(checked, slots.clone()));
                 }
+                self.leave_type_params(&slots);
             }
             StmtKind::OnHandler {
                 event,
@@ -1689,7 +1701,16 @@ impl Ctx<'_> {
         args: &[Expr],
         callee_type: &Type,
     ) -> Type {
-        let arg_types = self.function_arguments(args, callee_type);
+        // A generic function: infer its type arguments from this call and
+        // check the call against the substituted signature.
+        let instantiated;
+        let (callee_type, arg_types) = match self.instantiate_generic(&e.span, args, callee_type) {
+            Some((t, arg_types)) => {
+                instantiated = t;
+                (&instantiated, arg_types)
+            }
+            None => (callee_type, self.function_arguments(args, callee_type)),
+        };
         let specialized =
             self.table_signature(callee_type, arg_types.first(), arg_types.get(1), args.len());
         let specialized = self.opaque_signature(&specialized, &arg_types);

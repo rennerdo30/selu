@@ -479,8 +479,12 @@ impl Ctx<'_> {
                 }
             }
         }
+        // An expected return that is still unknown (a generic call's
+        // uninferred result) leaves the body to decide it.
         let written = self.annotation(ret).or_else(|| match expected {
-            Some(Type::Function { ret, .. }) if **ret != Type::Void => Some((**ret).clone()),
+            Some(Type::Function { ret, .. }) if **ret != Type::Void && **ret != Type::Untyped => {
+                Some((**ret).clone())
+            }
             _ => None,
         });
         let body = match body {

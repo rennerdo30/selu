@@ -9,7 +9,7 @@ pub(crate) struct Aliases {
     shapes: HashMap<String, crate::types::NamedShape>,
     validated: std::collections::HashSet<String>,
     pub(crate) contexts: HashMap<String, std::sync::Arc<HashMap<String, Type>>>,
-    context_stack: Vec<std::sync::Arc<HashMap<String, Type>>>,
+    pub(crate) context_stack: Vec<std::sync::Arc<HashMap<String, Type>>>,
 }
 impl Ctx<'_> {
     pub(crate) fn finish_alias_diagnostics(&mut self) {
