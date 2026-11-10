@@ -50,6 +50,12 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
             "empty",
             Some("C_PetBattles"),
         ),
+        // No assisted-combat rotation suggests a spell in the baseline world.
+        (
+            "C_AssistedCombat.GetActionSpell",
+            "empty",
+            Some("C_AssistedCombat"),
+        ),
         ("C_LFGList.GetAvailableRoles", "roles", Some("C_LFGList")),
         (
             "C_AzeriteItem.FindActiveAzeriteItem",

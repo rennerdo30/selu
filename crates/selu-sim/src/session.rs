@@ -14,6 +14,17 @@ use mlua::{Function, Lua, MultiValue, Table};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
+/// The player's name and realm: "Name-Realm" (the client's character key)
+/// names both, a bare name keeps the session's realm.
+fn character_identity(config: &SessionConfig) -> (String, String) {
+    match config.character.split_once('-') {
+        Some((name, realm)) if !name.is_empty() && !realm.is_empty() => {
+            (name.to_string(), realm.to_string())
+        }
+        _ => (config.character.clone(), config.realm.clone()),
+    }
+}
+
 /// VM-independent host commands retained across reload (decision 22).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -42,6 +53,9 @@ pub enum HostCommand {
     SetCVar {
         name: String,
         value: String,
+    },
+    LockCVar {
+        name: String,
     },
     SetZone {
         zone: String,
@@ -899,12 +913,7 @@ impl Session {
         // "Name-Realm" (the client's character key) names the player and the
         // realm separately, as UnitName and GetRealmName answer in game; a
         // bare name keeps the session's realm.
-        let (player, realm) = match config.character.split_once('-') {
-            Some((name, realm)) if !name.is_empty() && !realm.is_empty() => {
-                (name.to_string(), realm.to_string())
-            }
-            _ => (config.character.clone(), config.realm.clone()),
-        };
+        let (player, realm) = character_identity(config);
         sim.lua().globals().raw_set(
             "GetRealmName",
             sim.lua().create_function(move |_, ()| Ok(realm.clone()))?,
@@ -1003,6 +1012,12 @@ impl Session {
             instance: instance.into(),
         });
         self.sim.set_zone(zone, subzone, map, instance)
+    }
+    pub fn lock_cvar(&self, name: &str) -> SimResult<()> {
+        lock(&self.sim.state)
+            .commands
+            .push(HostCommand::LockCVar { name: name.into() });
+        self.sim.lock_cvar(name)
     }
     pub fn set_cvar(&self, name: &str, value: &str) -> SimResult<()> {
         lock(&self.sim.state).commands.push(HostCommand::SetCVar {
@@ -1375,6 +1390,7 @@ impl Session {
             "__selu_world_spells",
             "__selu_world_tracking",
             "__selu_world_cvars",
+            "__selu_world_locked_cvars",
         ] {
             world.push((
                 name,
@@ -1382,6 +1398,7 @@ impl Session {
             ));
         }
         let mut next_config = self.config.clone();
+        let switched = character.is_some();
         if let Some(character) = character {
             next_config.character = character;
         }
@@ -1416,6 +1433,7 @@ impl Session {
                     | "__selu_world_spells"
                     | "__selu_world_tracking"
                     | "__selu_world_cvars"
+                    | "__selu_world_locked_cvars"
             ) {
                 let table: Table = replacement.lua.globals().raw_get(name)?;
                 if let Value::Table(values) = restored {
@@ -1426,6 +1444,13 @@ impl Session {
                 }
             } else {
                 replacement.lua.globals().raw_set(name, restored)?;
+            }
+        }
+        // The world carries over, but the player is now the other character.
+        if switched {
+            let units: Table = replacement.lua.globals().raw_get("__selu_world_units")?;
+            if let Some(player) = units.raw_get::<Option<Table>>("player")? {
+                player.raw_set("name", character_identity(&next_config).0)?;
             }
         }
         self.config = next_config;

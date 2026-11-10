@@ -134,6 +134,14 @@ fn advance_bounded(
                 return Err(mlua::Error::runtime("dispatch budget exceeded"));
             }
             *clock.lock().unwrap_or_else(|e| e.into_inner()) = time;
+            // The callback budgets guard one frame against a runaway loop.
+            // A long advance is many frames (bounded by `limit` steps), so
+            // each step starts with a fresh allowance: advancing 30 seconds
+            // of a full UI is not a runaway.
+            lua.globals().set("__selu_sim_budget", limit)?;
+            if let Some(ctx) = lua.app_data_ref::<crate::Ctx>() {
+                crate::core::renew_callback_budget(&ctx);
+            }
             step.call::<()>(())?;
         }
         let mut now = clock.lock().unwrap_or_else(|e| e.into_inner());

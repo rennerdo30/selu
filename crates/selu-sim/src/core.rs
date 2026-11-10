@@ -1046,6 +1046,15 @@ pub fn dispatch<R>(
     result
 }
 
+/// A new scheduler step (frame) inside one dispatch: callbacks counted so
+/// far belong to earlier frames. An exhausted dispatch stays exhausted.
+pub(crate) fn renew_callback_budget(ctx: &Ctx) {
+    let mut b = ctx.budget.borrow_mut();
+    if !b.exhausted {
+        b.callbacks = 0;
+    }
+}
+
 /// Every script entry, including synchronous visibility and Lua-side timers,
 /// shares these limits. A small depth cap protects the native Rust/C stack.
 pub(crate) fn begin_callback(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {

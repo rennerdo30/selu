@@ -471,9 +471,21 @@ impl Vm {
 
     /// A CVar changed outside the addon (the game's own settings); fires
     /// CVAR_UPDATE like any change.
+    /// Makes the addon's writes to a CVar do nothing (sim.lockCVar).
+    pub fn lock_cvar(&self, name: &str) -> SimResult<()> {
+        let locked: Table = self.lua.globals().raw_get("__selu_world_locked_cvars")?;
+        locked.raw_set(name, true)
+    }
+
     pub fn set_cvar(&self, name: &str, value: &str) -> SimResult<()> {
+        // The game's own settings are not refused by our lock.
+        let locked: Table = self.lua.globals().raw_get("__selu_world_locked_cvars")?;
+        let was = locked.raw_get::<Value>(name)?;
+        locked.raw_set(name, Value::Nil)?;
         let set: mlua::Function = self.lua.globals().raw_get("SetCVar")?;
-        set.call::<()>((name, value))
+        let result = set.call::<()>((name, value));
+        locked.raw_set(name, was)?;
+        result
     }
 
     pub fn set_unit(&self, token: &str, unit: Unit) -> SimResult<()> {
@@ -678,6 +690,15 @@ function math.random(a,b)
  assert(a<=b, 'interval is empty'); return a+math.floor(n*(b-a+1))
 end
 function UnitAura(u,i) return units[u] and units[u].auras[i] end
+-- GetText(token, gender, ordinal): the client's global string for a token;
+-- gender 3 prefers the _FEMALE variant when the client has one.
+function GetText(token, gender)
+ if type(token) ~= 'string' then return nil end
+ if gender == 3 then local female = _G[token .. '_FEMALE']; if type(female) == 'string' then return female end end
+ local text = _G[token]
+ if type(text) == 'string' then return text end
+ return nil
+end
 -- XP, distance and visibility (sim.setUnit's xp/maxXp/distance/visible).
 __selu_world_flags = {xp_disabled=false, tracking=false}
 __selu_world_spells = {}; __selu_world_tracking = {}
@@ -704,7 +725,11 @@ function GetCVar(name)
 end
 function GetCVarBool(name) return GetCVar(name)=='1' end
 function GetCVarNumber(name) return tonumber(GetCVar(name)) or 0 end
+-- A locked CVar ignores writes without an error, as the client does for one
+-- it refuses: a setter that returns is not proof the value changed.
+__selu_world_locked_cvars = {}
 function SetCVar(name,value)
+ if __selu_world_locked_cvars[name] then return true end
  local text = cvarText(value)
  local changed = __selu_world_cvars[name] ~= text
  __selu_world_cvars[name] = text

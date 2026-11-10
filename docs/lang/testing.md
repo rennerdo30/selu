@@ -78,6 +78,7 @@ Helpers:
 | `sim.setTracking([{ name, texture, active, type, spellID }])` | The minimap tracking list for C_Minimap.GetNumTrackingTypes/GetTrackingInfo (fires MINIMAP_UPDATE_TRACKING) |
 | `sim.setZone({ zone, subzone, map, instance })` | Zone text, map and IsInInstance's type ("none", "party", "raid", ...) |
 | `sim.setCVar(name, value)` | Change a CVar as the game's own settings would (fires CVAR_UPDATE); SetCVar from the addon fires it too |
+| `sim.lockCVar(name)` | The addon's SetCVar on it returns but changes nothing, as for a CVar the client refuses |
 | `sim.prints()` | Read captured prints as an array |
 | `sim.frame(name)` | Look up a named frame; null if missing |
 

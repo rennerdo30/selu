@@ -95,6 +95,11 @@ fn overlay(m: &mut selu_manifest::Manifest) {
             json!([]),
         ),
         (
+            "sim.lockCVar",
+            json!([{"name":"name","type":"string"}]),
+            json!([]),
+        ),
+        (
             "sim.setCVar",
             json!([{"name":"name","type":"string"},{"name":"value","type":"string"}]),
             json!([]),
@@ -1044,6 +1049,11 @@ fn install(
                     .unwrap_or_else(|| "none".into()),
             )
         })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "lockCVar",
+        lua.create_function(move |_, name: String| s.borrow().lock_cvar(&name))?,
     )?;
     let s = session.clone();
     sim.set(

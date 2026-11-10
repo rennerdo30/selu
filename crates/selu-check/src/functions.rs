@@ -174,6 +174,18 @@ impl Ctx<'_> {
             self.types.set(e.id, t.clone());
             return t;
         }
+        // Anything fits `unknown`: an array or object literal passed there is
+        // checked element by element without a common element type.
+        if let (ExprKind::Array(items), Some(top @ (Type::Unknown | Type::Untyped))) =
+            (&e.kind, expected)
+        {
+            let top = top.clone();
+            for item in items {
+                self.value_expected(item, Some(&top));
+            }
+            self.types.set(e.id, top.clone());
+            return top;
+        }
         // `[a, b]` where a tuple is expected: each element against its slot.
         if let (ExprKind::Array(items), Some(Type::Tuple(slots))) = (&e.kind, expected)
             && items.len() == slots.len()
