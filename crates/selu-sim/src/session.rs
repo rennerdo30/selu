@@ -1095,6 +1095,32 @@ impl Session {
                 }
             })?,
         )?;
+        // A loaded addon's TOC fields, as the client answers them
+        // (C_AddOns.GetAddOnMetadata(name, field)); nil for an addon that
+        // is not loaded or a field its TOC does not have.
+        let state = self.sim.state.clone();
+        let target = self.config.toc_target();
+        let metadata =
+            self.sim
+                .lua
+                .create_function(move |_, (name, field): (mlua::Value, mlua::Value)| {
+                    let (mlua::Value::String(name), mlua::Value::String(field)) = (name, field)
+                    else {
+                        return Ok(None);
+                    };
+                    let (name, field) = (name.to_string_lossy(), field.to_string_lossy());
+                    let dir = lock(&state).loaded.iter().find_map(|p| {
+                        p.file_name()
+                            .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(&name))
+                            .then(|| p.clone())
+                    });
+                    let Some(dir) = dir else { return Ok(None) };
+                    Ok(loader::read_toc_target(&dir, target.as_deref())
+                        .ok()
+                        .and_then(|toc| toc.get(&field).map(str::to_string)))
+                })?;
+        api.set("GetAddOnMetadata", metadata.clone())?;
+        self.sim.lua.globals().set("GetAddOnMetadata", metadata)?;
         self.sim.lua.globals().set("C_AddOns", api)
     }
 

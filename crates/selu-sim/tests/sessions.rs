@@ -95,3 +95,27 @@ fn flavour_dependencies_and_load_on_demand() {
     assert_eq!(s.prints(), ["mainline", "lazy"]);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn addon_metadata_comes_from_the_loaded_toc() {
+    let root = std::env::temp_dir().join(format!("selu-s2-metadata-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("Meta")).unwrap();
+    std::fs::write(
+        root.join("Meta/Meta.toc"),
+        "## Title: Meta Addon\n## Version: 1.2.3-beta.4\nmain.lua",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("Meta/main.lua"),
+        "print(C_AddOns.GetAddOnMetadata('Meta','Version'), GetAddOnMetadata('meta','title'), tostring(C_AddOns.GetAddOnMetadata('Meta','Author')), tostring(C_AddOns.GetAddOnMetadata('Other','Version')))",
+    )
+    .unwrap();
+    let mut s = Session::new(SessionConfig {
+        target: Some("retail@12.0".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    s.load_addon_dir(&root.join("Meta")).unwrap();
+    assert_eq!(s.prints(), ["1.2.3-beta.4	Meta Addon	nil	nil"]);
+    std::fs::remove_dir_all(root).unwrap();
+}
