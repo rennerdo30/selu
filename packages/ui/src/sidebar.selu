@@ -1,0 +1,379 @@
+import { RegisterOwnedFrame } from "./stacking";
+import { Backdrop } from "./backdrop";
+import { CreateLabel, CreateSeparator, Label } from "./text";
+import { CreateEditBox, EditControl } from "./edit";
+import { assets } from "./materials";
+import { themes, SetColor } from "./theme";
+import { size, space } from "./tokens";
+import { AttachWindowRaise } from "./stacking";
+
+export type NavCategoryHeader = {
+  frame: Frame;
+  label: Label
+};
+
+export type NavCategory = {
+  items: NavItem[];
+  header: NavCategoryHeader ?
+};
+
+export type SidebarOptions = {
+  width?: number;
+  height?: number;
+  search?: boolean;
+  searchPlaceholder?: string;
+  onSelect?: (index: number) => void
+};
+
+export class NavItem {
+  frame: Button;
+  label: Label;
+  bg: Texture;
+  accentBar: Texture;
+  textured = false;
+  index: number;
+  searchText: string;
+  layoutTop: number?= null;
+  hovered = false;
+  owner: Sidebar;
+
+  constructor(owner: Sidebar, label: string, index: number, extra: string) {
+    this.owner = owner;
+    this.index = index;
+    this.searchText = (label + " " + extra).lower();
+    const frame = CreateFrame("Button", null, owner.list);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    frame.SetSize(owner.width, size.navItemHeight);
+    this.bg = frame.CreateTexture(null, "BACKGROUND");
+    this.bg.SetAllPoints();
+    this.bg.Hide();
+    const path = assets.texture("listHighlight");
+    if (path != null) {
+      try {
+        this.bg.SetTexture(path);
+        this.textured = true;
+      } catch {}
+    }
+    this.accentBar = frame.CreateTexture(null, "ARTWORK");
+    this.accentBar.SetPoint("TOPLEFT");
+    this.accentBar.SetPoint("BOTTOMLEFT");
+    this.accentBar.SetWidth(size.navAccentWidth);
+    this.accentBar.Hide();
+    this.label = CreateLabel(frame, { text: label, role: "body", color: "textSecondary" });
+    this.label.region.SetPoint("LEFT", size.navTextInset, 0);
+    this.label.region.SetPoint("RIGHT", -(size.scrollbarWidth + space.sm), 0);
+    frame.SetScript("OnEnter", () => {
+      this.hovered = true;
+      this.Refresh();
+    });
+    frame.SetScript("OnLeave", () => {
+      this.hovered = false;
+      this.Refresh();
+    });
+    frame.SetScript("OnClick", () => {
+      owner.Select(this.index);
+    });
+    AttachWindowRaise(frame);
+    themes.skin(frame, (_theme) => {
+      SetColor(this.accentBar, "accent");
+      this.Refresh();
+    });
+  }
+
+  Refresh() {
+    const selected = this.index == this.owner.selectedIndex;
+    this.accentBar.SetShown(selected);
+    if (selected || this.hovered) {
+      const token = selected ? (this.textured ? "navSelected" : "selected") : (this.textured ? "navHover" : "hover");
+      if (this.textured) {
+        const c = themes.color(token);
+        this.bg.SetVertexColor(c.r, c.g, c.b, c.a);
+      } else {
+        SetColor(this.bg, token);
+      }
+      this.bg.Show();
+      this.label.SetColor("textPrimary");
+    } else {
+      this.bg.Hide();
+      this.label.SetColor("textSecondary");
+    }
+  }
+}
+
+export class Sidebar {
+  frame: Frame;
+  viewport: Frame;
+  list: Frame;
+  scrollTrack: Frame;
+  scrollThumb: Button;
+  search: EditControl?= null;
+  items: NavItem[] = [];
+  categories = new Map<string, NavCategory>();
+  categoryOrder: string[] = [];
+  selectedIndex: number?= null;
+  onSelect: ((index: number) => void) ?;
+  width : number;
+  listHeight: number;
+  contentHeight: number;
+  scrollOffset = 0;
+  filterText: string?= null;
+  dragStartY = 0;
+  dragStartOffset = 0;
+
+  constructor(parent: Frame, opts: SidebarOptions) {
+    const width = opts.width ?? size.sidebarWidth;
+    this.width = width;
+    const height = opts.height ?? readable(parent.GetHeight()) ?? 0;
+    this.onSelect = opts.onSelect;
+    const bar = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(bar);
+    this.frame = bar;
+    bar.SetSize(width, height);
+    Backdrop(bar, { style: "sidebar" });
+    const dark = CreateSeparator(
+      bar,
+      { orientation: "VERTICAL", length: height, color: "borderOuter" }
+    );
+    dark.region.SetPoint("TOPRIGHT");
+    const gold = CreateSeparator(
+      bar,
+      { orientation: "VERTICAL", length: height, color: "borderInner" }
+    );
+    gold.region.SetPoint("TOPRIGHT", -size.separator, 0);
+    let top = space.sm;
+    if (opts.search != false) {
+      const search = CreateEditBox(bar, {
+        width: width - space.sm * 2 - size.separator * 2, placeholder: opts.searchPlaceholder, onChange: (
+          text,
+          _user
+        ) => {
+          this.SetFilter(text);
+        }
+      });
+      this.search = search;
+      search.frame.SetPoint("TOPLEFT", space.sm, -space.sm);
+      top = space.sm + size.inputHeight + space.sm;
+    }
+    this.listHeight = height - top;
+    this.contentHeight = this.listHeight;
+    const viewport = CreateFrame("Frame", null, bar);
+    RegisterOwnedFrame(viewport);
+    this.viewport = viewport;
+    viewport.SetSize(width, this.listHeight);
+    viewport.SetPoint("TOPLEFT", 0, -top);
+    viewport.SetClipsChildren(true);
+    bar.SetClipsChildren(true);
+    const list = CreateFrame("Frame", null, viewport);
+    RegisterOwnedFrame(list);
+    this.list = list;
+    list.SetSize(width, this.listHeight);
+    list.SetPoint("TOPLEFT");
+    const track = CreateFrame("Frame", null, bar);
+    RegisterOwnedFrame(track);
+    this.scrollTrack = track;
+    track.SetSize(size.scrollbarWidth, this.listHeight - space.sm * 2);
+    track.SetPoint("TOPRIGHT", -(size.separator * 2 + space.xs), -(top + space.sm));
+    Backdrop(track, { style: "track" });
+    track.SetFrameLevel((readable(bar.GetFrameLevel()) ?? 0) + size.scrollbarLevelOffset);
+    track.Hide();
+    const thumb = CreateFrame("Button", null, track);
+    RegisterOwnedFrame(thumb);
+    this.scrollThumb = thumb;
+    thumb.SetSize(size.scrollbarWidth, size.scrollThumbMin);
+    thumb.SetPoint("TOP");
+    Backdrop(thumb, { style: "pill" });
+    bar.EnableMouseWheel(true);
+    bar.SetScript("OnMouseWheel", (_self, delta) => {
+      if (typeof delta == "number") {
+        const wheel = readable(delta);
+        if (wheel != null) {
+          this.scrollOffset -= wheel * (size.navItemHeight + size.navItemGap);
+          this.ApplyScroll();
+        }
+      }
+    });
+    AttachWindowRaise(bar, ["OnMouseDown", "OnMouseWheel"]);
+    thumb.SetScript("OnMouseDown", () => {
+      const [x, y] = GetCursorPosition();
+      const cursor = readable(y);
+      if (cursor == null) {
+        return;
+      }
+      this.dragStartY = cursor;
+      this.dragStartOffset = this.scrollOffset;
+      bar.SetScript("OnUpdate", () => {
+        if (readable(IsMouseButtonDown("LeftButton")) != true) {
+          bar.SetScript("OnUpdate", null);
+          return;
+        }
+        const overflow = this.Overflow();
+        const travel = (readable(track.GetHeight()) ?? 0) - (readable(thumb.GetHeight()) ?? 0);
+        if (overflow <= 0 || travel <= 0) {
+          return;
+        }
+        const [
+          nx,
+          ny
+        ]
+          = GetCursorPosition();
+        const now = readable(ny);
+        const scale = readable(bar.GetEffectiveScale());
+        if (now == null || scale == null || scale <= 0) {
+          return;
+        }
+        this.scrollOffset = this.dragStartOffset + (this.dragStartY - now) / scale * overflow / travel;
+        this.ApplyScroll();
+      });
+    });
+    thumb.SetScript("OnMouseUp", () => {
+      bar.SetScript("OnUpdate", null);
+    });
+    AttachWindowRaise(thumb);
+  }
+
+  Overflow(): number {
+    return Math.max(0, this.contentHeight - this.listHeight);
+  }
+
+  ApplyScroll() {
+    const overflow = this.Overflow();
+    this.scrollOffset = Math.clamp(this.scrollOffset, 0, overflow);
+    this.list.SetPoint("TOPLEFT", 0, this.scrollOffset);
+    if (overflow<1) {
+      this.scrollTrack.Hide();
+      return;
+    }
+    this.scrollTrack.Show();
+    const track = readable(this.scrollTrack.GetHeight()) ?? 0;
+    const height = Math.clamp(
+      track * this.listHeight / this.contentHeight,
+      size.scrollThumbMin,
+      track
+    );
+    this.scrollThumb.SetHeight(height);
+    this.scrollThumb.ClearAllPoints();
+    this.scrollThumb.SetPoint("TOP", 0, -(track - height) * this.scrollOffset / overflow);
+  }
+
+  Matches(item: NavItem): boolean {
+    const filter = this.filterText;
+    return filter == null || item.searchText.includes(filter);
+  }
+
+  Relayout() {
+    let y = space.sm;
+    for (const key of this.categoryOrder) {
+      const category = this.categories.get(key);
+      if (category == null) {
+        continue;
+      }
+      let visible = false;
+      for (const item of category.items) {
+        if (this.Matches(item)) {
+          visible = true;
+          break;
+        }
+      }
+      const header = category.header;
+      if (header != null) {
+        header.frame.SetShown(visible);
+        if (visible) {
+          header.frame.ClearAllPoints();
+          header.frame.SetPoint("TOPLEFT", 0, -y);
+          y += size.navCategoryHeight + size.navItemGap;
+        }
+      }
+      for (const item of category.items) {
+        if (this.Matches(item)) {
+          item.layoutTop = y;
+          item.frame.ClearAllPoints();
+          item.frame.SetPoint("TOPLEFT", 0, -y);
+          item.frame.Show();
+          y += size.navItemHeight + size.navItemGap;
+        } else {
+          item.layoutTop = null;
+          item.frame.Hide();
+        }
+      }
+    }
+    this.contentHeight = y + space.sm;
+    this.list.SetHeight(Math.max(this.listHeight, this.contentHeight));
+    this.ApplyScroll();
+  }
+
+  SetFilter(text: string) {
+    const normalized = text.trim().lower();
+    this.filterText = normalized != "" ? normalized : null;
+    this.scrollOffset = 0;
+    this.Relayout();
+  }
+
+  EnsureCategory(label: string): NavCategory {
+    const previous = this.categories.get(label);
+    if (previous != null) {
+      return previous;
+    }
+    const category: NavCategory = { items: [], header: null };
+    if (label != "") {
+      const header = CreateFrame("Frame", null, this.list);
+      RegisterOwnedFrame(header);
+      header.SetSize(this.width, size.navCategoryHeight);
+      const title = CreateLabel(
+        header,
+        { text: label, role: "caption", color: "textDisabled", uppercase: true }
+      );
+      title.region.SetPoint("LEFT", size.navTextInset, 0);
+      title.region.SetPoint("RIGHT", -(size.scrollbarWidth + space.sm), 0);
+      header.Hide();
+      category.header = { frame: header, label: title };
+    }
+    this.categories.set(label, category);
+    this.categoryOrder.push(label);
+    return category;
+  }
+
+  AddItem(label: string, categoryLabel: string = "", searchExtra: string = ""): NavItem {
+    const category = this.EnsureCategory(categoryLabel);
+    const item = new NavItem(this, label, this.items.length + 1, searchExtra);
+    this.items.push(item);
+    category.items.push(item);
+    this.Relayout();
+    return item;
+  }
+
+  Select(index: number) {
+    this.selectedIndex = index;
+    for (const item of this.items) {
+      item.Refresh();
+    }
+    if (index >= 1 && index <= this.items.length) {
+      const item = this.items[index - 1];
+      const top = item.layoutTop;
+      if (top != null) {
+        if (top<this.scrollOffset) {
+          this.scrollOffset = top;
+        } else if (top + size.navItemHeight>this.scrollOffset + this.listHeight) {
+          this.scrollOffset = top + size.navItemHeight - this.listHeight;
+        }
+        this.ApplyScroll();
+      }
+    }
+    const callback = this.onSelect;
+    if (callback != null) {
+      callback(index);
+    }
+  }
+
+  GetSelected(): number ? {
+    return this.selectedIndex;
+  }
+}
+
+export function CreateSidebar(parent: Frame, opts: SidebarOptions?= null): Sidebar {
+  if (opts == null) {
+    const defaults: SidebarOptions = {};
+    return new Sidebar(parent, defaults);
+  }
+  return new Sidebar(parent, opts);
+}

@@ -1,0 +1,167 @@
+export type Material = {
+  path: string;
+  tile: boolean;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  fitAspect: number
+};
+
+export const materials = new Map<string, Material[]>();
+
+materials.set(
+  "rock",
+  [
+    {
+      path: "Interface\\FrameGeneral\\UI-Background-Rock",
+      tile: true,
+      left: 0,
+      right: 1,
+      top: 0,
+      bottom: 1,
+      fitAspect: 0
+    },
+    {
+      path: "Interface\\DialogFrame\\UI-DialogBox-Background",
+      tile: true,
+      left: 0,
+      right: 1,
+      top: 0,
+      bottom: 1,
+      fitAspect: 0
+    }
+  ]
+);
+
+materials.set(
+  "marble",
+  [
+    {
+      path: "Interface\\FrameGeneral\\UI-Background-Marble",
+      tile: true,
+      left: 0,
+      right: 1,
+      top: 0,
+      bottom: 1,
+      fitAspect: 0
+    },
+    {
+      path: "Interface\\FrameGeneral\\UI-Background-Rock",
+      tile: true,
+      left: 0,
+      right: 1,
+      top: 0,
+      bottom: 1,
+      fitAspect: 0
+    }
+  ]
+);
+
+materials.set(
+  "dialog",
+  [
+    {
+      path: "Interface\\DialogFrame\\UI-DialogBox-Background",
+      tile: true,
+      left: 0,
+      right: 1,
+      top: 0,
+      bottom: 1,
+      fitAspect: 0
+    },
+    {
+      path: "Interface\\Tooltips\\UI-Tooltip-Background",
+      tile: true,
+      left: 0,
+      right: 1,
+      top: 0,
+      bottom: 1,
+      fitAspect: 0
+    }
+  ]
+);
+
+materials.set(
+  "parchment",
+  [
+    {
+      path: "Interface\\AchievementFrame\\UI-Achievement-Parchment-Horizontal",
+      tile: false,
+      left: 0,
+      right: 1,
+      top: 0,
+      bottom: 1,
+      fitAspect: 4
+    },
+    {
+      path: "Interface\\QuestFrame\\QuestBG",
+      tile: false,
+      left: 0,
+      right: 0.585,
+      top: 0,
+      bottom: 0.66,
+      fitAspect: 0
+    },
+    {
+      path: "Interface\\Stationery\\Stationery_ill1",
+      tile: false,
+      left: 0,
+      right: 1,
+      top: 0,
+      bottom: 1,
+      fitAspect: 0
+    }
+  ]
+);
+
+materials.set(
+  "sliderTrack",
+  [
+    {
+      path: "Interface\\Buttons\\UI-SliderBar-Background",
+      tile: true,
+      left: 0,
+      right: 1,
+      top: 0,
+      bottom: 1,
+      fitAspect: 0
+    }
+  ]
+);
+
+export const textures = new Map<string, string>();
+textures.set("closeUp", "Interface\\Buttons\\UI-Panel-MinimizeButton-Up");
+textures.set("closeDown", "Interface\\Buttons\\UI-Panel-MinimizeButton-Down");
+textures.set("closeHighlight", "Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight");
+textures.set("checkUp", "Interface\\Buttons\\UI-CheckBox-Up");
+textures.set("checkDown", "Interface\\Buttons\\UI-CheckBox-Down");
+textures.set("checkMark", "Interface\\Buttons\\UI-CheckBox-Check");
+textures.set("checkHighlight", "Interface\\Buttons\\UI-CheckBox-Highlight");
+textures.set("buttonUp", "Interface\\Buttons\\UI-Panel-Button-Up");
+textures.set("buttonDown", "Interface\\Buttons\\UI-Panel-Button-Down");
+textures.set("buttonHighlight", "Interface\\Buttons\\UI-Panel-Button-Highlight");
+textures.set("sliderThumb", "Interface\\Buttons\\UI-SliderBar-Button-Horizontal");
+textures.set("listHighlight", "Interface\\QuestFrame\\UI-QuestTitleHighlight");
+textures.set("iconRing", "Interface\\Buttons\\UI-Quickslot2");
+textures.set("iconFallback", "Interface\\Icons\\INV_Misc_QuestionMark");
+
+export type Edge = {
+  path: string;
+  size: number;
+  inset: number
+};
+
+export const edges = new Map<string, Edge>();
+
+edges.set(
+  "dialog",
+  { path: "Interface\\DialogFrame\\UI-DialogBox-Border", size: 32, inset: 11 }
+);
+
+edges.set(
+  "tooltip",
+  { path: "Interface\\Tooltips\\UI-Tooltip-Border", size: 16, inset: 4 }
+);
+
+edges.set("groove", { path: "Interface\\Buttons\\UI-SliderBar-Border", size: 8, inset: 3 });

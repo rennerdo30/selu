@@ -1,0 +1,256 @@
+import { Color, darkColors, lightColors, missingColor } from "./tokens";
+import { hostLog as logMessage, hostSaveTheme } from "./host";
+
+export type Theme = {
+  name: string;
+  colors: Map<string, Color>;
+  materials: Map<string, string | boolean>
+};
+
+export class ThemeRegistry {
+  themes = new Map<string, Theme>();
+  active: Theme;
+  skins = new WeakMap<Frame, (theme: Theme) => void>();
+  labelSkins = new WeakMap<FontString, (theme: Theme) => void>();
+  textureSkins = new WeakMap<Texture, (theme: Theme) => void>();
+  callbacks: ((theme: Theme) => void)[] = [];
+  warned = new Set<string>();
+  failures = new Set<(theme: Theme) => void>();
+
+  constructor() {
+    const dark: Theme = {
+      name: "dark",
+      colors: darkColors(),
+      materials: new Map<string, string | boolean>()
+    };
+    const light: Theme = {
+      name: "light",
+      colors: lightColors(),
+      materials: new Map<string, string | boolean>()
+    };
+    dark.materials.set("window", "rock");
+    dark.materials.set("header", "marble");
+    dark.materials.set("sidebar", "rock");
+    dark.materials.set("surface", "dialog");
+    dark.materials.set("input", "dialog");
+    dark.materials.set("slider", "sliderTrack");
+    light.materials.set("window", "parchment");
+    light.materials.set("header", "marble");
+    light.materials.set("sidebar", "parchment");
+    light.materials.set("surface", false);
+    light.materials.set("input", false);
+    light.materials.set("slider", "sliderTrack");
+    this.themes.set("dark", dark);
+    this.themes.set("light", light);
+    this.active = dark;
+  }
+
+  color(name: string?= null): Color {
+    if (name == null) {
+      return missingColor;
+    }
+    const current = this.active.colors.get(name);
+    if (current != null) {
+      return current;
+    }
+    const dark = this.themes.get("dark");
+    if (dark != null) {
+      const fallback = dark.colors.get(name);
+      if (fallback != null) {
+        return fallback;
+      }
+    }
+    if (!this.warned.has(name)) {
+      this.warned.add(name);
+      logMessage(
+        "WARN",
+        `ui: colour token '${name}' is not in the palette; drawing the missing-colour marker`
+      );
+    }
+    return missingColor;
+  }
+
+  apply(callback: (theme: Theme) => void) {
+    try {
+      callback(this.active);
+    } catch (error) {
+      if (!this.failures.has(callback)) {
+        this.failures.add(callback);
+        logMessage("ERROR", `UI theme callback failed: ${error.message}`);
+      }
+    }
+  }
+
+  skin(widget: Frame, apply: (theme: Theme) => void): Frame {
+    this.skins.set(widget, apply);
+    this.apply(apply);
+    return widget;
+  }
+
+  skinLabel(widget: FontString, apply: (theme: Theme) => void) {
+    this.labelSkins.set(widget, apply);
+    this.apply(apply);
+  }
+
+  skinTexture(widget: Texture, apply: (theme: Theme) => void) {
+    this.textureSkins.set(widget, apply);
+    this.apply(apply);
+  }
+
+  onChanged(callback: (theme: Theme) => void) {
+    this.callbacks.push(callback);
+  }
+
+  names(): string[] {
+    const result: string[] = [];
+    for (const [name, theme] of this.themes) {
+      result.push(name);
+    }
+    result.sort();
+    return result;
+  }
+
+  set(name: string?= null, persist: boolean?= null) {
+    const requested = name != null ? this.themes.get(name) : null;
+    const selected = requested ?? this.themes.get("dark");
+    if (selected == null) {
+      return;
+    }
+    this.active = selected;
+    for (const [widget, apply] of this.skins) {
+      this.apply(apply);
+    }
+    for (const [label, apply] of this.labelSkins) {
+      this.apply(apply);
+    }
+    for (const [texture, apply] of this.textureSkins) {
+      this.apply(apply);
+    }
+    for (const callback of this.callbacks) {
+      this.apply(callback);
+    }
+    if (persist != false) {
+      hostSaveTheme(selected.name);
+    }
+  }
+
+  registerColor(name: string, values: Map<string, Color>) {
+    for (const [themeName, theme] of this.themes) {
+      const value = values.get(themeName) ?? values.get("dark");
+      if (value != null) {
+        theme.colors.set(name, value);
+      }
+    }
+  }
+
+  registerTheme(
+    name: string,
+    colors: Map<string, Color>,
+    materials: Map<string, string | boolean>
+  ): Theme {
+    const theme: Theme = {
+      name: name,
+      colors: new Map<string, Color>(),
+      materials: new Map<string, string | boolean>()
+    };
+    const base = this.themes.get("dark");
+    if (base != null) {
+      for (const [key, value] of base.colors) {
+        theme.colors.set(key, value);
+      }
+      for (const [key, value] of base.materials) {
+        theme.materials.set(key, value);
+      }
+    }
+    for (const [key, value] of colors) {
+      theme.colors.set(key, value);
+    }
+    for (const [key, value] of materials) {
+      theme.materials.set(key, value);
+    }
+    this.themes.set(name, theme);
+    return theme;
+  }
+}
+
+export const themes = new ThemeRegistry();
+
+export function Color(name: string?= null): Color {
+  return themes.color(name);
+}
+
+export function SetColor(texture: Texture, name: string?= null) {
+  const c = Color(name);
+  texture.SetColorTexture(c.r, c.g, c.b, c.a);
+}
+
+export function SetTextColor(label: FontString, name: string?= null) {
+  const c = Color(name);
+  label.SetTextColor(c.r, c.g, c.b, c.a);
+}
+
+export function RoundToStep(value: number, step: number?= null): number {
+  return step == null || step <= 0 ? value : Math.floor(value / step + 0.5) * step;
+}
+
+export function GetThemeName(): string {
+  return themes.active.name;
+}
+
+export function GetThemeNames(): string[] {
+  return themes.names();
+}
+
+export function SetTheme(name: string?= null, persist: boolean?= null) {
+  themes.set(name, persist);
+}
+
+export function RegisterColor(name: string, values: Map<string, Color>) {
+  themes.registerColor(name, values);
+}
+
+export type ThemeDefinition = {
+  colors?: Map<string, Color>;
+  materials?: Map<string, string | boolean>
+};
+
+export function RegisterTheme(name: string, definition: ThemeDefinition): Theme {
+  return themes.registerTheme(
+    name,
+    definition.colors ?? new Map<string, Color>(),
+    definition.materials ?? new Map<string, string | boolean>()
+  );
+}
+
+export function Skin(widget: Frame, apply: (theme: Theme) => void): Frame {
+  return themes.skin(widget, apply);
+}
+
+export function OnThemeChanged(callback: (theme: Theme) => void) {
+  themes.onChanged(callback);
+}
+
+export function Unpack(name: string?= null): [number, number, number, number] {
+  const c = Color(name);
+  return [c.r, c.g, c.b, c.a];
+}
+
+function colorByte(value: number): number {
+  return math.max(0, math.min(255, math.floor(value * 255 + 0.5)));
+}
+
+// "|cffrrggbb" for a token, for chat lines and inline text colour (toolkit 01b0992).
+export function ColorEscape(name: string?= null): string {
+  const c = Color(name);
+  return format("|cff%02x%02x%02x", colorByte(c.r), colorByte(c.g), colorByte(c.b));
+}
+
+export function SkinLabel(widget: FontString, apply: (theme: Theme) => void): FontString {
+  themes.skinLabel(widget, apply);
+  return widget;
+}
+
+export function SkinTexture(widget: Texture, apply: (theme: Theme) => void): Texture {
+  themes.skinTexture(widget, apply);
+  return widget;
+}

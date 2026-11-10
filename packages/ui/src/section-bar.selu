@@ -1,0 +1,186 @@
+import { Backdrop } from "./backdrop";
+import { CreateLabel, Label } from "./text";
+import { SetColor, Skin } from "./theme";
+import { space, list } from "./tokens";
+import { RegisterOwnedFrame, AttachWindowRaise } from "./stacking";
+import { ShowTooltip, HideTooltip } from "./tooltip";
+import { KitL } from "./kit-strings";
+export type SectionTooltip = string | string[] | ((bar: SectionBar) => (string | string[])?);
+
+export type SectionBarOptions = {
+  width?: number;
+  height?: number;
+  labelWidth?: number;
+  clickable?: boolean;
+  tooltip?: SectionTooltip;
+  onClick?: (bar: SectionBar, mouse: string?) => void
+};
+
+export class SectionBar {
+  frame: Button;
+  rail: Texture;
+  toggle: Label;
+  pill: Frame;
+  count: Label;
+  label: Label;
+  opts: SectionBarOptions;
+  tooltip: SectionTooltip ?;
+  collapsed : boolean?= null;
+  hovered = false;
+  tooltipShown = false;
+
+  constructor(parent: Frame, opts: SectionBarOptions) {
+    this.opts = opts;
+    this.tooltip = opts.tooltip;
+    this.frame = CreateFrame("Button", null, parent);
+    RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(
+      opts.width ?? readable(parent.GetWidth()) ?? 0,
+      opts.height ?? list.SECTION_BAR_HEIGHT
+    );
+    Backdrop(this.frame, { style: "header" });
+    this.rail = this.frame.CreateTexture(null, "ARTWORK");
+    this.rail.SetPoint("TOPLEFT");
+    this.rail.SetPoint("BOTTOMLEFT");
+    this.rail.SetWidth(list.SECTION_RAIL_WIDTH);
+    this.toggle = CreateLabel(
+      this.frame,
+      { role: "small", color: "textSecondary", justify: "CENTER", width: space.md, wrap: false }
+    );
+    this.toggle.region.SetPoint("RIGHT", this.frame, "RIGHT", -space.xs, 0);
+    this.pill = CreateFrame("Frame", null, this.frame);
+    RegisterOwnedFrame(this.pill);
+    this.pill.SetSize(list.SECTION_PILL_WIDTH, list.SECTION_PILL_HEIGHT);
+    this.pill.SetPoint("RIGHT", this.toggle.region, "LEFT", -space.xs, 0);
+    Backdrop(this.pill, { style: "well" });
+    this.count = CreateLabel(
+      this.pill,
+      {
+        role: "caption",
+        color: "textSecondary",
+        justify: "CENTER",
+        width: list.SECTION_PILL_WIDTH,
+        wrap: false
+      }
+    );
+    this.count.region.SetPoint("CENTER");
+    this.label = CreateLabel(
+      this.frame,
+      { role: "small", color: "textSecondary", width: opts.labelWidth ?? 1, wrap: false }
+    );
+    this.label.region.SetPoint("LEFT", this.rail, "RIGHT", space.sm, 0);
+    this.frame.SetScript("OnClick", (_self, mouse) => {
+      const click = this.opts.onClick; if (this.IsClickable() && click != null) {
+        click(this, mouse);
+      }
+    });
+    this.frame.SetScript("OnEnter", () => {
+      this.hovered = true;
+      this.Paint();
+      const tips = this.TooltipLines();
+      this.tooltipShown = tips.lines != null && ShowTooltip(this.frame, tips.lines, tips.hint);
+    });
+    this.frame.SetScript("OnLeave", () => {
+      this.hovered = false; this.Paint(); if (this.tooltipShown) {
+        this.tooltipShown = false; HideTooltip();
+      }
+    });
+    this.frame.HookScript("OnSizeChanged", () => {
+      this.Layout();
+    });
+    AttachWindowRaise(this.frame);
+    this.Layout();
+    Skin(this.frame, (_theme) => {
+      this.Paint();
+    });
+  }
+
+  TooltipLines(): {
+    lines: (string | string[]) ?;
+    hint : string ?
+  }
+
+  {
+    const source = this.tooltip;
+    let lines: (string | string[])?= null;
+    if (typeof source == "function") {
+      try {
+        lines = source(this);
+      } catch {}
+    } else {
+      lines = source;
+    }
+    if (typeof lines == "table" && lines.length == 0) {
+      lines = null;
+    }
+    let hint: string?= null;
+    if (this.collapsed != null && this.IsClickable()) {
+      hint = KitL(this.collapsed == true ? "ui.section.expand" : "ui.section.collapse");
+      if (lines == null) {
+        lines = [readable(this.label.region.GetText()) ?? ""];
+      }
+    }
+    return { lines: lines, hint: hint };
+  }
+
+  IsClickable(): boolean {
+    if (this.opts.clickable != null) {
+      return this.opts.clickable == true;
+    }
+    return this.opts.onClick != null && this.collapsed != null;
+  }
+
+  Layout() {
+    if (this.opts.labelWidth != null) {
+      return;
+    }
+    let right = space.sm;
+    if (this.collapsed != null) {
+      right += space.xs + space.md;
+    }
+    if (readable(this.pill.IsShown()) == true) {
+      right = space.xs + space.md + space.xs + list.SECTION_PILL_WIDTH + space.sm;
+    }
+    this.label.region.SetWidth(Math.max(
+      1,
+      (readable(this.frame.GetWidth()) ?? 0) - list.SECTION_RAIL_WIDTH - space.sm - right
+    ));
+  }
+
+  Paint() {
+    const lit = this.hovered && this.IsClickable();
+    this.label.SetColor(lit ? "textPrimary" : "textSecondary");
+    this.toggle.SetColor(lit ? "textPrimary" : "textSecondary");
+    SetColor(this.rail, "accent");
+  }
+
+  SetData(label: string?= null, count: number?= null, collapsed: boolean?= null) {
+    this.label.region.SetText(label ?? "");
+    if (count != null) {
+      this.count.region.SetText(format("%d", count));
+      this.pill.Show();
+    } else {
+      this.count.region.SetText("");
+      this.pill.Hide();
+    }
+    this.collapsed = collapsed;
+    this.toggle.region.SetText(collapsed == null ? "" : collapsed ? "+" : "-");
+    this.Layout();
+    this.Paint();
+  }
+
+  SetTooltip(source: SectionTooltip?= null) {
+    this.tooltip = source;
+  }
+}
+
+export function CreateSectionBar(
+  parent: Frame,
+  opts: SectionBarOptions?= null
+): SectionBar {
+  if (opts == null) {
+    const defaults: SectionBarOptions = {};
+    return new SectionBar(parent, defaults);
+  }
+  return new SectionBar(parent, opts);
+}

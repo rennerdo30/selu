@@ -1,0 +1,583 @@
+import { CreateLabel, Label } from "./text";
+import { Edges } from "./backdrop";
+import { themes, SetColor } from "./theme";
+import { space, size, typography, list } from "./tokens";
+import { fonts, FontRole } from "./fonts";
+import { RegisterOwnedFrame, AttachWindowRaise } from "./stacking";
+import { ListRowLane, ColumnLayout, ColumnSpec } from "./list-layout";
+import { ShowTooltip, HideTooltip, ShowRichTooltip } from "./tooltip";
+import { GetTexture } from "./materials";
+
+export type RowColumn = {
+  width?: number;
+  weight?: number;
+  justify?: string;
+  role?: FontRole;
+  color?: string;
+  bar?: boolean;
+  key?: string;
+  label?: string
+};
+
+export type RowRGB = {
+  r: number;
+  g?: number;
+  b?: number
+};
+
+export type RowBarValue = {
+  value?: number;
+  color?: string
+};
+
+export type RowValue = string | number | boolean | RowBarValue;
+export type RowTooltip = string | string[] | ((row: ListRow) => (string | string[])?);
+
+export type ListRowData = {
+  section?: string;
+  title?: string;
+  detail?: string;
+  value?: string;
+  rail?: string;
+  titleColor?: string;
+  detailColor?: string;
+  valueColor?: string;
+  titleRGB?: RowRGB;
+  icon?: string | number;
+  iconCoords?: number[];
+  iconDesaturated?: boolean;
+  columns?: RowValue[];
+  columnColors?: string[];
+  selected?: boolean;
+  minHeight?: number;
+  wrap?: boolean;
+  wrapDetail?: boolean;
+  trailingWidth?: number;
+  trailing?: boolean;
+  hint?: string;
+  tooltip?: RowTooltip;
+  richTooltip?: (tip: GameTooltip, row: ListRow) => boolean ?;
+  onClick?: (row: ListRow, mouse: string?) => void
+};
+
+export type ListRowOptions = {
+  width?: number;
+  iconSize?: number;
+  iconEdge?: boolean;
+  trailingWidth?: number;
+  columns?: RowColumn[];
+  columnGap?: number;
+  minHeight?: number
+};
+
+export class RowBar {
+  track: Texture;
+  fill: Texture;
+  fillToken = "sliderFill";
+
+  constructor(parent: Frame) {
+    this.track = parent.CreateTexture(null, "ARTWORK");
+    this.fill = parent.CreateTexture(null, "ARTWORK");
+    this.track.SetHeight(list.ROW_BAR_HEIGHT);
+    this.fill.SetHeight(list.ROW_BAR_HEIGHT);
+    themes.skinTexture(this.track, (_theme) => {
+      SetColor(this.track, "track");
+      SetColor(this.fill, this.fillToken);
+    });
+  }
+
+  Hide() {
+    this.track.Hide();
+    this.fill.Hide();
+  }
+}
+
+function rowText(value: RowValue?): string {
+  if (typeof value == "string") {
+    return value;
+  }
+  if (typeof value == "number") {
+    return `${value}`;
+  }
+  if (typeof value == "boolean") {
+    return value ? "true" : "";
+  }
+  return "";
+}
+
+export class ListRow {
+  frame: Button;
+  hover: Texture;
+  selectedEdges: Edges;
+  rail: Texture;
+  icon: Texture;
+  iconEdge: Texture?= null;
+  title: Label;
+  detail: Label;
+  value: Label;
+  trailing: Frame?= null;
+  cells: Label[] = [];
+  bars = new Map<number, RowBar>();
+  cellRoles: FontRole[] = [];
+  item: ListRowData? = null;
+  opts: ListRowOptions;
+  hovered = false;
+  clickable = false;
+  tooltipShown = false;
+
+  constructor(parent: Frame, opts: ListRowOptions) {
+    this.opts = opts;
+    this.item = null;
+    const frame = CreateFrame("Button", null, parent);
+    this.frame = frame;
+    RegisterOwnedFrame(frame);
+    frame.SetSize(
+      opts.width ?? readable(parent.GetWidth()) ?? 0,
+      typography.body + space.xs * 2
+    );
+    frame.RegisterForClicks("AnyUp");
+    this.hover = frame.CreateTexture(null, "BACKGROUND");
+    this.hover.SetAllPoints();
+    this.hover.Hide();
+    this.selectedEdges = new Edges(frame, 0, "BORDER", size.border);
+    this.rail = frame.CreateTexture(null, "ARTWORK");
+    this.rail.SetWidth(list.ROW_RAIL_WIDTH);
+    this.rail.SetPoint("TOPLEFT");
+    this.rail.SetPoint("BOTTOMLEFT");
+    this.rail.Hide();
+    const iconSize = opts.iconSize ?? list.ROW_ICON_SIZE;
+    this.icon = frame.CreateTexture(null, "ARTWORK");
+    this.icon.SetSize(iconSize, iconSize);
+    this.icon.SetPoint("LEFT", frame, "LEFT", space.sm, 0);
+    this.icon.Hide();
+    if (opts.iconSize != null && opts.iconEdge != false) {
+      const edge = frame.CreateTexture(null, "BORDER");
+      edge.SetSize(iconSize + size.border * 2, iconSize + size.border * 2);
+      edge.SetPoint("CENTER", this.icon, "CENTER", 0, 0);
+      edge.Hide();
+      this.iconEdge = edge;
+    }
+    const trailing = opts.trailingWidth;
+    if (trailing != null) {
+      this.EnsureTrailing(trailing);
+    }
+    this.title = CreateLabel(
+      frame,
+      { role: "body", color: "textPrimary", width: 1, wrap: false }
+    );
+    this.detail = CreateLabel(
+      frame,
+      { role: "small", color: "textSecondary", width: 1, wrap: false }
+    );
+    this.value = CreateLabel(
+      frame,
+      { role: "small", color: "textSecondary", justify: "RIGHT", width: 1, wrap: false }
+    );
+    themes.skinLabel(this.title.region, (_theme) => {
+      this.PaintTitle();
+    });
+    frame.SetScript("OnClick", (_self, mouse) => {
+      if (mouse != "LeftButton" && mouse != "RightButton") {
+        return;
+      }
+      const item = this.item;
+      const click = item != null ? item.onClick : null;
+      if (click != null) {
+        click(this, mouse);
+      }
+    });
+    frame.SetScript("OnEnter", () => {
+      this.hovered = true;
+      this.Paint();
+      const item = this.Data();
+      const rich = item.richTooltip;
+      if (rich != null && ShowRichTooltip(frame, (tip, _owner) => rich(tip, this), item.hint)) {
+        this.tooltipShown = true;
+        return;
+      }
+      let lines = this.TooltipLines();
+      if (lines == null && item.hint != null) {
+        lines = [item.title ?? ""];
+      }
+      this.tooltipShown = lines != null && ShowTooltip(frame, lines, item.hint);
+    });
+    frame.SetScript("OnLeave", () => {
+      this.hovered = false;
+      this.Paint();
+      HideTooltip();
+      this.tooltipShown = false;
+    });
+    AttachWindowRaise(frame);
+    themes.skin(frame, (_theme) => {
+      this.Paint();
+    });
+  }
+
+  Data(): ListRowData {
+    const item = this.item;
+    if (item != null) {
+      return item;
+    }
+    const empty: ListRowData = {};
+    return empty;
+  }
+
+  EnsureTrailing(width: number): Frame {
+    const existing = this.trailing;
+    if (existing != null) {
+      existing.SetSize(width, typography.body + space.xs * 2);
+      return existing;
+    }
+    const frame = CreateFrame("Frame", null, this.frame);
+    RegisterOwnedFrame(frame);
+    frame.SetPoint("RIGHT", this.frame, "RIGHT", -space.sm, 0);
+    this.trailing = frame;
+    frame.SetSize(width, typography.body + space.xs * 2);
+    return frame;
+  }
+
+  TooltipLines(): (string | string[]) ? {
+    const source = this.Data().tooltip;
+    let lines: (string | string[])?= null;
+    if (typeof source == "function") {
+      try {
+        lines = source(this);
+      } catch {}
+    } else if (typeof source == "string") {
+      lines = source;
+    } else if (typeof source == "table") {
+      lines = source;
+    }
+    if (typeof lines == "string") {
+      return lines;
+    }
+    if (typeof lines == "table" && lines.length>0) {
+      return lines;
+    }
+    return null;
+  }
+
+  PaintTitleColor(label: Label, fallback: string) {
+    const rgb = this.Data().titleRGB;
+    if (rgb != null) {
+      label.region.SetTextColor(rgb.r, rgb.g ?? rgb.r, rgb.b ?? rgb.r, 1);
+    } else {
+      label.SetColor(fallback);
+    }
+  }
+
+  PaintTitle() {
+    this.PaintTitleColor(this.title, this.Data().titleColor ?? "textPrimary");
+    if (this.cells.length > 0) {
+      const columns = this.opts.columns;
+      const colors = this.Data().columnColors;
+      const token = colors != null ? colors[0] : null;
+      const column = columns != null ? columns[0] : null;
+      this.PaintTitleColor(
+        this.cells[0],
+        token ?? (column != null ? column.color : null) ?? "textPrimary"
+      );
+    }
+  }
+
+  Paint() {
+    SetColor(this.hover, "hover");
+    this.hover.SetShown(this.hovered && this.clickable);
+    const rail = this.Data().rail;
+    if (rail != null) {
+      SetColor(this.rail, rail);
+    }
+    this.selectedEdges.paint(this.Data().selected == true ? "accent" : null);
+    const edge = this.iconEdge;
+    if (edge != null) {
+      SetColor(edge, "borderOuter");
+    }
+    this.PaintTitle();
+    this.detail.SetColor(this.Data().detailColor ?? "textSecondary");
+    this.value.SetColor(this.Data().valueColor ?? "textSecondary");
+    for (let i = 1; i<this.cells.length; i++) {
+      const columns = this.opts.columns;
+      const colors = this.Data().columnColors;
+      const token = colors != null ? colors[i] : null;
+      const column = columns != null ? columns[i] : null;
+      this.cells[i].SetColor(token ?? (column != null ? column.color : null) ?? "textSecondary");
+    }
+  }
+
+  Cell(index: number, spec: RowColumn) : Label {
+    const existing = this.cells[index];
+    if (existing != null) {
+      return existing;
+    }
+    let role: FontRole = "body";
+    const requestedRole = spec.role;
+    if (requestedRole != null) {
+      role = requestedRole;
+    }
+    const cell = CreateLabel(
+      this.frame,
+      { role: role, color: "textSecondary", width: 1, wrap: false }
+    );
+    this.cells.push(cell);
+    this.cellRoles.push(role);
+    if (index == 0) {
+      themes.skinLabel(cell.region, (_theme) => {
+        this.PaintTitle();
+      });
+    }
+    return cell;
+  }
+
+  PaintBar(index: number, value: RowValue?, x: number, width: number) {
+    let fraction: number?= null;
+    let token: string?= null;
+    if (typeof value == "number") {
+      fraction = value;
+    } else if (typeof value == "table") {
+      fraction = value.value;
+      token = value.color;
+    }
+    let bar = this.bars.get(index);
+    if (fraction == null) {
+      if (bar != null) {
+        bar.Hide();
+      }
+      return;
+    }
+    if (bar == null) {
+      bar = new RowBar(this.frame);
+      this.bars.set(index, bar);
+    }
+    bar.fillToken = token ?? "sliderFill";
+    bar.track.ClearAllPoints();
+    bar.track.SetPoint("LEFT", this.frame, "LEFT", x, 0);
+    bar.track.SetWidth(width);
+    SetColor(bar.track, "track");
+    SetColor(bar.fill, bar.fillToken);
+    bar.track.Show();
+    const clamped = Math.clamp(fraction, 0, 1);
+    if (clamped > 0) {
+      bar.fill.ClearAllPoints();
+      bar.fill.SetPoint("LEFT", bar.track, "LEFT", 0, 0);
+      bar.fill.SetWidth(Math.max(1, width * clamped));
+      bar.fill.Show();
+    } else {
+      bar.fill.Hide();
+    }
+  }
+
+  SetIcon(item: ListRowData) {
+    const path = item.icon;
+    let shown = path != null;
+    if (path != null) {
+      try {
+        if (typeof path == "number") {
+          if (this.icon.SetTexture(path) == false) {
+            shown = false;
+          }
+        } else {
+          if (this.icon.SetTexture(path) == false) {
+            shown = false;
+          }
+        }
+      } catch {
+        shown = false;
+      }
+      if (!shown) {
+        const fallback = GetTexture("iconFallback");
+        if (fallback != null) {
+          try {
+            this.icon.SetTexture(fallback);
+            shown = true;
+          } catch {}
+        }
+      }
+    }
+    if (shown) {
+      const coords = item.iconCoords ?? list.ROW_ICON_COORDS;
+      try {
+        this.icon.SetTexCoord(coords[0], coords[1], coords[2], coords[3]);
+      } catch {} try {
+        this.icon.SetDesaturated(item.iconDesaturated == true);
+      } catch {}
+    }
+    this.icon.SetShown(shown);
+    const edge = this.iconEdge;
+    if (edge != null) {
+      edge.SetShown(shown);
+    }
+  }
+
+  SetData(data: ListRowData?= null): number {
+    const empty: ListRowData = {};
+    const item = data ?? empty;
+    this.item = item;
+    this.clickable = item.onClick != null;
+    this.frame.EnableMouse(this.clickable || item.tooltip != null || item.hint != null || item.richTooltip != null);
+    const width = readable(this.frame.GetWidth()) ?? 0;
+    const iconSize = this.opts.iconSize ?? list.ROW_ICON_SIZE;
+    const hasIcon = this.opts.iconSize != null || item.icon != null;
+    let trailingWidth = this.opts.trailingWidth;
+    if (item.trailing == false) {
+      trailingWidth = null;
+    } else if (item.trailingWidth != null) {
+      trailingWidth = item.trailingWidth;
+    }
+    if (trailingWidth != null) {
+      this.EnsureTrailing(trailingWidth).Show();
+    } else {
+      const trailing = this.trailing;
+      if (trailing != null) {
+        trailing.Hide();
+      }
+    }
+    const lane = ListRowLane(
+      width,
+      { iconSize: hasIcon ? iconSize : null, trailingWidth: trailingWidth }
+    );
+    const right = width - lane.left - lane.width;
+    const specs = this.opts.columns;
+    const values = item.columns;
+    const useColumns = specs != null && values != null;
+    let hasDetail = item.detail != null && item.detail != "";
+    if (useColumns) {
+      hasDetail = false;
+    }
+    const value = useColumns ? "" : item.value ?? "";
+    this.value.region.SetText(value);
+    let valueWidth = 0;
+    if (value != "") {
+      valueWidth = Math.min(
+        Math.floor(width / 3),
+        (readable(this.value.region.GetStringWidth()) ?? 0) + space.xs
+      );
+      this.value.region.SetWidth(Math.max(1, valueWidth));
+      this.value.region.Show();
+    } else {
+      this.value.region.Hide();
+    }
+    let titleHeight = typography.body;
+    let detailHeight = typography.small;
+    const columnSpecs: ColumnSpec[] = [];
+    if (specs != null) {
+      for (const spec of specs) {
+        columnSpecs.push({ width: spec.width, weight: spec.weight, justify: spec.justify });
+      }
+    }
+    const geometry = ColumnLayout(columnSpecs, lane.width, this.opts.columnGap);
+    for (const [index, bar] of this.bars) {
+      bar.Hide();
+    }
+    if (useColumns && specs != null && values != null) {
+      this.title.region.SetText("");
+      this.title.region.Hide();
+      for (let i = 0; i<geometry.length; i++) {
+        const spec = specs[i];
+        const cell = this.Cell(i, spec);
+        const g = geometry[i];
+        if (spec.bar == true) {
+          cell.region.SetText("");
+          cell.region.Hide();
+        } else {
+          let role: FontRole = "body";
+          const requestedRole = spec.role;
+          if (requestedRole != null) {
+            role = requestedRole;
+          }
+          if (this.cellRoles[i] != role) {
+            this.cellRoles[i] = role;
+            cell.region.SetFontObject(fonts.get(role));
+          }
+          cell.region.SetWidth(g.width);
+          cell.region.SetJustifyH(g.justify);
+          cell.region.SetText(rowText(values[i]));
+          cell.region.Show();
+        }
+      }
+      for (let i = geometry.length; i<this.cells.length; i++) {
+        this.cells[i].region.Hide();
+      }
+    } else {
+      for (const cell of this.cells) {
+        cell.region.Hide();
+      }
+      const textWidth = Math.max(1, lane.width - (valueWidth>0 ? valueWidth + space.sm : 0));
+      this.title.region.SetWidth(textWidth);
+      this.title.region.SetWordWrap(item.wrap == true);
+      this.title.region.SetText(item.title ?? "");
+      if (item.wrap == true) {
+        titleHeight = Math.max(
+          typography.body,
+          readable(this.title.region.GetStringHeight()) ?? typography.body
+        );
+      }
+      this.title.region.Show();
+      if (hasDetail) {
+        this.detail.region.SetWidth(textWidth);
+        this.detail.region.SetWordWrap(item.wrapDetail == true);
+        this.detail.region.SetText(item.detail ?? "");
+        if (item.wrapDetail == true) {
+          detailHeight = Math.max(
+            typography.small,
+            readable(this.detail.region.GetStringHeight()) ?? typography.small
+          );
+        }
+        this.detail.region.Show();
+      }
+    }
+    if (!hasDetail) {
+      this.detail.region.SetText("");
+      this.detail.region.Hide();
+    }
+    const textBlock = titleHeight + (hasDetail ? detailHeight + 2 : 0);
+    let height = textBlock + space.xs * 2;
+    if (hasIcon) {
+      height = Math.max(height, iconSize + space.xs);
+    }
+    const minimum = item.minHeight ?? this.opts.minHeight;
+    if (minimum != null) {
+      height = Math.max(height, minimum);
+    }
+    const top = Math.floor((height - textBlock) / 2);
+    if (value != "") {
+      this.value.region.ClearAllPoints();
+      this.value.region.SetPoint("TOPRIGHT", this.frame, "TOPRIGHT", -right, -top - 1);
+    }
+    if (useColumns && specs != null && values != null) {
+      for (let i = 0; i<geometry.length; i++) {
+        const g = geometry[i];
+        if (specs[i].bar == true) {
+          this.PaintBar(i, values[i], lane.left + g.x, g.width);
+        } else {
+          const cell = this.cells[i];
+          cell.region.ClearAllPoints();
+          cell.region.SetPoint("TOPLEFT", this.frame, "TOPLEFT", lane.left + g.x, -top);
+        }
+      }
+    } else {
+      this.title.region.ClearAllPoints();
+      this.title.region.SetPoint("TOPLEFT", this.frame, "TOPLEFT", lane.left, -top);
+      if (hasDetail) {
+        this.detail.region.ClearAllPoints();
+        this.detail.region.SetPoint("TOPLEFT", this.title.region, "BOTTOMLEFT", 0, -2);
+      }
+    }
+    this.SetIcon(item);
+    const trailing = this.trailing;
+    if (trailing != null) {
+      trailing.SetHeight(height);
+    }
+    this.rail.SetShown(item.rail != null);
+    this.frame.SetHeight(height);
+    this.Paint();
+    return height;
+  }
+}
+
+export function CreateListRow(parent: Frame, opts: ListRowOptions?= null): ListRow {
+  if (opts == null) {
+    const defaults: ListRowOptions = {};
+    return new ListRow(parent, defaults);
+  }
+  return new ListRow(parent, opts);
+}

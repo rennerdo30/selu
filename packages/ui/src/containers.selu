@@ -1,0 +1,96 @@
+import { RegisterOwnedFrame } from "./stacking";
+import { CreateLabel, Label } from "./text";
+import { Backdrop } from "./backdrop";
+import { space, typography } from "./tokens";
+
+export type SectionOptions = {
+  padding?: number;
+  width?: number;
+  height?: number;
+  anchor?: boolean;
+  title?: string;
+  description?: string
+};
+
+export class Section {
+  frame: Frame;
+  title: Label;
+  description: Label;
+
+  constructor(parent: Frame, opts: SectionOptions) {
+    const padding = opts.padding ?? space.md;
+    const width = opts.width ?? ((readable(parent.GetWidth()) ?? 0) - padding * 2);
+    const height = opts.height ?? ((readable(parent.GetHeight()) ?? 0) - padding * 2);
+    const frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    frame.SetSize(width, height);
+    if (opts.anchor != false) {
+      frame.SetPoint("TOPLEFT", padding, -padding);
+    }
+    this.title = CreateLabel(
+      frame,
+      { text: opts.title ?? "", role: "heading", color: "textTitle" }
+    );
+    this.title.region.SetPoint("TOPLEFT");
+    this.description = CreateLabel(
+      frame,
+      {
+        text: opts.description ?? "",
+        role: "small",
+        color: "textSecondary",
+        width: width,
+        wrap: true
+      }
+    );
+    this.description.region.SetPoint("TOPLEFT", this.title.region, "BOTTOMLEFT", 0, -space.sm);
+  }
+}
+
+export function CreateSection(parent: Frame, opts: SectionOptions?= null): Section {
+  if (opts == null) {
+    const defaults: SectionOptions = {};
+    return new Section(parent, defaults);
+  }
+  return new Section(parent, opts);
+}
+
+export type CardOptions = {
+  height: number;
+  width?: number;
+  padding?: number;
+  title?: string
+};
+
+export class Card {
+  frame: Frame;
+  body: Frame;
+  title: Label?= null;
+
+  constructor(parent: Frame, opts: CardOptions) {
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    const padding = opts.padding ?? space.md;
+    const frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    frame.SetSize(width, opts.height);
+    Backdrop(frame, { style: "inset" });
+    let top = padding;
+    const title = opts.title;
+    if (title != null) {
+      const label = CreateLabel(frame, { text: title, role: "heading", color: "textTitle" });
+      this.title = label;
+      label.region.SetPoint("TOPLEFT", padding, -padding);
+      top = padding + typography.heading + space.md;
+    }
+    const body = CreateFrame("Frame", null, frame);
+    RegisterOwnedFrame(body);
+    this.body = body;
+    body.SetPoint("TOPLEFT", padding, -top);
+    body.SetSize(width - padding * 2, opts.height - top - padding);
+  }
+}
+
+export function CreateCard(parent: Frame, opts: CardOptions): Card {
+  return new Card(parent, opts);
+}

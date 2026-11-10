@@ -1,0 +1,315 @@
+import { CreateListRow, ListRow, ListRowData } from "./list-row";
+import { CreateLabel, Label } from "./text";
+import { Backdrop } from "./backdrop";
+import { themes, SetColor } from "./theme";
+import { space, size, typography, list, popup } from "./tokens";
+import { RegisterOwnedFrame } from "./stacking";
+import { HideTooltip } from "./tooltip";
+
+export type PopupOptions = {
+  name?: string;
+  width?: number;
+  onHide?: (menu: PopupMenu) => void
+};
+
+export type PopupItem = ListRowData;
+
+export type PopupSection = {
+  divider: Texture;
+  label: Label
+};
+
+function copyRow(
+  item: ListRowData,
+  click: ((row: ListRow, mouse: string?) => void)?
+): ListRowData {
+  return {
+    title: item.title,
+    detail: item.detail,
+    value: item.value,
+    rail: item.rail,
+    titleColor: item.titleColor,
+    detailColor: item.detailColor,
+    valueColor: item.valueColor,
+    titleRGB: item.titleRGB,
+    icon: item.icon,
+    iconCoords: item.iconCoords,
+    iconDesaturated: item.iconDesaturated,
+    columns: item.columns,
+    columnColors: item.columnColors,
+    selected: item.selected,
+    minHeight: item.minHeight,
+    wrap: item.wrap,
+    wrapDetail: item.wrapDetail,
+    trailingWidth: item.trailingWidth,
+    trailing: item.trailing,
+    hint: item.hint,
+    tooltip: item.tooltip,
+    richTooltip: item.richTooltip,
+    onClick: click
+  };
+}
+
+export class PopupMenu {
+  frame: Frame;
+  catcher: Button;
+  rows: ListRow[] = [];
+  sections: PopupSection[] = [];
+  rowCount = 0;
+  side = "";
+  anchor: Frame?= null;
+  owner: Frame?= null;
+  opts: PopupOptions;
+  width: number;
+
+  constructor(opts: PopupOptions) {
+    this.opts = opts;
+    this.width = opts.width ?? popup.WIDTH;
+    this.catcher = CreateFrame("Button", null, UIParent);
+    RegisterOwnedFrame(this.catcher);
+    this.catcher.SetAllPoints(UIParent);
+    this.catcher.SetFrameStrata(popup.STRATA);
+    this.catcher.SetFrameLevel(popup.CATCHER_LEVEL);
+    this.catcher.EnableMouse(true);
+    this.catcher.RegisterForClicks("AnyUp");
+    this.catcher.Hide();
+    this.frame = CreateFrame("Frame", opts.name ?? null, UIParent);
+    RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(this.width, space.xs * 2);
+    this.frame.SetFrameStrata(popup.STRATA);
+    this.frame.SetFrameLevel(popup.MENU_LEVEL);
+    this.frame.SetClampedToScreen(true);
+    this.frame.EnableMouse(true);
+    const base = this.frame.CreateTexture(null, "BACKGROUND", null, -8);
+    base.SetAllPoints(this.frame);
+    themes.skinTexture(base, (_theme) => {
+      SetColor(base, "surface");
+    });
+    Backdrop(this.frame, { style: "inset" });
+    this.frame.Hide();
+    const name = opts.name;
+    if (name != null) {
+      tinsert(UISpecialFrames, name);
+    }
+    this.frame.SetScript("OnHide", () => {
+      this.catcher.Hide();
+      for (const row of this.rows) {
+        if (row.hovered) {
+          row.hovered = false;
+          row.Paint();
+          HideTooltip();
+        }
+      }
+      const hide = this.opts.onHide;
+      if (hide != null) {
+        hide(this);
+      }
+    });
+    this.catcher.SetScript("OnClick", () => {
+      this.Close();
+    });
+  }
+
+  NewSection(): PopupSection {
+    const divider = this.frame.CreateTexture(null, "ARTWORK");
+    divider.SetHeight(size.separator);
+    const label = CreateLabel(
+      this.frame,
+      {
+        role: "small",
+        color: "textSecondary",
+        width: this.width - space.xs * 2 - space.sm * 2,
+        wrap: false
+      }
+    );
+    divider.Hide();
+    label.region.Hide();
+    themes.skinTexture(divider, (_theme) => {
+      SetColor(divider, "divider");
+    });
+    const section: PopupSection = { divider: divider, label: label };
+    this.sections.push(section);
+    return section;
+  }
+
+  SetItems(items: PopupItem[]?= null): number {
+    for (const row of this.rows) {
+      row.frame.Hide();
+    }
+    for (const section of this.sections) {
+      section.divider.Hide();
+      section.label.region.Hide();
+    }
+    const visible: PopupItem[] = [];
+    let pending: PopupItem?= null;
+    if (items != null) {
+      for (const item of items) {
+        if (item.section != null) {
+          pending = item;
+        } else {
+          if (pending != null) {
+            visible.push(pending);
+            pending = null;
+          }
+          visible.push(item);
+        }
+      }
+    }
+    let y = space.xs;
+    let rowCount = 0;
+    let sectionCount = 0;
+    for (const item of visible) {
+      const text = item.section;
+      if (text != null) {
+        let section = this.sections[sectionCount];
+        if (section == null) {
+          section = this.NewSection();
+        }
+        sectionCount += 1;
+        if (rowCount>0) {
+          y += space.xs;
+          section.divider.ClearAllPoints();
+          section.divider.SetPoint("TOPLEFT", this.frame, "TOPLEFT", space.sm, -y);
+          section.divider.SetWidth(this.width - space.sm * 2);
+          SetColor(section.divider, "divider");
+          section.divider.Show();
+          y += size.separator + space.xs;
+        }
+        if (text != "") {
+          section.label.region.SetText(text);
+          section.label.region.ClearAllPoints();
+          section.label.region.SetPoint(
+            "TOPLEFT",
+            this.frame,
+            "TOPLEFT",
+            space.xs + space.sm,
+            -(y + space.xs)
+          );
+          section.label.region.Show();
+          y += popup.SECTION_HEIGHT;
+        }
+      } else {
+        let row = this.rows[rowCount];
+        if (row == null) {
+          row = CreateListRow(
+            this.frame,
+            { width: this.width - space.xs * 2, iconSize: list.ROW_ICON_SIZE, iconEdge: false }
+          );
+          this.rows.push(row);
+        }
+        rowCount += 1;
+        const click = item.onClick;
+        let action: ((row: ListRow, mouse: string?) => void)?= null;
+        if (click != null) {
+          action = (clicked, mouse) => {
+            this.Close();
+            click(clicked, mouse);
+          };
+        }
+        row.frame.ClearAllPoints();
+        row.frame.SetPoint("TOPLEFT", this.frame, "TOPLEFT", space.xs, -y);
+        y += row.SetData(copyRow(item, action));
+        row.frame.Show();
+      }
+    }
+    y += space.xs;
+    this.frame.SetHeight(y);
+    this.rowCount = rowCount;
+    return y;
+  }
+
+  Place(anchor: Frame?= null, placement: string?= null) {
+    this.frame.ClearAllPoints();
+    const screenW = readable(UIParent.GetWidth());
+    const screenH = readable(UIParent.GetHeight());
+    if (anchor == null || screenW == null || screenH == null) {
+      this.frame.SetPoint("CENTER", UIParent, "CENTER", 0, 0);
+      return;
+    }
+    const leftValue = readable(anchor.GetLeft());
+    const rightValue = readable(anchor.GetRight());
+    const topValue = readable(anchor.GetTop());
+    const bottomValue = readable(anchor.GetBottom());
+    if (leftValue == null || rightValue == null || topValue == null || bottomValue == null) {
+      this.frame.SetPoint("CENTER", UIParent, "CENTER", 0, 0);
+      return;
+    }
+    const aScale = readable(anchor.GetEffectiveScale());
+    const pScale = readable(UIParent.GetEffectiveScale());
+    let ratio = 1;
+    if (aScale != null && pScale != null && aScale>0 && pScale>0) {
+      ratio = aScale / pScale;
+    }
+    const left = leftValue * ratio;
+    const right = rightValue * ratio;
+    const top = topValue * ratio;
+    const bottom = bottomValue * ratio;
+    const width = readable(this.frame.GetWidth()) ?? 0;
+    const height = readable(this.frame.GetHeight()) ?? 0;
+    let x = 0;
+    let y = 0;
+    if (placement == "below") {
+      x = Math.clamp(left, popup.MARGIN, Math.max(popup.MARGIN, screenW - popup.MARGIN - width));
+      y = bottom - popup.GAP;
+      this.side = "BELOW";
+      if (y - height<popup.MARGIN) {
+        y = top + popup.GAP + height;
+        this.side = "ABOVE";
+      }
+    } else {
+      if ((left + right) / 2>screenW / 2) {
+        x = left - popup.GAP - width;
+        this.side = "LEFT";
+      } else {
+        x = right + popup.GAP;
+        this.side = "RIGHT";
+      }
+      y = (top + bottom) / 2>screenH / 2 ? top : bottom + height;
+      x = Math.clamp(x, popup.MARGIN, Math.max(popup.MARGIN, screenW - popup.MARGIN - width));
+    }
+    y = Math.clamp(
+      y,
+      Math.min(screenH - popup.MARGIN, height + popup.MARGIN),
+      screenH - popup.MARGIN
+    );
+    this.frame.SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x, y);
+  }
+
+  Open(anchor: Frame?= null, items: PopupItem[]?= null, placement: string?= null) {
+    if (items != null) {
+      this.SetItems(items);
+    }
+    this.anchor = anchor;
+    this.Place(anchor, placement);
+    this.catcher.Show();
+    this.frame.Show();
+  }
+
+  Close() {
+    if (readable(this.frame.IsShown()) == true) {
+      this.frame.Hide();
+    } else {
+      this.catcher.Hide();
+    }
+  }
+
+  IsOpen(): boolean {
+    return readable(this.frame.IsShown()) == true;
+  }
+
+  Toggle(anchor: Frame?= null, items: PopupItem[]?= null, placement: string?= null) {
+    if (this.IsOpen()) {
+      this.Close();
+    } else {
+      this.Open(anchor, items, placement);
+    }
+  }
+}
+
+export function CreatePopupMenu(opts: PopupOptions?= null): PopupMenu {
+  if (opts == null) {
+    const defaults: PopupOptions = {};
+    return new PopupMenu(defaults);
+  }
+  return new PopupMenu(opts);
+}

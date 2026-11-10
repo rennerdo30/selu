@@ -1,0 +1,201 @@
+import { RegisterOwnedFrame } from "./stacking";
+import { assets } from "./materials";
+import { Backdrop, BackdropView } from "./backdrop";
+import { CreateLabel, Label } from "./text";
+import { themes, SetColor } from "./theme";
+import { size, space } from "./tokens";
+import { InputState } from "./input";
+import { AttachWindowRaise } from "./stacking";
+
+export type CheckboxOptions = {
+  get?: () => boolean ?;
+  set?: () => void;
+  onChange?: (checked: boolean?) => void
+};
+
+export class Checkbox {
+  frame: Button;
+  input: InputState;
+  face: Texture?= null;
+  mark: Texture?= null;
+  fill: Texture?= null;
+  backdrop: BackdropView?= null;
+  opts: CheckboxOptions;
+
+  constructor(parent: Frame, opts: CheckboxOptions) {
+    this.opts = opts;
+    const box = CreateFrame("Button", null, parent);
+    RegisterOwnedFrame(box);
+    this.frame = box;
+    box.SetSize(size.checkbox, size.checkbox);
+    this.input = new InputState(box, (enabled) => {
+      if (enabled) {
+        box.Enable();
+      } else {
+        box.Disable();
+      }
+      }, () => {}, () => {
+        this.Refresh();
+    });
+    const up = assets.texture("checkUp");
+    const markPath = assets.texture("checkMark");
+    if (up != null && markPath != null) {
+      const down = assets.texture("checkDown") ?? up;
+      const face = box.CreateTexture(null, "ARTWORK");
+      this.face = face;
+      face.SetAllPoints();
+      face.SetTexture(up);
+      const mark = box.CreateTexture(null, "OVERLAY");
+      this.mark = mark;
+      mark.SetAllPoints();
+      mark.SetTexture(markPath);
+      mark.Hide();
+      const highlight = assets.texture("checkHighlight");
+      if (highlight != null) {
+        const glow = box.CreateTexture(null, "HIGHLIGHT");
+        glow.SetAllPoints();
+        glow.SetTexture(highlight);
+        glow.SetBlendMode("ADD");
+      }
+      box.SetScript("OnMouseDown", () => {
+        if (this.input.enabled) {
+          face.SetTexture(down);
+        }
+      });
+      box.SetScript("OnMouseUp", () => {
+        face.SetTexture(up);
+      });
+    } else {
+      this.backdrop = Backdrop(
+        box,
+        { bg: "surfaceRaised", border: "borderControl", inset: size.checkboxFlatInset }
+      );
+      const fill = box.CreateTexture(null, "OVERLAY");
+      this.fill = fill;
+      const inset = size.checkboxFlatInset + size.checkboxInset;
+      fill.SetPoint("TOPLEFT", inset, -inset);
+      fill.SetPoint("BOTTOMRIGHT", -inset, inset);
+      fill.Hide();
+    }
+    box.SetScript("OnClick", () => {
+      this.Click();
+    });
+    box.SetScript("OnEnter", () => {
+      if (!this.input.enabled) {
+        return;
+      }
+      this.input.hovered = true;
+      this.Refresh();
+    });
+    box.SetScript("OnLeave", () => {
+      this.input.hovered = false;
+      this.Refresh();
+    });
+    AttachWindowRaise(box);
+    themes.skin(box, (_theme) => {
+      this.Refresh();
+    });
+  }
+
+  Click() {
+    if (!this.input.enabled) {
+      return;
+    }
+    const set = this.opts.set;
+    if (set != null) {
+      set();
+    }
+    this.Refresh();
+    const change = this.opts.onChange;
+    const get = this.opts.get;
+    if (change != null) {
+      change(get != null ? get() : null);
+    }
+  }
+
+  Refresh() {
+    const get = this.opts.get;
+    const checked = get != null && get() == true;
+    const mark = this.mark;
+    const face = this.face;
+    const enabled = this.input.enabled;
+    if (mark != null && face != null) {
+      mark.SetShown(checked);
+      const c = themes.color(enabled ? "checkTint" : "textDisabled");
+      face.SetVertexColor(c.r, c.g, c.b, c.a);
+      const m = themes.color(enabled ? "checkMarkTint" : "textDisabled");
+      mark.SetVertexColor(m.r, m.g, m.b, m.a);
+    } else {
+      const fill = this.fill;
+      if (fill != null) {
+        fill.SetShown(checked);
+        SetColor(fill, enabled ? "accent" : "textDisabled");
+      }
+      const backdrop = this.backdrop;
+      if (backdrop != null) {
+        backdrop.SetColors(
+          "surfaceRaised",
+          !enabled ? "divider" : checked ? "accent" : this.input.hovered ? "accentHover" : "borderControl"
+        );
+      }
+    }
+  }
+
+  SetEnabled(enabled: boolean = true) {
+    this.input.SetEnabled(enabled);
+  }
+}
+
+export function CreateCheckbox(parent: Frame, opts: CheckboxOptions): Checkbox {
+  return new Checkbox(parent, opts);
+}
+
+export type ToggleOptions = {
+  label?: string;
+  width?: number;
+  get?: () => boolean ?;
+  set?: () => void;
+  onChange?: (checked: boolean?) => void
+};
+
+export class ToggleRow {
+  frame: Frame;
+  label: Label;
+  checkbox: Checkbox;
+  enabled = true;
+
+  constructor(parent: Frame, opts: ToggleOptions) {
+    const frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    frame.SetSize(width, size.controlHeightSmall);
+    this.label = CreateLabel(
+      frame,
+      { text: opts.label ?? "", role: "body", color: "textPrimary" }
+    );
+    this.label.region.SetPoint("LEFT");
+    this.label.region.SetWidth(Math.max(1, width - size.checkbox - space.sm));
+    this.label.region.SetWordWrap(false);
+    this.checkbox = CreateCheckbox(
+      frame,
+      { get: opts.get, set: opts.set, onChange: opts.onChange }
+    );
+    this.checkbox.frame.SetPoint("RIGHT");
+  }
+
+  Refresh() {
+    this.checkbox.Refresh();
+    this.label.SetColor(this.enabled ? "textPrimary" : "textDisabled");
+  }
+
+  SetEnabled(enabled: boolean = true) {
+    this.enabled = enabled;
+    this.checkbox.SetEnabled(enabled);
+    this.Refresh();
+  }
+}
+
+export function CreateToggleRow(parent: Frame, opts: ToggleOptions): ToggleRow {
+  return new ToggleRow(parent, opts);
+}

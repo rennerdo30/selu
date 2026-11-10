@@ -1,0 +1,82 @@
+import { CreateLabel, Label } from "./text";
+import { CreateSlider, SliderControl } from "./slider";
+import { RoundToStep } from "./theme";
+import { size } from "./tokens";
+
+export type SliderRowOptions = {
+  label?: string;
+  width?: number;
+  min: number;
+  max: number;
+  step?: number;
+  get?: () => number ?;
+  set?: (value: number) => void;
+  format?: (value: number) => string
+};
+
+export class SliderRow {
+  frame: Frame;
+  label: Label;
+  value: Label;
+  slider: SliderControl;
+  enabled = true;
+  opts: SliderRowOptions;
+
+  constructor(parent: Frame, opts: SliderRowOptions) {
+    this.opts = opts;
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    const frame = CreateFrame("Frame", null, parent);
+    this.frame = frame;
+    frame.SetSize(width, size.sliderRowHeight);
+    this.label = CreateLabel(
+      frame,
+      { text: opts.label ?? "", role: "body", color: "textPrimary" }
+    );
+    this.label.region.SetPoint("TOPLEFT");
+    this.value = CreateLabel(
+      frame,
+      { text: "", role: "body", color: "accent", justify: "RIGHT" }
+    );
+    this.value.region.SetPoint("TOPRIGHT");
+    this.slider = CreateSlider(frame, {
+      min: opts.min, max: opts.max, step: opts.step, width: width - size.sliderInset * 2, onChange: (value) => {
+        const set = this.opts.set;
+        if (set != null) {
+          set(value);
+        }
+        this.value.region.SetText(this.Format(value));
+      }
+    });
+    this.slider.frame.SetPoint("BOTTOMLEFT", size.sliderInset, 0);
+  }
+
+  Format(value: number): string {
+    const format = this.opts.format;
+    return format != null ? format(value) : `${value}`;
+  }
+
+  Refresh() {
+    const get = this.opts.get;
+    if (get == null) {
+      return;
+    }
+    const value = get();
+    if (value == null) {
+      return;
+    }
+    this.slider.SetValueSilent(value);
+    this.value.region.SetText(this.Format(RoundToStep(value, this.opts.step ?? 1)));
+    this.label.SetColor(this.enabled ? "textPrimary" : "textDisabled");
+    this.value.SetColor(this.enabled ? "accent" : "textDisabled");
+  }
+
+  SetEnabled(enabled: boolean = true) {
+    this.enabled = enabled;
+    this.slider.SetEnabled(enabled);
+    this.Refresh();
+  }
+}
+
+export function CreateSliderRow(parent: Frame, opts: SliderRowOptions): SliderRow {
+  return new SliderRow(parent, opts);
+}

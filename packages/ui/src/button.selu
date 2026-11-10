@@ -1,0 +1,519 @@
+import { RegisterOwnedFrame } from "./stacking";
+import { Backdrop, BackdropView } from "./backdrop";
+import { CreateLabel, Label } from "./text";
+import { themes } from "./theme";
+import { size, space } from "./tokens";
+import { InputState } from "./input";
+import { AttachWindowRaise } from "./stacking";
+import { MeasureText, ShowTooltip, HideTooltip } from "./tooltip";
+export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+
+type Variant = {
+  bg: string ?;
+  bgHover : string;
+  bgPressed: string;
+  border: string ?;
+  borderHover : string ?;
+  text : string;
+  textHover: string
+};
+
+function variant(name: ButtonVariant): Variant {
+  if (name == "secondary") {
+    return {
+      bg: "surfaceRaised",
+      bgHover: "surfaceRaised",
+      bgPressed: "surface",
+      border: "borderControl",
+      borderHover: "accent",
+      text: "textPrimary",
+      textHover: "textPrimary"
+    };
+  }
+  if (name == "ghost") {
+    return {
+      bg: null,
+      bgHover: "hover",
+      bgPressed: "selected",
+      border: null,
+      borderHover: null,
+      text: "textSecondary",
+      textHover: "textPrimary"
+    };
+  }
+  if (name == "danger") {
+    return {
+      bg: "surfaceRaised",
+      bgHover: "surfaceRaised",
+      bgPressed: "surface",
+      border: "borderControl",
+      borderHover: "danger",
+      text: "danger",
+      textHover: "danger"
+    };
+  }
+  return {
+    bg: "surfaceRaised",
+    bgHover: "selected",
+    bgPressed: "surface",
+    border: "accent",
+    borderHover: "accentHover",
+    text: "accent",
+    textHover: "accentHover"
+  };
+}
+
+export type TooltipValue = string | string[];
+export type TooltipSource = TooltipValue | ((button: ButtonControl) => TooltipValue?);
+export type TextSource = string | ((button: ButtonControl) => string?);
+
+function text(source: TextSource?, button: ButtonControl): string ? {
+  if (typeof source == "function") {
+    try {
+      return source(button);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof source == "string") {
+    return source;
+  }
+  return null;
+}
+
+function lines(source: TooltipSource?, button: ButtonControl) : string[] ? {
+  let value: TooltipValue?= null;
+  if (typeof source == "function") {
+    try {
+      value = source(button);
+    } catch {
+      return null;
+    }
+  } else {
+    value = source;
+  }
+  if (typeof value == "string") {
+    return [value];
+  }
+  if (value == null || value.length == 0) {
+    return null;
+  }
+  return value;
+}
+
+export type ButtonOptions = {
+  text?: string;
+  width?: number;
+  maxWidth?: number;
+  height?: number;
+  variant?: ButtonVariant;
+  onClick?: (button: ButtonControl, mouse: string?) => void;
+  tooltip?: TooltipSource;
+  hint?: TextSource;
+  disabledTooltip?: TooltipSource;
+  confirm?: ConfirmOptions
+};
+
+export type ConfirmFooter = {
+  Layout: () => void;
+  Flash: (text: string, seconds: number, tone: string) => void;
+  ClearFlash: () => void;
+  IsFlashing: () => boolean
+};
+
+export type ConfirmOptions = {
+  confirmText?: TextSource;
+  text?: TextSource;
+  seconds?: number;
+  onConfirm?: (button: ButtonControl, mouse: string?) => void;
+  onArm?: (button: ButtonControl) => void;
+  onDisarm?: (button: ButtonControl, reason: string) => void;
+  footer?: ConfirmFooter;
+  prompt?: TextSource;
+  promptTone?: string;
+  resetOn?: Frame[]
+};
+
+export class ButtonControl {
+  frame: Button;
+  label: Label;
+  input: InputState;
+  backdrop: BackdropView;
+  variant: ButtonVariant;
+  spec: Variant;
+  autoWidth: boolean;
+  maxWidth: number ?;
+  labelExtra = 0;
+  truncated = false;
+  labelBounded = false;
+  armed = false;
+  confirm : ConfirmController?= null;
+  tooltip: TooltipSource ?;
+  hint : TextSource ?;
+  disabledTooltip : TooltipSource ?;
+  tooltipShown = false;
+  onClickAction : ((button: ButtonControl, mouse: string?) => void) ?;
+
+  constructor(parent: Frame, opts: ButtonOptions) {
+    const frame = CreateFrame("Button", null, parent);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    const requested = opts.variant;
+    if (requested != null) {
+      this.variant = requested;
+    } else {
+      this.variant = "primary";
+    }
+    const spec = variant(this.variant);
+    this.spec = spec;
+    this.tooltip = opts.tooltip;
+    this.hint = opts.hint;
+    this.disabledTooltip = opts.disabledTooltip;
+    this.maxWidth = opts.maxWidth;
+    this.onClickAction = opts.onClick;
+    let background: string | boolean = false;
+    const initialBg = spec.bg;
+    if (initialBg != null) {
+      background = initialBg;
+    }
+    let edge: string | boolean = false;
+    const initialEdge = spec.border;
+    if (initialEdge != null) {
+      edge = initialEdge;
+    }
+    this.backdrop = Backdrop(frame, { bg: background, border: edge });
+    const height = opts.height ?? size.controlHeight;
+    if (height <= size.controlHeightSmall) {
+      this.label = CreateLabel(
+        frame,
+        {
+          text: opts.text ?? "",
+          role: "small",
+          color: spec.text,
+          layer: "OVERLAY",
+          justify: "CENTER"
+        }
+      );
+    } else {
+      this.label = CreateLabel(
+        frame,
+        {
+          text: opts.text ?? "",
+          role: "body",
+          color: spec.text,
+          layer: "OVERLAY",
+          justify: "CENTER"
+        }
+      );
+    }
+    this.label.region.SetPoint("CENTER");
+    this.autoWidth = opts.width == null;
+    frame.SetSize(
+      opts.width ?? (MeasureText(this.label.region) + size.buttonPaddingX * 2),
+      height
+    );
+    this.input = new InputState(frame, (enabled) => {
+      if (enabled) {
+        frame.Enable();
+      } else {
+        frame.Disable();
+      }
+      }, () => {}, () => {
+        this.Refresh();
+    });
+    frame.SetScript("OnEnter", () => {
+      if (this.input.enabled) {
+        this.input.hovered = true;
+        this.Refresh();
+      }
+      const value = this.TooltipLines();
+      this.tooltipShown = value.lines != null && ShowTooltip(
+        frame,
+        value.lines,
+        value.hint
+      );
+    });
+    frame.SetScript("OnLeave", () => {
+      this.input.hovered = false;
+      this.input.pressed = false;
+      this.Refresh();
+      if (this.tooltipShown) {
+        this.tooltipShown = false;
+        HideTooltip();
+      }
+    });
+    frame.SetScript("OnMouseDown", () => {
+      if (this.input.enabled) {
+        this.input.pressed = true;
+        this.Refresh();
+      }
+    });
+    frame.SetScript("OnMouseUp", () => {
+      this.input.pressed = false;
+      this.Refresh();
+    });
+    frame.SetScript("OnClick", (_self, mouse) => {
+      this.Click(typeof mouse == "string" ? mouse : null);
+    });
+    AttachWindowRaise(frame);
+    this.FitLabel();
+    const confirm = opts.confirm;
+    if (confirm != null) {
+      this.confirm = new ConfirmController(this, confirm);
+    }
+    themes.skin(frame, (_theme) => {
+      this.Refresh();
+    });
+  }
+
+  FitLabel() {
+    const natural = MeasureText(this.label.region);
+    const extra = this.labelExtra;
+    let width = readable(this.frame.GetWidth()) ?? 0;
+    if (this.autoWidth) {
+      width = natural + size.buttonPaddingX * 2 + extra;
+      const max = this.maxWidth;
+      if (max != null && width>max) {
+        width = max;
+      }
+      this.frame.SetWidth(width);
+    }
+    if (extra>0) {
+      this.label.region.ClearAllPoints();
+      this.label.region.SetPoint("CENTER", this.frame, "CENTER", -extra / 2, 0);
+    }
+    const room = Math.max(1, width - space.sm * 2 - extra);
+    this.truncated = natural>room + 0.5;
+    if (this.truncated || !this.autoWidth) {
+      this.label.region.SetWidth(room);
+      this.label.region.SetWordWrap(false);
+      this.labelBounded = true;
+    } else if (this.labelBounded) {
+      this.label.region.SetWidth(0);
+      this.labelBounded = false;
+    }
+  }
+
+  IsTruncated() : boolean {
+    return this.truncated;
+  }
+
+  Refresh() {
+    const spec = this.spec;
+    const enabled = this.input.enabled;
+    let bg = spec.bg;
+    let border = spec.border;
+    let ink = spec.text;
+    if (!enabled) {
+      border = "divider";
+      ink = "textDisabled";
+    } else if (this.input.pressed) {
+      bg = spec.bgPressed;
+      border = spec.borderHover;
+      ink = spec.textHover;
+    } else if (this.input.hovered) {
+      bg = spec.bgHover;
+      border = spec.borderHover;
+      ink = spec.textHover;
+    }
+    this.backdrop.bgToken = bg;
+    this.backdrop.borderToken = border;
+    this.backdrop.Apply();
+    this.label.SetColor(ink);
+  }
+
+  SetText(value: string) {
+    this.label.region.SetText(value);
+    this.FitLabel();
+  }
+
+  SetMaxWidth(value: number?) {
+    this.maxWidth = value;
+    this.FitLabel();
+  }
+
+  SetTooltip(value: TooltipSource?, hint: TextSource?= null) {
+    this.tooltip = value;
+    this.hint = hint;
+  }
+
+  SetDisabledTooltip(value: TooltipSource?) {
+    this.disabledTooltip = value;
+    if (!this.input.enabled) {
+      this.SetEnabled(false);
+    }
+  }
+
+  TooltipLines(): {
+    lines: string[] ?;
+    hint : string ?
+  }
+
+  {
+    if (!this.input.enabled) {
+      return { lines: lines(this.disabledTooltip, this), hint: null };
+    }
+    let result = lines(this.tooltip, this);
+    const hint = text(this.hint, this);
+    const full = readable(this.label.region.GetText()) ?? "";
+    if (this.truncated && full != "") {
+      if (result == null) {
+        result = [full];
+      } else if (result[0] != full) {
+        const copy = [full];
+        for (const line of result) {
+          copy.push(line);
+        }
+        result = copy;
+      }
+    }
+    if (result == null && hint != null) {
+      result = [full];
+    }
+    return { lines: result, hint: hint };
+  }
+
+  SetEnabled(enabled: boolean = true) {
+    this.input.SetEnabled(enabled);
+    if (!enabled && this.disabledTooltip != null) {
+      this.frame.EnableMouse(true);
+      try {
+        this.frame.SetMotionScriptsWhileDisabled(true);
+      } catch {}
+    }
+  }
+
+  Click(mouse: string?= null) {
+    if (!this.input.enabled) {
+      return;
+    }
+    const confirm = this.confirm;
+    if (confirm != null) {
+      confirm.Click(mouse);
+      return;
+    }
+    const action = this.onClickAction;
+    if (action != null) {
+      action(this, mouse);
+    }
+  }
+}
+
+export const CONFIRM_SECONDS = 4;
+
+export class ConfirmController {
+  button: ButtonControl;
+  opts: ConfirmOptions;
+  generation = 0;
+  idleFallback: string;
+  promptShown = false;
+
+  constructor(button: ButtonControl, opts: ConfirmOptions) {
+    this.button = button;
+    this.opts = opts;
+    this.idleFallback = readable(button.label.region.GetText()) ?? "";
+    button.armed = false;
+    const defaults: Frame[] = [button.frame];
+    const resets = opts.resetOn ?? defaults;
+    for (const frame of resets) {
+      frame.HookScript("OnHide", () => {
+        this.Disarm("hide");
+      });
+    }
+  }
+
+  IsArmed(): boolean {
+    return this.button.armed;
+  }
+
+  Relabel() {
+    this.button.SetText(this.button.armed ? (text(
+      this.opts.confirmText,
+      this.button
+      ) ?? "") : (text(this.opts.text, this.button) ?? this.idleFallback));
+    const footer = this.opts.footer;
+    if (footer != null) {
+      footer.Layout();
+    }
+  }
+
+  Disarm(reason: string = "manual") {
+    if (!this.button.armed) {
+      return;
+    }
+    this.button.armed = false;
+    this.generation += 1;
+    const footer = this.opts.footer;
+    if (footer != null && this.promptShown && footer.IsFlashing()) {
+      footer.ClearFlash();
+    }
+    this.promptShown = false;
+    this.Relabel();
+    const callback = this.opts.onDisarm;
+    if (callback != null) {
+      callback(this.button, reason);
+    }
+  }
+
+  Arm() {
+    if (this.button.armed) {
+      return;
+    }
+    if (this.opts.text == null) {
+      this.idleFallback = readable(this.button.label.region.GetText()) ?? this.idleFallback;
+    }
+    this.button.armed = true;
+    this.generation += 1;
+    const generation = this.generation;
+    this.Relabel();
+    const footer = this.opts.footer;
+    const prompt = text(this.opts.prompt, this.button);
+    if (footer != null && prompt != null) {
+      footer.Flash(
+        prompt,
+        this.opts.seconds ?? CONFIRM_SECONDS,
+        this.opts.promptTone ?? "danger"
+      );
+      this.promptShown = true;
+    }
+    C_Timer.After(this.opts.seconds ?? CONFIRM_SECONDS, () => {
+      if (this.generation == generation) {
+        this.Disarm("timeout");
+      }
+    });
+    const callback = this.opts.onArm;
+    if (callback != null) {
+      callback(this.button);
+    }
+  }
+
+  Click(mouse: string?= null) {
+    if (!this.button.armed) {
+      this.Arm();
+      return;
+    }
+    this.Disarm("confirm");
+    const action = this.opts.onConfirm ?? this.button.onClickAction;
+    if (action != null) {
+      action(this.button, mouse);
+    }
+  }
+}
+
+export function CreateButton(parent: Frame, opts: ButtonOptions?= null) : ButtonControl {
+  if (opts == null) {
+    const defaults: ButtonOptions = {};
+    return new ButtonControl(parent, defaults);
+  }
+  return new ButtonControl(parent, opts);
+}
+
+export function ArmConfirm(
+  button: ButtonControl,
+  opts: ConfirmOptions?= null
+): ConfirmController {
+  const defaults: ConfirmOptions = {};
+  const controller = new ConfirmController(button, opts ?? defaults);
+  button.confirm = controller;
+  return controller;
+}

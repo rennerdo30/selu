@@ -1,0 +1,336 @@
+import { SetOwnedFrameLevel } from "./stacking";
+import { RegisterOwnedFrame } from "./stacking";
+import { Backdrop } from "./backdrop";
+import { CreateLabel, Label } from "./text";
+import { assets } from "./materials";
+import { themes, SetColor } from "./theme";
+import { size, space, motion } from "./tokens";
+import { RegisterWindowRaise, AttachWindowRaise } from "./stacking";
+import { FitWindowScale, RegisterScaledWindow } from "./scaling";
+import { hostLoadPosition, hostSavePosition } from "./host";
+let windowTop = 200;
+
+export type WindowOptions = {
+  width: number;
+  height: number;
+  name?: string;
+  title?: string;
+  subtitle?: string;
+  icon?: string;
+  padding?: number;
+  headerHeight?: number;
+  strata?: string;
+  parent?: Frame;
+  point?: string;
+  relativePoint?: string;
+  x?: number;
+  y?: number;
+  positionKey?: string
+};
+
+export class Window {
+  frame: Frame;
+  header: Frame;
+  content: Frame;
+  body: Frame;
+  titleLabel: Label;
+  subtitleLabel: Label?= null;
+  closeButton: Button;
+  icon: Texture?= null;
+  iconRing: Texture?= null;
+  sheen: Texture;
+  bevelTop: Texture;
+  accentLine: Texture;
+  ruleShadow: Texture;
+
+  layout: {
+    inset: number;
+    headerHeight: number;
+    padding: number
+  };
+
+  positionKey: string ?;
+  fadeIn : AnimationGroup?= null;
+
+  constructor(opts: WindowOptions) {
+    const width = opts.width;
+    const height = opts.height;
+    const inset = size.frameInset;
+    const padding = opts.padding ?? space.sm;
+    const headerHeight = opts.headerHeight ?? (opts.subtitle != null ? size.headerHeight : size.headerHeightCompact);
+    this.layout = { inset: inset, headerHeight: headerHeight, padding: padding };
+    this.positionKey = opts.positionKey ?? opts.name;
+    const parent = opts.parent ?? UIParent;
+    const frame = CreateFrame("Frame", opts.name ?? null, parent);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    frame.SetSize(width, height);
+    frame.SetPoint(
+      opts.point ?? "CENTER",
+      parent,
+      opts.relativePoint ?? opts.point ?? "CENTER",
+      opts.x ?? 0,
+      opts.y ?? 0
+    );
+    frame.SetFrameStrata(opts.strata ?? "HIGH");
+    frame.SetClampedToScreen(true);
+    frame.EnableMouse(true);
+    frame.SetMovable(true);
+    frame.Hide();
+    Backdrop(frame, { style: "window" });
+    RegisterWindowRaise(frame, () => {
+      this.Raise();
+    });
+    const name = opts.name;
+    if (name != null) {
+      tinsert(UISpecialFrames, name);
+    }
+    const header = CreateFrame("Frame", null, frame);
+    RegisterOwnedFrame(header);
+    this.header = header;
+    header.SetPoint("TOPLEFT", inset, -inset);
+    header.SetSize(width - inset * 2, headerHeight);
+    header.EnableMouse(true);
+    header.RegisterForDrag("LeftButton");
+    header.SetScript("OnDragStart", () => {
+      frame.StartMoving();
+    });
+    header.SetScript("OnDragStop", () => {
+      frame.StopMovingOrSizing();
+      this.SavePosition();
+    });
+    AttachWindowRaise(header);
+    Backdrop(header, { style: "header" });
+    const sheen = header.CreateTexture(null, "BORDER");
+    this.sheen = sheen;
+    sheen.SetAllPoints();
+    themes.skinTexture(sheen, (_theme) => {
+      const from = themes.color("headerSheenBottom");
+      const to = themes.color("headerSheenTop");
+      sheen.SetGradient(
+        "VERTICAL",
+        CreateColor(from.r, from.g, from.b, from.a),
+        CreateColor(to.r, to.g, to.b, to.a)
+      );
+    });
+    const bevel = header.CreateTexture(null, "OVERLAY");
+    this.bevelTop = bevel;
+    bevel.SetHeight(size.bevelLine);
+    bevel.SetPoint("TOPLEFT");
+    bevel.SetPoint("TOPRIGHT");
+    themes.skinTexture(bevel, (_theme) => {
+      SetColor(bevel, "bevelLight");
+    });
+    const shadow = header.CreateTexture(null, "OVERLAY");
+    this.ruleShadow = shadow;
+    shadow.SetHeight(size.bevelLine);
+    shadow.SetPoint("BOTTOMLEFT");
+    shadow.SetPoint("BOTTOMRIGHT");
+    themes.skinTexture(shadow, (_theme) => {
+      SetColor(shadow, "bevelDark");
+    });
+    const accent = header.CreateTexture(null, "OVERLAY");
+    this.accentLine = accent;
+    accent.SetHeight(size.accentLine);
+    accent.SetPoint("BOTTOMLEFT", 0, size.bevelLine);
+    accent.SetPoint("BOTTOMRIGHT", 0, size.bevelLine);
+    themes.skinTexture(accent, (_theme) => {
+      SetColor(accent, "accent");
+    });
+    const iconPath = opts.icon;
+    let titleStart = space.lg;
+    const title = CreateLabel(
+      header,
+      { text: opts.title ?? "", role: "title", color: "textTitle" }
+    );
+    this.titleLabel = title;
+    const titleY = opts.subtitle != null ? space.sm : 0;
+    if (iconPath != null) {
+      const icon = header.CreateTexture(null, "ARTWORK");
+      this.icon = icon;
+      icon.SetSize(size.windowIcon, size.windowIcon);
+      icon.SetPoint("LEFT", space.lg, 0);
+      try {
+        icon.SetTexture(iconPath);
+        icon.SetTexCoord(0.08, 0.92, 0.08, 0.92);
+      } catch {}
+      const ringPath = assets.texture("iconRing");
+      if (ringPath != null) {
+        const ring = header.CreateTexture(null, "OVERLAY");
+        this.iconRing = ring;
+        ring.SetSize(size.windowIcon * 1.72, size.windowIcon * 1.72);
+        ring.SetPoint("CENTER", icon, "CENTER", 0, 0);
+        ring.SetTexture(ringPath);
+        themes.skinTexture(ring, (_theme) => {
+          const c = themes.color("iconRingTint");
+          ring.SetVertexColor(c.r, c.g, c.b, c.a);
+        });
+      }
+      title.region.SetPoint("LEFT", icon, "RIGHT", space.sm + 2, titleY);
+      titleStart = space.lg + size.windowIcon + space.sm + 2;
+    } else {
+      title.region.SetPoint("LEFT", header, "LEFT", space.lg, titleY);
+    }
+    const subtitle = opts.subtitle;
+    if (subtitle != null) {
+      const label = CreateLabel(
+        header,
+        { text: subtitle, role: "small", color: "textSecondary" }
+      );
+      this.subtitleLabel = label;
+      label.region.SetPoint("TOPLEFT", title.region, "BOTTOMLEFT", 0, -2);
+    }
+    const close = CreateFrame("Button", null, header);
+    RegisterOwnedFrame(close);
+    this.closeButton = close;
+    close.SetSize(size.closeButton, size.closeButton);
+    const up = assets.texture("closeUp");
+    let closeInset = space.sm;
+    if (up != null) {
+      closeInset = space.xs;
+      close.SetPoint("RIGHT", -space.xs, 0);
+      const down = assets.texture("closeDown") ?? up;
+      const face = close.CreateTexture(null, "ARTWORK");
+      face.SetAllPoints();
+      face.SetTexture(up);
+      const highlight = assets.texture("closeHighlight");
+      if (highlight != null) {
+        const glow = close.CreateTexture(null, "HIGHLIGHT");
+        glow.SetAllPoints();
+        glow.SetTexture(highlight);
+        glow.SetBlendMode("ADD");
+      }
+      close.SetScript("OnMouseDown", () => {
+        face.SetTexture(down);
+      });
+      close.SetScript("OnMouseUp", () => {
+        face.SetTexture(up);
+      });
+    } else {
+      close.SetPoint("RIGHT", -space.sm, 0);
+      const glyph = CreateLabel(
+        close,
+        { text: "×", role: "title", color: "textSecondary", layer: "OVERLAY" }
+      );
+      glyph.region.SetPoint("CENTER");
+      close.SetScript("OnEnter", () => {
+        glyph.SetColor("danger");
+      });
+      close.SetScript("OnLeave", () => {
+        glyph.SetColor("textSecondary");
+      });
+    }
+    close.SetScript("OnClick", () => {
+      frame.Hide();
+    });
+    AttachWindowRaise(close);
+    const titleWidth = Math.max(
+      1,
+      width - inset * 2 - titleStart - closeInset - size.closeButton - space.sm
+    );
+    title.region.SetWidth(titleWidth);
+    const sub = this.subtitleLabel;
+    if (sub != null) {
+      sub.region.SetWidth(titleWidth);
+    }
+    const content = CreateFrame("Frame", null, frame);
+    RegisterOwnedFrame(content);
+    this.content = content;
+    content.SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0);
+    content.SetSize(width - inset * 2, height - inset * 2 - headerHeight);
+    const body = CreateFrame("Frame", null, content);
+    RegisterOwnedFrame(body);
+    this.body = body;
+    body.SetPoint("TOPLEFT", padding, -padding);
+    body.SetSize(
+      width - inset * 2 - padding * 2,
+      height - inset * 2 - headerHeight - padding * 2
+    );
+    try {
+      const group = frame.CreateAnimationGroup();
+      const alpha = group.CreateAnimation("Alpha");
+      alpha.SetFromAlpha(0);
+      alpha.SetToAlpha(1);
+      alpha.SetDuration(motion.fast);
+      this.fadeIn = group;
+    } catch {}
+    header.SetScript("OnShow", () => {
+      if (readable(frame.IsShown()) != true) {
+        return;
+      }
+      FitWindowScale(frame);
+      this.RestorePosition();
+      this.Raise();
+      const fade = this.fadeIn;
+      if (fade != null) {
+        fade.Stop();
+        fade.Play();
+      }
+    });
+    AttachWindowRaise(frame);
+    this.Raise();
+    RegisterScaledWindow(frame);
+    FitWindowScale(frame);
+  }
+
+  Raise() {
+    const current = readable(this.frame.GetFrameLevel());
+    if (current == windowTop) {
+      return;
+    }
+    const target = windowTop + 20;
+    if (SetOwnedFrameLevel(this.frame, target)) {
+      windowTop = target;
+    }
+  }
+
+  Toggle() {
+    if (readable(this.frame.IsShown()) == true) {
+      this.frame.Hide();
+    } else {
+      this.frame.Show();
+    }
+  }
+
+  SavePosition() {
+    const key = this.positionKey;
+    if (key == null) {
+      return;
+    }
+    const [p, parent, rp, x, y] = this.frame.GetPoint();
+    const point = readable(p);
+    if (point == null) {
+      return;
+    }
+    hostSavePosition(key, {
+      point: point,
+      relativePoint: readable(rp) ?? point,
+      x: readable(x) ?? 0,
+      y: readable(y) ?? 0
+    });
+  }
+
+  RestorePosition(): boolean {
+    const key = this.positionKey;
+    if (key == null) {
+      return false;
+    }
+    const pos = hostLoadPosition(key);
+    if (pos == null) {
+      return false;
+    }
+    this.frame.ClearAllPoints();
+    this.frame.SetPoint(
+      pos.point,
+      UIParent,
+      pos.relativePoint ?? pos.point,
+      pos.x ?? 0,
+      pos.y ?? 0
+    );
+    return true;
+  }
+}
+
+export function CreateWindow(opts: WindowOptions): Window {
+  return new Window(opts);
+}

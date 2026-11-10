@@ -1,0 +1,71 @@
+// What the addon using the kit supplies: its log, its strings, its locale,
+// where the chosen theme and window positions are kept, and the prefix for
+// the few frames the kit creates with a global name. Everything is optional;
+// without a host the kit logs nothing, shows caller keys as given, uses the
+// client locale and keeps theme and window positions for the session only.
+export type WindowPosition = {
+  point: string;
+  relativePoint?: string;
+  x?: number;
+  y?: number
+};
+
+export type UiHost = {
+  log?: (level: string, message: string) => void;
+  translate?: (key: string) => string;
+  locale?: () => string;
+  namePrefix?: string;
+  saveTheme?: (name: string) => void;
+  loadWindowPosition?: (key: string) => WindowPosition?;
+  saveWindowPosition?: (key: string, position: WindowPosition) => void
+};
+
+let current: UiHost = {};
+const sessionPositions = new Map<string, WindowPosition>();
+
+// Call once, early, from the addon (before its windows open).
+export function ConfigureUi(host: UiHost) {
+  current = host;
+}
+
+export function hostLog(level: string, message: string) {
+  const log = current.log;
+  if (log != null) {
+    log(level, message);
+  }
+}
+
+export function hostTranslate(key: string): string {
+  const translate = current.translate;
+  return translate != null ? translate(key) : key;
+}
+
+export function hostLocale(): string {
+  const locale = current.locale;
+  return locale != null ? locale() : GetLocale();
+}
+
+export function hostNamePrefix(): string {
+  return current.namePrefix ?? "SeluUI";
+}
+
+export function hostSaveTheme(name: string) {
+  const save = current.saveTheme;
+  if (save != null) {
+    save(name);
+  }
+}
+
+export function hostLoadPosition(key: string): WindowPosition? {
+  const load = current.loadWindowPosition;
+  return load != null ? load(key) : sessionPositions.get(key);
+}
+
+export function hostSavePosition(key: string, position: WindowPosition) {
+  const save = current.saveWindowPosition;
+  if (save != null) {
+    save(key, position);
+  } else {
+    sessionPositions.set(key, position);
+  }
+}

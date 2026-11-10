@@ -1,0 +1,355 @@
+import { CreateLabel, Label } from "./text";
+import { CreateButton, ButtonControl, ButtonVariant, ConfirmFooter } from "./button";
+import { Backdrop } from "./backdrop";
+import { themes, SetColor } from "./theme";
+import { space, size, typography, list } from "./tokens";
+import { fonts, FontRole } from "./fonts";
+import { RowRGB } from "./list-row";
+import { MeasureText, ShowTooltip, HideTooltip } from "./tooltip";
+import { RegisterOwnedFrame, AttachWindowRaise } from "./stacking";
+import { Window } from "./window";
+import { FitWindowScale, windowScaling } from "./scaling";
+export type FooterTooltip = string | string[] | ((footer: FooterStrip) => (string | string[])?);
+
+export type FooterOptions = {
+  width?: number;
+  height?: number
+};
+
+export class FooterStrip {
+  confirm: ConfirmFooter;
+  frame: Frame;
+  status: Label;
+  statusHit: Frame;
+  actions: ButtonControl[] = [];
+  statusText = "";
+  statusTooltip: FooterTooltip?= null;
+  flashGeneration = 0;
+  flashing = false;
+  tooltipShown = false;
+
+  constructor(parent: Frame, opts: FooterOptions) {
+    this.confirm = {
+      Layout: () => {
+        this.Layout();
+      }, Flash: (text, seconds, tone) => {
+        this.Flash(text, seconds, tone);
+      }, ClearFlash: () => {
+        this.ClearFlash();
+      }, IsFlashing: () => this.IsFlashing()
+    };
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    const height = opts.height ?? size.footerHeight;
+    this.frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(width, height);
+    Backdrop(this.frame, { style: "well" });
+    this.status = CreateLabel(
+      this.frame,
+      {
+        role: "small",
+        color: "textSecondary",
+        width: Math.max(1, width - space.sm * 2),
+        wrap: false
+      }
+    );
+    this.status.region.SetPoint("LEFT", this.frame, "LEFT", space.sm, 0);
+    this.statusHit = CreateFrame("Frame", null, this.frame);
+    RegisterOwnedFrame(this.statusHit);
+    this.statusHit.SetSize(Math.max(1, width - space.sm * 2), height);
+    this.statusHit.SetPoint("LEFT", this.frame, "LEFT", space.sm, 0);
+    this.statusHit.SetScript("OnEnter", () => {
+      const lines = this.StatusTooltip();
+      this.tooltipShown = lines != null && ShowTooltip(
+        this.statusHit,
+        lines
+      );
+    });
+    this.statusHit.SetScript("OnLeave", () => {
+      if (this.tooltipShown) {
+        this.tooltipShown = false;
+        HideTooltip();
+      }
+    });
+    AttachWindowRaise(this.statusHit);
+  }
+
+  StatusTooltip(): (string | string[]) ? {
+    const source = this.statusTooltip;
+    let lines: (string | string[])?= null;
+    if (typeof source == "function") {
+      try {
+        lines = source(this);
+      } catch {}
+    } else if (typeof source == "string") {
+      lines = source;
+    } else if (typeof source == "table") {
+      lines = source;
+    }
+    if (typeof lines == "string") {
+      return lines;
+    }
+    if (typeof lines == "table" && lines.length>0) {
+      return lines;
+    }
+    const text = readable(this.status.region.GetText()) ?? "";
+    if (text != "" && MeasureText(this.status.region)>(readable(this.status.region.GetWidth()) ?? 0)) {
+      return [text];
+    }
+    return null;
+  }
+
+  UpdateStatusHit() {
+    const width = readable(this.status.region.GetWidth()) ?? 1;
+    this.statusHit.SetWidth(Math.max(1, Math.min(width, MeasureText(this.status.region))));
+    this.statusHit.EnableMouse(this.StatusTooltip() != null);
+  }
+
+  Layout = () => {
+    let right = space.xs;
+    for (let i = this.actions.length - 1; i >= 0; i--) {
+      const button = this.actions[i];
+      if (button.autoWidth) {
+        button.SetText(readable(button.label.region.GetText()) ?? "");
+      }
+      button.frame.ClearAllPoints();
+      button.frame.SetPoint("RIGHT", this.frame, "RIGHT", -right, 0);
+      button.frame.Show();
+      right += (readable(button.frame.GetWidth()) ?? 0) + space.xs;
+    }
+    this.status.region.SetWidth(Math.max(
+      1,
+      (readable(this.frame.GetWidth()) ?? 0) - right - space.sm * 2
+    ));
+    this.UpdateStatusHit();
+  };
+
+  SetStatus(text: string?= null, tooltip: FooterTooltip?= null) {
+    this.statusText = text ?? "";
+    this.statusTooltip = tooltip;
+    if (!this.flashing) {
+      this.status.region.SetText(this.statusText);
+      this.status.SetColor("textSecondary");
+    }
+    this.UpdateStatusHit();
+  }
+
+  IsFlashing = () : boolean => {
+    return this.flashing;
+  };
+
+  ClearFlash = () => {
+    this.flashing = false;
+    this.flashGeneration += 1;
+    this.status.region.SetText(this.statusText);
+    this.status.SetColor("textSecondary");
+    this.UpdateStatusHit();
+  };
+
+  Flash = (text: string?= null, seconds: number?= null, tone: string?= null) => {
+    this.flashGeneration += 1;
+    const generation = this.flashGeneration;
+    this.flashing = true;
+    this.status.region.SetText(text ?? "");
+    this.status.SetColor(tone ?? "textPrimary");
+    this.UpdateStatusHit();
+    C_Timer.After(seconds ?? list.FLASH_SECONDS, () => {
+      if (this.flashGeneration == generation) {
+        this.ClearFlash();
+      }
+    });
+  };
+
+  SetActions(buttons: ButtonControl[]?= null) {
+    for (const button of this.actions) {
+      button.frame.Hide();
+    }
+    const empty: ButtonControl[] = [];
+    this.actions = buttons ?? empty;
+    this.Layout();
+  }
+}
+
+export function CreateFooterStrip(parent: Frame, opts: FooterOptions?= null): FooterStrip {
+  if (opts == null) {
+    const defaults: FooterOptions = {};
+    return new FooterStrip(parent, defaults);
+  }
+  return new FooterStrip(parent, opts);
+}
+
+export type SummaryLine = {
+  role?: FontRole;
+  color?: string
+};
+
+export type SummaryOptions = {
+  width?: number;
+  lines?: SummaryLine[];
+  lineGap?: number;
+  pad?: number
+};
+
+export class SummaryWell {
+  frame: Frame;
+  lines: Label[] = [];
+  rgbs = new Map<number, RowRGB>();
+  tooltipShown = false;
+
+  constructor(parent: Frame, opts: SummaryOptions) {
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    const pad = opts.pad ?? space.sm;
+    const gap = opts.lineGap ?? space.xs;
+    this.frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(this.frame);
+    Backdrop(this.frame, { style: "inset" });
+    const defaults: SummaryLine[] = [{}];
+    const specs = opts.lines ?? defaults;
+    let y = pad;
+    for (let i = 0; i<specs.length; i++) {
+      const spec = specs[i];
+      let role: FontRole = "body";
+      const requestedRole = spec.role;
+      if (requestedRole != null) {
+        role = requestedRole;
+      }
+      const label = CreateLabel(
+        this.frame,
+        {
+          role: role,
+          color: spec.color ?? (i == 0 ? "textPrimary" : "textSecondary"),
+          width: width - pad * 2,
+          wrap: false
+        }
+      );
+      label.region.SetPoint("TOPLEFT", this.frame, "TOPLEFT", pad, -y);
+      this.lines.push(label);
+      const fontHeight = role == "title" ? typography.title : role == "heading" ? typography.heading : role == "small" ? typography.small : role == "caption" ? typography.caption : typography.body;
+      y += fontHeight + gap;
+      const index = i;
+      themes.skinLabel(label.region, (_theme) => {
+        this.PaintLine(index);
+      });
+    }
+    this.frame.SetSize(width, y - gap + pad);
+    this.frame.SetScript("OnEnter", () => {
+      if (!this.IsTruncated()) {
+        return;
+      }
+      const lines: string[] = [];
+      for (const label of this.lines) {
+        const text = readable(label.region.GetText()) ?? "";
+        if (text != "") {
+          lines.push(text);
+        }
+      }
+      this.tooltipShown = ShowTooltip(this.frame, lines);
+    });
+    this.frame.SetScript("OnLeave", () => {
+      if (this.tooltipShown) {
+        this.tooltipShown = false;
+        HideTooltip();
+      }
+    });
+    AttachWindowRaise(this.frame);
+    this.UpdateMouse();
+  }
+
+  PaintLine(index: number) {
+    const label = this.lines[index];
+    if (label == null) {
+      return;
+    }
+    const rgb = this.rgbs.get(index);
+    if (rgb != null) {
+      label.region.SetTextColor(rgb.r, rgb.g ?? rgb.r, rgb.b ?? rgb.r, 1);
+    } else {
+      label.SetColor(label.colorToken);
+    }
+  }
+
+  IsTruncated(): boolean {
+    for (const label of this.lines) {
+      const text = readable(label.region.GetText()) ?? "";
+      if (text != "" && MeasureText(label.region)>(readable(label.region.GetWidth()) ?? 0)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  UpdateMouse() {
+    this.frame.EnableMouse(this.IsTruncated());
+  }
+
+  SetLine(index: number, text: string?= null, rgb: RowRGB?= null) {
+    const label = this.lines[index];
+    if (label == null) {
+      return;
+    }
+    label.region.SetText(text ?? "");
+    if (rgb != null) {
+      this.rgbs.set(index, rgb);
+    } else {
+      this.rgbs.delete(index);
+    }
+    this.PaintLine(index);
+    this.UpdateMouse();
+  }
+
+  SetLines(texts: string[]?= null) {
+    for (let i = 0; i<this.lines.length; i++) {
+      this.SetLine(i, texts != null ? texts[i] : null);
+    }
+  }
+}
+
+export function CreateSummaryWell(parent: Frame, opts: SummaryOptions?= null): SummaryWell {
+  if (opts == null) {
+    const defaults: SummaryOptions = {};
+    return new SummaryWell(parent, defaults);
+  }
+  return new SummaryWell(parent, opts);
+}
+
+export type FitResult = {
+  bodyHeight: number;
+  windowHeight: number
+};
+
+export function FitWindowToBody(
+  window: Window?= null,
+  bodyHeight: number?= null,
+  opts: { keepTop?: boolean }?= null
+): FitResult ? {
+  if (window == null) {
+    return null;
+  }
+  if (opts != null && opts.keepTop == true && readable(window.frame.IsShown()) == true) {
+    const left = readable(window.frame.GetLeft());
+    const top = readable(window.frame.GetTop());
+    if (left != null && top != null) {
+      window.frame.ClearAllPoints();
+      window.frame.SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top);
+    }
+  }
+  const layout = window.layout;
+  const chrome = layout.inset * 2 + layout.headerHeight + layout.padding * 2;
+  let body = Math.max(1, Math.floor((bodyHeight ?? 1) + 0.5));
+  const screen = readable(UIParent.GetHeight());
+  if (screen != null) {
+    let scale = windowScaling.originals.get(window.frame) ?? readable(window.frame.GetScale()) ?? 1;
+    if (scale <= 0) {
+      scale = 1;
+    }
+    const maxBody = Math.floor((screen - space.md * 2) / scale - chrome);
+    if (maxBody >= 1) {
+      body = Math.min(body, maxBody);
+    }
+  }
+  window.frame.SetHeight(chrome + body);
+  window.content.SetHeight(body + layout.padding * 2);
+  window.body.SetHeight(body);
+  FitWindowScale(window.frame);
+  return { bodyHeight: body, windowHeight: chrome + body };
+}

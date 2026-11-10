@@ -1,0 +1,79 @@
+import { themes } from "./theme";
+import { hostLog as logMessage } from "./host";
+
+export type TooltipLines = string | string[];
+export type RichTooltipFill = (tip: GameTooltip, owner: Frame) => boolean ?;
+
+export function ShowTooltip(
+  owner: Frame,
+  lines: TooltipLines?= null,
+  hint: string?= null,
+  anchor: string?= null
+) : boolean {
+  let normalized: string[] = [];
+  if (typeof lines == "string") {
+    normalized = [lines];
+  } else if (lines != null) {
+    normalized = lines;
+  }
+  if (normalized.length == 0 && hint == null) {
+    return false;
+  }
+  GameTooltip.SetOwner(owner, anchor ?? "ANCHOR_RIGHT");
+  const c = themes.color("textPrimary");
+  GameTooltip.SetText(normalized.length>0 ? normalized[0] : hint ?? "", c.r, c.g, c.b);
+  for (let i = 1; i<normalized.length; i++) {
+    GameTooltip.AddLine(normalized[i], null, null, null, true);
+  }
+  if (hint != null && normalized.length>0) {
+    const h = themes.color("textSecondary");
+    GameTooltip.AddLine(hint, h.r, h.g, h.b, true);
+  }
+  GameTooltip.Show();
+  return true;
+}
+
+export function HideTooltip() {
+  GameTooltip.Hide();
+}
+
+// Native tooltip and owner stay typed; only explicit false refuses a successful fill.
+export function ShowRichTooltip(
+  owner: Frame,
+  fill: RichTooltipFill?= null,
+  hint: string?= null,
+  anchor: string?= null
+): boolean {
+  if (fill == null) {
+    return false;
+  }
+  GameTooltip.SetOwner(owner, anchor ?? "ANCHOR_RIGHT");
+  try {
+    if (fill(GameTooltip, owner) == false) {
+      GameTooltip.Hide();
+      return false;
+    }
+  } catch (error) {
+    logMessage("WARN", `ui: a rich tooltip failed: ${error.message}`);
+    GameTooltip.Hide();
+    return false;
+  }
+  if (hint != null) {
+    const c = themes.color("textSecondary");
+    GameTooltip.AddLine(hint, c.r, c.g, c.b, true);
+  }
+  GameTooltip.Show();
+  return true;
+}
+
+export function MeasureText(label: FontString): number {
+  try {
+    return readable(label.GetUnboundedStringWidth()) ?? 0;
+  } catch {
+    try {
+      return readable(label.GetStringWidth()) ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+}

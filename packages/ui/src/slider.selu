@@ -1,0 +1,167 @@
+import { RegisterOwnedFrame } from "./stacking";
+import { AttachWindowRaise } from "./stacking";
+import { assets } from "./materials";
+import { Backdrop, BackdropView } from "./backdrop";
+import { themes, RoundToStep, SetColor } from "./theme";
+import { size } from "./tokens";
+import { InputState } from "./input";
+
+export type SliderOptions = {
+  min: number;
+  max: number;
+  step?: number;
+  width?: number;
+  onChange?: (value: number) => void
+};
+
+export class SliderControl {
+  frame: Slider;
+  input: InputState;
+  track: Texture;
+  fill: Texture;
+  thumb: Texture;
+  backdrop: BackdropView?= null;
+  fillInset = 0;
+  grooved: boolean;
+  thumbTextured = false;
+  suppress = false;
+  lastValue: number?= null;
+  min: number;
+  max: number;
+  step: number;
+  onChange: ((value: number) => void) ?;
+
+  constructor(parent: Frame, opts: SliderOptions) {
+    const frame = CreateFrame("Slider", null, parent);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    this.min = opts.min;
+    this.max = opts.max;
+    this.step = opts.step ?? 1;
+    this.onChange = opts.onChange;
+    frame.SetOrientation("HORIZONTAL");
+    frame.SetSize(opts.width ?? readable(parent.GetWidth()) ?? 0, size.sliderHeight);
+    frame.SetMinMaxValues(this.min, this.max);
+    frame.SetValueStep(this.step);
+    frame.SetObeyStepOnDrag(true);
+    this.grooved = assets.edge("groove") != null;
+    const fill = frame.CreateTexture(null, "ARTWORK");
+    this.fill = fill;
+    if (this.grooved) {
+      const backdrop = Backdrop(frame, { style: "track" });
+      this.backdrop = backdrop;
+      this.track = backdrop.bg;
+      this.fillInset = backdrop.contentInset;
+      fill.SetPoint("TOPLEFT", this.fillInset, -this.fillInset);
+      fill.SetPoint("BOTTOMLEFT", this.fillInset, this.fillInset);
+    } else {
+      const track = frame.CreateTexture(null, "BACKGROUND");
+      this.track = track;
+      track.SetPoint("LEFT");
+      track.SetPoint("RIGHT");
+      track.SetHeight(size.sliderTrack);
+      fill.SetHeight(size.sliderTrack);
+      fill.SetPoint("LEFT", track, "LEFT", 0, 0);
+    }
+    const thumb = frame.CreateTexture(null, "OVERLAY");
+    this.thumb = thumb;
+    const path = assets.texture("sliderThumb");
+    if (path != null) {
+      try {
+        thumb.SetTexture(path);
+        this.thumbTextured = true;
+      } catch {}
+    }
+    const thumbSize = this.thumbTextured ? size.sliderThumbTextured : size.sliderThumb;
+    thumb.SetSize(thumbSize, thumbSize);
+    frame.SetThumbTexture(thumb);
+    this.input = new InputState(frame, (enabled) => {
+      if (enabled) {
+        frame.Enable();
+      } else {
+        frame.Disable();
+      }
+      }, () => {}, () => {
+        this.Refresh();
+    });
+    frame.SetScript("OnValueChanged", (_self, value) => {
+      if (typeof value != "number") {
+        return;
+      }
+      const safe = readable(value);
+      if (safe == null) {
+        return;
+      }
+      this.UpdateFill(safe);
+      if (this.suppress) {
+        return;
+      }
+      const rounded = RoundToStep(safe, this.step);
+      if (rounded == this.lastValue) {
+        return;
+      }
+      this.lastValue = rounded;
+      const change = this.onChange;
+      if (change != null) {
+        change(rounded);
+      }
+    });
+    frame.SetScript("OnSizeChanged", () => {
+      const value = readable(frame.GetValue());
+      if (value != null) {
+        this.UpdateFill(value);
+      }
+    });
+    frame.EnableMouseWheel(false);
+    AttachWindowRaise(frame, ["OnMouseDown"]);
+    themes.skin(frame, (_theme) => {
+      this.Refresh();
+    });
+  }
+
+  UpdateFill(value: number) {
+    const range = this.max - this.min;
+    const pct = range > 0 ? (value - this.min) / range : 0;
+    const width = readable(this.frame.GetWidth()) ?? 0;
+    const thumbWidth = readable(this.thumb.GetWidth()) ?? 0;
+    this.fill.SetWidth(Math.max(
+      1,
+      thumbWidth / 2 + (width - thumbWidth) * pct - this.fillInset
+    ));
+  }
+
+  SetValueSilent(value: number) {
+    this.suppress = true;
+    this.lastValue = RoundToStep(value, this.step);
+    this.frame.SetValue(value);
+    this.suppress = false;
+    this.UpdateFill(value);
+  }
+
+  SetEnabled(enabled: boolean = true) {
+    this.input.SetEnabled(enabled);
+  }
+
+  Refresh() {
+    const enabled = this.input.enabled;
+    const backdrop = this.backdrop;
+    if (backdrop != null) {
+      backdrop.borderToken = enabled ? "borderControl" : "divider";
+      backdrop.Apply();
+    }
+    if (!this.grooved) {
+      SetColor(this.track, "track");
+    }
+    SetColor(this.fill, enabled ? "sliderFill" : "divider");
+    if (this.thumbTextured) {
+      const c = themes.color(enabled ? "thumbTint" : "textDisabled");
+      this.thumb.SetVertexColor(c.r, c.g, c.b, c.a);
+    } else {
+      SetColor(this.thumb, enabled ? "thumb" : "textDisabled");
+    }
+  }
+}
+
+export function CreateSlider(parent: Frame, opts: SliderOptions): SliderControl {
+  return new SliderControl(parent, opts);
+}

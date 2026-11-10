@@ -1,0 +1,147 @@
+import { RoundToStep } from "./theme";
+import { space } from "./tokens";
+export const windowScaleRange = { min: 1, max: 1.5, step: 0.05 };
+
+export function ScreenFitScale(frame: Frame, requestedMargin: number?= null): number ? {
+  const margin = requestedMargin ?? space.md;
+  let fit: number?= null;
+  try {
+    const screen = readable(UIParent.GetWidth());
+    const width = readable(frame.GetWidth());
+    if (screen != null && screen > 0 && width != null && width > 0) {
+      fit = Math.max(1, screen - margin * 2) / width;
+    }
+  } catch {}
+  try {
+    const screen = readable(UIParent.GetHeight());
+    const height = readable(frame.GetHeight());
+    if (screen != null && screen > 0 && height != null && height > 0) {
+      const h = Math.max(1, screen - margin * 2) / height;
+      fit = fit != null ? Math.min(fit, h) : h;
+    }
+  } catch {}
+  return fit;
+}
+
+export class WindowScaling {
+  value = 1;
+  windows = new WeakMap<Frame, boolean>();
+  pending = new WeakMap<Frame, boolean>();
+  originals = new WeakMap<Frame, number>();
+  events: Frame?= null;
+
+  ensureEvents() {
+    if (this.events != null) {
+      return;
+    }
+    const frame = CreateFrame("Frame");
+    this.events = frame;
+    frame.RegisterEvent("PLAYER_REGEN_ENABLED");
+    frame.RegisterEvent("UI_SCALE_CHANGED");
+    frame.RegisterEvent("DISPLAY_SIZE_CHANGED");
+    frame.SetScript("OnEvent", (_self, event) => {
+      if (event == "PLAYER_REGEN_ENABLED") {
+        for (const [window, pending] of this.pending) {
+          this.pending.delete(window);
+          this.fit(window);
+        }
+      } else if (this.value != 1) {
+        this.refresh();
+      }
+    });
+  }
+
+  locked(frame: Frame): boolean {
+    if (!InCombatLockdown()) {
+      return false;
+    }
+    try {
+      return readable(frame.IsProtected()) != false;
+    } catch {
+      return true;
+    }
+  }
+
+  fit(frame: Frame): number ? {
+    const original = this.originals.get(frame);
+    if (this.value == 1 && original == null) {
+      return null;
+    }
+    if (this.locked(frame)) {
+      this.pending.set(frame, true);
+      this.ensureEvents();
+      return null;
+    }
+    let target = 1;
+    if (this.value == 1) {
+      if (original == null) {
+        return null;
+      }
+      target = original;
+      this.originals.delete(frame);
+    } else {
+      if (original == null) {
+        let current = 1;
+        try {
+          const read = readable(frame.GetScale());
+          if (read != null && read > 0) {
+            current = read;
+          }
+        } catch {}
+        this.originals.set(frame, current);
+      }
+      const fit = ScreenFitScale(frame);
+      target = Math.max(0.5, fit != null ? Math.min(this.value, fit) : this.value);
+    }
+    frame.SetScale(target);
+    return target;
+  }
+
+  refresh() {
+    for (const [frame, present] of this.windows) {
+      this.fit(frame);
+    }
+  }
+
+  register(frame: Frame) : Frame {
+    this.windows.set(frame, true);
+    return frame;
+  }
+
+  set(scale: number): number {
+    const input = scale != scale ? 1 : scale;
+    const next = Math.clamp(
+      RoundToStep(input, windowScaleRange.step),
+      windowScaleRange.min,
+      windowScaleRange.max
+    );
+    if (next != this.value) {
+      this.value = next;
+      this.ensureEvents();
+      this.refresh();
+    }
+    return this.value;
+  }
+}
+
+export const windowScaling = new WindowScaling();
+
+export function GetWindowScale() : number {
+  return windowScaling.value;
+}
+
+export function SetWindowScale(scale: number?= null): number {
+  return windowScaling.set(scale ?? 1);
+}
+
+export function FitWindowScale(frame: Frame?= null): number ? {
+  return frame != null ? windowScaling.fit(frame) : null;
+}
+
+export function RefreshWindowScales() {
+  windowScaling.refresh();
+}
+
+export function RegisterScaledWindow(frame: Frame?= null) : Frame ? {
+  return frame != null ? windowScaling.register(frame) : null;
+}

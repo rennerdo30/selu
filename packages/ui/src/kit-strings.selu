@@ -1,0 +1,41 @@
+import { hostLocale, hostTranslate } from "./host";
+const tables = new Map<string, Map<string, string>>();
+const enUS = new Map<string, string>();
+enUS.set("ui.section.collapse", "Click to collapse this section.");
+enUS.set("ui.section.expand", "Click to expand this section.");
+enUS.set("ui.visibility.always", "Always");
+enUS.set("ui.visibility.relevant", "When relevant");
+enUS.set("ui.visibility.off", "Off");
+enUS.set("ui.visibility.always.tip", "Shown whenever it has something to show.");
+enUS.set("ui.visibility.relevant.tip", "Shown only while it can help you right now.");
+enUS.set("ui.visibility.off.tip", "Never shown.");
+enUS.set("ui.group.behaviour", "Behaviour");
+enUS.set("ui.group.display", "Display");
+enUS.set("ui.group.advanced", "Advanced");
+enUS.set("ui.group.actions", "Actions");
+tables.set("enUS", enUS);
+const deDE = new Map<string, string>();
+deDE.set("ui.section.collapse", "Klicken, um diesen Abschnitt einzuklappen.");
+deDE.set("ui.section.expand", "Klicken, um diesen Abschnitt aufzuklappen.");
+deDE.set("ui.visibility.always", "Immer");
+deDE.set("ui.visibility.relevant", "Bei Bedarf");
+deDE.set("ui.visibility.off", "Aus");
+deDE.set("ui.visibility.always.tip", "Wird immer gezeigt, wenn es etwas anzuzeigen gibt.");
+deDE.set("ui.visibility.relevant.tip", "Wird nur gezeigt, solange es dir gerade hilft.");
+deDE.set("ui.visibility.off.tip", "Wird nie gezeigt.");
+deDE.set("ui.group.behaviour", "Verhalten");
+deDE.set("ui.group.display", "Anzeige");
+deDE.set("ui.group.advanced", "Erweitert");
+deDE.set("ui.group.actions", "Aktionen");
+tables.set("deDE", deDE);
+
+// The kit's own sentences, in the host's locale, English as the fallback.
+export function KitL(key: string): string {
+  const table = tables.get(hostLocale());
+  return (table != null ? table.get(key) : null) ?? enUS.get(key) ?? key;
+}
+
+// Keys the caller passed in (labels, tooltips): translated by the host.
+export function CallerL(key: string): string {
+  return hostTranslate(key);
+}

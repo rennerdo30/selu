@@ -1,0 +1,49 @@
+import { CreateSegmented, Segmented, SelectionValue, SegmentOption } from "./segmented";
+import { CreateLabel, Label } from "./text";
+import { space, size, list } from "./tokens";
+import { NormalizeVisibility, VISIBILITY_VALUES } from "./list-layout";
+import { KitL, CallerL } from "./kit-strings";
+import { TrackKitLocale } from "./kit-locale";
+import { RegisterOwnedFrame } from "./stacking";
+export type RowStateOptions = { options?: SegmentOption[]; width?: number; height?: number; allowNone?: boolean; get?: () => SelectionValue?; set?: (value: SelectionValue) => void; onChange?: (value: SelectionValue) => void };
+export class RowState {
+  control: Segmented; frame: Frame; getter: (() => SelectionValue?)?; setter: ((value: SelectionValue) => void)?; opts: RowStateOptions;
+  constructor(parent: Frame, opts: RowStateOptions) {
+    this.opts = opts; this.getter = opts.get; this.setter = opts.set;
+    this.control = CreateSegmented(parent, {width: opts.width ?? list.ROW_STATE_WIDTH, height: opts.height ?? size.controlHeightSmall - space.xs, selection: "outline", compact: true, options: opts.options,
+      get: () => { const get = this.getter; const value = get != null ? get() : null; const options = this.opts.options; if (value == null && this.opts.allowNone == false && options != null && options.length > 0) { return options[0].value; } return value; },
+      set: (value) => { const set = this.setter; if (set != null) { set(value); } const change = this.opts.onChange; if (change != null) { change(value); } }
+    }); this.frame = this.control.frame;
+  }
+  Bind(get: (() => SelectionValue?)? = null, set: ((value: SelectionValue) => void)? = null) { this.getter = get; this.setter = set; this.control.Refresh(); }
+  Refresh() { this.control.Refresh(); }
+  SetEnabled(enabled: boolean) { this.control.SetEnabled(enabled); }
+}
+export function CreateRowState(parent: Frame, opts: RowStateOptions? = null): RowState {
+  if (opts == null) { const defaults: RowStateOptions = {}; return new RowState(parent, defaults); } return new RowState(parent, opts);
+}
+export type VisibilityOptions = { width?: number; controlWidth?: number; label?: string; labelKey?: string; get?: () => string?; set?: (value: string) => void; default?: string; selection?: string };
+export class VisibilityRow {
+  frame: Frame; label: Label; control: Segmented; enabled = true; opts: VisibilityOptions;
+  constructor(parent: Frame, opts: VisibilityOptions) {
+    this.opts = opts; const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    const controlWidth = opts.controlWidth ?? Math.floor(width / 2);
+    this.frame = CreateFrame("Frame", null, parent); RegisterOwnedFrame(this.frame); this.frame.SetSize(width, size.controlHeightSmall);
+    this.label = CreateLabel(this.frame, {text: opts.label ?? "", role: "body", color: "textPrimary", width: Math.max(1, width - controlWidth - space.sm), wrap: false}); this.label.region.SetPoint("LEFT");
+    const options: SegmentOption[] = [];
+    for (const value of VISIBILITY_VALUES) { options.push({value: value, label: KitL("ui.visibility." + value), tooltip: (_value, _option) => [KitL("ui.visibility." + value), KitL("ui.visibility." + value + ".tip")]}); }
+    this.control = CreateSegmented(this.frame, {width: controlWidth, selection: opts.selection, options: options,
+      get: () => { const get = this.opts.get; return NormalizeVisibility(get != null ? get() : null, this.opts.default); },
+      set: (value) => { const set = this.opts.set; if (set != null && typeof value == "string") { set(value); } }
+    }); this.control.frame.SetPoint("RIGHT"); this.Relabel(); TrackKitLocale(() => { this.Relabel(); }); this.Refresh();
+  }
+  Relabel() {
+    const key = this.opts.labelKey; if (key != null) { this.label.region.SetText(CallerL(key)); }
+    const labels: string[] = []; for (const value of VISIBILITY_VALUES) { labels.push(KitL("ui.visibility." + value)); } this.control.Relabel(labels);
+  }
+  Refresh() { this.control.Refresh(); this.label.SetColor(this.enabled ? "textPrimary" : "textDisabled"); }
+  SetEnabled(enabled: boolean? = null) { this.enabled = enabled != false; this.control.SetEnabled(this.enabled); this.Refresh(); }
+}
+export function CreateVisibilityRow(parent: Frame, opts: VisibilityOptions? = null): VisibilityRow {
+  if (opts == null) { const defaults: VisibilityOptions = {}; return new VisibilityRow(parent, defaults); } return new VisibilityRow(parent, opts);
+}

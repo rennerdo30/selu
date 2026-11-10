@@ -1,0 +1,106 @@
+const roots = new WeakMap<Frame, () => void>();
+
+export function RegisterWindowRaise(frame: Frame, raise: () => void) {
+  roots.set(frame, raise);
+}
+
+export function RaiseWindow(widget: Frame?= null): boolean {
+  let current: Frame?= widget;
+  for (let i = 0; i < 64; i++) {
+    const frame = current;
+    if (frame == null) {
+      return false;
+    }
+    const raise = roots.get(frame);
+    if (raise != null) {
+      raise();
+      return true;
+    }
+    try {
+      const parent = readable(frame.GetParent());
+      if (parent == null || parent == frame) {
+        return false;
+      }
+      if (readable(parent.IsObjectType("Frame"))) {
+        current = parent;
+      } else {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function AttachWindowRaise(
+  widget: Frame?= null,
+  events: string[]?= null
+): Frame ? {
+  if (widget == null) {
+    return null;
+  }
+  for (const event of events ?? ["OnMouseDown"]) {
+    widget.HookScript(event, () => {
+      RaiseWindow(widget);
+    });
+  }
+  return widget;
+}
+
+// Positive ownership: only frames created/registered by the kit participate.
+const owned = new WeakMap<Frame, boolean>();
+
+export function RegisterOwnedFrame(frame: Frame) {
+  owned.set(frame, true);
+}
+
+function belongs(frame: Frame, root: Frame) : boolean {
+  let current: Frame?= frame;
+  for (let i = 0; i<64; i++) {
+    const value = current;
+    if (value == null) {
+      return false;
+    }
+    if (value == root) {
+      return true;
+    }
+    const parent = readable(value.GetParent());
+    if (parent == null || parent == value) {
+      return false;
+    }
+    if (readable(parent.IsObjectType("Frame"))) {
+      current = parent;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function SetOwnedFrameLevel(root: Frame, target: number): boolean {
+  const current = readable(root.GetFrameLevel());
+  if (current == null) {
+    return false;
+  }
+  const levels: {
+    frame: Frame;
+    level: number
+  }
+  [] = [];
+  for (const [frame, present] of owned) {
+    if (frame != root && belongs(frame, root)) {
+      const level = readable(frame.GetFrameLevel());
+      if (level == null) {
+        return false;
+      }
+      levels.push({ frame: frame, level: level + target - current });
+    }
+  }
+  root.SetFrameLevel(target);
+  // These absolute targets are also safe on clients that propagate the root change.
+  for (const item of levels) {
+    item.frame.SetFrameLevel(item.level);
+  }
+  return true;
+}

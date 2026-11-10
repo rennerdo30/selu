@@ -1,0 +1,592 @@
+import { RegisterOwnedFrame } from "./stacking";
+import { Backdrop } from "./backdrop";
+import { CreateLabel, Label } from "./text";
+import { themes, SetColor } from "./theme";
+import { size, space } from "./tokens";
+import { AttachWindowRaise } from "./stacking";
+import { MeasureText, ShowTooltip, HideTooltip } from "./tooltip";
+import { CallerL as L } from "./kit-strings";
+export type SelectionValue = string | number | boolean;
+
+export type SegmentFlag = boolean | ((
+  value: SelectionValue,
+  option: SegmentOption
+  ) => boolean?);
+export type SegmentLines = string | string[] | ((
+  value: SelectionValue,
+  option: SegmentOption
+  ) => (string | string[])?);
+export type SegmentOption = {
+  value: SelectionValue;
+  label?: string;
+  labelKey?: string;
+  icon?: string | number;
+  atlas?: string;
+  iconCoords?: number[];
+  iconDesaturated?: boolean | ((
+    value: SelectionValue,
+    option: SegmentOption,
+    selected: boolean
+    ) => boolean?);
+  visible?: boolean | (() => boolean?);
+  enabled?: SegmentFlag;
+  disabled?: SegmentFlag;
+  canSelect?: SegmentFlag;
+  tooltip?: SegmentLines;
+  disabledTooltip?: SegmentLines | boolean;
+  onEnter?: (segment: Segment) => void;
+  onLeave?: (segment: Segment) => void;
+  lane?: number | ((value: SelectionValue, option: SegmentOption) => number)
+};
+
+export type SegmentedOptions = {
+  options?: SegmentOption[];
+  get?: () => SelectionValue ?;
+  set?: (value: SelectionValue) => void;
+  width?: number;
+  height?: number;
+  enabled?: SegmentFlag;
+  canSelect?: (value: SelectionValue, option: SegmentOption) => boolean ?;
+  onEnter?: (value: SelectionValue, segment: Segment, option: SegmentOption) => void;
+  onLeave?: (value: SelectionValue, segment: Segment, option: SegmentOption) => void;
+  selection?: string;
+  compact?: boolean
+};
+
+function flag(value: SegmentFlag?, fallback: boolean, option: SegmentOption): boolean {
+  if (typeof value == "function") {
+    try {
+      return value(option.value, option) != false;
+    } catch {
+      return false;
+    }
+  }
+  if (typeof value == "boolean") {
+    return value;
+  }
+  return fallback;
+}
+
+export class Segment {
+  frame: Button;
+  bg: Texture;
+  marker: Texture;
+  outline: Frame?= null;
+  label: Label;
+  icon: Texture?= null;
+  iconTexture: Texture?= null;
+  option: SegmentOption;
+  enabled = true;
+  hovered = false;
+  pressed = false;
+  truncated = false;
+  tooltipShown = false;
+  laneOffset = 0;
+  owner: Segmented;
+
+  constructor(owner: Segmented, option: SegmentOption) {
+    this.owner = owner;
+    this.option = option;
+    const frame = CreateFrame("Button", null, owner.frame);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    this.bg = frame.CreateTexture(null, "BACKGROUND");
+    this.bg.SetAllPoints();
+    this.bg.Hide();
+    this.marker = frame.CreateTexture(null, "ARTWORK");
+    this.marker.SetPoint("BOTTOMLEFT");
+    this.marker.SetPoint("BOTTOMRIGHT");
+    this.marker.SetHeight(size.segmentMarker);
+    SetColor(this.marker, "accent");
+    this.marker.Hide();
+    if (owner.opts.selection == "outline") {
+      const outline = CreateFrame("Frame", null, frame);
+      RegisterOwnedFrame(outline);
+      this.outline = outline;
+      outline.SetAllPoints(frame);
+      const edge = Backdrop(outline, { border: "accent" });
+      edge.bg.Hide();
+      outline.Hide();
+    }
+    if (owner.opts.compact == true) {
+      this.label = CreateLabel(
+        frame,
+        { text: "", role: "caption", color: "textSecondary", justify: "CENTER", layer: "OVERLAY" }
+      );
+    } else {
+      this.label = CreateLabel(
+        frame,
+        { text: "", role: "small", color: "textSecondary", justify: "CENTER", layer: "OVERLAY" }
+      );
+    }
+    this.label.region.SetPoint("CENTER");
+    this.label.region.SetWordWrap(false);
+    frame.SetScript("OnEnter", () => {
+      if (this.enabled) {
+        this.hovered = true;
+        this.Refresh();
+        const enter = this.option.onEnter;
+        if (enter != null) {
+          enter(this);
+        }
+        const callback = this.owner.opts.onEnter;
+        if (callback != null) {
+          callback(this.option.value, this, this.option);
+        }
+      }
+      const lines = this.TooltipLines();
+      this.tooltipShown = lines != null && ShowTooltip(
+        frame,
+        lines
+      );
+    });
+    frame.SetScript("OnLeave", () => {
+      const hovered = this.hovered;
+      this.hovered = false;
+      this.pressed = false;
+      this.Refresh();
+      const leave = this.option.onLeave;
+      if (hovered && leave != null) {
+        leave(this);
+      }
+      const callback = this.owner.opts.onLeave;
+      if (hovered && callback != null) {
+        callback(this.option.value, this, this.option);
+      }
+      if (this.tooltipShown) {
+        this.tooltipShown = false;
+        HideTooltip();
+      }
+    });
+    frame.SetScript("OnMouseDown", () => {
+      if (this.CanSelect()) {
+        this.pressed = true;
+        this.Refresh();
+      }
+    });
+    frame.SetScript("OnMouseUp", () => {
+      this.pressed = false;
+      this.Refresh();
+    });
+    frame.SetScript("OnClick", () => {
+      this.Click();
+    });
+    AttachWindowRaise(frame);
+  }
+
+  ApplyOption(option: SegmentOption) {
+    this.option = option;
+    if (option.label == null) {
+      const key = option.labelKey;
+      if (key != null) {
+        option.label = L(key);
+      }
+    }
+    this.label.region.SetText(option.label ?? "");
+    this.label.region.Show();
+    this.icon = null;
+    const old = this.iconTexture;
+    if (old != null) {
+      old.Hide();
+    }
+    const path = option.icon;
+    const atlas = option.atlas;
+    if (path != null || atlas != null) {
+      let icon = this.iconTexture;
+      if (icon == null) {
+        icon = this.frame.CreateTexture(null, "ARTWORK");
+        icon.SetPoint("CENTER", this.frame, "CENTER", this.laneOffset / 2, 0);
+        this.iconTexture = icon;
+      }
+      const pixels = this.owner.height - this.owner.inset * 2 - space.xs;
+      icon.SetSize(pixels, pixels);
+      try {
+        if (atlas != null) {
+          icon.SetAtlas(atlas);
+        } else if (typeof path == "string") {
+          icon.SetTexture(path);
+        } else if (typeof path == "number") {
+          icon.SetTexture(path);
+        }
+        const coords = option.iconCoords;
+        if (coords != null) {
+          icon.SetTexCoord(coords[0], coords[1], coords[2], coords[3]);
+        } else if (atlas == null) {
+          icon.SetTexCoord(0.08, 0.92, 0.08, 0.92);
+        }
+        this.label.region.Hide();
+        this.icon = icon;
+        icon.Show();
+      } catch {
+        icon.Hide();
+      }
+    }
+  }
+
+  IsEnabled(): boolean {
+    const disabled = this.option.disabled;
+    let off = disabled == true;
+    if (typeof disabled == "function") {
+      try {
+        off = disabled(this.option.value, this.option) == true;
+      } catch {
+        off = true;
+      }
+    }
+    return this.owner.enabled && flag(
+      this.owner.opts.enabled,
+      true,
+      this.option
+    ) && flag(this.option.enabled, true, this.option) && !off;
+  }
+
+  CanSelect(): boolean {
+    if (!this.IsEnabled() || !flag(this.option.canSelect, true, this.option)) {
+      return false;
+    }
+    const can = this.owner.opts.canSelect;
+    if (can != null) {
+      try {
+        return can(this.option.value, this.option) != false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  SetEnabled(enabled: boolean = true) {
+    this.enabled = enabled;
+    if (!enabled) {
+      this.hovered = false;
+      this.pressed = false;
+      this.frame.Disable();
+    } else {
+      this.frame.Enable();
+    }
+    const explains = !enabled && this.option.disabledTooltip != null;
+    this.frame.EnableMouse(enabled || explains);
+    if (explains) {
+      try {
+        this.frame.SetMotionScriptsWhileDisabled(true);
+      } catch {}
+    }
+  }
+
+  Click() {
+    if (this.CanSelect()) {
+      const set = this.owner.setValue;
+      if (set != null) {
+        set(this.option.value);
+      }
+    }
+    this.owner.Refresh();
+  }
+
+  TooltipLines(): string[] ? {
+    let source: SegmentLines?= this.option.tooltip;
+    if (!this.enabled) {
+      const disabled = this.option.disabledTooltip;
+      if (disabled == true) {
+        source = this.option.tooltip;
+      } else if (typeof disabled == "boolean") {
+        source = null;
+      } else {
+        source = disabled;
+      }
+    }
+    let result: (string | string[])?= null;
+    if (typeof source == "function") {
+      try {
+        result = source(this.option.value, this.option);
+      } catch {
+        result = null;
+      }
+    } else if (typeof source == "string") {
+      result = [readable(this.label.region.GetText()) ?? "", source];
+    } else {
+      result = source;
+    }
+    if (typeof result == "string") {
+      return [result];
+    }
+    if (result != null && result.length>0) {
+      return result;
+    }
+    const full = readable(this.label.region.GetText()) ?? "";
+    return this.truncated && full != "" ? [full] : null;
+  }
+
+  Refresh() {
+    const get = this.owner.getValue;
+    const current = get != null ? get() : null;
+    const selected = this.option.value == current;
+    const outline = this.outline;
+    if (outline != null) {
+      outline.SetShown(selected && this.enabled);
+    }
+    const icon = this.icon;
+    if (icon != null) {
+      const desaturate = this.option.iconDesaturated;
+      let value = desaturate == true;
+      if (typeof desaturate == "function") {
+        try {
+          value = desaturate(this.option.value, this.option, selected) == true;
+        } catch {
+          value = false;
+        }
+      }
+      try {
+        icon.SetDesaturated(value);
+      } catch {}
+    }
+    let ink = "textSecondary";
+    let iconInk: string?= null;
+    let marker: string?= null;
+    let bg: string?= null;
+    if (!this.enabled) {
+      SetColor(this.marker, "divider");
+      ink = "textDisabled";
+      iconInk = "textDisabled";
+      if (selected && outline == null) {
+        marker = "divider";
+      }
+    } else if (this.pressed) {
+      SetColor(this.marker, "accentPressed");
+      ink = "accentPressed";
+      iconInk = "accentPressed";
+      bg = "selected";
+      if (selected && outline == null) {
+        marker = "accentPressed";
+      }
+    } else if (selected && outline != null) {
+      ink = "textPrimary";
+    } else if (selected) {
+      ink = "accent";
+      iconInk = "accent";
+      bg = "selected";
+      marker = "accent";
+    } else if (this.hovered) {
+      ink = "textPrimary";
+      iconInk = "textPrimary";
+      bg = "hover";
+    }
+    this.label.SetColor(ink);
+    if (bg != null) {
+      SetColor(this.bg, bg);
+      this.bg.Show();
+    } else {
+      this.bg.Hide();
+    }
+    if (marker != null) {
+      SetColor(this.marker, marker);
+      this.marker.Show();
+    } else {
+      this.marker.Hide();
+    }
+    if (icon != null) {
+      if (iconInk != null) {
+        const c = themes.color(iconInk);
+        icon.SetVertexColor(c.r, c.g, c.b, c.a);
+      } else {
+        icon.SetVertexColor(1, 1, 1, 1);
+      }
+    }
+  }
+}
+
+export class Segmented {
+  frame: Frame;
+  opts: SegmentedOptions;
+  segments: Segment[] = [];
+  pool: Segment[] = [];
+  enabled = true;
+  inset: number;
+  height: number;
+  width: number;
+  getValue: (() => SelectionValue?) ?;
+  setValue : ((value: SelectionValue) => void) ?;
+
+  constructor(parent: Frame, opts: SegmentedOptions) {
+    this.opts = opts;
+    this.width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    this.height = opts.height ?? size.controlHeightSmall;
+    this.getValue = opts.get;
+    this.setValue = opts.set;
+    const frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    frame.SetSize(this.width, this.height);
+    const backdrop = Backdrop(frame, { style: "well" });
+    this.inset = backdrop.textured ? backdrop.contentInset : size.border;
+    frame.HookScript("OnSizeChanged", () => {
+      this.Layout();
+    });
+    this.SetOptions(opts.options, true);
+    themes.skin(frame, (_theme) => {
+      this.Refresh();
+    });
+  }
+
+  SetOptions(options: SegmentOption[]?= null, deferRefresh: boolean = false) {
+    let normalized: SegmentOption[] = [];
+    if (options != null) {
+      normalized = options;
+    }
+    for (const segment of this.segments) {
+      segment.hovered = false;
+      segment.pressed = false;
+      segment.frame.Hide();
+      this.pool.push(segment);
+    }
+    this.segments = [];
+    for (const option of normalized) {
+      const pooled = this.pool.pop();
+      const segment = pooled ?? new Segment(this, option);
+      segment.ApplyOption(option);
+      segment.frame.Show();
+      this.segments.push(segment);
+    }
+    if (deferRefresh) {
+      this.Place(this.segments);
+    } else {
+      this.Refresh();
+    }
+  }
+
+  Place(visible: Segment[]) {
+    const count = visible.length;
+    if (count == 0) {
+      return;
+    }
+    const read = readable(this.frame.GetWidth());
+    const width = read != null && read>0 ? read : this.width;
+    const inner = width - this.inset * 2;
+    const each = Math.floor(inner / count);
+    for (let i = 0; i<count; i++) {
+      const segment = visible[i];
+      const width = i == count - 1 ? inner - each * (count - 1) : each;
+      segment.frame.ClearAllPoints();
+      segment.frame.SetSize(width, this.height - this.inset * 2);
+      segment.frame.SetPoint("TOPLEFT", this.inset + i * each, -this.inset);
+      const source = segment.option.lane;
+      let lane = 0;
+      if (typeof source == "function") {
+        try {
+          lane = source(segment.option.value, segment.option);
+        } catch {
+          lane = 0;
+        }
+      } else {
+        lane = source ?? 0;
+      }
+      lane = Math.max(0, lane);
+      if (segment.laneOffset != lane) {
+        segment.laneOffset = lane;
+        segment.label.region.ClearAllPoints();
+        segment.label.region.SetPoint("CENTER", segment.frame, "CENTER", lane / 2, 0);
+        const icon = segment.iconTexture;
+        if (icon != null) {
+          icon.ClearAllPoints();
+          icon.SetPoint("CENTER", segment.frame, "CENTER", lane / 2, 0);
+        }
+      }
+      const room = Math.max(1, width - lane - space.xs * 2);
+      segment.label.region.SetWidth(room);
+      segment.truncated = segment.icon == null && MeasureText(segment.label.region)>room + 0.5;
+    }
+  }
+
+  Layout() {
+    const visible: Segment[] = [];
+    for (const segment of this.segments) {
+      if (readable(segment.frame.IsShown()) == true) {
+        visible.push(segment);
+      }
+    }
+    this.Place(visible);
+  }
+
+  Refresh() {
+    const visible: Segment[] = [];
+    for (const segment of this.segments) {
+      const source = segment.option.visible;
+      let show = source != false;
+      if (typeof source == "function") {
+        try {
+          show = source() == true;
+        } catch {
+          show = false;
+        }
+      }
+      segment.frame.SetShown(show);
+      if (show) {
+        segment.SetEnabled(segment.IsEnabled());
+        visible.push(segment);
+      } else {
+        segment.hovered = false;
+        segment.pressed = false;
+      }
+    }
+    this.Place(visible);
+    for (const segment of visible) {
+      segment.Refresh();
+    }
+  }
+
+  Relabel(labels: (string[] | ((
+    value: SelectionValue,
+    option: SegmentOption,
+    index: number
+    ) => string?))?= null) {
+      for (let i = 0; i<this.segments.length; i++) {
+        const segment = this.segments[i];
+        let value: string?= null;
+        if (typeof labels == "function") {
+          try {
+            value = labels(segment.option.value, segment.option, i + 1);
+          } catch {}
+        } else if (labels != null && i<labels.length) {
+          value = labels[i];
+        }
+        const key = segment.option.labelKey;
+        if (value == null && key != null) {
+          value = L(key);
+        }
+        if (value != null) {
+          segment.option.label = value;
+          segment.label.region.SetText(value);
+        }
+      }
+      this.Refresh();
+  }
+
+  NeededWidth() : number {
+    let widest = 0;
+    let count = 0;
+    for (const segment of this.segments) {
+      if (readable(segment.frame.IsShown()) == true) {
+        count += 1;
+        if (segment.icon == null) {
+          widest = Math.max(widest, MeasureText(segment.label.region));
+        }
+      }
+    }
+    return this.inset * 2 + count * (Math.ceil(widest) + space.sm * 2);
+  }
+
+  SetEnabled(enabled: boolean = true) {
+    this.enabled = enabled;
+    this.Refresh();
+  }
+
+  Bind(get: () => SelectionValue?, set: (value: SelectionValue) => void) {
+    this.getValue = get;
+    this.setValue = set;
+    this.Refresh();
+  }
+}
+
+export function CreateSegmented(parent: Frame, opts: SegmentedOptions): Segmented {
+  return new Segmented(parent, opts);
+}

@@ -1,0 +1,204 @@
+// Exact UI.lua token values. Runtime state belongs to theme.selu.
+export type Color = {
+  r: number;
+  g: number;
+  b: number;
+  a: number
+};
+
+export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 28 };
+
+export const size = {
+  border: 1,
+  frameInset: 2,
+  accentLine: 2,
+  bevelLine: 1,
+  headerHeight: 46,
+  headerHeightCompact: 40,
+  closeButton: 32,
+  windowIcon: 24,
+  controlHeight: 26,
+  controlHeightSmall: 22,
+  footerButtonHeight: 18,
+  footerHeight: 26,
+  buttonCap: 12,
+  checkbox: 26,
+  checkboxFlatInset: 4,
+  checkboxInset: 4,
+
+  navItemHeight: 28,
+  navItemGap: 1,
+
+  navCategoryHeight: 18,
+  navAccentWidth: 3,
+  navTextInset: 16,
+  sidebarWidth: 190,
+  sliderHeight: 16,
+  sliderTrack: 4,
+  sliderThumb: 14,
+  sliderThumbTextured: 32,
+  sliderInset: 2,
+  sliderRowHeight: 42,
+  scrollbarWidth: 12,
+  scrollbarGap: 8,
+
+  scrollbarLevelOffset: 10,
+  scrollThumbMin: 24,
+  scrollStep: 40,
+  inputHeight: 24,
+
+  segmentMarker: 2,
+  inputInset: 8,
+  separator: 1,
+  buttonPaddingX: 16,
+};
+
+export const typography = { title: 16, heading: 14, body: 12, small: 11, caption: 10 };
+export const motion = { fast: 0.12, normal: 0.20 };
+export const opacity = { disabled: 0.45, dim: 0.30 };
+export const fontPath = "Fonts\\FRIZQT__.TTF";
+export const fontFlags = "";
+export const fontShadow = { x: 1, y: -1 };
+export const missingColor: Color = { r: 1, g: 0, b: 1, a: 1 };
+
+export function darkColors(): Map<string, Color> {
+  const colors = new Map<string, Color>();
+  colors.set("window", { r: 0.110, g: 0.100, b: 0.090, a: 0.97 });
+  colors.set("header", { r: 0.200, g: 0.180, b: 0.160, a: 1 });
+  colors.set("sidebar", { r: 0.080, g: 0.075, b: 0.070, a: 1 });
+  colors.set("surface", { r: 0.060, g: 0.055, b: 0.050, a: 1 });
+  colors.set("surfaceRaised", { r: 0.200, g: 0.180, b: 0.160, a: 1 });
+  colors.set("input", { r: 0.120, g: 0.108, b: 0.096, a: 1 });
+  colors.set("card", { r: 0.150, g: 0.138, b: 0.125, a: 1 });
+  colors.set("wellBase", { r: 0.135, g: 0.123, b: 0.110, a: 1 });
+  colors.set("slotFill", { r: 1, g: 1, b: 1, a: 0.045 });
+  colors.set("windowTint", { r: 0.90, g: 0.86, b: 0.80, a: 1 });
+  colors.set("headerTint", { r: 0.50, g: 0.47, b: 0.42, a: 1 });
+  colors.set("sidebarTint", { r: 0.62, g: 0.58, b: 0.53, a: 1 });
+  colors.set("surfaceTint", { r: 1, g: 1, b: 1, a: 0.50 });
+  colors.set("inputTint", { r: 0.80, g: 0.80, b: 0.80, a: 0.55 });
+  colors.set("trackTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("iconRingTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("borderOuter", { r: 0, g: 0, b: 0, a: 0.80 });
+  colors.set("borderInner", { r: 0.98, g: 0.76, b: 0.30, a: 0.16 });
+  colors.set("borderControl", { r: 0.30, g: 0.27, b: 0.24, a: 1 });
+  colors.set("divider", { r: 1, g: 1, b: 1, a: 0.08 });
+  colors.set("bevelLight", { r: 1, g: 1, b: 1, a: 0.12 });
+  colors.set("bevelDark", { r: 0, g: 0, b: 0, a: 0.60 });
+  colors.set("headerSheenTop", { r: 1, g: 1, b: 1, a: 0.14 });
+  colors.set("headerSheenBottom", { r: 1, g: 1, b: 1, a: 0 });
+  colors.set("accent", { r: 1.00, g: 0.82, b: 0.00, a: 1 });
+  colors.set("accentHover", { r: 1.00, g: 0.90, b: 0.45, a: 1 });
+  colors.set("accentPressed", { r: 0.82, g: 0.64, b: 0.00, a: 1 });
+  colors.set("onAccent", { r: 0.12, g: 0.08, b: 0.02, a: 1 });
+  colors.set("textTitle", { r: 1.00, g: 0.82, b: 0.00, a: 1 });
+  colors.set("textPrimary", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("textSecondary", { r: 0.78, g: 0.76, b: 0.72, a: 1 });
+  colors.set("textDisabled", { r: 0.50, g: 0.50, b: 0.50, a: 1 });
+  colors.set("textShadow", { r: 0, g: 0, b: 0, a: 1 });
+  colors.set("track", { r: 0.16, g: 0.14, b: 0.12, a: 1 });
+  colors.set("thumb", { r: 0.93, g: 0.90, b: 0.85, a: 1 });
+  colors.set("thumbTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("sliderFill", { r: 0.85, g: 0.66, b: 0.16, a: 0.40 });
+  colors.set("scrollbar", { r: 0.46, g: 0.41, b: 0.33, a: 1 });
+  colors.set("hover", { r: 1, g: 1, b: 1, a: 0.06 });
+  colors.set("selected", { r: 1.00, g: 0.82, b: 0.00, a: 0.18 });
+  colors.set("navSelected", { r: 1.00, g: 0.82, b: 0.00, a: 0.60 });
+  colors.set("navHover", { r: 1, g: 1, b: 1, a: 0.25 });
+  colors.set("buttonTintPrimary", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("buttonTintSecondary", { r: 0.80, g: 0.80, b: 0.80, a: 1 });
+  colors.set("buttonTintDanger", { r: 1.00, g: 0.70, b: 0.70, a: 1 });
+  colors.set("buttonHighlightTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("checkTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("checkMarkTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("success", { r: 0.45, g: 0.80, b: 0.35, a: 1 });
+  colors.set("danger", { r: 0.90, g: 0.32, b: 0.28, a: 1 });
+  colors.set("info", { r: 0.40, g: 0.65, b: 0.95, a: 1 });
+  return colors;
+}
+
+export function lightColors(): Map<string, Color> {
+  const colors = new Map<string, Color>();
+  colors.set("window", { r: 0.930, g: 0.890, b: 0.800, a: 0.98 });
+  colors.set("header", { r: 0.860, g: 0.800, b: 0.680, a: 1 });
+  colors.set("sidebar", { r: 0.880, g: 0.830, b: 0.720, a: 1 });
+  colors.set("surface", { r: 0.955, g: 0.935, b: 0.885, a: 1 });
+  colors.set("surfaceRaised", { r: 1.000, g: 0.990, b: 0.960, a: 1 });
+  colors.set("input", { r: 1.000, g: 0.990, b: 0.960, a: 1 });
+  colors.set("card", { r: 1.000, g: 1.000, b: 1.000, a: 1 });
+  colors.set("wellBase", { r: 0.955, g: 0.935, b: 0.885, a: 1 });
+  colors.set("slotFill", { r: 0, g: 0, b: 0, a: 0.055 });
+  colors.set("windowTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("headerTint", { r: 0.88, g: 0.82, b: 0.70, a: 1 });
+  colors.set("sidebarTint", { r: 0.90, g: 0.86, b: 0.78, a: 1 });
+  colors.set("surfaceTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("inputTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("trackTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("iconRingTint", { r: 0.85, g: 0.75, b: 0.55, a: 1 });
+  colors.set("borderOuter", { r: 0.28, g: 0.22, b: 0.15, a: 0.55 });
+  colors.set("borderInner", { r: 0.72, g: 0.46, b: 0.08, a: 0.22 });
+  colors.set("borderControl", { r: 0.66, g: 0.60, b: 0.52, a: 1 });
+  colors.set("divider", { r: 0, g: 0, b: 0, a: 0.12 });
+  colors.set("bevelLight", { r: 1, g: 1, b: 1, a: 0.45 });
+  colors.set("bevelDark", { r: 0.25, g: 0.15, b: 0.05, a: 0.45 });
+  colors.set("headerSheenTop", { r: 1, g: 1, b: 1, a: 0.35 });
+  colors.set("headerSheenBottom", { r: 1, g: 1, b: 1, a: 0 });
+  colors.set("accent", { r: 0.62, g: 0.38, b: 0.05, a: 1 });
+  colors.set("accentHover", { r: 0.75, g: 0.48, b: 0.10, a: 1 });
+  colors.set("accentPressed", { r: 0.50, g: 0.30, b: 0.04, a: 1 });
+  colors.set("onAccent", { r: 1.00, g: 0.98, b: 0.94, a: 1 });
+  colors.set("textTitle", { r: 0.38, g: 0.22, b: 0.06, a: 1 });
+  colors.set("textPrimary", { r: 0.16, g: 0.11, b: 0.06, a: 1 });
+  colors.set("textSecondary", { r: 0.42, g: 0.34, b: 0.25, a: 1 });
+  colors.set("textDisabled", { r: 0.62, g: 0.56, b: 0.48, a: 1 });
+  colors.set("textShadow", { r: 0, g: 0, b: 0, a: 0 });
+  colors.set("track", { r: 0.78, g: 0.73, b: 0.65, a: 1 });
+  colors.set("thumb", { r: 0.62, g: 0.38, b: 0.05, a: 1 });
+  colors.set("thumbTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("sliderFill", { r: 0.62, g: 0.38, b: 0.05, a: 0.40 });
+  colors.set("scrollbar", { r: 0.58, g: 0.53, b: 0.45, a: 1 });
+  colors.set("hover", { r: 0, g: 0, b: 0, a: 0.05 });
+  colors.set("selected", { r: 0.62, g: 0.38, b: 0.05, a: 0.14 });
+  colors.set("navSelected", { r: 0.62, g: 0.38, b: 0.05, a: 0.45 });
+  colors.set("navHover", { r: 0.30, g: 0.20, b: 0.10, a: 0.18 });
+  colors.set("buttonTintPrimary", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("buttonTintSecondary", { r: 0.90, g: 0.88, b: 0.84, a: 1 });
+  colors.set("buttonTintDanger", { r: 1.00, g: 0.75, b: 0.75, a: 1 });
+  colors.set("buttonHighlightTint", { r: 1, g: 1, b: 1, a: 0.70 });
+  colors.set("checkTint", { r: 1, g: 1, b: 1, a: 1 });
+  colors.set("checkMarkTint", { r: 0.62, g: 0.38, b: 0.05, a: 1 });
+  colors.set("success", { r: 0.20, g: 0.52, b: 0.18, a: 1 });
+  colors.set("danger", { r: 0.72, g: 0.18, b: 0.14, a: 1 });
+  colors.set("info", { r: 0.14, g: 0.38, b: 0.68, a: 1 });
+  return colors;
+}
+
+export const list = {
+  SECTION_BAR_HEIGHT: 20,
+  SECTION_RAIL_WIDTH: 2,
+  SECTION_PILL_WIDTH: 28,
+  SECTION_PILL_HEIGHT: 14,
+  ROW_RAIL_WIDTH: 2,
+  ROW_BAR_HEIGHT: 6,
+  ROW_GAP: size.separator,
+  BUTTON_ROW_HEIGHT: size.controlHeightSmall + space.xs * 2,
+  COLUMN_HEADER_HEIGHT: 16,
+  ROW_STATE_WIDTH: 104,
+  NUMBER_FIELD_WIDTH: 64,
+  FLASH_SECONDS: 4,
+  INVALID_SECONDS: 1.5,
+  ROW_ICON_SIZE: typography.body + space.xs,
+  ROW_ICON_COORDS: [0.08, 0.92, 0.08, 0.92]
+};
+
+export const popup = {
+  WIDTH: 210,
+  STRATA: "FULLSCREEN_DIALOG",
+  CATCHER_LEVEL: 1,
+  MENU_LEVEL: 20,
+  GAP: space.xs,
+  MARGIN: space.sm,
+  SECTION_HEIGHT: typography.small + space.sm
+};
+
+export const choice = { CARET: "v" };

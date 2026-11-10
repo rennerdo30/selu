@@ -1,0 +1,197 @@
+import { RegisterOwnedFrame } from "./stacking";
+import { CreateLabel, Label } from "./text";
+import { Backdrop, BackdropView } from "./backdrop";
+import { fonts, FontRole } from "./fonts";
+import { themes } from "./theme";
+import { size } from "./tokens";
+import { InputState } from "./input";
+import { AttachWindowRaise } from "./stacking";
+import { MeasureText } from "./tooltip";
+
+export type EditOptions = {
+  width?: number;
+  height?: number;
+  placeholder?: string;
+  placeholderShort?: string;
+  text?: string;
+  multiline?: boolean;
+  font?: FontRole;
+  flat?: boolean;
+  onChange?: (text: string, userInput: boolean?) => void;
+  onEnter?: (text: string) => void
+};
+
+export class EditControl {
+  frame: EditBox;
+  placeholder: Label;
+  input: InputState;
+  backdrop: BackdropView;
+  opts: EditOptions;
+  textInset: number;
+  placeholderText: string;
+  placeholderShort: string ?;
+  invalid = false;
+
+  constructor(parent: Frame, opts: EditOptions) {
+    this.opts = opts;
+    const box = CreateFrame("EditBox", null, parent);
+    RegisterOwnedFrame(box);
+    this.frame = box;
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    if (opts.multiline == true) {
+      box.SetMultiLine(true);
+      box.SetWidth(width);
+    } else {
+      box.SetSize(width, opts.height ?? size.inputHeight);
+    }
+    box.SetAutoFocus(false);
+    const role = opts.font;
+    if (role != null) {
+      box.SetFontObject(fonts.get(role));
+    } else {
+      box.SetFontObject(fonts.get("body"));
+    }
+    if (opts.flat == true) {
+      this.backdrop = Backdrop(box, { bg: false });
+    } else {
+      this.backdrop = Backdrop(box, { style: "well" });
+    }
+    const inset = size.inputInset + this.backdrop.contentInset;
+    this.textInset = inset;
+    box.SetTextInsets(inset, inset, 0, 0);
+    this.placeholder = CreateLabel(
+      box,
+      { text: opts.placeholder ?? "", role: "body", color: "textSecondary", layer: "OVERLAY" }
+    );
+    const label = this.placeholder.region;
+    if (opts.multiline == true) {
+      label.SetPoint("TOPLEFT", inset, -size.inputInset);
+      label.SetPoint("TOPRIGHT", -inset, -size.inputInset);
+    } else {
+      label.SetPoint("LEFT", inset, 0);
+      label.SetPoint("RIGHT", -inset, 0);
+      label.SetJustifyH("LEFT");
+      label.SetWordWrap(false);
+    }
+    this.placeholderText = opts.placeholder ?? "";
+    this.placeholderShort = opts.placeholderShort;
+    this.input = new InputState(box, (enabled) => {
+      if (enabled) {
+        box.Enable();
+      } else {
+        box.Disable();
+      }
+      }, () => {
+        box.ClearFocus();
+      }, () => {
+        this.Refresh();
+    });
+    box.HookScript("OnSizeChanged", () => {
+      this.FitPlaceholder();
+    });
+    this.FitPlaceholder();
+    box.SetScript("OnEscapePressed", () => {
+      box.ClearFocus();
+    });
+    box.SetScript("OnEnterPressed", () => {
+      if (!this.input.enabled) {
+        return;
+      }
+      const callback = this.opts.onEnter;
+      const value = readable(box.GetText());
+      if (callback != null && value != null) {
+        callback(value);
+      }
+      if (this.opts.multiline != true) {
+        box.ClearFocus();
+      }
+    });
+    box.SetScript("OnEditFocusGained", () => {
+      if (!this.input.enabled) {
+        box.ClearFocus();
+        return;
+      }
+      this.input.focused = true;
+      this.Refresh();
+    });
+    box.SetScript("OnEditFocusLost", () => {
+      this.input.focused = false;
+      this.Refresh();
+    });
+    box.SetScript("OnTextChanged", (_self, userInput) => {
+      this.UpdatePlaceholder();
+      const callback = this.opts.onChange;
+      const value = readable(box.GetText());
+      if (callback != null && value != null) {
+        if (typeof userInput == "boolean") {
+          callback(value, readable(userInput));
+        } else {
+          callback(value, null);
+        }
+      }
+    });
+    AttachWindowRaise(box, ["OnMouseDown", "OnEditFocusGained"]);
+    const initial = opts.text;
+    if (initial != null) {
+      box.SetText(initial);
+    }
+    themes.skin(box, (_theme) => {
+      this.Refresh();
+    });
+  }
+
+  FitPlaceholder() {
+    const short = this.placeholderShort;
+    if (this.opts.multiline == true || short == null || short == "") {
+      return;
+    }
+    this.placeholder.region.SetText(this.placeholderText);
+    const available = (readable(this.frame.GetWidth()) ?? 0) - this.textInset * 2;
+    if (available>0 && MeasureText(this.placeholder.region)>available) {
+      this.placeholder.region.SetText(short);
+    }
+  }
+
+  SetPlaceholder(text: string, short: string?= null) {
+    this.placeholderText = text;
+    this.placeholderShort = short;
+    this.placeholder.region.SetText(text);
+    this.FitPlaceholder();
+  }
+
+  UpdatePlaceholder() {
+    const value = readable(this.frame.GetText());
+    const focus = readable(this.frame.HasFocus());
+    this.placeholder.region.SetShown(value == "" && focus == false);
+  }
+
+  Refresh() {
+    const enabled = this.input.enabled;
+    const c = themes.color(enabled ? "textPrimary" : "textDisabled");
+    this.frame.SetTextColor(c.r, c.g, c.b, c.a);
+    this.placeholder.SetColor(enabled ? "textSecondary" : "textDisabled");
+    if (this.opts.flat == true) {
+      this.backdrop.bgToken = null;
+      this.backdrop.borderToken = null;
+      this.backdrop.Apply();
+    } else {
+      this.backdrop.SetColors(
+        "input",
+        !enabled ? "divider" : this.invalid ? "danger" : this.input.focused ? "accent" : "borderControl"
+      );
+    }
+    this.UpdatePlaceholder();
+  }
+
+  SetEnabled(enabled: boolean = true) {
+    this.input.SetEnabled(enabled);
+  }
+}
+
+export function CreateEditBox(parent: Frame, opts: EditOptions?= null): EditControl {
+  if (opts == null) {
+    const defaults: EditOptions = {};
+    return new EditControl(parent, defaults);
+  }
+  return new EditControl(parent, opts);
+}

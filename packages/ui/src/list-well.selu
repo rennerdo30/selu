@@ -1,0 +1,604 @@
+import { CreateListRow, ListRow, ListRowOptions, ListRowData, RowColumn } from "./list-row";
+import { CreateSectionBar, SectionBar, SectionTooltip } from "./section-bar";
+import { CreateColumnHeader, ColumnHeader } from "./column-header";
+
+import {
+  CreateEmptyState,
+  EmptyState,
+  CreateCallout,
+  Callout,
+  EmptyAction
+}
+
+from "./compound-content";
+
+import { CollapseStore, CollapseState, ListRowLane, RowLaneOptions } from "./list-layout";
+import { CreateScrollFrame, ScrollControl } from "./scroll";
+import { Backdrop } from "./backdrop";
+import { CreateLabel, Label } from "./text";
+import { space, size, list } from "./tokens";
+import { RegisterOwnedFrame } from "./stacking";
+import { hostLog as logMessage } from "./host";
+
+export type WellEntry = {
+  kind: string;
+  id?: string;
+  label?: string;
+  count?: number;
+  collapsible?: boolean;
+  tooltip?: SectionTooltip;
+  data?: ListRowData;
+  setup?: (row: ListRow, data: ListRowData?, entry: WellEntry) => void;
+  frame?: Frame;
+  height?: number;
+  layout?: (frame: Frame, width: number) => number ?;
+  open?: boolean;
+  text?: string;
+  action?: string;
+  onAction?: EmptyAction;
+  compact?: boolean;
+  list?: Frame[];
+  size?: number
+};
+
+export type WellPaintOptions = { forceExpanded?: boolean };
+
+export type ListWellOptions = {
+  width?: number;
+  maxHeight?: number;
+  minHeight?: number;
+  pad?: number;
+  claimLane?: boolean;
+  fit?: string;
+  onResize?: (delta: number, height: number, well: ListWell) => void;
+  collapse?: CollapseState;
+  onToggle?: (id: string, collapsed: boolean) => void;
+  columns?: RowColumn[];
+  columnGap?: number;
+  iconSize?: number;
+  trailingWidth?: number;
+  rowMinHeight?: number;
+  setupRow?: (row: ListRow, data: ListRowData?, entry: WellEntry) => void
+};
+
+export type DrawerOptions = {
+  row?: RowLaneOptions;
+  fieldGap?: number
+};
+
+export type DrawerField = {
+  label: Label;
+  control: Frame
+};
+
+export class WellDrawer {
+  frame: Frame;
+  fields: DrawerField[] = [];
+  callout: Callout;
+  action: Frame?= null;
+  note: string?= null;
+  well: ListWell;
+  opts: DrawerOptions;
+  lane: RowLaneOptions;
+
+  constructor(well: ListWell, opts: DrawerOptions) {
+    this.well = well;
+    this.opts = opts;
+    const lane: RowLaneOptions = {
+      iconSize: well.rowOpts.iconSize,
+      trailingWidth: well.rowOpts.trailingWidth
+    };
+    this.lane = opts.row ?? lane;
+    this.frame = CreateFrame("Frame", null, well.child);
+    RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(well.RowWidth(), size.controlHeightSmall);
+    this.callout = CreateCallout(this.frame, { width: 1 });
+    this.callout.frame.Hide();
+    this.frame.Hide();
+  }
+
+  AddField(labelText: string?, control: Frame): Label {
+    const label = CreateLabel(
+      this.frame,
+      { text: labelText ?? "", role: "small", color: "textSecondary", wrap: false }
+    );
+    control.SetParent(this.frame);
+    this.fields.push({ label: label, control: control });
+    return label;
+  }
+
+  SetFieldLabel(index: number, text: string?= null) {
+    const field = this.fields[index];
+    if (field != null) {
+      field.label.region.SetText(text ?? "");
+    }
+  }
+
+  SetAction(button: Frame?= null) {
+    this.action = button;
+  }
+
+  SetNote(text: string?= null) {
+    this.note = text;
+  }
+
+  Layout(width: number?= null): number {
+    const w = width ?? this.well.StableWidth();
+    this.frame.SetWidth(w);
+    const lane = ListRowLane(w, this.lane);
+    let lineHeight = 0;
+    for (const field of this.fields) {
+      lineHeight = Math.max(lineHeight, readable(field.control.GetHeight()) ?? 0);
+    }
+    const action = this.action;
+    if (action != null) {
+      lineHeight = Math.max(lineHeight, readable(action.GetHeight()) ?? 0);
+    }
+    const centre = -(space.xs + lineHeight / 2);
+    let x = lane.left;
+    for (const field of this.fields) {
+      field.label.region.ClearAllPoints();
+      field.label.region.SetPoint("LEFT", this.frame, "TOPLEFT", x, centre);
+      x += (readable(field.label.region.GetStringWidth()) ?? 0) + space.xs;
+      field.control.ClearAllPoints();
+      field.control.SetPoint("LEFT", this.frame, "TOPLEFT", x, centre);
+      x += (readable(field.control.GetWidth()) ?? 0) + (this.opts.fieldGap ?? space.md);
+    }
+    if (action != null) {
+      action.ClearAllPoints();
+      action.SetPoint("RIGHT", this.frame, "TOPRIGHT", -space.sm, centre);
+    }
+    let height = space.xs + lineHeight + space.sm;
+    const note = this.note;
+    if (note != null && note != "") {
+      this.callout.frame.SetWidth(Math.max(1, w - lane.left - space.sm));
+      const ch = this.callout.SetText(note);
+      this.callout.frame.ClearAllPoints();
+      this.callout.frame.SetPoint(
+        "TOPLEFT",
+        this.frame,
+        "TOPLEFT",
+        lane.left,
+        -(space.xs + lineHeight + space.sm)
+      );
+      this.callout.frame.Show();
+      height += ch + space.sm;
+    } else {
+      this.callout.frame.Hide();
+    }
+    this.frame.SetHeight(height);
+    return height;
+  }
+
+  Entry(id: string?= null): WellEntry {
+    return {
+      kind: "drawer",
+      id: id,
+      frame: this.frame,
+      height: this.Layout(this.well.StableWidth())
+    };
+  }
+}
+
+export class ListWell {
+  frame: Frame;
+  scroll: ScrollControl;
+  child: Frame;
+  header: ColumnHeader?= null;
+  collapse: CollapseState;
+  bars: SectionBar[] = [];
+  rows: ListRow[] = [];
+  empties: EmptyState[] = [];
+  callouts: Callout[] = [];
+  barIDs = new Map<number, string>();
+  rowEntries = new Map<number, WellEntry>();
+  drawerFrames = new Set<Frame>();
+  managedButtons = new Set<Frame>();
+  maxHeight: number;
+  minHeight: number;
+  fit: string;
+  opts: ListWellOptions;
+  rowOpts: ListRowOptions;
+  pad: number;
+  chrome: number;
+  fullWidth: number;
+  narrowWidth: number;
+  rowWidth: number;
+  entries: WellEntry[]?= null;
+  paintOpts: WellPaintOptions?= null;
+  openDrawer: string?= null;
+
+  constructor(parent: Frame, opts: ListWellOptions) {
+    this.opts = opts;
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    this.pad = opts.pad ?? space.xs;
+    this.maxHeight = opts.maxHeight ?? readable(parent.GetHeight()) ?? 0;
+    this.minHeight = opts.minHeight ?? size.controlHeight * 2;
+    this.fit = opts.fit ?? "content";
+    this.frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(width, this.maxHeight);
+    Backdrop(this.frame, { style: "inset" });
+    this.collapse = opts.collapse ?? CollapseStore();
+    this.rowOpts = {
+      width: width - this.pad * 2,
+      iconSize: opts.iconSize,
+      trailingWidth: opts.trailingWidth,
+      columns: opts.columns,
+      columnGap: opts.columnGap,
+      minHeight: opts.rowMinHeight
+    };
+    let headerHeight = 0;
+    if (opts.columns != null) {
+      this.BuildHeader();
+      const header = this.header;
+      if (header != null) {
+        headerHeight = readable(header.frame.GetHeight()) ?? 0;
+      }
+    }
+    this.chrome = this.pad * 2 + headerHeight;
+    this.scroll = CreateScrollFrame(
+      this.frame,
+      {
+        width: width - this.pad * 2,
+        height: Math.max(1, this.maxHeight - this.chrome),
+        claimLane: opts.claimLane != false
+      }
+    );
+    this.scroll.frame.SetPoint(
+      "TOPLEFT",
+      this.frame,
+      "TOPLEFT",
+      this.pad,
+      -(this.pad + headerHeight)
+    );
+    this.child = this.scroll.child;
+    this.narrowWidth = readable(this.child.GetWidth()) ?? 0;
+    this.fullWidth = opts.claimLane == false ? this.narrowWidth : width - this.pad * 2;
+    this.rowWidth = this.fullWidth;
+  }
+
+  BuildHeader() {
+    this.header = CreateColumnHeader(
+      this.frame,
+      {
+        width: (readable(this.frame.GetWidth()) ?? 0) - this.pad * 2,
+        columns: this.rowOpts.columns,
+        gap: this.opts.columnGap,
+        row: { iconSize: this.rowOpts.iconSize, trailingWidth: this.rowOpts.trailingWidth }
+      }
+    );
+    const header = this.header;
+    if (header != null) {
+      header.frame.SetPoint("TOPLEFT", this.frame, "TOPLEFT", this.pad, -this.pad);
+    }
+  }
+
+  AcquireBar(index: number): SectionBar {
+    const existing = this.bars[index];
+    if (existing != null) {
+      return existing;
+    }
+    const bar = CreateSectionBar(this.child, {
+      width: this.fullWidth, onClick: (_bar, _mouse) => {
+        const id = this.barIDs.get(index);
+        if (id == null) {
+          return;
+        }
+        const collapsed = this.collapse.Toggle(id);
+        const toggle = this.opts.onToggle;
+        if (toggle != null) {
+          toggle(id, collapsed);
+        }
+        this.Repaint();
+      }
+    });
+    this.bars.push(bar);
+    return bar;
+  }
+
+  AcquireRow(index: number): ListRow {
+    const existing = this.rows[index];
+    if (existing != null) {
+      return existing;
+    }
+    this.rowOpts.width = this.fullWidth;
+    const row = CreateListRow(this.child, this.rowOpts);
+    this.rows.push(row);
+    return row;
+  }
+
+  PlaceFrame(frame: Frame, y: number, width: number, height: number?= null) {
+    frame.SetParent(this.child);
+    frame.ClearAllPoints();
+    frame.SetPoint("TOPLEFT", this.child, "TOPLEFT", 0, -y);
+    frame.SetWidth(width);
+    if (height != null) {
+      frame.SetHeight(height);
+    }
+    frame.Show();
+  }
+
+  LayoutFrame(entry: WellEntry, width: number): number {
+    const frame = entry.frame;
+    if (frame == null) {
+      return 0;
+    }
+    const layout = entry.layout;
+    if (layout != null) {
+      try {
+        const height = layout(frame, width);
+        if (height != null) {
+          return height;
+        }
+      } catch (error) {
+        logMessage("WARN", `ui: a list well frame layout failed: ${error.message}`);
+      }
+    }
+    return entry.height ?? readable(frame.GetHeight()) ?? 0;
+  }
+
+  PaintAt(entries: WellEntry[], width: number, forceExpanded: boolean): number {
+    this.child.SetWidth(width);
+    let y = 0;
+    let bars = 0;
+    let rows = 0;
+    let empties = 0;
+    let callouts = 0;
+    let skipping = false;
+    const usedButtons = new Set<Frame>();
+    const usedFrames = new Set<Frame>();
+    for (const entry of entries) {
+      if (entry.kind == "section") {
+        const bar = this.AcquireBar(bars);
+        const sectionID = entry.id;
+        if (sectionID != null) {
+          this.barIDs.set(bars, sectionID);
+        } else {
+          this.barIDs.delete(bars);
+        }
+        bars += 1;
+        if (y>0) {
+          y += space.sm;
+        }
+        let collapsed: boolean?= null;
+        const id = entry.id;
+        if (entry.collapsible != false && !forceExpanded && id != null) {
+          collapsed = this.collapse.Get(id);
+        }
+        bar.frame.SetWidth(width);
+        bar.SetTooltip(entry.tooltip);
+        bar.SetData(entry.label, entry.count, collapsed);
+        bar.frame.ClearAllPoints();
+        bar.frame.SetPoint("TOPLEFT", this.child, "TOPLEFT", 0, -y);
+        bar.frame.Show();
+        y += (readable(bar.frame.GetHeight()) ?? 0) + space.xs;
+        skipping = collapsed == true;
+      } else if (skipping) {} else if (entry.kind == "row") {
+        const row = this.AcquireRow(rows);
+        this.rowEntries.set(rows, entry);
+        rows += 1;
+        row.frame.SetWidth(width);
+        const height = row.SetData(entry.data);
+        const setup = entry.setup ?? this.opts.setupRow;
+        if (setup != null) {
+          setup(row, entry.data, entry);
+        }
+        row.frame.ClearAllPoints();
+        row.frame.SetPoint("TOPLEFT", this.child, "TOPLEFT", 0, -y);
+        row.frame.Show();
+        y += height + list.ROW_GAP;
+      } else if (entry.kind == "frame" || entry.kind == "drawer") {
+        const frame = entry.frame;
+        if (frame != null) {
+          this.drawerFrames.add(frame);
+          if (entry.kind == "frame" || entry.open == true || (entry.id != null && this.openDrawer == entry.id)) {
+            usedFrames.add(frame);
+            const height = this.LayoutFrame(entry, width);
+            this.PlaceFrame(frame, y, width, height);
+            y += height + (entry.kind == "drawer" ? list.ROW_GAP : 0);
+          }
+        }
+      } else if (entry.kind == "empty") {
+        let empty = this.empties[empties];
+        if (empty == null) {
+          empty = CreateEmptyState(this.child, { width: this.fullWidth });
+          this.empties.push(empty);
+        }
+        empties += 1;
+        empty.frame.SetWidth(width);
+        const height = empty.SetContent(
+          entry.text,
+          entry.action,
+          entry.onAction,
+          entry.compact == true
+        );
+        empty.frame.ClearAllPoints();
+        empty.frame.SetPoint("TOPLEFT", this.child, "TOPLEFT", 0, -y);
+        empty.frame.Show();
+        y += height;
+      } else if (entry.kind == "callout") {
+        let callout = this.callouts[callouts];
+        if (callout == null) {
+          callout = CreateCallout(this.child, { width: this.fullWidth - space.sm * 2 });
+          this.callouts.push(callout);
+        }
+        callouts += 1;
+        callout.frame.SetWidth(Math.max(1, width - space.sm * 2));
+        const height = callout.SetText(entry.text);
+        callout.frame.ClearAllPoints();
+        callout.frame.SetPoint("TOPLEFT", this.child, "TOPLEFT", space.sm, -(y + space.xs));
+        callout.frame.Show();
+        y += height + space.xs * 2;
+      } else if (entry.kind == "buttons") {
+        let x = space.sm;
+        const buttons = entry.list;
+        if (buttons != null) {
+          for (const button of buttons) {
+            button.ClearAllPoints();
+            button.SetPoint("TOPLEFT", this.child, "TOPLEFT", x, -(y + space.xs));
+            button.Show();
+            usedButtons.add(button);
+            this.managedButtons.add(button);
+            x += (readable(button.GetWidth()) ?? 0) + space.sm;
+          }
+        }
+        y += list.BUTTON_ROW_HEIGHT;
+      } else if (entry.kind == "gap") {
+        y += entry.size ?? space.sm;
+      }
+    }
+    for (let i = bars; i<this.bars.length; i++) {
+      this.bars[i].frame.Hide();
+    }
+    for (let i = rows; i<this.rows.length; i++) {
+      this.rows[i].item = null;
+      this.rowEntries.delete(i);
+      this.rows[i].frame.Hide();
+    }
+    for (let i = empties; i<this.empties.length; i++) {
+      this.empties[i].frame.Hide();
+    }
+    for (let i = callouts; i<this.callouts.length; i++) {
+      this.callouts[i].frame.Hide();
+    }
+    for (const button of this.managedButtons) {
+      if (!usedButtons.has(button)) {
+        button.Hide();
+      }
+    }
+    for (const frame of this.drawerFrames) {
+      if (!usedFrames.has(frame)) {
+        frame.Hide();
+      }
+    }
+    return y;
+  }
+
+  Paint(entries: WellEntry[]?= null, paintOpts: WellPaintOptions?= null): number {
+    const empty: WellEntry[] = [];
+    const current = entries ?? empty;
+    this.entries = current;
+    this.paintOpts = paintOpts;
+    const maxViewport = Math.max(1, this.maxHeight - this.chrome);
+    let width = this.fullWidth;
+    let height = this.PaintAt(
+      current,
+      width,
+      paintOpts != null && paintOpts.forceExpanded == true
+    );
+    if (height - maxViewport >= 1 && this.narrowWidth<this.fullWidth) {
+      width = this.narrowWidth;
+      height = this.PaintAt(current, width, paintOpts != null && paintOpts.forceExpanded == true);
+    }
+    this.rowWidth = width;
+    const header = this.header;
+    if (header != null) {
+      header.Layout(width);
+    }
+    let viewport = maxViewport;
+    if (this.fit == "content") {
+      const minViewport = Math.max(1, Math.min(maxViewport, this.minHeight - this.chrome));
+      viewport = Math.clamp(Math.floor(height + 0.5), minViewport, maxViewport);
+    }
+    const previous = readable(this.frame.GetHeight()) ?? 0;
+    const newHeight = viewport + this.chrome;
+    this.frame.SetHeight(newHeight);
+    this.scroll.frame.SetHeight(viewport);
+    this.scroll.SetContentHeight(Math.max(1, height));
+    const resize = this.opts.onResize;
+    if (previous != newHeight && resize != null) {
+      resize(newHeight - previous, newHeight, this);
+    }
+    return height;
+  }
+
+  Repaint(): number {
+    const entries = this.entries;
+    if (entries != null) {
+      return this.Paint(entries, this.paintOpts);
+    }
+    return 0;
+  }
+
+  ScrollToTop() {
+    this.scroll.ScrollToTop();
+  }
+
+  SetMaxHeight(height: number?= null, opts: { repaint?: boolean }?= null) {
+    this.maxHeight = Math.max(this.chrome + 1, height ?? this.maxHeight);
+    if (this.fit == "fixed" || this.entries == null) {
+      this.frame.SetHeight(this.maxHeight);
+      this.scroll.frame.SetHeight(this.maxHeight - this.chrome);
+    }
+    if (this.entries != null && !(opts != null && opts.repaint == false)) {
+      this.Repaint();
+    }
+  }
+
+  RowWidth(): number {
+    return this.rowWidth;
+  }
+
+  StableWidth(): number {
+    return this.narrowWidth;
+  }
+
+  SetColumns(spec: RowColumn[]?= null) {
+    this.rowOpts.columns = spec;
+    let header = this.header;
+    if (spec != null && header == null) {
+      this.BuildHeader();
+      header = this.header;
+      if (header != null) {
+        const hh = readable(header.frame.GetHeight()) ?? 0;
+        this.chrome = this.pad * 2 + hh;
+        this.scroll.frame.ClearAllPoints();
+        this.scroll.frame.SetPoint("TOPLEFT", this.frame, "TOPLEFT", this.pad, -(this.pad + hh));
+        this.scroll.frame.SetHeight(Math.max(
+          1,
+          (readable(this.frame.GetHeight()) ?? 0) - this.chrome
+        ));
+      }
+    } else if (header != null) {
+      const empty: RowColumn[] = [];
+      header.SetColumnSpecs(spec ?? empty);
+      header.frame.SetShown(spec != null);
+    }
+    if (this.entries != null) {
+      this.Repaint();
+    } else if (header != null) {
+      header.Layout(this.rowWidth);
+    }
+  }
+
+  CreateDrawer(opts: DrawerOptions?= null): WellDrawer {
+    if (opts == null) {
+      const defaults: DrawerOptions = {};
+      return new WellDrawer(this, defaults);
+    }
+    return new WellDrawer(this, opts);
+  }
+
+  IsDrawerOpen(id: string?= null): boolean {
+    return id != null && this.openDrawer == id;
+  }
+
+  SetOpenDrawer(id: string?= null) {
+    this.openDrawer = id;
+    this.Repaint();
+  }
+
+  ToggleDrawer(id: string?= null): boolean {
+    this.SetOpenDrawer(this.openDrawer != id ? id : null);
+    return this.openDrawer == id && id != null;
+  }
+}
+
+export function CreateListWell(parent: Frame, opts: ListWellOptions?= null): ListWell {
+  if (opts == null) {
+    const defaults: ListWellOptions = {};
+    return new ListWell(parent, defaults);
+  }
+  return new ListWell(parent, opts);
+}

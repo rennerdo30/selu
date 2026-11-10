@@ -1,0 +1,233 @@
+import { CreateEditBox, EditControl } from "./edit";
+import { CreateLabel, Label } from "./text";
+import { list, space, size } from "./tokens";
+import { MeasureText } from "./tooltip";
+
+export type NumberFieldOptions = {
+  width?: number;
+  height?: number;
+  unit?: string;
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  integer?: boolean;
+  reject?: boolean;
+  get?: () => number ?;
+  set?: (value: number?) => boolean ?;
+  validate?: (value: number) => boolean ?;
+  onReject?: (reason: string, value: number?, text: string) => void
+};
+
+function formatNumber(value: number?, integer: boolean): string {
+  if (value == null) {
+    return "";
+  }
+  if (integer || value == Math.floor(value)) {
+    return format("%d", value);
+  }
+  return format("%.2f", value).replaceAll(
+    luaPattern`0+$`,
+    ""
+  ).replaceAll(luaPattern`%.$`, "");
+}
+
+export class NumberField {
+  edit: EditControl;
+  frame: EditBox;
+  unitLabel: Label;
+  opts: NumberFieldOptions;
+  getter: (() => number?) ?;
+  setter : ((value: number?) => boolean?) ?;
+  sanitizing = false;
+  committing = false;
+  cancelling = false;
+  invalidGeneration = 0;
+
+  constructor(parent: Frame, opts: NumberFieldOptions) {
+    this.opts = opts;
+    this.getter = opts.get;
+    this.setter = opts.set;
+    this.edit = CreateEditBox(parent, {
+      width: opts.width ?? list.NUMBER_FIELD_WIDTH, height: opts.height ?? size.controlHeightSmall, placeholder: opts.placeholder, onChange: (
+        text,
+        user
+      ) => {
+        this.Sanitize(text, user);
+      }
+    });
+    this.frame = this.edit.frame;
+    this.unitLabel = CreateLabel(
+      this.frame,
+      {
+        text: opts.unit ?? "",
+        role: "small",
+        color: "textSecondary",
+        layer: "OVERLAY",
+        justify: "RIGHT"
+      }
+    );
+    this.unitLabel.region.SetPoint("RIGHT", this.frame, "RIGHT", -this.edit.textInset, 0);
+    this.LayoutUnit();
+    this.frame.HookScript("OnEnterPressed", () => {
+      this.Commit();
+    });
+    this.frame.HookScript("OnEditFocusLost", () => {
+      this.Commit();
+    });
+    this.frame.SetScript("OnEscapePressed", () => {
+      this.cancelling = true; this.Sync(); this.frame.ClearFocus(); this.cancelling = false;
+    });
+    this.Sync();
+  }
+
+  Sanitize(text: string, user: boolean?) {
+    if (user != true || this.sanitizing) {
+      return;
+    }
+    const min = this.opts.min;
+    const allowMinus = min != null && min<0;
+    let clean = "";
+    let separator = false;
+    for (let i = 1; i <= text.length; i++) {
+      const char = text.slice(i - 1, i);
+      if (char.match(luaPattern`%d`) != null) {
+        clean += char;
+      } else if ((char == "." || char == ",") && !separator && this.opts.integer != true) {
+        separator = true;
+        clean += char;
+      } else if (char == "-" && allowMinus && clean == "") {
+        clean += char;
+      }
+    }
+    if (clean != text) {
+      this.sanitizing = true;
+      this.frame.SetText(clean);
+      this.sanitizing = false;
+    }
+  }
+
+  LayoutUnit() {
+    const unit = this.opts.unit;
+    const width = unit != null && unit != "" ? MeasureText(this.unitLabel.region) + space.xs : 0;
+    const right = this.edit.textInset + width;
+    this.frame.SetTextInsets(this.edit.textInset, right, 0, 0);
+    this.edit.placeholder.region.ClearAllPoints();
+    this.edit.placeholder.region.SetPoint("LEFT", this.frame, "LEFT", this.edit.textInset, 0);
+    this.edit.placeholder.region.SetPoint("RIGHT", this.frame, "RIGHT", -right, 0);
+  }
+
+  SetUnit(unit: string?= null) {
+    this.opts.unit = unit;
+    this.unitLabel.region.SetText(unit ?? "");
+    this.LayoutUnit();
+  }
+
+  Refresh() {
+    this.edit.Refresh();
+    this.unitLabel.SetColor(this.edit.input.enabled ? "textSecondary" : "textDisabled");
+  }
+
+  Sync() {
+    const get = this.getter;
+    this.frame.SetText(formatNumber(get != null ? get() : null, this.opts.integer == true));
+  }
+
+  Bind(get: (() => number?)?= null, set: ((value: number?) => boolean?)?= null) {
+    this.getter = get;
+    this.setter = set;
+    this.Sync();
+  }
+
+  ShowInvalid() {
+    this.invalidGeneration += 1;
+    const generation = this.invalidGeneration;
+    this.edit.invalid = true;
+    this.Refresh();
+    C_Timer.After(list.INVALID_SECONDS, () => {
+      if (this.invalidGeneration != generation) {
+        return;
+      }
+      this.edit.invalid = false; this.Refresh();
+    });
+  }
+
+  Commit() {
+    if (this.committing || this.cancelling || !this.edit.input.enabled) {
+      return;
+    }
+    this.committing = true;
+    const typed = readable(this.frame.GetText()) ?? "";
+    const text = typed.replaceAll(luaPattern`,`, ".").match(luaPattern`^%s*(.-)%s*$`) ?? "";
+    let value: number?= null;
+    let valid = true;
+    let reason = "";
+    if (text != "") {
+      value = tonumber(text);
+      if (value == null) {
+        valid = false;
+        reason = "nan";
+      } else {
+        if (this.opts.integer == true) {
+          value = Math.floor(value + 0.5);
+        }
+        const min = this.opts.min;
+        const max = this.opts.max;
+        const low = min != null && value<min;
+        const high = max != null && value>max;
+        if (this.opts.reject == true && (low || high)) {
+          valid = false;
+          reason = "range";
+        } else {
+          if (low && min != null) {
+            value = min;
+          }
+          if (high && max != null) {
+            value = max;
+          }
+          const validate = this.opts.validate;
+          if (validate != null && validate(value) == false) {
+            valid = false;
+            reason = "invalid";
+          }
+        }
+      }
+    }
+    if (valid) {
+      const get = this.getter;
+      const current = get != null ? get() : null;
+      const set = this.setter;
+      if (value != current && set != null && set(value) == false) {
+        valid = false;
+        reason = "refused";
+      }
+    }
+    if (valid) {
+      this.edit.invalid = false;
+      this.Refresh();
+    } else {
+      this.ShowInvalid();
+      const reject = this.opts.onReject;
+      if (reject != null) {
+        reject(reason, value, typed);
+      }
+    }
+    this.Sync();
+    this.committing = false;
+  }
+
+  SetEnabled(enabled: boolean?= null) {
+    this.edit.SetEnabled(enabled != false);
+    this.Refresh();
+  }
+}
+
+export function CreateNumberField(
+  parent: Frame,
+  opts: NumberFieldOptions?= null
+): NumberField {
+  if (opts == null) {
+    const defaults: NumberFieldOptions = {};
+    return new NumberField(parent, defaults);
+  }
+  return new NumberField(parent, opts);
+}

@@ -1,0 +1,237 @@
+import { materials, textures, Material, edges, Edge } from "./assets";
+import { themes, SetColor } from "./theme";
+import { hostLog as logMessage } from "./host";
+
+export class AssetResolver {
+  cache = new Map<string, boolean>();
+  resolved: string[] = [];
+  missing: string[] = [];
+  mode = "";
+  materialCache = new Map<string, Material | boolean>();
+  edgeCache = new Map<string, Edge | boolean>();
+  textureCache = new Map<string, string | boolean>();
+  probe: Texture;
+
+  constructor() {
+    this.probe = UIParent.CreateTexture(null, "BACKGROUND");
+    this.probe.Hide();
+    if (this.check(
+      "fileid",
+      "Interface\\Buttons\\WHITE8X8"
+      ) == true && this.check(
+        "fileid",
+        "Interface\\SeluUI\\ProbeMissingTexture"
+      ) == false) {
+        this.mode = "fileid";
+    } else if (this.check(
+      "texture",
+      "Interface\\Buttons\\WHITE8X8"
+      ) == true && this.check(
+        "texture",
+        "Interface\\SeluUI\\ProbeMissingTexture"
+      ) == false) {
+        this.mode = "texture";
+    }
+  }
+
+  check(mode: string, path: string): boolean ? {
+    try {
+      this.probe.SetTexture(path);
+      if (mode == "fileid") {
+        const value = readable(this.probe.GetTextureFileID());
+        this.probe.SetTexture(null);
+        return value != null && value != 0;
+      }
+      const value = readable(this.probe.GetTexture());
+      this.probe.SetTexture(null);
+      return value != null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  exists(path: string?= null) : boolean {
+    if (path == null || this.mode == "") {
+      return false;
+    }
+    const cached = this.cache.get(path);
+    if (cached != null) {
+      return cached;
+    }
+    const exists = this.check(this.mode, path) == true;
+    this.cache.set(path, exists);
+    if (exists) {
+      this.resolved.push(path);
+      logMessage("DEBUG", `ui: asset resolved  ${path}`);
+    } else {
+      this.missing.push(path);
+      logMessage("DEBUG", `ui: asset MISSING   ${path} (flat fallback)`);
+    }
+    return exists;
+  }
+
+  material(name: string?= null): Material ? {
+    if (name == null) {
+      return null;
+    }
+    const cached = this.materialCache.get(name);
+    if (typeof cached == "table") {
+      return cached;
+    }
+    if (cached == false) {
+      return null;
+    }
+    const candidates = materials.get(name);
+    if (candidates == null) {
+      return null;
+    }
+    for (const candidate of candidates) {
+      if (this.exists(candidate.path)) {
+        this.materialCache.set(name, candidate);
+        return candidate;
+      }
+    }
+    this.materialCache.set(name, false);
+    return null;
+  }
+
+  edge(name: string?= null) : Edge ? {
+    if (name == null) {
+      return null;
+    }
+    const cached = this.edgeCache.get(name);
+    if (typeof cached == "table") {
+      return cached;
+    }
+    if (cached == false) {
+      return null;
+    }
+    const spec = edges.get(name);
+    if (spec != null && this.exists(spec.path)) {
+      this.edgeCache.set(name, spec);
+      return spec;
+    }
+    this.edgeCache.set(name, false);
+    return null;
+  }
+
+  texture(key: string?= null) : string ? {
+    if (key == null) {
+      return null;
+    }
+    const cached = this.textureCache.get(key);
+    if (typeof cached == "string") {
+      return cached;
+    }
+    if (cached == false) {
+      return null;
+    }
+    const path = textures.get(key);
+    if (path != null && this.exists(path)) {
+      this.textureCache.set(key, path);
+      return path;
+    }
+    this.textureCache.set(key, false);
+    return null;
+  }
+}
+
+export const assets = new AssetResolver();
+
+export function PaintMaterial(
+  texture: Texture,
+  surface: string?= null,
+  tintToken: string?= null,
+  fallbackToken: string?= null,
+  frame: Frame?= null
+): boolean {
+  const name = surface != null ? themes.active.materials.get(surface) : null;
+  const material = typeof name == "string" ? assets.material(name) : null;
+  if (material != null) {
+    let loaded = false;
+    let tiled = false;
+    if (material.tile) {
+      try {
+        texture.SetTexture(material.path, "REPEAT", "REPEAT");
+        loaded = true;
+        tiled = true;
+      } catch {}
+    }
+    if (!loaded) {
+      try {
+        texture.SetTexture(material.path);
+        loaded = true;
+      } catch {}
+    }
+    if (loaded) {
+      try {
+        texture.SetHorizTile(tiled);
+      } catch {} try {
+        texture.SetVertTile(tiled);
+      } catch {}
+      let right = material.right;
+      if (!tiled && material.fitAspect > 0 && frame != null) {
+        const width = readable(frame.GetWidth());
+        const height = readable(frame.GetHeight());
+        if (width != null && height != null && width > 0 && height > 0) {
+          right = Math.min(1, width / height / material.fitAspect);
+        }
+      }
+      try {
+        texture.SetTexCoord(material.left, right, material.top, material.bottom);
+      } catch {}
+      try {
+        if (tintToken != null) {
+          const c = themes.color(tintToken);
+          texture.SetVertexColor(c.r, c.g, c.b, c.a);
+        } else {
+          texture.SetVertexColor(1, 1, 1, 1);
+        }
+      } catch {} return true;
+    }
+  }
+  try {
+    texture.SetHorizTile(false);
+  } catch {} try {
+    texture.SetVertTile(false);
+  } catch {} try {
+    texture.SetVertexColor(1, 1, 1, 1);
+  } catch {} if (fallbackToken != null) {
+    SetColor(texture, fallbackToken);
+  } else {
+    texture.SetColorTexture(0, 0, 0, 0);
+  }
+  return false;
+}
+
+export function AssetExists(path: string?= null): boolean {
+  return assets.exists(path);
+}
+
+export function GetMaterial(name: string?= null): Material ? {
+  return assets.material(name);
+}
+
+export function GetEdge(name: string?= null) : Edge ? {
+  return assets.edge(name);
+}
+
+export function GetTexture(key: string?= null) : string ? {
+  return assets.texture(key);
+}
+
+export function GetAssetReport() : {
+  verified: boolean;
+  mode: string ?;
+  resolved : string[];
+  missing: string[]
+}
+
+{
+  return {
+    verified: assets.mode != "",
+    mode: assets.mode == "" ? null : assets.mode,
+    resolved: assets.resolved,
+    missing: assets.missing
+  };
+}

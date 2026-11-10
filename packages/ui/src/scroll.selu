@@ -1,0 +1,394 @@
+import { RegisterOwnedFrame } from "./stacking";
+import { Backdrop } from "./backdrop";
+import { CreateEditBox, EditControl } from "./edit";
+import { FontRole } from "./fonts";
+import { size, space, typography } from "./tokens";
+import { AttachWindowRaise } from "./stacking";
+import { CreateButton, ButtonControl } from "./button";
+import { CreateLabel, Label } from "./text";
+
+export type ScrollOptions = {
+  width?: number;
+  height?: number;
+  claimLane?: boolean
+};
+
+export class ScrollControl {
+  frame: ScrollFrame;
+  child: Frame;
+  scrollbar: Frame;
+  thumb: Button;
+  width: number;
+  viewWidth: number;
+  claimLane: boolean;
+  OnViewportWidth: ((width: number) => void)?= null;
+  dragStartY = 0;
+  dragStartScroll = 0;
+
+  constructor(parent: Frame, opts: ScrollOptions) {
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    const height = opts.height ?? readable(parent.GetHeight()) ?? 0;
+    this.width = width;
+    this.viewWidth = width - size.scrollbarWidth - size.scrollbarGap;
+    this.claimLane = opts.claimLane == true;
+    const scroll = CreateFrame("ScrollFrame", null, parent);
+    RegisterOwnedFrame(scroll);
+    this.frame = scroll;
+    scroll.SetSize(this.viewWidth, height);
+    const child = CreateFrame("Frame", null, scroll);
+    RegisterOwnedFrame(child);
+    this.child = child;
+    child.SetSize(this.viewWidth, height);
+    scroll.SetScrollChild(child);
+    const bar = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(bar);
+    this.scrollbar = bar;
+    bar.SetSize(size.scrollbarWidth, height);
+    bar.SetPoint("TOPLEFT", scroll, "TOPRIGHT", size.scrollbarGap, 0);
+    bar.SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", size.scrollbarGap, 0);
+    Backdrop(bar, { style: "track" });
+    const thumb = CreateFrame("Button", null, bar);
+    RegisterOwnedFrame(thumb);
+    this.thumb = thumb;
+    thumb.SetSize(size.scrollbarWidth, size.scrollThumbMin);
+    thumb.SetPoint("TOP");
+    Backdrop(thumb, { style: "pill" });
+    scroll.EnableMouseWheel(true);
+    scroll.SetScript("OnMouseWheel", (_self, delta) => {
+      if (typeof delta == "number") {
+        const step = readable(delta);
+        if (step != null) {
+          this.ScrollTo((readable(scroll.GetVerticalScroll()) ?? 0) - step * size.scrollStep);
+        }
+      }
+    });
+    AttachWindowRaise(scroll, ["OnMouseDown", "OnMouseWheel"]);
+    scroll.SetScript("OnScrollRangeChanged", () => {
+      this.UpdateThumb();
+    });
+    scroll.SetScript("OnShow", () => {
+      this.UpdateThumb();
+    });
+    thumb.SetScript("OnMouseDown", () => {
+      const [x, y] = GetCursorPosition();
+      const cursor = readable(y);
+      if (cursor == null) {
+        return;
+      }
+      this.dragStartY = cursor;
+      this.dragStartScroll = readable(scroll.GetVerticalScroll()) ?? 0;
+      bar.SetScript("OnUpdate", () => {
+        if (readable(IsMouseButtonDown("LeftButton")) != true) {
+          bar.SetScript("OnUpdate", null);
+          return;
+        }
+        const range = this.GetRange();
+        const travel = (readable(bar.GetHeight()) ?? 0) - (readable(thumb.GetHeight()) ?? 0);
+        if (range <= 0 || travel <= 0) {
+          return;
+        }
+        const [
+          nowX,
+          nowY
+        ]
+          = GetCursorPosition();
+        const current = readable(nowY);
+        const scale = readable(bar.GetEffectiveScale());
+        if (current == null || scale == null || scale <= 0) {
+          return;
+        }
+        this.ScrollTo(this.dragStartScroll + (this.dragStartY - current) / scale * range / travel);
+      });
+    });
+    thumb.SetScript("OnMouseUp", () => {
+      bar.SetScript("OnUpdate", null);
+    });
+    AttachWindowRaise(thumb);
+    this.UpdateThumb();
+  }
+
+  GetRange(): number {
+    const content = readable(this.child.GetHeight());
+    const visible = readable(this.frame.GetHeight());
+    return content != null && visible != null ? Math.max(0, content - visible) : 0;
+  }
+
+  UpdateThumb() {
+    const range = this.GetRange();
+    const scroll = this.frame;
+    const bar = this.scrollbar;
+    const thumb = this.thumb;
+    if (range<1) {
+      if (readable(scroll.GetVerticalScroll()) != 0) {
+        scroll.SetVerticalScroll(0);
+      }
+      bar.Hide();
+      if (this.claimLane) {
+        scroll.SetWidth(this.width);
+        const callback = this.OnViewportWidth;
+        if (callback != null) {
+          callback(this.width);
+        }
+      }
+      return;
+    }
+    if (this.claimLane) {
+      scroll.SetWidth(this.viewWidth);
+      const callback = this.OnViewportWidth;
+      if (callback != null) {
+        callback(this.viewWidth);
+      }
+    }
+    bar.Show();
+    const track = readable(bar.GetHeight()) ?? 0;
+    const visible = readable(scroll.GetHeight()) ?? 0;
+    const height = Math.clamp(track * visible / (visible + range), size.scrollThumbMin, track);
+    thumb.SetHeight(height);
+    const raw = readable(scroll.GetVerticalScroll()) ?? 0;
+    const current = Math.clamp(raw, 0, range);
+    if (current != raw) {
+      scroll.SetVerticalScroll(current);
+    }
+    thumb.ClearAllPoints();
+    thumb.SetPoint("TOP", 0, -(track - height) * current / range);
+  }
+
+  ScrollTo(value: number) {
+    this.frame.SetVerticalScroll(Math.clamp(value, 0, this.GetRange()));
+    this.UpdateThumb();
+  }
+
+  SetContentHeight(height: number) {
+    this.child.SetHeight(Math.max(height, 1));
+    this.UpdateThumb();
+  }
+
+  ScrollToTop() {
+    this.ScrollTo(0);
+  }
+}
+
+export function CreateScrollFrame(
+  parent: Frame,
+  opts: ScrollOptions?= null
+): ScrollControl {
+  if (opts == null) {
+    const defaults: ScrollOptions = {};
+    return new ScrollControl(parent, defaults);
+  }
+  return new ScrollControl(parent, opts);
+}
+
+export type TextAreaOptions = {
+  width?: number;
+  height?: number;
+  font?: FontRole;
+  claimLane?: boolean
+};
+
+export class TextArea {
+  scroll: ScrollControl;
+  editBox: EditControl;
+
+  constructor(parent: Frame, opts: TextAreaOptions) {
+    const scroll = CreateScrollFrame(
+      parent,
+      { width: opts.width, height: opts.height, claimLane: opts.claimLane }
+    );
+    this.scroll = scroll;
+    const edit = CreateEditBox(
+      scroll.child,
+      {
+        width: readable(scroll.child.GetWidth()) ?? 0,
+        multiline: true,
+        flat: true,
+        font: opts.font
+      }
+    );
+    this.editBox = edit;
+    edit.frame.SetPoint("TOPLEFT");
+    if (opts.claimLane == true) {
+      scroll.OnViewportWidth = (width) => {
+        scroll.child.SetWidth(width);
+        edit.frame.SetWidth(width);
+      };
+      const callback = scroll.OnViewportWidth;
+      if (callback != null) {
+        callback(readable(scroll.frame.GetWidth()) ?? 0);
+      }
+    }
+    edit.frame.HookScript("OnTextChanged", () => {
+      scroll.SetContentHeight(Math.max(
+        readable(edit.frame.GetHeight()) ?? 0,
+        readable(scroll.frame.GetHeight()) ?? 0
+      ));
+    });
+    edit.frame.SetScript("OnCursorChanged", (_self, x, y, width, height) => {
+      if (typeof y != "number" || typeof height != "number") {
+        return;
+      }
+      const cursorY = readable(y);
+      const cursorHeight = readable(height);
+      if (cursorY == null || cursorHeight == null) {
+        return;
+      }
+      const top = -cursorY;
+      const bottom = top + cursorHeight;
+      const current = readable(scroll.frame.GetVerticalScroll()) ?? 0;
+      const visible = readable(scroll.frame.GetHeight()) ?? 0;
+      if (top<current) {
+        scroll.frame.SetVerticalScroll(top);
+      } else if (bottom>current + visible) {
+        scroll.frame.SetVerticalScroll(bottom - visible);
+      }
+      scroll.UpdateThumb();
+    });
+    scroll.frame.HookScript("OnHide", () => {
+      scroll.scrollbar.Hide();
+    });
+  }
+}
+
+export function CreateTextArea(parent: Frame, opts: TextAreaOptions?= null): TextArea {
+  if (opts == null) {
+    const defaults: TextAreaOptions = {};
+    return new TextArea(parent, defaults);
+  }
+  return new TextArea(parent, opts);
+}
+
+// Wave 3 supplies its richer empty-state builder through this checked interface.
+export type EmptyAction = (button: ButtonControl, mouse: string?) => void;
+
+export type EmptyView = {
+  frame: Frame;
+  SetContent: (text: string, actionText: string?, onAction: EmptyAction?) => void
+};
+
+export type TextWellOptions = {
+  width?: number;
+  height?: number;
+  pad?: number;
+  font?: FontRole;
+  emptyFactory?: (parent: Frame, width: number) => EmptyView
+};
+
+function defaultEmpty(parent: Frame, width: number): EmptyView {
+  const frame = CreateFrame("Frame", null, parent);
+  RegisterOwnedFrame(frame);
+  frame.SetSize(width, size.controlHeightSmall);
+  const label = CreateLabel(
+    frame,
+    {
+      text: "",
+      role: "body",
+      color: "textSecondary",
+      width: Math.max(1, width - space.md * 2),
+      wrap: true,
+      justify: "CENTER"
+    }
+  );
+  label.region.SetPoint("TOP", frame, "TOP", 0, -space.md);
+  let action: EmptyAction?= null;
+  const button = CreateButton(frame, {
+    text: "", variant: "secondary", height: size.controlHeightSmall, onClick: (
+      _button,
+      _mouse
+    ) => {
+      const run = action;
+      if (run != null) {
+        run(_button, _mouse);
+      }
+    }
+  });
+  button.frame.Hide();
+  const set = (text: string, actionText: string?, onAction: EmptyAction?) => {
+    label.region.SetWidth(Math.max(1, (readable(frame.GetWidth()) ?? width) - space.md * 2));
+    label.region.SetText(text);
+    let height = space.md + (readable(label.region.GetStringHeight()) ?? typography.body);
+    action = onAction;
+    if (actionText != null && actionText != "" && onAction != null) {
+      button.SetText(actionText);
+      button.frame.ClearAllPoints();
+      button.frame.SetPoint("TOP", label.region, "BOTTOM", 0, -space.sm);
+      button.frame.Show();
+      height += space.sm + size.controlHeightSmall;
+    } else {
+      action = null;
+      button.frame.Hide();
+    }
+    frame.SetHeight(height + space.md);
+  };
+  set("", null, null);
+  return { frame: frame, SetContent: set };
+}
+
+export class TextWell {
+  frame: Frame;
+  area: TextArea;
+  editBox: EditControl;
+  empty: EmptyView;
+  hasText = false;
+
+  constructor(parent: Frame, opts: TextWellOptions) {
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    const height = opts.height ?? readable(parent.GetHeight()) ?? 0;
+    const pad = opts.pad ?? space.xs;
+    const frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(frame);
+    this.frame = frame;
+    frame.SetSize(width, height);
+    Backdrop(frame, { style: "inset" });
+    this.area = CreateTextArea(
+      frame,
+      { width: width - pad * 2, height: height - pad * 2, font: opts.font, claimLane: true }
+    );
+    this.area.scroll.frame.SetPoint("TOPLEFT", frame, "TOPLEFT", pad, -pad);
+    this.editBox = this.area.editBox;
+    const factory = opts.emptyFactory;
+    this.empty = factory != null ? factory(
+      frame,
+      width - space.md * 2
+    ) : defaultEmpty(frame, width - space.md * 2);
+    this.empty.frame.SetPoint("CENTER", frame, "CENTER", 0, 0);
+    this.empty.frame.Hide();
+  }
+
+  HasText(): boolean {
+    return this.hasText;
+  }
+
+  SetText(text: string) {
+    this.hasText = true;
+    this.empty.frame.Hide();
+    this.area.scroll.frame.Show();
+    this.editBox.frame.SetText(text);
+    this.editBox.frame.SetCursorPosition(0);
+  }
+
+  ShowEmpty(text: string, actionText: string?= null, onAction: EmptyAction?= null) {
+    this.hasText = false;
+    this.editBox.frame.SetText("");
+    this.editBox.frame.ClearFocus();
+    this.area.scroll.frame.Hide();
+    this.empty.SetContent(text, actionText, onAction);
+    this.empty.frame.Show();
+  }
+
+  SelectAll(): boolean {
+    if (!this.hasText) {
+      return false;
+    }
+    this.editBox.frame.HighlightText();
+    this.editBox.frame.SetFocus();
+    return true;
+  }
+}
+
+export function CreateTextWell(parent: Frame, opts: TextWellOptions?= null): TextWell {
+  if (opts == null) {
+    const defaults: TextWellOptions = {};
+    return new TextWell(parent, defaults);
+  }
+  return new TextWell(parent, opts);
+}

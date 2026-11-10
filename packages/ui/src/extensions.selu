@@ -1,0 +1,7 @@
+// A checked named export replaces UI["Create" + name]. No dynamic service bag.
+export type WidgetFactory<Options, Widget> = (parent: Frame, opts: Options) => Widget;
+
+export type RegisteredWidget<Options, Widget> = {
+  name: string;
+  create: WidgetFactory<Options, Widget>
+};

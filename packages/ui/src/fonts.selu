@@ -1,0 +1,106 @@
+import { typography, fontPath, fontFlags, fontShadow } from "./tokens";
+import { themes } from "./theme";
+export type FontRole = "title" | "heading" | "body" | "small" | "caption";
+
+function fallback(role: FontRole): Font {
+  if (role == "title") {
+    return GameFontNormalLarge;
+  }
+  if (role == "heading") {
+    return GameFontNormal;
+  }
+  if (role == "body") {
+    return GameFontHighlight;
+  }
+  if (role == "small") {
+    return GameFontHighlightSmall;
+  }
+  return GameFontDisableSmall;
+}
+
+function height(role: FontRole): number {
+  if (role == "title") {
+    return typography.title;
+  }
+  if (role == "heading") {
+    return typography.heading;
+  }
+  if (role == "body") {
+    return typography.body;
+  }
+  if (role == "small") {
+    return typography.small;
+  }
+  return typography.caption;
+}
+
+function tryFont(font: Font, path: string, pixels: number): boolean {
+  try {
+    const applied: boolean?= font.SetFont(path, pixels, fontFlags);
+    if (applied == false) {
+      return false;
+    }
+    if (applied == true) {
+      return true;
+    }
+    const current = font.GetFont();
+    return current != null && current.split("/").join("\\").lower() == path.split("/").join("\\").lower();
+  } catch {
+    return false;
+  }
+}
+
+export class Typography {
+  fonts = new Map<string, Font>();
+  owned: Font[] = [];
+  path: string?= null;
+  source = "Blizzard font objects (no path could be applied)";
+
+  constructor() {
+    const roles: FontRole[] = ["title", "heading", "body", "small", "caption"];
+    for (const role of roles) {
+      let selected = fallback(role);
+      try {
+        const created = CreateFont("SeluUIFont_" + role);
+        let candidate = fontPath;
+        let applied = tryFont(created, candidate, height(role));
+        if (!applied) {
+          const clientPath = GameFontNormal.GetFont();
+          if (clientPath != null && clientPath.lower() != fontPath.lower()) {
+            candidate = clientPath;
+            applied = tryFont(created, candidate, height(role));
+          }
+        }
+        if (applied) {
+          selected = created;
+          created.SetShadowOffset(fontShadow.x, fontShadow.y);
+          this.owned.push(created);
+          if (this.path == null) {
+            this.path = candidate;
+            this.source = candidate == fontPath ? "Friz Quadrata (explicit)" : "client GameFontNormal";
+          }
+        }
+      } catch {}
+      this.fonts.set(role, selected);
+    }
+    this.refresh();
+    themes.onChanged((_theme) => {
+      this.refresh();
+    });
+  }
+
+  get(role: FontRole): Font {
+    return this.fonts.get(role) ?? GameFontNormal;
+  }
+
+  refresh() {
+    const c = themes.color("textShadow");
+    for (const font of this.owned) {
+      try {
+        font.SetShadowColor(c.r, c.g, c.b, c.a);
+      } catch {}
+    }
+  }
+}
+
+export const fonts = new Typography();

@@ -1,0 +1,189 @@
+import { CreateLabel, Label } from "./text";
+import { RowColumn } from "./list-row";
+import { ColumnLayout, ColumnSpec, ListRowLane, RowLaneOptions } from "./list-layout";
+import { list, size } from "./tokens";
+import { themes, SetColor } from "./theme";
+import { MeasureText, ShowTooltip, HideTooltip } from "./tooltip";
+import { TrackKitLocale } from "./kit-locale";
+import { CallerL } from "./kit-strings";
+import { RegisterOwnedFrame, AttachWindowRaise } from "./stacking";
+export type CaptionSpec = RowColumn | string;
+
+export type ColumnHeaderOptions = {
+  width?: number;
+  columns?: RowColumn[];
+  gap?: number;
+  row?: RowLaneOptions
+};
+
+export class HeaderCell {
+  frame: Frame;
+  label: Label;
+  fullText = "";
+  truncated = false;
+  tooltipShown = false;
+
+  constructor(parent: Frame) {
+    this.frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(1, list.COLUMN_HEADER_HEIGHT);
+    this.label = CreateLabel(
+      this.frame,
+      { role: "caption", color: "textSecondary", width: 1, wrap: false }
+    );
+    this.label.region.SetPoint("LEFT", this.frame, "LEFT", 0, 0);
+    this.frame.SetScript("OnEnter", () => {
+      if (this.truncated) {
+        this.tooltipShown = ShowTooltip(this.frame, [this.fullText]);
+      }
+    });
+    this.frame.SetScript("OnLeave", () => {
+      if (this.tooltipShown) {
+        this.tooltipShown = false;
+        HideTooltip();
+      }
+    });
+    AttachWindowRaise(this.frame);
+  }
+}
+
+export class ColumnHeader {
+  frame: Frame;
+  divider: Texture;
+  columns: RowColumn[];
+  captions: string[] = [];
+  cells: HeaderCell[] = [];
+  opts: ColumnHeaderOptions;
+
+  constructor(parent: Frame, opts: ColumnHeaderOptions) {
+    this.opts = opts;
+    const columns: RowColumn[] = [];
+    this.columns = opts.columns ?? columns;
+    this.frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(
+      opts.width ?? readable(parent.GetWidth()) ?? 0,
+      list.COLUMN_HEADER_HEIGHT
+    );
+    this.divider = this.frame.CreateTexture(null, "ARTWORK");
+    this.divider.SetHeight(size.separator);
+    this.divider.SetPoint("BOTTOMLEFT");
+    this.divider.SetPoint("BOTTOMRIGHT");
+    themes.skinTexture(this.divider, (_theme) => {
+      SetColor(this.divider, "divider");
+    });
+    this.frame.HookScript("OnSizeChanged", () => {
+      this.Layout();
+    });
+    TrackKitLocale(() => {
+      this.Layout();
+    });
+    this.Layout();
+  }
+
+  Caption(index: number): string {
+    const override = this.captions[index];
+    const column = this.columns[index];
+    if (override != null) {
+      return CallerL(override).upper();
+    }
+    if (column != null) {
+      const label = column.label;
+      if (label != null) {
+        return label.upper();
+      }
+      const key = column.key;
+      if (key != null) {
+        return CallerL(key).upper();
+      }
+    }
+    return "";
+  }
+
+  Layout(width: number?= null) {
+    if (width != null && readable(this.frame.GetWidth()) != width) {
+      this.frame.SetWidth(width);
+    }
+    const lane = ListRowLane(readable(this.frame.GetWidth()), this.opts.row);
+    const specs: ColumnSpec[] = [];
+    for (const column of this.columns) {
+      specs.push({ width: column.width, weight: column.weight, justify: column.justify });
+    }
+    const geometry = ColumnLayout(specs, lane.width, this.opts.gap);
+    for (let i = 0; i<geometry.length; i++) {
+      let cell = this.cells[i];
+      if (cell == null) {
+        cell = new HeaderCell(this.frame);
+        this.cells.push(cell);
+      }
+      const g = geometry[i];
+      const text = this.Caption(i);
+      cell.frame.SetWidth(g.width);
+      cell.frame.ClearAllPoints();
+      cell.frame.SetPoint("LEFT", this.frame, "LEFT", lane.left + g.x, 0);
+      cell.label.region.SetWidth(g.width);
+      cell.label.region.SetJustifyH(g.justify);
+      cell.label.region.SetText(text);
+      cell.fullText = text;
+      cell.truncated = MeasureText(cell.label.region)>g.width;
+      cell.frame.EnableMouse(cell.truncated);
+      cell.frame.Show();
+    }
+    for (let i = geometry.length; i<this.cells.length; i++) {
+      this.cells[i].frame.Hide();
+    }
+  }
+
+  SetColumnSpecs(columns: RowColumn[]?= null) {
+    if (columns == null) {
+      this.SetColumns();
+      return;
+    }
+    this.columns = columns;
+    this.captions = [];
+    this.Layout();
+  }
+
+  SetCaptions(captions: string[]?= null) {
+    const empty: string[] = [];
+    this.captions = captions ?? empty;
+    this.Layout();
+  }
+
+  SetColumns(columns: CaptionSpec[]?= null) {
+    if (columns == null || columns.length == 0) {
+      this.captions = [];
+    } else if (typeof columns[0] == "string") {
+      const captions: string[] = [];
+      for (let i = 0; i<columns.length; i++) {
+        const column = columns[i];
+        if (typeof column == "string") {
+          captions.push(column);
+        }
+      }
+      this.captions = captions;
+    } else {
+      const specs: RowColumn[] = [];
+      for (let i = 0; i<columns.length; i++) {
+        const column = columns[i];
+        if (typeof column == "table") {
+          specs.push(column);
+        }
+      }
+      this.columns = specs;
+      this.captions = [];
+    }
+    this.Layout();
+  }
+}
+
+export function CreateColumnHeader(
+  parent: Frame,
+  opts: ColumnHeaderOptions?= null
+): ColumnHeader {
+  if (opts == null) {
+    const defaults: ColumnHeaderOptions = {};
+    return new ColumnHeader(parent, defaults);
+  }
+  return new ColumnHeader(parent, opts);
+}

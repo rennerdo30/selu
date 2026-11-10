@@ -1,0 +1,144 @@
+import { CreateButton, ButtonControl, TooltipSource } from "./button";
+import { CreateLabel, Label } from "./text";
+import { RowRGB } from "./list-row";
+import { space, size, typography } from "./tokens";
+import { themes, SetColor } from "./theme";
+import { RegisterOwnedFrame } from "./stacking";
+
+export type BreadcrumbTrailing = {
+  frame: Frame;
+  setMaxWidth?: (width: number) => void
+};
+
+export type BreadcrumbOptions = {
+  width?: number;
+  height?: number;
+  backText?: string | (() => string?);
+  backTooltip?: TooltipSource;
+  onBack?: () => void;
+  trailing?: BreadcrumbTrailing;
+  trailingMaxShare?: number
+};
+
+export class Breadcrumb {
+  frame: Frame;
+  back: ButtonControl;
+  divider: Texture;
+  current: Label;
+  rgb: RowRGB?= null;
+  trailing: BreadcrumbTrailing?= null;
+  opts: BreadcrumbOptions;
+
+  constructor(parent: Frame, opts: BreadcrumbOptions) {
+    this.opts = opts;
+    const height = opts.height ?? size.controlHeightSmall;
+    this.frame = CreateFrame("Frame", null, parent);
+    RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(opts.width ?? readable(parent.GetWidth()) ?? 0, height);
+    this.back = CreateButton(this.frame, {
+      text: this.BackText(), height: height, variant: "ghost", tooltip: opts.backTooltip, onClick: (
+        _button,
+        _mouse
+      ) => {
+        const back = this.opts.onBack; if (back != null) {
+          back();
+        }
+      }
+    });
+    this.back.frame.SetPoint("LEFT", this.frame, "LEFT", 0, 0);
+    this.divider = this.frame.CreateTexture(null, "ARTWORK");
+    this.divider.SetSize(size.separator, typography.body);
+    themes.skinTexture(this.divider, (_theme) => {
+      SetColor(this.divider, "divider");
+    });
+    this.current = CreateLabel(
+      this.frame,
+      { role: "body", color: "textPrimary", width: 1, wrap: false }
+    );
+    themes.skinLabel(this.current.region, (_theme) => {
+      this.PaintCurrent();
+    });
+    if (opts.trailing != null) {
+      this.SetTrailing(opts.trailing);
+    } else {
+      this.Layout();
+    }
+  }
+
+  BackText(): string {
+    const text = this.opts.backText;
+    if (typeof text == "function") {
+      try {
+        return text() ?? "";
+      } catch {
+        return "";
+      }
+    }
+    if (typeof text == "string") {
+      return text;
+    }
+    return "";
+  }
+
+  PaintCurrent() {
+    const rgb = this.rgb;
+    if (rgb != null) {
+      this.current.region.SetTextColor(rgb.r, rgb.g ?? rgb.r, rgb.b ?? rgb.r, 1);
+    } else {
+      this.current.SetColor("textPrimary");
+    }
+  }
+
+  SetCurrent(text: string?= null, rgb: RowRGB?= null) {
+    this.current.region.SetText(text ?? "");
+    this.rgb = rgb;
+    this.PaintCurrent();
+  }
+
+  SetTrailing(widget: BreadcrumbTrailing?= null) {
+    this.trailing = widget;
+    if (widget != null) {
+      widget.frame.SetParent(this.frame);
+      widget.frame.ClearAllPoints();
+      widget.frame.SetPoint("RIGHT", this.frame, "RIGHT", 0, 0);
+    }
+    this.Layout();
+  }
+
+  Layout() {
+    const width = readable(this.frame.GetWidth()) ?? 0;
+    this.divider.ClearAllPoints();
+    this.divider.SetPoint("LEFT", this.back.frame, "RIGHT", space.sm, 0);
+    this.current.region.ClearAllPoints();
+    this.current.region.SetPoint("LEFT", this.divider, "RIGHT", space.sm, 0);
+    let used = (readable(this.back.frame.GetWidth()) ?? 0) + space.sm * 2 + size.separator;
+    const trailing = this.trailing;
+    if (trailing != null && readable(trailing.frame.IsShown()) == true) {
+      const cap = Math.floor(width * (this.opts.trailingMaxShare ?? 0.5));
+      const resize = trailing.setMaxWidth;
+      if (resize != null) {
+        resize(cap);
+      } else if ((readable(trailing.frame.GetWidth()) ?? 0)>cap) {
+        trailing.frame.SetWidth(cap);
+      }
+      used += (readable(trailing.frame.GetWidth()) ?? 0) + space.sm;
+    }
+    this.current.region.SetWidth(Math.max(1, width - used));
+  }
+
+  Relabel() {
+    this.back.SetText(this.BackText());
+    this.Layout();
+  }
+}
+
+export function CreateBreadcrumb(
+  parent: Frame,
+  opts: BreadcrumbOptions?= null
+): Breadcrumb {
+  if (opts == null) {
+    const defaults: BreadcrumbOptions = {};
+    return new Breadcrumb(parent, defaults);
+  }
+  return new Breadcrumb(parent, opts);
+}

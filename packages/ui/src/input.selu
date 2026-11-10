@@ -1,0 +1,47 @@
+export class InputState {
+  enabled = true;
+  hovered = false;
+  pressed = false;
+  focused = false;
+  frame: Frame;
+  nativeEnabled: (enabled: boolean) => void;
+  clearFocus: () => void;
+  refresh: () => void;
+
+  constructor(
+    frame: Frame,
+    nativeEnabled: (enabled: boolean) => void,
+    clearFocus: () => void,
+    refresh: () => void
+  ) {
+    this.frame = frame;
+    this.nativeEnabled = nativeEnabled;
+    this.clearFocus = clearFocus;
+    this.refresh = refresh;
+  }
+
+  SetEnabled(enabled: boolean = true) {
+    this.enabled = enabled;
+    if (!enabled) {
+      this.hovered = false;
+      this.pressed = false;
+      this.focused = false;
+      try {
+        this.clearFocus();
+      } catch {}
+    }
+    try {
+      this.nativeEnabled(enabled);
+    } catch {}
+    try {
+      this.frame.EnableMouse(enabled);
+    } catch {}
+    try {
+      this.frame.EnableKeyboard(enabled);
+    } catch {}
+    try {
+      this.frame.SetAlpha(1);
+    } catch {}
+    this.refresh();
+  }
+}

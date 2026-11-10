@@ -1,0 +1,90 @@
+import { themes, Unpack } from "./theme";
+import { ShowTooltip, HideTooltip, TooltipLines } from "./tooltip";
+
+// A small tinted glyph in a slightly larger hit box: the corner X of HUD
+// cards, card header glyphs and the waypoint arrow's clear glyph
+// (toolkit a663bb0: four modules had their own copy with the same sizes).
+export type GlyphButtonOptions = {
+  texture: string;
+  size?: number;
+  hit?: number;
+  layer?: string;
+  token?: string;
+  hoverToken?: string;
+  // Up to two click kinds; default left button up.
+  clicks?: string[];
+  tooltip?: () => TooltipLines?;
+  tooltipAnchor?: string;
+  onClick?: (button: Button, mouse: string?) => void;
+  onEnter?: (button: Button) => void;
+  onLeave?: (button: Button) => void
+};
+
+export class GlyphButton {
+  frame: Button;
+  glyph: Texture;
+  hovered = false;
+  token: string;
+  hoverToken: string;
+  tooltipShown = false;
+
+  constructor(parent: Frame, opts: GlyphButtonOptions) {
+    const size = opts.size ?? 16;
+    const hit = opts.hit ?? 20;
+    const button = CreateFrame("Button", null, parent);
+    this.frame = button;
+    button.SetSize(hit, hit);
+    const clicks = opts.clicks ?? ["LeftButtonUp"];
+    if (clicks.length >= 2) {
+      button.RegisterForClicks(clicks[0], clicks[1]);
+    } else if (clicks.length == 1) {
+      button.RegisterForClicks(clicks[0]);
+    }
+    this.glyph = button.CreateTexture(null, opts.layer ?? "ARTWORK");
+    this.glyph.SetSize(size, size);
+    this.glyph.SetPoint("CENTER", button, "CENTER", 0, 0);
+    this.glyph.SetTexture(opts.texture);
+    this.token = opts.token ?? "textSecondary";
+    this.hoverToken = opts.hoverToken ?? "danger";
+    button.SetScript("OnEnter", () => {
+      this.hovered = true;
+      this.Repaint();
+      const tooltip = opts.tooltip;
+      if (tooltip != null) {
+        this.tooltipShown = ShowTooltip(button, tooltip(), null, opts.tooltipAnchor);
+      }
+      const enter = opts.onEnter;
+      if (enter != null) { enter(button); }
+    });
+    button.SetScript("OnLeave", () => {
+      this.hovered = false;
+      this.Repaint();
+      if (this.tooltipShown) { HideTooltip(); }
+      this.tooltipShown = false;
+      const leave = opts.onLeave;
+      if (leave != null) { leave(button); }
+    });
+    const click = opts.onClick;
+    if (click != null) {
+      button.SetScript("OnClick", (_self, mouse) => {
+        click(button, typeof mouse == "string" ? mouse : null);
+      });
+    }
+    themes.skinTexture(this.glyph, (_theme) => { this.Repaint(); });
+  }
+
+  Repaint() {
+    const [r, g, b, a] = Unpack(this.hovered ? this.hoverToken : this.token);
+    this.glyph.SetVertexColor(r, g, b, a);
+  }
+
+  SetTokens(token: string?= null, hoverToken: string?= null) {
+    this.token = token ?? this.token;
+    this.hoverToken = hoverToken ?? this.hoverToken;
+    this.Repaint();
+  }
+}
+
+export function CreateGlyphButton(parent: Frame, opts: GlyphButtonOptions): GlyphButton {
+  return new GlyphButton(parent, opts);
+}

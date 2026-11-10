@@ -1,0 +1,79 @@
+import { CreateLabel, Label } from "./text";
+import { SetColor, Skin } from "./theme";
+import { space, size, typography } from "./tokens";
+import { RegisterOwnedFrame } from "./stacking";
+import { TrackKitLocale } from "./kit-locale";
+import { KitL, CallerL } from "./kit-strings";
+export type GroupHeadingOptions = { width?: number; text?: string; key?: string; group?: string };
+export class GroupHeading {
+  frame: Frame; label: Label; divider: Texture; opts: GroupHeadingOptions;
+  constructor(parent: Frame, opts: GroupHeadingOptions) {
+    this.opts = opts;
+    this.frame = CreateFrame("Frame", null, parent); RegisterOwnedFrame(this.frame);
+    const width = opts.width ?? readable(parent.GetWidth()) ?? 0;
+    this.frame.SetSize(width, typography.small + space.xs + size.separator);
+    this.label = CreateLabel(this.frame, {role: "small", color: "textSecondary", width: width, wrap: false});
+    this.label.region.SetPoint("TOPLEFT");
+    this.divider = this.frame.CreateTexture(null, "ARTWORK"); this.divider.SetHeight(size.separator);
+    this.divider.SetPoint("BOTTOMLEFT"); this.divider.SetPoint("BOTTOMRIGHT");
+    Skin(this.frame, (_theme) => { SetColor(this.divider, "divider"); });
+    this.Relabel();
+    if (opts.group != null || opts.key != null) { TrackKitLocale(() => { this.Relabel(); }); }
+  }
+  Relabel() {
+    const group = this.opts.group; const key = this.opts.key;
+    this.label.region.SetText(group != null ? KitL("ui.group." + group) : key != null ? CallerL(key) : this.opts.text ?? "");
+  }
+  SetText(text: string? = null) { this.opts.group = null; this.opts.key = null; this.opts.text = text; this.label.region.SetText(text ?? ""); }
+}
+export function CreateGroupHeading(parent: Frame, opts: GroupHeadingOptions? = null): GroupHeading {
+  if (opts == null) { const defaults: GroupHeadingOptions = {}; return new GroupHeading(parent, defaults); }
+  return new GroupHeading(parent, opts);
+}
+// Native geometry plus an explicit typed auto-size hook replaces widget duck typing.
+export type ToolbarItem = { frame: Frame; fitLabel?: () => void };
+export type ToolbarItems = { left?: ToolbarItem[]; right?: ToolbarItem[]; fill?: ToolbarItem };
+export type ToolbarOptions = { width?: number; height?: number; gap?: number; minFill?: number };
+export class Toolbar {
+  frame: Frame; left: ToolbarItem[] = []; right: ToolbarItem[] = []; fill: ToolbarItem? = null;
+  opts: ToolbarOptions;
+  constructor(parent: Frame, opts: ToolbarOptions) {
+    this.opts = opts; this.frame = CreateFrame("Frame", null, parent); RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(opts.width ?? readable(parent.GetWidth()) ?? 0, opts.height ?? size.controlHeight);
+  }
+  Measure(widget: ToolbarItem): number {
+    const fit = widget.fitLabel; if (fit != null) { fit(); }
+    return readable(widget.frame.GetWidth()) ?? 0;
+  }
+  SetItems(items: ToolbarItems? = null) {
+    if (items == null) { this.left = []; this.right = []; this.fill = null; }
+    else { const left: ToolbarItem[] = []; const right: ToolbarItem[] = []; this.left = items.left ?? left; this.right = items.right ?? right; this.fill = items.fill; }
+    this.Layout();
+  }
+  Layout() {
+    const gap = this.opts.gap ?? space.sm; let x = 0;
+    for (const widget of this.left) {
+      if (readable(widget.frame.IsShown()) == true) {
+        widget.frame.ClearAllPoints(); widget.frame.SetPoint("LEFT", this.frame, "LEFT", x, 0);
+        x += this.Measure(widget) + gap;
+      }
+    }
+    let right = 0;
+    for (let i = this.right.length - 1; i >= 0; i--) {
+      const widget = this.right[i];
+      if (readable(widget.frame.IsShown()) == true) {
+        widget.frame.ClearAllPoints(); widget.frame.SetPoint("RIGHT", this.frame, "RIGHT", -right, 0);
+        right += this.Measure(widget) + gap;
+      }
+    }
+    const fill = this.fill;
+    if (fill != null) {
+      fill.frame.ClearAllPoints(); fill.frame.SetPoint("LEFT", this.frame, "LEFT", x, 0);
+      fill.frame.SetWidth(Math.max(this.opts.minFill ?? size.inputHeight, (readable(this.frame.GetWidth()) ?? 0) - x - right));
+    }
+  }
+}
+export function CreateToolbar(parent: Frame, opts: ToolbarOptions? = null): Toolbar {
+  if (opts == null) { const defaults: ToolbarOptions = {}; return new Toolbar(parent, defaults); }
+  return new Toolbar(parent, opts);
+}

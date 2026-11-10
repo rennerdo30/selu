@@ -1,0 +1,240 @@
+import { SetColor, themes } from "./theme";
+import { PaintMaterial } from "./materials";
+import { size } from "./tokens";
+
+export class Edges {
+  parts: Texture[] = [];
+
+  constructor(frame: Frame, inset: number, layer: string, thickness: number) {
+    const top = frame.CreateTexture(null, layer);
+    top.SetPoint("TOPLEFT", inset, -inset);
+    top.SetPoint("TOPRIGHT", -inset, -inset);
+    top.SetHeight(thickness);
+    const bottom = frame.CreateTexture(null, layer);
+    bottom.SetPoint("BOTTOMLEFT", inset, inset);
+    bottom.SetPoint("BOTTOMRIGHT", -inset, inset);
+    bottom.SetHeight(thickness);
+    const left = frame.CreateTexture(null, layer);
+    left.SetPoint("TOPLEFT", inset, -inset);
+    left.SetPoint("BOTTOMLEFT", inset, inset);
+    left.SetWidth(thickness);
+    const right = frame.CreateTexture(null, layer);
+    right.SetPoint("TOPRIGHT", -inset, -inset);
+    right.SetPoint("BOTTOMRIGHT", -inset, inset);
+    right.SetWidth(thickness);
+    this.parts = [top, bottom, left, right];
+  }
+
+  paint(token: string?) {
+    for (const part of this.parts) {
+      if (token != null) {
+        SetColor(part, token);
+      } else {
+        part.SetColorTexture(0, 0, 0, 0);
+      }
+    }
+  }
+}
+
+export type BackdropStyle = {
+  surface: string ?;
+  tint : string ?;
+  bg : string ?;
+  border : string ?;
+  inner : string ?;
+  base : string ?;
+  sublevel : number
+};
+
+function style(name: string): BackdropStyle {
+  if (name == "window") {
+    return {
+      surface: "window",
+      tint: "windowTint",
+      bg: "window",
+      border: "borderOuter",
+      inner: "borderInner",
+      base: null,
+      sublevel: -8
+    };
+  }
+  if (name == "header") {
+    return {
+      surface: "header",
+      tint: "headerTint",
+      bg: "header",
+      border: null,
+      inner: null,
+      base: null,
+      sublevel: -8
+    };
+  }
+  if (name == "sidebar") {
+    return {
+      surface: "sidebar",
+      tint: "sidebarTint",
+      bg: "sidebar",
+      border: null,
+      inner: null,
+      base: null,
+      sublevel: -8
+    };
+  }
+  if (name == "inset") {
+    return {
+      surface: "surface",
+      tint: "surfaceTint",
+      bg: "surface",
+      border: "borderOuter",
+      inner: "borderInner",
+      base: "wellBase",
+      sublevel: -6
+    };
+  }
+  if (name == "well") {
+    return {
+      surface: "input",
+      tint: "inputTint",
+      bg: "input",
+      border: "borderControl",
+      inner: null,
+      base: null,
+      sublevel: -5
+    };
+  }
+  if (name == "track") {
+    return {
+      surface: "slider",
+      tint: "trackTint",
+      bg: "track",
+      border: "borderControl",
+      inner: null,
+      base: null,
+      sublevel: -5
+    };
+  }
+  if (name == "card" || name == "slot" || name == "pill") {
+    return {
+      surface: null,
+      tint: null,
+      bg: name == "card" ? "card" : name == "slot" ? "slotFill" : "scrollbar",
+      border: "borderOuter",
+      inner: null,
+      base: null,
+      sublevel: -4
+    };
+  }
+  return {
+    surface: null,
+    tint: null,
+    bg: null,
+    border: null,
+    inner: null,
+    base: null,
+    sublevel: 0
+  };
+}
+
+export type BackdropOptions = {
+  style?: string;
+  bg?: string | boolean;
+  border?: string | boolean;
+  inner?: string | boolean;
+  inset?: number;
+  thickness?: number
+};
+
+function pick(override: (string | boolean)?, fallback: string?): string ? {
+  return typeof override == "string" ? override : override == false ? null : fallback;
+}
+
+export class BackdropView {
+  frame: Frame;
+  bg: Texture;
+  base: Texture?= null;
+  edges: Edges?= null;
+  innerEdges: Edges?= null;
+  bgToken: string ?;
+  borderToken : string ?;
+  innerToken : string ?;
+  spec : BackdropStyle;
+  contentInset: number;
+  textured = false;
+
+  constructor(frame: Frame, opts: BackdropOptions) {
+    this.frame = frame;
+    const spec = style(opts.style ?? "");
+    this.spec = spec;
+    this.bgToken = pick(opts.bg, spec.bg);
+    this.borderToken = pick(opts.border, spec.border);
+    this.innerToken = pick(opts.inner, spec.inner);
+    const inset = opts.inset ?? 0;
+    this.contentInset = inset;
+    const thickness = opts.thickness ?? size.border;
+    if (spec.base != null) {
+      const base = frame.CreateTexture(null, "BACKGROUND", null, spec.sublevel - 1);
+      base.SetPoint("TOPLEFT", inset, -inset);
+      base.SetPoint("BOTTOMRIGHT", -inset, inset);
+      this.base = base;
+    }
+    this.bg = frame.CreateTexture(null, "BACKGROUND", null, spec.sublevel);
+    this.bg.SetPoint("TOPLEFT", inset, -inset);
+    this.bg.SetPoint("BOTTOMRIGHT", -inset, inset);
+    if (this.borderToken != null) {
+      this.edges = new Edges(frame, inset, "BORDER", thickness);
+    }
+    if (this.innerToken != null) {
+      this.innerEdges = new Edges(frame, inset + thickness, "BORDER", thickness);
+    }
+    this.Apply();
+    themes.onChanged((_theme) => {
+      this.Apply();
+    });
+  }
+
+  Apply() {
+    const base = this.base;
+    const baseToken = this.spec.base;
+    if (base != null && baseToken != null) {
+      SetColor(base, baseToken);
+    }
+    PaintMaterial(
+      this.bg,
+      this.spec.surface,
+      this.spec.tint,
+      this.bgToken,
+      this.frame
+    );
+    const edges = this.edges;
+    if (edges != null) {
+      edges.paint(this.borderToken);
+    }
+    const inner = this.innerEdges;
+    if (inner != null) {
+      inner.paint(this.innerToken);
+    }
+  }
+
+  SetColors(
+    bg: string?,
+    border: (string | boolean)?= null,
+    inner: (string | boolean)?= null
+  ) {
+    this.bgToken = bg;
+    if (border != null) {
+      this.borderToken = pick(border, null);
+    }
+    if (inner != null) {
+      this.innerToken = pick(inner, null);
+    }
+    this.Apply();
+  }
+}
+
+export function Backdrop(frame: Frame, opts: BackdropOptions?= null) : BackdropView {
+  if (opts == null) {
+    const defaults: BackdropOptions = {};
+    return new BackdropView(frame, defaults);
+  }
+  return new BackdropView(frame, opts);
+}

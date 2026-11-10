@@ -230,7 +230,25 @@ pub(crate) fn publish_reexports(stmts: &[Stmt], module: &mut ModuleBindings) {
         {
             for (remote, local, _, _) in names {
                 if let Some(export) = module.imports.get(from).and_then(|m| m.get(remote)) {
-                    let export = export.clone();
+                    let mut export = export.clone();
+                    // A value re-exported under the name of a type this module
+                    // exports keeps both: the value, and the type declarations.
+                    if let Some(existing) = module.exports.get(local)
+                        && !existing.has_value
+                        && export.has_value
+                    {
+                        let mut aliases = (*existing.aliases).clone();
+                        aliases.extend(export.aliases.iter().map(|(k, v)| (k.clone(), v.clone())));
+                        export.aliases = std::sync::Arc::new(aliases);
+                        let mut contexts = (*existing.type_contexts).clone();
+                        contexts.extend(
+                            export
+                                .type_contexts
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone())),
+                        );
+                        export.type_contexts = std::sync::Arc::new(contexts);
+                    }
                     module.exports.insert(local.clone(), export);
                 }
             }

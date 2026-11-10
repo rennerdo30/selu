@@ -1,0 +1,70 @@
+import { CreateLabel, Label } from "./text";
+import { CreateButton, ButtonControl } from "./button";
+import { Backdrop } from "./backdrop";
+import { space, size, typography } from "./tokens";
+import { fonts } from "./fonts";
+import { RegisterOwnedFrame } from "./stacking";
+
+export type EmptyAction = (button: ButtonControl, mouse: string?) => void;
+export type EmptyStateOptions = { width?: number; compact?: boolean; text?: string; actionText?: string; onAction?: EmptyAction };
+export class EmptyState {
+  frame: Frame; label: Label; button: ButtonControl;
+  compact: boolean; onAction: EmptyAction? = null;
+  constructor(parent: Frame, opts: EmptyStateOptions) {
+    this.frame = CreateFrame("Frame", null, parent); RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(opts.width ?? readable(parent.GetWidth()) ?? 0, size.controlHeightSmall);
+    this.compact = opts.compact == true;
+    this.label = CreateLabel(this.frame, { role: "body", color: "textSecondary", wrap: true, justify: "CENTER" });
+    this.button = CreateButton(this.frame, { text: "", variant: "secondary", height: size.controlHeightSmall,
+      onClick: (button, mouse) => { const action = this.onAction; if (action != null) { action(button, mouse); } } });
+    this.SetContent(opts.text, opts.actionText, opts.onAction);
+  }
+  SetCompact(compact: boolean? = null) { this.compact = compact == true; }
+  SetContent(text: string? = null, actionText: string? = null, onAction: EmptyAction? = null, compact: boolean? = null): number {
+    if (compact != null) { this.compact = compact == true; }
+    const pad = this.compact ? space.xs : space.md;
+    this.label.region.SetFontObject(this.compact ? fonts.get("small") : fonts.get("body"));
+    this.label.region.SetJustifyH(this.compact ? "LEFT" : "CENTER");
+    this.label.region.ClearAllPoints();
+    this.label.region.SetWidth(Math.max(1, (readable(this.frame.GetWidth()) ?? 0) - (this.compact ? space.sm : space.md) * 2));
+    if (this.compact) { this.label.region.SetPoint("TOPLEFT", this.frame, "TOPLEFT", space.sm, -pad); }
+    else { this.label.region.SetPoint("TOP", this.frame, "TOP", 0, -pad); }
+    this.label.region.SetText(text ?? "");
+    let height = pad + (readable(this.label.region.GetStringHeight()) ?? typography.body);
+    this.onAction = onAction;
+    if (actionText != null && actionText != "" && onAction != null) {
+      const gap = this.compact ? space.xs : space.sm;
+      this.button.SetText(actionText); this.button.frame.ClearAllPoints();
+      if (this.compact) { this.button.frame.SetPoint("TOPLEFT", this.label.region, "BOTTOMLEFT", 0, -gap); }
+      else { this.button.frame.SetPoint("TOP", this.label.region, "BOTTOM", 0, -gap); }
+      this.button.frame.Show(); height += gap + size.controlHeightSmall;
+    } else { this.onAction = null; this.button.frame.Hide(); }
+    height += pad; this.frame.SetHeight(height); return height;
+  }
+}
+export function CreateEmptyState(parent: Frame, opts: EmptyStateOptions? = null): EmptyState {
+  if (opts == null) { const defaults: EmptyStateOptions = {}; return new EmptyState(parent, defaults); }
+  return new EmptyState(parent, opts);
+}
+export type CalloutOptions = { width?: number; text?: string };
+export class Callout {
+  frame: Frame; label: Label;
+  constructor(parent: Frame, opts: CalloutOptions) {
+    this.frame = CreateFrame("Frame", null, parent); RegisterOwnedFrame(this.frame);
+    this.frame.SetSize(opts.width ?? readable(parent.GetWidth()) ?? 0, typography.small + space.sm * 2);
+    Backdrop(this.frame, { style: "inset" });
+    this.label = CreateLabel(this.frame, { role: "small", color: "textSecondary", wrap: true });
+    this.label.region.SetPoint("TOPLEFT", this.frame, "TOPLEFT", space.sm, -space.sm);
+    this.SetText(opts.text);
+  }
+  SetText(text: string? = null): number {
+    this.label.region.SetWidth(Math.max(1, (readable(this.frame.GetWidth()) ?? 0) - space.sm * 2));
+    this.label.region.SetText(text ?? "");
+    const height = (readable(this.label.region.GetStringHeight()) ?? typography.small) + space.sm * 2;
+    this.frame.SetHeight(height); return height;
+  }
+}
+export function CreateCallout(parent: Frame, opts: CalloutOptions? = null): Callout {
+  if (opts == null) { const defaults: CalloutOptions = {}; return new Callout(parent, defaults); }
+  return new Callout(parent, opts);
+}

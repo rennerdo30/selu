@@ -1,0 +1,96 @@
+import { fonts, FontRole } from "./fonts";
+import { themes, SetColor, SetTextColor } from "./theme";
+import { size } from "./tokens";
+
+export type LabelOptions = {
+  text?: string;
+  role?: FontRole;
+  color?: string;
+  width?: number;
+  justify?: string;
+  justifyV?: string;
+  wrap?: boolean;
+  uppercase?: boolean;
+  layer?: string
+};
+
+export class Label {
+  region: FontString;
+  colorToken: string;
+
+  constructor(parent: Frame, opts: LabelOptions) {
+    const label = parent.CreateFontString(null, opts.layer ?? "ARTWORK");
+    this.region = label;
+    const requested = opts.role;
+    if (requested != null) {
+      label.SetFontObject(fonts.get(requested));
+    } else {
+      label.SetFontObject(fonts.get("body"));
+    }
+    this.colorToken = opts.color ?? "textPrimary";
+    const width = opts.width;
+    if (width != null) {
+      label.SetWidth(width);
+      label.SetWordWrap(opts.wrap != false);
+    } else if (opts.wrap == true) {
+      label.SetWordWrap(true);
+    }
+    label.SetJustifyH(opts.justify ?? "LEFT");
+    const vertical = opts.justifyV;
+    if (vertical != null) {
+      label.SetJustifyV(vertical);
+    }
+    const text = opts.text ?? "";
+    label.SetText(opts.uppercase == true ? text.upper() : text);
+    themes.skinLabel(label, (_theme) => {
+      SetTextColor(label, this.colorToken);
+    });
+  }
+
+  SetColor(token: string) {
+    this.colorToken = token;
+    SetTextColor(this.region, token);
+  }
+}
+
+export function CreateLabel(parent: Frame, opts: LabelOptions?= null): Label {
+  if (opts == null) {
+    const defaults: LabelOptions = {};
+    return new Label(parent, defaults);
+  }
+  return new Label(parent, opts);
+}
+
+export type SeparatorOptions = {
+  orientation?: string;
+  length?: number;
+  color?: string
+};
+
+export class Separator {
+  region: Texture;
+  colorToken: string;
+
+  constructor(parent: Frame, opts: SeparatorOptions) {
+    const line = parent.CreateTexture(null, "ARTWORK");
+    this.region = line;
+    const length = opts.length ?? readable(parent.GetWidth()) ?? 0;
+    if (opts.orientation == "VERTICAL") {
+      line.SetSize(size.separator, length);
+    } else {
+      line.SetSize(length, size.separator);
+    }
+    this.colorToken = opts.color ?? "divider";
+    themes.skinTexture(line, (_theme) => {
+      SetColor(line, this.colorToken);
+    });
+  }
+}
+
+export function CreateSeparator(parent: Frame, opts: SeparatorOptions?= null): Separator {
+  if (opts == null) {
+    const defaults: SeparatorOptions = {};
+    return new Separator(parent, defaults);
+  }
+  return new Separator(parent, opts);
+}

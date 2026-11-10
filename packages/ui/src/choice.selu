@@ -1,0 +1,266 @@
+import { hostNamePrefix } from "./host";
+import {
+  CreateButton,
+  ButtonControl,
+  ButtonVariant,
+  TooltipSource,
+  TextSource
+}
+
+from "./button";
+
+import { CreateLabel, Label } from "./text";
+import { CreatePopupMenu, PopupMenu, PopupItem } from "./popup-menu";
+import { SelectionValue } from "./segmented";
+import { RowRGB, RowTooltip } from "./list-row";
+import { size, space, typography, choice as choiceMetrics } from "./tokens";
+
+export type ChoiceOption = {
+  value: SelectionValue;
+  label?: string;
+  note?: string;
+  tooltip?: RowTooltip;
+  hint?: string;
+  titleRGB?: RowRGB;
+  icon?: string | number;
+  iconCoords?: number[];
+  disabled?: boolean
+};
+
+export type ChoiceSource = ChoiceOption[] | (() => ChoiceOption[]?);
+
+export type ChoiceOptions = {
+  width?: number;
+  maxWidth?: number;
+  height?: number;
+  variant?: ButtonVariant;
+  options?: ChoiceSource;
+  get?: () => SelectionValue ?;
+  set?: (value: SelectionValue) => void;
+  text?: (value: SelectionValue?, option: ChoiceOption?) => string ?;
+  placeholder?: string;
+  section?: string | (() => string?);
+  tooltip?: TooltipSource;
+  hint?: TextSource;
+  menu?: PopupMenu;
+  menuName?: string;
+  menuWidth?: number
+};
+
+let choiceMenuCount = 0;
+
+export class Choice {
+  button: ButtonControl;
+  frame: Button;
+  label: Label;
+  caret: Label;
+  menu: PopupMenu;
+  opts: ChoiceOptions;
+  options: ChoiceSource ?;
+  getter : (() => SelectionValue?) ?;
+  setter : ((value: SelectionValue) => void) ?;
+
+  constructor(parent: Frame, opts: ChoiceOptions) {
+    this.opts = opts;
+    this.options = opts.options;
+    this.getter = opts.get;
+    this.setter = opts.set;
+    let variant: ButtonVariant = "secondary";
+    const requested = opts.variant;
+    if (requested != null) {
+      variant = requested;
+    }
+    this.button = CreateButton(parent, {
+      text: "", width: opts.width, maxWidth: opts.maxWidth, height: opts.height ?? size.controlHeightSmall, variant: variant, tooltip: opts.tooltip, hint: opts.hint, onClick: (
+        _button,
+        _mouse
+      ) => {
+        this.Toggle();
+      }
+    });
+    this.frame = this.button.frame;
+    this.label = this.button.label;
+    this.caret = CreateLabel(
+      this.frame,
+      {
+        text: choiceMetrics.CARET,
+        role: "caption",
+        color: "textSecondary",
+        layer: "OVERLAY",
+        justify: "CENTER"
+      }
+    );
+    this.caret.region.SetPoint("RIGHT", this.frame, "RIGHT", -space.sm, 0);
+    this.button.labelExtra = space.sm + typography.caption;
+    let menu = opts.menu;
+    if (menu == null) {
+      let name = opts.menuName;
+      if (name == null) {
+        choiceMenuCount += 1;
+        name = hostNamePrefix() + "ChoiceMenu" + `${choiceMenuCount}`;
+      }
+      menu = CreatePopupMenu({ name: name, width: opts.menuWidth });
+    }
+    this.menu = menu;
+    this.frame.HookScript("OnHide", () => {
+      this.Close();
+    });
+    this.Refresh();
+  }
+
+  Options() : ChoiceOption[] {
+    const source = this.options;
+    const empty: ChoiceOption[] = [];
+    if (typeof source == "function") {
+      try {
+        return source() ?? empty;
+      } catch {
+        return empty;
+      }
+    }
+    if (typeof source == "table") {
+      return source;
+    }
+    return empty;
+  }
+
+  Current(): {
+    value: SelectionValue ?;
+    option : ChoiceOption ?
+  }
+
+  {
+    const get = this.getter;
+    const value = get != null ? get() : null;
+    for (const option of this.Options()) {
+      if (option.value == value) {
+        return { value: value, option: option };
+      }
+    }
+    return { value: value, option: null };
+  }
+
+  Refresh() {
+    const current = this.Current();
+    const text = this.opts.text;
+    let value: string?= null;
+    if (text != null) {
+      try {
+        value = text(current.value, current.option);
+      } catch {}
+    }
+    if (value == null) {
+      const option = current.option;
+      value = option != null ? option.label : null;
+    }
+    this.button.SetText(value ?? this.opts.placeholder ?? "");
+    this.caret.SetColor(this.button.input.enabled ? "textSecondary" : "textDisabled");
+  }
+
+  IsOpen(): boolean {
+    return this.menu.owner == this.frame && this.menu.IsOpen();
+  }
+
+  Close() {
+    if (this.IsOpen()) {
+      this.menu.Close();
+    }
+  }
+
+  Open() {
+    const current = this.Current();
+    const items: PopupItem[] = [];
+    const source = this.opts.section;
+    let section: string?= null;
+    if (typeof source == "function") {
+      try {
+        section = source();
+      } catch {}
+    } else if (typeof source == "string") {
+      section = source;
+    }
+    if (section != null) {
+      items.push({ section: section });
+    }
+    for (const option of this.Options()) {
+      const value = option.value;
+      let title = option.label;
+      if (title == null) {
+        if (typeof value == "string") {
+          title = value;
+        } else if (typeof value == "number") {
+          title = `${value}`;
+        } else {
+          title = value ? "true" : "false";
+        }
+      }
+      const item: PopupItem = {
+        title: title,
+        value: option.note,
+        titleRGB: option.titleRGB,
+        icon: option.icon,
+        iconCoords: option.iconCoords,
+        selected: value == current.value,
+        tooltip: option.tooltip,
+        hint: option.hint
+      };
+      if (option.disabled == true) {
+        item.titleColor = "textDisabled";
+      } else {
+        item.onClick = (_row, _mouse) => {
+          const set = this.setter;
+          if (set != null) {
+            set(value);
+          }
+          this.Refresh();
+        };
+      }
+      items.push(item);
+    }
+    this.menu.owner = this.frame;
+    this.menu.Open(this.frame, items, "below");
+  }
+
+  Toggle() {
+    if (this.IsOpen()) {
+      this.Close();
+    } else {
+      this.Open();
+    }
+  }
+
+  SetOptions(options: ChoiceSource?= null) {
+    this.options = options;
+    this.Refresh();
+  }
+
+  Bind(get: (() => SelectionValue?)?= null, set: ((value: SelectionValue) => void)?= null) {
+    this.getter = get;
+    this.setter = set;
+    this.Refresh();
+  }
+
+  SetEnabled(enabled: boolean?= null) {
+    this.button.SetEnabled(enabled != false);
+    if (!this.button.input.enabled) {
+      this.Close();
+    }
+    this.caret.SetColor(this.button.input.enabled ? "textSecondary" : "textDisabled");
+  }
+
+  SetText(text: string) {
+    this.button.SetText(text);
+  }
+
+  SetMaxWidth(width: number?= null) {
+    this.button.SetMaxWidth(width);
+  }
+}
+
+export function CreateChoice(parent: Frame, opts: ChoiceOptions?= null): Choice {
+  if (opts == null) {
+    const defaults: ChoiceOptions = {};
+    return new Choice(parent, defaults);
+  }
+  return new Choice(parent, opts);
+}

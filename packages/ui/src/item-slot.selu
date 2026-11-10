@@ -1,0 +1,85 @@
+import { Backdrop } from "./backdrop";
+import { CreateLabel, Label } from "./text";
+import { AttachWindowRaise } from "./stacking";
+
+// One item shown from a link (a saved copy, a list), not a live container
+// slot: Modern Bags keeps Blizzard's container buttons. For items the player
+// cannot act on in place, such as the bank view (toolkit 01b0992).
+export type ItemSlotOptions = { size?: number };
+
+export class ItemSlot {
+  frame: Button;
+  icon: Texture;
+  count: Label;
+  edges: Texture[] = [];
+  link: string? = null;
+
+  constructor(parent: Frame, opts: ItemSlotOptions) {
+    const size = opts.size ?? 34;
+    const slot = CreateFrame("Button", null, parent);
+    this.frame = slot;
+    slot.SetSize(size, size);
+    Backdrop(slot, { style: "slot" });
+    this.icon = slot.CreateTexture(null, "ARTWORK");
+    this.icon.SetPoint("TOPLEFT", slot, "TOPLEFT", 2, -2);
+    this.icon.SetPoint("BOTTOMRIGHT", slot, "BOTTOMRIGHT", -2, 2);
+    this.icon.SetTexCoord(0.07, 0.93, 0.07, 0.93);
+    this.count = CreateLabel(slot, { role: "small", justify: "RIGHT" });
+    this.count.region.SetPoint("BOTTOMRIGHT", slot, "BOTTOMRIGHT", -2, 2);
+    this.AddEdge(slot, "TOPLEFT", "TOPRIGHT", false);
+    this.AddEdge(slot, "BOTTOMLEFT", "BOTTOMRIGHT", false);
+    this.AddEdge(slot, "TOPLEFT", "BOTTOMLEFT", true);
+    this.AddEdge(slot, "TOPRIGHT", "BOTTOMRIGHT", true);
+    slot.SetScript("OnEnter", () => {
+      const link = this.link;
+      if (link == null) { return; }
+      GameTooltip.SetOwner(slot, "ANCHOR_RIGHT");
+      try { GameTooltip.SetHyperlink(link); } catch {}
+      GameTooltip.Show();
+    });
+    slot.SetScript("OnLeave", () => { GameTooltip.Hide(); });
+    slot.SetScript("OnClick", (_self, _mouse) => {
+      const link = this.link;
+      if (link != null && IsModifiedClick("CHATLINK")) {
+        // Forever and current clients insert chat links through ChatFrameUtil.
+        ChatFrameUtil.InsertLink(link);
+      }
+    });
+    AttachWindowRaise(slot);
+  }
+
+  AddEdge(slot: Button, from: string, to: string, vertical: boolean) {
+    const edge = slot.CreateTexture(null, "OVERLAY");
+    edge.SetTexture("Interface\\Buttons\\WHITE8X8");
+    edge.SetPoint(from, slot, from, 0, 0);
+    edge.SetPoint(to, slot, to, 0, 0);
+    if (vertical) { edge.SetWidth(1); } else { edge.SetHeight(1); }
+    edge.Hide();
+    this.edges.push(edge);
+  }
+
+  // quality 2+ draws Blizzard's information colour as a thin edge.
+  SetItem(link: string?, icon: string?, count: number?, quality: number?) {
+    this.link = link;
+    this.icon.SetTexture(icon ?? "Interface\\Icons\\INV_Misc_QuestionMark");
+    this.count.region.SetText(count != null && count > 1 ? tostring(count) : "");
+    // Item quality is Blizzard's information colour, never a theme token.
+    const color = quality != null && quality >= 2 ? ITEM_QUALITY_COLORS.get(quality) : null;
+    for (const edge of this.edges) {
+      if (color != null) { edge.SetVertexColor(color.r, color.g, color.b, 0.9); }
+      edge.SetShown(color != null);
+    }
+  }
+
+  Clear() {
+    this.link = null;
+    this.icon.SetTexture(null);
+    this.count.region.SetText("");
+    for (const edge of this.edges) { edge.Hide(); }
+  }
+}
+
+export function CreateItemSlot(parent: Frame, opts: ItemSlotOptions?= null): ItemSlot {
+  const defaults: ItemSlotOptions = {};
+  return new ItemSlot(parent, opts ?? defaults);
+}

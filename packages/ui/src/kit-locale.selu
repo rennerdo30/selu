@@ -1,0 +1,22 @@
+import { hostLog } from "./host";
+const refreshers: (() => void)[] = [];
+const failures = new Set<() => void>();
+
+export function TrackKitLocale(refresh: () => void) {
+  refreshers.push(refresh);
+}
+
+export function RefreshKitLocale() {
+  for (const refresh of refreshers) {
+    try {
+      refresh();
+    } catch (error) {
+      if (!failures.has(refresh)) {
+        failures.add(refresh);
+        hostLog("WARN", `UI locale callback failed: ${error.message}`);
+      }
+    }
+  }
+}
+
+// The host calls RefreshKitLocale when its locale changes.

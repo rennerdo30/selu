@@ -1,0 +1,78 @@
+import { space } from "./tokens";
+
+export type CollapseMap = Map<string, boolean>;
+export class CollapseState {
+  session = new Map<string, boolean>();
+  provider: (() => CollapseMap?)?;
+  defaults: CollapseMap?;
+  constructor(provider: (() => CollapseMap?)?, defaults: CollapseMap?) {
+    this.provider = provider; this.defaults = defaults;
+  }
+  Map(): CollapseMap {
+    const provider = this.provider;
+    if (provider != null) {
+      try { const map = provider(); if (map != null) { return map; } } catch {}
+    }
+    return this.session;
+  }
+  Get(id: string): boolean {
+    const value = this.Map().get(id);
+    if (value != null) { return value == true; }
+    const defaults = this.defaults;
+    return defaults != null && defaults.get(id) == true;
+  }
+  Set(id: string, collapsed: boolean? = null) {
+    const map = this.Map(); const defaults = this.defaults;
+    if (collapsed == true) { map.set(id, true); }
+    else if (defaults != null && defaults.get(id) == true) { map.set(id, false); }
+    else { map.delete(id); }
+  }
+  Toggle(id: string): boolean {
+    const collapsed = !this.Get(id); this.Set(id, collapsed); return collapsed;
+  }
+}
+export function CollapseStore(provider: (() => CollapseMap?)? = null, defaults: CollapseMap? = null): CollapseState {
+  return new CollapseState(provider, defaults);
+}
+export type RowLaneOptions = { iconSize?: number; trailingWidth?: number };
+export type Lane = { left: number; width: number };
+export function ListRowLane(width: number? = null, rowOpts: RowLaneOptions? = null): Lane {
+  let left = space.sm; let right = space.sm;
+  if (rowOpts != null) {
+    const icon = rowOpts.iconSize; const trailing = rowOpts.trailingWidth;
+    if (icon != null) { left += icon + space.sm; }
+    if (trailing != null) { right += trailing + space.sm; }
+  }
+  return { left: left, width: Math.max(1, (width ?? 0) - left - right) };
+}
+export type ColumnSpec = { width?: number; weight?: number; justify?: string };
+export type ColumnCell = { x: number; width: number; justify: string };
+export function ColumnLayout(spec: ColumnSpec[]? = null, width: number? = null, gap: number? = null): ColumnCell[] {
+  const cells: ColumnCell[] = [];
+  if (spec == null || spec.length == 0) { return cells; }
+  const spacing = gap ?? space.sm;
+  let fixed = 0; let weights = 0; let lastWeighted = -1;
+  for (let i = 0; i < spec.length; i++) {
+    const column = spec[i]; const fixedWidth = column.width;
+    if (fixedWidth != null) { fixed += fixedWidth; }
+    else { weights += column.weight ?? 1; lastWeighted = i; }
+  }
+  const free = Math.max(0, (width ?? 0) - fixed - spacing * (spec.length - 1));
+  let x = 0; let assigned = 0;
+  for (let i = 0; i < spec.length; i++) {
+    const column = spec[i]; const fixedWidth = column.width;
+    let cellWidth = 0;
+    if (fixedWidth != null) { cellWidth = fixedWidth; }
+    else if (i == lastWeighted) { cellWidth = free - assigned; }
+    else { cellWidth = Math.floor(free * (column.weight ?? 1) / weights); assigned += cellWidth; }
+    cellWidth = Math.max(1, cellWidth);
+    cells.push({ x: x, width: cellWidth, justify: column.justify ?? "LEFT" });
+    x += cellWidth + spacing;
+  }
+  return cells;
+}
+export const VISIBILITY_VALUES = ["always", "relevant", "off"];
+export function NormalizeVisibility(value: string? = null, fallback: string? = null): string {
+  if (value != null) { if (value == "always" || value == "relevant" || value == "off") { return value; } }
+  return fallback ?? "relevant";
+}

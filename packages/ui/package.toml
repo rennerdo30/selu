@@ -1,0 +1,5 @@
+name = "ui"
+description = "Base UI toolkit: windows, buttons, lists, menus, tooltips and themes, from Renner's Toolkit."
+# Checked on Forever so far (the toolkit port's target); each further product is
+# added once the kit type-checks against that product's manifests.
+products = ["wowf"]
