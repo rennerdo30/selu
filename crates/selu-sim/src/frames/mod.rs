@@ -485,6 +485,10 @@ mod fidelity_tests {
             button:SetNormalFontObject(f); button:SetDisabledFontObject(f)
             assert(button:GetNormalFontObject() == f and button:GetDisabledFontObject() == f)
             assert(button:GetHighlightFontObject() == nil)
+            local check = CreateFrame('CheckButton', nil, b)
+            assert(check:GetCheckedTexture() == nil)
+            local mark = check:CreateTexture(); check:SetCheckedTexture(mark)
+            assert(check:GetCheckedTexture() == mark and check:GetDisabledCheckedTexture() == nil)
         "#).unwrap();
         let snap = sim.snapshot().unwrap();
         let tint = snap

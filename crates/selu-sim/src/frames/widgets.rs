@@ -529,6 +529,10 @@ pub fn create(
                 "GetPushedTexture",
                 "GetDisabledTexture",
                 "SetDisabledTexture",
+                "SetCheckedTexture",
+                "GetCheckedTexture",
+                "SetDisabledCheckedTexture",
+                "GetDisabledCheckedTexture",
                 "SetFontString",
                 "GetFontString",
                 "SetNormalFontObject",
@@ -1340,6 +1344,10 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             | "GetPushedTexture"
             | "SetDisabledTexture"
             | "GetDisabledTexture"
+            | "SetCheckedTexture"
+            | "GetCheckedTexture"
+            | "SetDisabledCheckedTexture"
+            | "GetDisabledCheckedTexture"
     ) {
         let key = format!("__selu_{}", &method[3..]);
         let previous = t.raw_get::<Option<Table>>(key.as_str())?;
