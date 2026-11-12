@@ -333,6 +333,17 @@ mod tests {
         );
     }
     #[test]
+    fn regions_run_their_own_onload_before_the_parent_does() {
+        let sim = crate::Sim::new().unwrap();
+        sim.eval("function AliasLabel(self) self:GetParent().text = self end")
+            .unwrap();
+        run(
+            &sim,
+            r#"<Ui><CheckButton name="Box"><Layers><Layer><FontString parentKey="Text"><Scripts><OnLoad function="AliasLabel"/></Scripts></FontString><Texture parentKey="Art"><Scripts><OnLoad>self:GetParent().artLoaded=true</OnLoad></Scripts></Texture></Layer></Layers><Scripts><OnLoad>assert(self.text==self.Text and self.artLoaded)</OnLoad></Scripts></CheckButton></Ui>"#,
+        );
+        sim.eval("assert(Box.text==Box.Text)").unwrap();
+    }
+    #[test]
     fn intrinsic_constructor_resolves_final_derived_mixin() {
         let sim = crate::Sim::new().unwrap();
         sim.eval("BaseInit={Init=function(self)self.base=true end};DerivedInit={Init=function(self)assert(self.value==42);self.derived=true end}").unwrap();

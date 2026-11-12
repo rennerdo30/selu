@@ -343,10 +343,17 @@ existing login sequence. Studio reports progress, counts, errors and wall time
 in the console, plus the most frequently called manifest native stand-ins.
 Reload rebuilds the default UI before the user's addon.
 
+A load-on-demand Blizzard addon (`C_AddOns.LoadAddOn("Blizzard_...")`, for
+example a window's templates) loads from the same source as the default UI,
+after those of its dependencies that are not loaded yet, each with its own
+`ADDON_LOADED`. An addon in the user's own AddOns folder of that name is
+loaded first. File errors are logged as `error:` lines.
+
 The synthetic profile exposes one visible General chat window and selects the
 scenario's chosen Blizzard edit-mode preset through `EDIT_MODE_LAYOUTS_UPDATED`.
 It never reads the client's saved layouts. XML `relativeKey` anchors can walk
-anonymous parents and child members. Animation groups exist before OnLoad;
+anonymous parents and child members. Textures and font strings run their
+own XML OnLoad, before their parent's. Animation groups exist before OnLoad;
 Alpha and Translation use the existing simulator animation clock. Other
 animation types remain diagnostic notes. Initial XML visibility does not fire
 the instance's inherited visibility script before OnLoad.

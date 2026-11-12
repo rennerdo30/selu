@@ -150,6 +150,7 @@ impl HostValue {
 struct VmState {
     tolerant_ui: bool,
     blizzard_loaded: HashSet<String>,
+    blizzard_source: Option<BlizzardSource>,
     loaded: Vec<PathBuf>,
     loading: HashSet<PathBuf>,
     commands: Vec<HostCommand>,
@@ -380,6 +381,186 @@ fn register_addon_snapshot(vm: &Vm, dir: &Path, config: &SessionConfig) -> SimRe
     }
     Ok(())
 }
+/// Where the default UI came from, kept for load-on-demand Blizzard addons.
+#[derive(Clone)]
+struct BlizzardSource {
+    root: PathBuf,
+    target: Option<String>,
+    storage: Option<std::sync::Arc<selu_gamedata::Storage>>,
+}
+
+/// Runs Blizzard addons in order: every file under its own error boundary in
+/// the addon's environment, then ADDON_LOADED. Shared by the default UI start
+/// and a later `LoadAddOn` of a load-on-demand Blizzard addon.
+fn run_blizzard_addons(
+    sim: &Vm,
+    addons: Vec<loader::Toc>,
+    client: Option<(&selu_gamedata::Storage, &Path)>,
+    report: &mut loader::DefaultUiReport,
+    progress: &mut dyn FnMut(&str),
+) -> SimResult<()> {
+    // Module values stay importable by addons loaded later.
+    let modules = match sim
+        .lua
+        .named_registry_value::<Option<Table>>("selu.blizzard_modules")?
+    {
+        Some(modules) => modules,
+        None => {
+            let modules = sim.lua.create_table()?;
+            sim.lua
+                .set_named_registry_value("selu.blizzard_modules", modules.clone())?;
+            modules
+        }
+    };
+    let mut prepared = Vec::with_capacity(addons.len());
+    let mut legacy_names = Vec::new();
+    for toc in addons {
+        progress(&toc.name);
+        // A bad input file must not discard every successfully read chunk
+        // in the addon. The native error handler allows later files to load.
+        let mut files = Vec::new();
+        for file in &toc.files {
+            let single = loader::Toc {
+                name: toc.name.clone(),
+                dir: toc.dir.clone(),
+                metadata: Vec::new(),
+                files: vec![file.clone()],
+            };
+            match loader::read_files_client(&single, &mut |s| report.notes.push(s), client) {
+                Ok(chunks) => files.extend(chunks),
+                Err(error) => report.errors.push(error),
+            }
+        }
+        for (name, source) in &files {
+            // This is the simulator's own repeated bootstrap, not a
+            // client localization/legacy declaration site.
+            if name != "@selu/xml-runtime" {
+                legacy_names.extend(crate::ui_metadata::register_text_refs(&sim.lua, source)?);
+            }
+        }
+        prepared.push((toc, files));
+    }
+    crate::legacy::prepare(&sim.lua, legacy_names)?;
+    for (toc, files) in prepared {
+        // Art of an addon read from the client resolves through client
+        // storage; only a folder on disk is an extra asset root.
+        if toc.dir.is_dir() {
+            crate::fonts::register_addon_root(sim.lua(), &toc.dir)?;
+        }
+        let ns = sim.lua.create_table()?;
+        let imported = modules.clone();
+        let module_prefix = toc.name.clone();
+        let environment = sim.lua.create_table()?;
+        let metatable = sim.lua.create_table()?;
+        metatable.raw_set("__index", sim.lua.globals())?;
+        metatable.raw_set("__newindex", sim.lua.globals())?;
+        environment.set_metatable(Some(metatable));
+        environment.raw_set(
+            "import",
+            sim.lua.create_function(move |_, name: String| {
+                let key = if name.starts_with('.') {
+                    format!(
+                        "{module_prefix}/{}",
+                        name.trim_start_matches('.').replace('.', "/")
+                    )
+                } else {
+                    name.replace('.', "/")
+                };
+                imported.raw_get::<Value>(key)
+            })?,
+        )?;
+        sim.lua
+            .set_named_registry_value(&format!("selu:addon:{}", toc.name), ns.clone())?;
+        for (name, source) in files {
+            if std::env::var_os("SELU_SIM_UI_LOAD_TRACE").is_some() {
+                eprintln!("Default UI source: {}: {name}", toc.name);
+            }
+            let result = dispatch(&sim.lua, &sim.ctx, || {
+                core::call_lua::<Value>(
+                    &sim.lua,
+                    if name == "@selu/xml-runtime" {
+                        crate::host_lua::factory(
+                            &sim.lua,
+                            "selu.xml.runtime_chunk",
+                            &format!("return function(...)\n{source}\nend"),
+                        )?
+                    } else {
+                        let chunk = std::path::Path::new(&name)
+                            .strip_prefix(&toc.dir)
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_else(|_| name.clone());
+                        // Blizzard's code runs secure (see taint.rs).
+                        sim.ctx.taint.borrow_mut().register_secure(&chunk);
+                        sim.lua
+                            .load(&source)
+                            .set_name(chunk)
+                            .set_environment(environment.clone())
+                            .into_function()?
+                    },
+                    (toc.name.as_str(), ns.clone()),
+                )
+            });
+            match result {
+                Ok(value) => {
+                    let key = name.trim_start_matches('@').replace('\\', "/");
+                    modules.raw_set(
+                        format!("{}/{}", toc.name, key.trim_end_matches(".lua")),
+                        value,
+                    )?;
+                }
+                Err(error) => report.errors.push(format!("{}: {error}", toc.name)),
+            }
+        }
+        report.addons_loaded += 1;
+        lock(&sim.state).blizzard_loaded.insert(toc.name.clone());
+        if let Err(error) = sim.fire(
+            "ADDON_LOADED",
+            vec![Value::String(sim.lua.create_string(&toc.name)?)],
+        ) {
+            report.errors.push(error.to_string());
+        }
+    }
+    Ok(())
+}
+
+/// `C_AddOns.LoadAddOn` of a Blizzard addon: it and the dependencies not
+/// loaded yet run from the same source as the default UI.
+fn load_blizzard_lod(
+    sim: &Vm,
+    source: &BlizzardSource,
+    name: &str,
+) -> mlua::Result<(Option<bool>, Option<String>)> {
+    let roots = [name.to_string()];
+    let (addons, mut report) = match loader::default_ui_order_client(
+        &source.root,
+        source.target.as_deref(),
+        source.storage.as_deref(),
+        Some(&roots),
+    ) {
+        Ok(order) => order,
+        Err(error) => return Ok((None, Some(error))),
+    };
+    let loaded = lock(&sim.state).blizzard_loaded.clone();
+    if !addons.iter().any(|toc| toc.name == name) {
+        return Ok((None, Some("MISSING".to_string())));
+    }
+    let pending: Vec<_> = addons
+        .into_iter()
+        .filter(|toc| !loaded.contains(&toc.name))
+        .collect();
+    let client = source
+        .storage
+        .as_deref()
+        .map(|storage| (storage, source.root.as_path()));
+    let _budget = core::BlizzardBootstrapBudget::new(&sim.lua, &sim.ctx);
+    run_blizzard_addons(sim, pending, client, &mut report, &mut |_| {})
+        .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+    for error in &report.errors {
+        sim.ctx.log(format!("error: {error}"));
+    }
+    Ok((Some(true), None))
+}
+
 fn load_dynamic(
     vm: &Vm,
     dir: &Path,
@@ -690,6 +871,11 @@ impl Session {
         )
         .map_err(runtime)?;
         report.notes.extend(source_notes);
+        lock(&self.sim.state).blizzard_source = Some(BlizzardSource {
+            root: source_root.clone(),
+            target: toc_target.clone(),
+            storage: storage.clone(),
+        });
         let edit_mode = loader::read_toc_target_client(
             &source_root.join("Interface/AddOns/Blizzard_EditMode"),
             toc_target.as_deref(),
@@ -729,122 +915,7 @@ impl Session {
         api.raw_set("IsAddOnLoaded", loaded.clone())?;
         self.sim.lua.globals().raw_set("IsAddOnLoaded", loaded)?;
         self.sim.lua.globals().raw_set("C_AddOns", api)?;
-        let modules = self.sim.lua.create_table()?;
-        let mut prepared = Vec::with_capacity(addons.len());
-        let mut legacy_names = Vec::new();
-        for toc in addons {
-            progress(&toc.name);
-            // A bad input file must not discard every successfully read chunk
-            // in the addon. The native error handler allows later files to load.
-            let mut files = Vec::new();
-            for file in &toc.files {
-                let single = loader::Toc {
-                    name: toc.name.clone(),
-                    dir: toc.dir.clone(),
-                    metadata: Vec::new(),
-                    files: vec![file.clone()],
-                };
-                match loader::read_files_client(&single, &mut |s| report.notes.push(s), client) {
-                    Ok(chunks) => files.extend(chunks),
-                    Err(error) => report.errors.push(error),
-                }
-            }
-            for (name, source) in &files {
-                // This is the simulator's own repeated bootstrap, not a
-                // client localization/legacy declaration site.
-                if name != "@selu/xml-runtime" {
-                    legacy_names.extend(crate::ui_metadata::register_text_refs(
-                        &self.sim.lua,
-                        source,
-                    )?);
-                }
-            }
-            prepared.push((toc, files));
-        }
-        crate::legacy::prepare(&self.sim.lua, legacy_names)?;
-        for (toc, files) in prepared {
-            // Art of an addon read from the client resolves through client
-            // storage; only a folder on disk is an extra asset root.
-            if toc.dir.is_dir() {
-                crate::fonts::register_addon_root(self.sim.lua(), &toc.dir)?;
-            }
-            let ns = self.sim.lua.create_table()?;
-            let imported = modules.clone();
-            let module_prefix = toc.name.clone();
-            let environment = self.sim.lua.create_table()?;
-            let metatable = self.sim.lua.create_table()?;
-            metatable.raw_set("__index", self.sim.lua.globals())?;
-            metatable.raw_set("__newindex", self.sim.lua.globals())?;
-            environment.set_metatable(Some(metatable));
-            environment.raw_set(
-                "import",
-                self.sim.lua.create_function(move |_, name: String| {
-                    let key = if name.starts_with('.') {
-                        format!(
-                            "{module_prefix}/{}",
-                            name.trim_start_matches('.').replace('.', "/")
-                        )
-                    } else {
-                        name.replace('.', "/")
-                    };
-                    imported.raw_get::<Value>(key)
-                })?,
-            )?;
-            self.sim
-                .lua
-                .set_named_registry_value(&format!("selu:addon:{}", toc.name), ns.clone())?;
-            for (name, source) in files {
-                if std::env::var_os("SELU_SIM_UI_LOAD_TRACE").is_some() {
-                    eprintln!("Default UI source: {}: {name}", toc.name);
-                }
-                let result = dispatch(&self.sim.lua, &self.sim.ctx, || {
-                    core::call_lua::<Value>(
-                        &self.sim.lua,
-                        if name == "@selu/xml-runtime" {
-                            crate::host_lua::factory(
-                                &self.sim.lua,
-                                "selu.xml.runtime_chunk",
-                                &format!("return function(...)\n{source}\nend"),
-                            )?
-                        } else {
-                            let chunk = std::path::Path::new(&name)
-                                .strip_prefix(&toc.dir)
-                                .map(|p| p.to_string_lossy().into_owned())
-                                .unwrap_or_else(|_| name.clone());
-                            // Blizzard's code runs secure (see taint.rs).
-                            self.sim.ctx.taint.borrow_mut().register_secure(&chunk);
-                            self.sim
-                                .lua
-                                .load(&source)
-                                .set_name(chunk)
-                                .set_environment(environment.clone())
-                                .into_function()?
-                        },
-                        (toc.name.as_str(), ns.clone()),
-                    )
-                });
-                match result {
-                    Ok(value) => {
-                        let key = name.trim_start_matches('@').replace('\\', "/");
-                        modules.raw_set(
-                            format!("{}/{}", toc.name, key.trim_end_matches(".lua")),
-                            value,
-                        )?;
-                    }
-                    Err(error) => report.errors.push(format!("{}: {error}", toc.name)),
-                }
-            }
-            report.addons_loaded += 1;
-            lock(&self.sim.state)
-                .blizzard_loaded
-                .insert(toc.name.clone());
-            if let Err(error) = self.sim.fire(
-                "ADDON_LOADED",
-                vec![Value::String(self.sim.lua.create_string(&toc.name)?)],
-            ) {
-                report.errors.push(error.to_string());
-            }
-        }
+        run_blizzard_addons(&self.sim, addons, client, &mut report, &mut progress)?;
         #[cfg(debug_assertions)]
         if std::env::var_os("SELU_SIM_PROFILE").is_some() {
             eprintln!(
@@ -1196,7 +1267,16 @@ impl Session {
                 if name.contains(['/', '\\']) || name == ".." {
                     return Ok((None, Some("MISSING".to_string())));
                 }
-                match load_dynamic(&vm, &root.join(name), &config, &saved) {
+                // An addon of the user's own folder first; otherwise one of
+                // Blizzard's, when the default UI was loaded from a source.
+                let own = root.join(&name);
+                let blizzard = lock(&state).blizzard_source.clone();
+                if !own.is_dir()
+                    && let Some(source) = blizzard
+                {
+                    return load_blizzard_lod(&vm, &source, &name);
+                }
+                match load_dynamic(&vm, &own, &config, &saved) {
                     Ok(_) => Ok((Some(true), None)),
                     Err(error) => Ok((None, Some(error.to_string()))),
                 }

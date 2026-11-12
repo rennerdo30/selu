@@ -474,7 +474,9 @@ create=function(n,parent,layer,subLevel)
             f:SetAllPoints(parent)
         end
     end)
-    if n.tag~='Texture' and n.tag~='FontString' and n.tag~='Font' then
+    -- Regions run their OnLoad too (UICheckButtonTemplate's label sets its
+    -- parent's `text` alias there); a Font object has no scripts.
+    if n.tag~='Font' then
         local onload=f.__scripts.OnLoad; if onload then invoke(onload,f) end
     end
     return f
