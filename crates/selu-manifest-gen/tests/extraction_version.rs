@@ -70,6 +70,13 @@ const CONTRACTS: &[(u32, &str)] = &[
         15,
         "90c02798899cba4e32d00cfae797a4a5322893aee9b0039481351d6412d9f14b",
     ),
+    // 16: lists (XML parentArray); reviewed Lua fields of mixins (`[[fields]]`);
+    // the overlays type the scroll list, tab system, NineSlice and panel tab
+    // accessors and the eight-coordinate SetTexCoord.
+    (
+        16,
+        "8f22d7d25172a72720db83fb9ff0c0fbecbce08ac10907ad9fbf7d3d14fd91b1",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

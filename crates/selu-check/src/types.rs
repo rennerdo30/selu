@@ -443,7 +443,21 @@ impl Type {
             (source, Type::ApiOpaque(_, members)) if !members.is_empty() => {
                 members.iter().any(|t| source.assignable_seen(t, seen))
             }
-            (Type::Widget(a, bases), Type::Widget(b, _)) => a == b || bases.contains(b),
+            // A target written as a template (`box: WowScrollBoxList`) also
+            // needs the source to carry that template, directly or through
+            // the templates it inherits (`@has:` lists that closure).
+            (Type::Widget(a, bases), Type::Widget(b, wanted)) => {
+                (a == b || bases.contains(b))
+                    && wanted
+                        .iter()
+                        .filter_map(|tag| tag.strip_prefix("@template:"))
+                        .all(|template| {
+                            bases.iter().any(|tag| {
+                                tag.strip_prefix("@has:") == Some(template)
+                                    || tag.strip_prefix("@template:") == Some(template)
+                            })
+                        })
+            }
             (Type::Secret(a), Type::Optional(b)) => {
                 Type::Secret(a.clone()).assignable_seen(b, seen)
             }

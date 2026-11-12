@@ -156,6 +156,7 @@ fn keyed(
                 ty: (*ty).into(),
                 templates: templates.iter().map(|t| (*t).to_owned()).collect(),
                 element: element.map(str::to_owned),
+                array: false,
             })
             .collect(),
     }
@@ -511,6 +512,96 @@ fn cached_manifests() -> &'static Vec<selu_manifest::Manifest> {
 }
 
 #[test]
+fn lists_and_reviewed_lua_fields_are_typed_and_read_only() {
+    let mut m = keyed_manifest();
+    m.child_keys.push(selu_manifest::ChildKeys {
+        owner: "KeyedBase".into(),
+        children: vec![
+            selu_manifest::ChildKey {
+                key: "Bg".into(),
+                ty: "Texture".into(),
+                templates: vec![],
+                element: None,
+                array: false,
+            },
+            selu_manifest::ChildKey {
+                key: "Tabs".into(),
+                ty: "Button".into(),
+                templates: vec!["KeyedTab".into()],
+                element: None,
+                array: true,
+            },
+        ],
+    });
+    m.child_keys
+        .retain(|c| !(c.owner == "KeyedBase" && c.children.len() == 1));
+    m.templates.push(selu_manifest::DataEntry {
+        name: "KeyedTab".into(),
+        source: 0,
+        evidence: selu_manifest::Evidence::Source,
+        ty: Some("Button".into()),
+        fields: vec!["isSelected".into(), "unreviewed".into()],
+        methods: vec![],
+        inherits: vec![],
+        mixins: vec![],
+        values: Default::default(),
+    });
+    let field = |name: &str, ty: &str, nilable: bool| -> selu_manifest::Declaration {
+        serde_json::from_value(serde_json::json!({
+            "name": name, "type": ty, "evidence": "source",
+            "attributes": { "Nilable": nilable }
+        }))
+        .unwrap()
+    };
+    m.member_fields = vec![
+        selu_manifest::MemberField {
+            owner: "KeyedShell".into(),
+            entry: field("selectedTab", "number", true),
+        },
+        selu_manifest::MemberField {
+            owner: "KeyedTab".into(),
+            entry: field("isSelected", "bool", true),
+        },
+    ];
+    let src = r#"
+        const frame = MerchantFrame;
+        let selected = 0;
+        for (const tab of frame.Tabs) {
+            tab.SetText("tab");
+            if (tab.isSelected == true) { selected += 1; }
+        }
+        const current: number? = frame.selectedTab;
+        print(frame.Tabs.length, selected, current ?? -1);
+    "#;
+    let p = selu_syntax::parse("frames.selu", src).unwrap();
+    let c = check(src, std::slice::from_ref(&m), true);
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    let lua = selu_lower::lower(&p, &m, &c.types).lua;
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval(
+        "MerchantFrame = CreateFrame('Frame'); MerchantFrame.Tabs = {}
+         for i = 1, 3 do local tab = CreateFrame('Button', nil, MerchantFrame); tab.isSelected = i == 2; MerchantFrame.Tabs[i] = tab end
+         MerchantFrame.selectedTab = 2",
+    )
+    .unwrap();
+    sim.load_files(&[("frames.lua".into(), lua)]).unwrap();
+    assert_eq!(sim.prints(), vec!["3\t1\t2"]);
+    for src in [
+        // The game owns these values.
+        "MerchantFrame.selectedTab = 3;",
+        "for (const tab of MerchantFrame.Tabs) { tab.isSelected = true; }",
+        "MerchantFrame.Tabs = [];",
+        // A field a mixin only names stays unchecked, so it stays an error.
+        "for (const tab of MerchantFrame.Tabs) { print(tab.unreviewed); }",
+        // The declared type is checked.
+        "const wrong: string = MerchantFrame.selectedTab ?? \"\";",
+    ] {
+        let d = check(src, std::slice::from_ref(&m), false);
+        assert!(d.has_errors(), "{src}: {:?}", d.diagnostics);
+    }
+}
+
+#[test]
 fn repeating_results_are_collected_into_an_array() {
     let m = retail();
     let src = r#"
@@ -540,4 +631,32 @@ fn repeating_results_are_collected_into_an_array() {
     let sim = selu_sim::Sim::new().unwrap();
     sim.load_files(&[("frames.lua".into(), lua)]).unwrap();
     assert_eq!(sim.prints(), vec!["2	1	1	0"]);
+}
+
+#[test]
+fn a_template_name_is_a_type_that_frames_must_carry() {
+    let m = keyed_manifest();
+    let src = r#"
+        function fade(shell: KeyedShell) { shell.Bg.SetAlpha(0); shell.TitleText.SetText("x"); }
+        function base(part: KeyedBase): Frame { return part; }
+        fade(MerchantFrame);
+        base(MerchantFrame);
+        base(MerchantFrame.Inset);
+        const made = CreateFrame("Frame", null, UIParent, "KeyedShell");
+        fade(made);
+        const any: Frame = MerchantFrame;
+    "#;
+    let c = check(src, std::slice::from_ref(&m), true);
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    for src in [
+        // A plain frame does not carry the template.
+        "function fade(shell: KeyedShell) {} fade(CreateFrame(\"Frame\"));",
+        // The inset has KeyedBase, not KeyedShell.
+        "function fade(shell: KeyedShell) {} fade(MerchantFrame.Inset);",
+        // Widening to Frame forgets the template.
+        "function fade(shell: KeyedShell) {} const any: Frame = MerchantFrame; fade(any);",
+    ] {
+        let d = check(src, std::slice::from_ref(&m), false);
+        assert!(d.has_errors(), "{src}: {:?}", d.diagnostics);
+    }
 }

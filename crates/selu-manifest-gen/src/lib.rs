@@ -463,6 +463,20 @@ pub struct Overlay {
     pub globals: Vec<GlobalOverlay>,
     #[serde(default)]
     pub methods: Vec<MethodOverlay>,
+    /// Values Blizzard's Lua assigns on frames of a mixin or template.
+    #[serde(default)]
+    pub fields: Vec<FieldOverlay>,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldOverlay {
+    /// The mixin or template that carries the field.
+    pub owner: String,
+    pub entry: Declaration,
+    pub note: String,
+    pub evidence: Evidence,
+    #[serde(default)]
+    pub live_probe: Option<String>,
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -575,6 +589,35 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
         widget.methods.push(method.entry);
         widget.methods.sort_by(|a, b| a.name.cmp(&b.name));
     }
+    for mut field in overlay.fields {
+        field.entry.evidence = Some(field.evidence);
+        note(&field.note)?;
+        evidence(field.evidence, &field.live_probe)?;
+        if field
+            .entry
+            .ty
+            .as_deref()
+            .is_none_or(|ty| ty.is_empty() || ty == "Function")
+        {
+            return Err("field overlay needs a value type".into());
+        }
+        // One overlay serves every build of its family. A build whose source
+        // does not have this mixin or template has no such field.
+        if !m
+            .templates
+            .iter()
+            .chain(&m.data_globals)
+            .any(|d| d.name == field.owner)
+        {
+            continue;
+        }
+        m.member_fields
+            .retain(|f| !(f.owner == field.owner && f.entry.name == field.entry.name));
+        m.member_fields.push(selu_manifest::MemberField {
+            owner: field.owner,
+            entry: field.entry,
+        });
+    }
     for g in overlay.globals {
         note(&g.note)?;
         evidence(g.evidence, &g.live_probe)?;
@@ -622,6 +665,8 @@ pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
     }
     m.child_keys.retain(|entry| !entry.children.is_empty());
     m.child_keys.sort_by(|a, b| a.owner.cmp(&b.owner));
+    m.member_fields
+        .sort_by(|a, b| (&a.owner, &a.entry.name).cmp(&(&b.owner, &b.entry.name)));
     selu_manifest::format::encode_manifest(m)
 }
 #[cfg(test)]
@@ -658,6 +703,33 @@ mod tests {
         .unwrap();
         assert_eq!(m.interface, 42);
         assert!(apply_overlay(&mut m, "surprise=1").is_err());
+        // A reviewed Lua field needs an existing owner and a value type.
+        let field = |owner: &str, ty: &str| {
+            format!(
+                "[[fields]]\nowner='{owner}'\nevidence='source'\nnote='pin abc file.lua:1'\nentry={{ name='isSelected', type='{ty}', attributes={{ Nilable=true }} }}"
+            )
+        };
+        // An owner this build does not have: the field does not apply.
+        apply_overlay(&mut m, &field("NoSuchMixin", "bool")).unwrap();
+        assert!(m.member_fields.is_empty());
+        m.data_globals.push(selu_manifest::DataEntry {
+            name: "TabMixin".into(),
+            source: 0,
+            evidence: selu_manifest::Evidence::Source,
+            ty: None,
+            fields: vec![],
+            methods: vec![],
+            inherits: vec![],
+            mixins: vec![],
+            values: Default::default(),
+        });
+        assert!(apply_overlay(&mut m, &field("TabMixin", "Function")).is_err());
+        apply_overlay(&mut m, &field("TabMixin", "bool")).unwrap();
+        apply_overlay(&mut m, &field("TabMixin", "bool")).unwrap();
+        assert_eq!(m.member_fields.len(), 1);
+        assert_eq!(m.member_fields[0].owner, "TabMixin");
+        m.member_fields.clear();
+        m.data_globals.pop();
         assert!(apply_overlay(&mut m, "[interface]\nvalue=1\nnote=''").is_err());
         assert!(apply_overlay(&mut m, "[[globals]]\nname='Test'").is_err());
         let a = encode(&mut m).unwrap();

@@ -63,6 +63,56 @@ Rules:
 - The child exists when its parent exists. For a frame of a load-on-demand
   addon, check the parent global first.
 
+### Lists of children
+
+Children that the XML collects in a list (`parentArray`) are a typed,
+read-only array on the parent, recorded per extraction 16:
+
+```selu
+for (const tab of AuctionHouseFrameAuctionsFrame.Tabs) { tab.SetAlpha(1); }
+```
+
+The element type is the widget type every listed child shares. Frames of
+different types are `Frame`; a list that mixes frames and regions is not
+recorded. Elements carry the templates all listed children share. A key of
+the same name wins over a list.
+
+### Lua fields and methods of Blizzard mixins
+
+Blizzard's Lua also assigns values on its frames (`self.isSelected = ...`)
+and gives them methods through mixins. Neither is in the XML or in the API
+documentation. Where an addon needs one, a reviewed overlay entry types it,
+with the source line as evidence:
+
+- `[[fields]]` types a value a mixin or template assigns. It is read-only.
+  A build whose source lacks that mixin has no such field.
+- `[[functions]]` named `<Mixin>.<Method>` types a mixin method.
+
+The overlays currently type, on every family: the scroll list
+(`ForEachFrame`, `GetFrames`, `RegisterCallback` for the frame events), the
+tab system (`tabs`, `isSelected`, `GetTextYOffset`), `NineSlicePanelMixin`'s
+centre and border colours, `PanelTemplates_GetSelectedTab`, and the
+eight-coordinate form of `SetTexCoord`; on Forever also the profession rank
+bar (`GetMaskWidth`, `overrideMaskRightOffset`). A mixin member without such
+an entry stays as before: a name the manifests know but do not type.
+
+### A template name is a type
+
+A function can ask for "a frame with this template":
+
+```selu
+function paintRows(box: WowScrollBoxList, paint: (row: Frame) => void) {
+    box.ForEachFrame((row) => { paint(row); });
+}
+paintRows(AddonList.ScrollBox, (row) => { row.SetAlpha(1); });
+```
+
+The type is the template's widget carrying that template, so the template's
+keyed children and reviewed members are available on the parameter. A frame
+fits only when it carries the template itself or through the templates it
+inherits; a plain `Frame`, or a frame widened to `Frame`, does not. A widget,
+class or type alias of the same name keeps precedence.
+
 Template and mixin lists apply in order: later definitions override earlier
 ones. An untyped override blocks access rather than falling back to an earlier
 typed definition. Documented widget

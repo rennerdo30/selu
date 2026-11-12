@@ -580,3 +580,77 @@ name = "InCombatLockdown"
 [[functions.entry.signature.returns]]
 name = "locked"
 type = "bool"
+
+# Extraction 16: Lua-side fields and mixin methods the skin framework reads
+[[fields]]
+owner = "TabSystemButtonArtMixin"
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/Shared/TabSystem/TabSystemTemplates.lua:42 `TabSystemButtonArtMixin:SetTabSelected` stores the flag its caller passes (`self.isSelected = isSelected`); it is unset until the first selection."
+entry = { name = "isSelected", type = "bool", attributes = { Nilable = true } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/Shared/TabSystem/TabSystemTemplates.lua:30 `TabSystemButtonArtMixin:GetTextYOffset(isSelected)` adds fixed pixel offsets to `self.textOffsetY or 0` and returns the sum."
+entry = { name = "TabSystemButtonArtMixin.GetTextYOffset", params = ["isSelected"], evidence = "source", signature = { name = "GetTextYOffset", type = "Function", arguments = [{ name = "isSelected", type = "bool", attributes = { Nilable = true } }], returns = [{ name = "offset", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_SharedXML/Shared/TabSystem/TabSystemTemplates.lua" } } }
+
+[[fields]]
+owner = "TabSystemMixin"
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/Shared/TabSystem/TabSystemTemplates.lua:208 `TabSystemMixin:OnLoad` creates `self.tabs`, and AddTab (:215) appends the buttons it acquires from the pool of `TabSystemButtonArtTemplate` buttons."
+entry = { name = "tabs", type = "table", attributes = { InnerType = "Button", SeluTemplates = ["TabSystemButtonArtTemplate"], Nilable = false } }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua:594 `ScrollBoxListMixin:ForEachFrame(func)` hands `func` to the view, which calls it with each visible row frame."
+entry = { name = "SeluScrollBoxFrameVisitor", type = "CallbackType", arguments = [{ name = "frame", type = "SimpleFrame", attributes = { Nilable = false } }] }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua:594 `ScrollBoxListMixin:ForEachFrame(func)` calls `func(frame)` for each row frame the view shows."
+entry = { name = "ScrollBoxListMixin.ForEachFrame", params = ["func"], evidence = "source", signature = { name = "ForEachFrame", type = "Function", arguments = [{ name = "func", type = "SeluScrollBoxFrameVisitor", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua:336 `ScrollBoxBaseMixin:GetFrames()` returns the view's list of row frames."
+entry = { name = "ScrollBoxBaseMixin.GetFrames", params = [], evidence = "source", signature = { name = "GetFrames", type = "Function", arguments = [], returns = [{ name = "frames", type = "table", attributes = { InnerType = "SimpleFrame", Nilable = false } }], attributes = { file = "Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua" } } }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua:744 the list triggers OnInitializedFrame with `(frame, elementData)`; a callback registered with an owner receives the owner first (Blizzard_SharedXMLBase/CallbackRegistry.lua:112). Reviewed for the frame events OnAcquiredFrame, OnInitializedFrame and OnReleasedFrame only."
+entry = { name = "SeluScrollBoxFrameEvent", type = "CallbackType", arguments = [{ name = "owner", type = "", attributes = { Nilable = true } }, { name = "frame", type = "SimpleFrame", attributes = { Nilable = false } }] }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua:555 ScrollBoxListMixin generates the event \"OnInitializedFrame\" (its `Event` table maps each name to itself, Blizzard_SharedXMLBase/CallbackRegistry.lua:282) and inherits `RegisterCallback(event, func, owner)` (:112). Reviewed for the frame events only: the callback's second value is the row frame."
+entry = { name = "ScrollBoxListMixin.RegisterCallback", params = ["event", "func", "owner"], evidence = "source", signature = { name = "RegisterCallback", type = "Function", arguments = [{ name = "event", type = "cstring", attributes = { Nilable = false } }, { name = "func", type = "SeluScrollBoxFrameEvent", attributes = { Nilable = false } }, { name = "owner", type = "", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/NineSlice.lua:258 `NineSlicePanelMixin:SetCenterColor(r, g, b, a)` passes the values to `SetVertexColor(r, g, b, a or 1)` of its pieces."
+entry = { name = "NineSlicePanelMixin.SetCenterColor", params = ["r", "g", "b", "a"], evidence = "source", signature = { name = "SetCenterColor", type = "Function", arguments = [{ name = "r", type = "number", attributes = { Nilable = false } }, { name = "g", type = "number", attributes = { Nilable = false } }, { name = "b", type = "number", attributes = { Nilable = false } }, { name = "a", type = "number", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_SharedXML/NineSlice.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/NineSlice.lua:272 `NineSlicePanelMixin:SetBorderColor(r, g, b, a)` passes the values to `SetVertexColor(r, g, b, a or 1)` of its pieces."
+entry = { name = "NineSlicePanelMixin.SetBorderColor", params = ["r", "g", "b", "a"], evidence = "source", signature = { name = "SetBorderColor", type = "Function", arguments = [{ name = "r", type = "number", attributes = { Nilable = false } }, { name = "g", type = "number", attributes = { Nilable = false } }, { name = "b", type = "number", attributes = { Nilable = false } }, { name = "a", type = "number", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_SharedXML/NineSlice.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/NineSlice.lua:265 `NineSlicePanelMixin:GetCenterColor()` returns `GetVertexColor()` of a piece, or nothing when the piece does not exist."
+entry = { name = "NineSlicePanelMixin.GetCenterColor", params = [], evidence = "source", signature = { name = "GetCenterColor", type = "Function", arguments = [], returns = [{ name = "r", type = "number", attributes = { Nilable = false } }, { name = "g", type = "number", attributes = { Nilable = false } }, { name = "b", type = "number", attributes = { Nilable = false } }, { name = "a", type = "number", attributes = { Nilable = false } }], attributes = { MayReturnNothing = true, file = "Blizzard_SharedXML/NineSlice.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/NineSlice.lua:283 `NineSlicePanelMixin:GetBorderColor()` returns `GetVertexColor()` of a piece, or nothing when the piece does not exist."
+entry = { name = "NineSlicePanelMixin.GetBorderColor", params = [], evidence = "source", signature = { name = "GetBorderColor", type = "Function", arguments = [], returns = [{ name = "r", type = "number", attributes = { Nilable = false } }, { name = "g", type = "number", attributes = { Nilable = false } }, { name = "b", type = "number", attributes = { Nilable = false } }, { name = "a", type = "number", attributes = { Nilable = false } }], attributes = { MayReturnNothing = true, file = "Blizzard_SharedXML/NineSlice.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXML/Classic/SharedUIPanelTemplates.lua:326 `PanelTemplates_GetSelectedTab(frame)` returns `frame.selectedTab`, the tab ID PanelTemplates_SetTab stored, or nil before the first selection."
+entry = { name = "PanelTemplates_GetSelectedTab", params = ["frame"], evidence = "source", signature = { name = "PanelTemplates_GetSelectedTab", type = "Function", arguments = [{ name = "frame", type = "SimpleFrame", attributes = { Nilable = false } }], returns = [{ name = "selectedTab", type = "number", attributes = { Nilable = true } }], attributes = { file = "Blizzard_SharedXML/Classic/SharedUIPanelTemplates.lua" } } }
+
+[[methods]]
+widget = "SimpleTextureBaseAPI"
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_CharacterFrame/Cata/PaperDollFrame.lua:2508 Blizzard calls `SetTexCoord` with eight numbers, the four corners (upper left, lower left, upper right, lower right); the generated documentation lists only the four-number form."
+entry = { name = "SetTexCoord", type = "Function", arguments = [{ name = "left", type = "number", attributes = { Nilable = false } }, { name = "right", type = "number", attributes = { Nilable = false } }, { name = "top", type = "number", attributes = { Nilable = false } }, { name = "bottom", type = "number", attributes = { Nilable = false } }], overloads = [{ name = "SetTexCoord", type = "Function", arguments = [{ name = "ULx", type = "number", attributes = { Nilable = false } }, { name = "ULy", type = "number", attributes = { Nilable = false } }, { name = "LLx", type = "number", attributes = { Nilable = false } }, { name = "LLy", type = "number", attributes = { Nilable = false } }, { name = "URx", type = "number", attributes = { Nilable = false } }, { name = "URy", type = "number", attributes = { Nilable = false } }, { name = "LRx", type = "number", attributes = { Nilable = false } }, { name = "LRy", type = "number", attributes = { Nilable = false } }], attributes = { Environment = "All", SecretArguments = "AllowedWhenTainted", SecretArgumentsAddAspect = [8192] } }], attributes = { Environment = "All", SecretArguments = "AllowedWhenTainted", SecretArgumentsAddAspect = [8192] } }

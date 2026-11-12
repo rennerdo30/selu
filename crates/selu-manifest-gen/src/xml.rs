@@ -26,7 +26,13 @@ pub struct Xml {
     /// Globals a template's named child becomes per instance, with the
     /// owner of that child's keyed children.
     key_aliases: BTreeMap<String, String>,
+    /// Lists (`parentArray`) per element: every child naming the list, as
+    /// (widget type, templates), in XML order.
+    arrays: BTreeMap<String, BTreeMap<String, Vec<ArrayElement>>>,
 }
+type ArrayElement = (String, Vec<String>);
+/// (nearest named widget, inside a template, template root, element owner)
+type Open = (Option<String>, bool, Option<String>, Option<String>);
 /// Region and animation tags that can carry a `parentKey` but are not in the
 /// schema's widget substitution group, with the widget type each creates.
 fn keyed_region(tag: &str) -> Option<&'static str> {
@@ -108,8 +114,7 @@ impl Xml {
     }
     pub fn parse(&mut self, file: &str, text: &str) -> Result<(), String> {
         let mut reader = Reader::from_str(text.trim_start_matches('\u{feff}'));
-        // (nearest named widget, inside a template, template root, element owner)
-        let mut stack: Vec<(Option<String>, bool, Option<String>, Option<String>)> = vec![];
+        let mut stack: Vec<Open> = vec![];
         let mut key_value_owner: Option<String> = None;
         loop {
             let event = reader.read_event().map_err(|e| format!("{file}: {e}"))?;
@@ -232,8 +237,28 @@ impl Xml {
                                 }),
                                 templates: inherits.clone(),
                                 element: element.clone().filter(|e| Some(e) != path.as_ref()),
+                                array: false,
                             });
                         }
+                    }
+                    // A list: `parent.<name>` holds every child naming it.
+                    if keyed
+                        && let (Some(owner), Some(list)) = (
+                            &parent.3,
+                            attrs.get("parentArray").filter(|k| identifier(k)),
+                        )
+                    {
+                        self.arrays
+                            .entry(owner.clone())
+                            .or_default()
+                            .entry(list.clone())
+                            .or_default()
+                            .push((
+                                region.map(str::to_owned).unwrap_or_else(|| {
+                                    self.types.get(&tag).cloned().unwrap_or(tag.clone())
+                                }),
+                                inherits.clone(),
+                            ));
                     }
                     if widget && let Some(n) = &resolved {
                         if let Some(mixins) = attrs.get("mixin") {
@@ -399,6 +424,44 @@ impl Xml {
         }
         // Children of unknown widget types are dropped in `encode`, once the
         // overlays have added the canonical widgets.
+        // Lists become one keyed entry each. The element type is the one
+        // every child shares; children of different frame types are frames;
+        // a list mixing frames and regions is not recorded.
+        for (owner, lists) in std::mem::take(&mut self.arrays) {
+            for (name, elements) in lists {
+                let children = self.keys.entry(owner.clone()).or_default();
+                if children.iter().any(|c| c.key == name) {
+                    continue;
+                }
+                let first = &elements[0];
+                let same_type = elements.iter().all(|e| e.0 == first.0);
+                let region = |ty: &str| {
+                    matches!(
+                        ty,
+                        "Texture" | "FontString" | "MaskTexture" | "Line" | "AnimationGroup"
+                    ) || ty.starts_with("SimpleAnim")
+                };
+                let ty = if same_type {
+                    first.0.clone()
+                } else if elements.iter().all(|e| !region(&e.0)) {
+                    "Frame".to_owned()
+                } else {
+                    continue;
+                };
+                let templates = if elements.iter().all(|e| e.1 == first.1) {
+                    first.1.clone()
+                } else {
+                    Vec::new()
+                };
+                children.push(ChildKey {
+                    key: name,
+                    ty,
+                    templates,
+                    element: None,
+                    array: true,
+                });
+            }
+        }
         // A template's named child is a global per instance: that global
         // has the keyed children its template definition gave it inline.
         for (global, element) in std::mem::take(&mut self.key_aliases) {
@@ -409,12 +472,12 @@ impl Xml {
                 let children = children
                     .iter()
                     .map(|child| ChildKey {
-                        element: Some(
+                        element: (!child.array).then(|| {
                             child
                                 .element
                                 .clone()
-                                .unwrap_or_else(|| format!("{element}.{}", child.key)),
-                        ),
+                                .unwrap_or_else(|| format!("{element}.{}", child.key))
+                        }),
                         ..child.clone()
                     })
                     .collect();
@@ -709,6 +772,66 @@ mod tests {
         assert!(!owners.iter().any(|o| o.contains("Unreachable")));
         let decoded: Manifest = selu_manifest::format::decode(&bytes).unwrap();
         assert_eq!(decoded, m);
+    }
+    #[test]
+    fn lists_of_children_are_recorded_with_their_common_element_type() {
+        let mut xml = Xml::default();
+        xml.parse(
+            "lists.xml",
+            r#"<Ui>
+            <Frame name="TabOwner" virtual="true">
+              <Frames>
+                <Button parentArray="Tabs" inherits="TabTemplate"/>
+                <Button parentArray="Tabs" inherits="TabTemplate"/>
+                <CheckButton parentArray="Mixed"/>
+                <Frame parentArray="Mixed" inherits="Other"/>
+                <Frame parentArray="Lost"/>
+              </Frames>
+              <Layers><Layer>
+                <Texture parentArray="Lost"/>
+                <Texture parentKey="Tabs"/>
+                <Texture parentArray="Pieces"/><Texture parentArray="Pieces"/>
+              </Layer></Layers>
+            </Frame>
+            <Frame name="Window" inherits="TabOwner">
+              <Frames><Button name="$parentTab1" parentArray="Own"/></Frames>
+            </Frame></Ui>"#,
+        )
+        .unwrap();
+        let mut m = manifest();
+        for widget in ["Frame", "Button", "CheckButton", "Texture"] {
+            let mut d = declaration(widget, "ScriptObject", "");
+            d.attributes.clear();
+            m.widgets.push(d);
+        }
+        xml.extend_manifest(&mut m);
+        crate::encode(&mut m).unwrap();
+        let of = |owner: &str| -> Vec<(String, String, Vec<String>, bool)> {
+            m.child_keys
+                .iter()
+                .find(|c| c.owner == owner)
+                .map(|c| {
+                    c.children
+                        .iter()
+                        .map(|k| (k.key.clone(), k.ty.clone(), k.templates.clone(), k.array))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            of("TabOwner"),
+            [
+                // Frames of different types are frames; their templates differ.
+                ("Mixed".to_owned(), "Frame".to_owned(), vec![], true),
+                ("Pieces".to_owned(), "Texture".to_owned(), vec![], true),
+                // A key of the same name wins over the list.
+                ("Tabs".to_owned(), "Texture".to_owned(), vec![], false),
+            ]
+        );
+        assert_eq!(
+            of("Window"),
+            [("Own".to_owned(), "Button".to_owned(), vec![], true)]
+        );
     }
     #[test]
     fn review_truncated_xml() {

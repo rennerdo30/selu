@@ -166,6 +166,21 @@ pub struct ChildKey {
     /// when it is not `<owner>.<key>` (a named global child).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element: Option<String>,
+    /// The key is a list (`parentArray`): `parent.<key>` holds every child
+    /// that names it, in XML order. `ty` and `templates` describe one element.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub array: bool,
+}
+
+/// A value that Blizzard's Lua assigns on every frame using a mixin or a
+/// template (`self.isSelected = ...`). XML and the API documentation know
+/// nothing of it; a reviewed overlay types it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberField {
+    /// The mixin or template name.
+    pub owner: String,
+    pub entry: Declaration,
 }
 
 /// The keyed children of one element: a named frame, a template, or a
@@ -185,6 +200,9 @@ pub struct Manifest {
     /// Sorted by owner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub child_keys: Vec<ChildKeys>,
+    /// Sorted by owner, then name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_fields: Vec<MemberField>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -37,7 +37,14 @@ fn effective<'a>(
         result = mixin;
     }
     let own = m.function(&format!("{template}.{name}"));
-    if let Some(f) = own {
+    if let Some(field) = m
+        .member_fields
+        .iter()
+        .find(|f| f.owner == template && f.entry.name == name)
+    {
+        // A reviewed field of this mixin or template (assigned in Lua).
+        result = Some(Some(&field.entry));
+    } else if let Some(f) = own {
         result = Some(f.signature.as_ref());
     } else if d.fields.iter().chain(&d.methods).any(|s| s == name) {
         // Template name lists include their direct mixin projection. Preserve
@@ -119,9 +126,45 @@ fn child_key<'a>(m: &'a Manifest, bases: &[String], key: &str) -> Option<(&'a Ch
         .rev()
         .find_map(|t| template_key(m, t, key, &mut Vec::new()))
 }
+/// Adds `@has:<template>` for every template in `templates` and all the
+/// templates they inherit. Member lookup keeps using the `@template:` tags
+/// and their order; `@has:` only answers "does this frame carry template X".
+pub(crate) fn tag_template_closure(m: &Manifest, bases: &mut Vec<String>) {
+    fn visit(m: &Manifest, template: &str, out: &mut Vec<String>) {
+        let tag = format!("@has:{template}");
+        if out.contains(&tag) {
+            return;
+        }
+        out.push(tag);
+        if let Some(d) = m.templates.iter().find(|d| d.name == template) {
+            for base in &d.inherits {
+                visit(m, base, out);
+            }
+        }
+    }
+    let mut templates: Vec<String> = bases
+        .iter()
+        .filter_map(|s| s.strip_prefix("@template:").map(str::to_owned))
+        .collect();
+    if let Some(global) = bases.iter().find_map(|s| s.strip_prefix("@global:"))
+        && let Some(g) = m.globals.iter().find(|g| g.name == global)
+    {
+        templates.extend(g.templates.iter().cloned());
+    }
+    let mut has = Vec::new();
+    for template in &templates {
+        visit(m, template, &mut has);
+    }
+    for tag in has {
+        if !bases.contains(&tag) {
+            bases.push(tag);
+        }
+    }
+}
 impl Ctx<'_> {
     pub(crate) fn frame_type_names(&self) -> std::collections::HashMap<String, Type> {
-        self.manifest
+        let mut names: std::collections::HashMap<String, Type> = self
+            .manifest
             .widgets
             .iter()
             .flat_map(|w| {
@@ -134,7 +177,24 @@ impl Ctx<'_> {
                     (n, ty)
                 })
             })
-            .collect()
+            .collect();
+        // A template name is a written type too: the template's widget,
+        // carrying that template. A widget of the same name keeps precedence.
+        for template in &self.manifest.templates {
+            let Some(widget) = template.ty.as_deref() else {
+                continue;
+            };
+            if names.contains_key(&template.name) {
+                continue;
+            }
+            let mut ty = api::named(self.manifest, widget, 0);
+            if let Type::Widget(_, bases) = &mut ty {
+                bases.push(format!("@template:{}", template.name));
+                tag_template_closure(self.manifest, bases);
+                names.insert(template.name.clone(), ty);
+            }
+        }
+        names
     }
     pub(crate) fn frame_global(&self, name: &str) -> Option<Type> {
         let g = &self.manifest.globals[*self.index.globals.get(name)?];
@@ -142,6 +202,7 @@ impl Ctx<'_> {
         if let Type::Widget(_, bases) = &mut ty {
             bases.push(format!("@global:{name}"));
             bases.extend(g.templates.iter().map(|t| format!("@template:{t}")));
+            tag_template_closure(self.manifest, bases);
         }
         Some(ty)
     }
@@ -186,19 +247,45 @@ impl Ctx<'_> {
                 bases.push(format!("@template:{name}"));
             }
         }
+        if let Type::Widget(_, bases) = &mut base {
+            tag_template_closure(self.manifest, bases);
+        }
         base
     }
-    /// True when `name` is a keyed child (`parentKey`) of this widget on a
-    /// selected target.
+    /// True when `name` is a keyed child (`parentKey`), a list
+    /// (`parentArray`) or a reviewed Lua field of this widget on a selected
+    /// target. Such members belong to the game and are read-only.
     pub(crate) fn keyed_child(&self, ty: &Type, name: &str) -> bool {
         let Type::Widget(_, bases) = ty else {
             return false;
         };
+        let templates: Vec<_> = bases
+            .iter()
+            .filter_map(|s| s.strip_prefix("@template:"))
+            .collect();
+        let global = bases.iter().find_map(|s| s.strip_prefix("@global:"));
         self.availability
             .manifests()
             .iter()
             .filter(|m| self.target_is_active(m))
-            .any(|m| child_key(m, bases, name).is_some())
+            .any(|m| {
+                if child_key(m, bases, name).is_some() {
+                    return true;
+                }
+                let names: Vec<_> = if let Some(g) = global {
+                    m.globals
+                        .iter()
+                        .find(|v| v.name == g)
+                        .map(|g| g.templates.iter().map(String::as_str).collect())
+                        .unwrap_or_default()
+                } else {
+                    templates.clone()
+                };
+                matches!(
+                    applied(m, &names, name),
+                    Some(Some(d)) if d.ty.as_deref().is_some_and(|ty| ty != "Function")
+                )
+            })
     }
     pub(crate) fn frame_member(&mut self, ty: &Type, name: &str, object: &Expr) -> Option<Type> {
         let Type::Widget(_, bases) = ty else {
@@ -236,10 +323,18 @@ impl Ctx<'_> {
             let (child, element) = child.as_ref().expect("present on every target");
             let mut ty = api::named(m, &child.ty, 0);
             if let Type::Widget(_, child_bases) = &mut ty {
-                child_bases.push(format!("@element:{element}"));
+                // A list element has no single place in the XML tree.
+                if !child.array {
+                    child_bases.push(format!("@element:{element}"));
+                }
                 child_bases.extend(child.templates.iter().map(|t| format!("@template:{t}")));
+                tag_template_closure(m, child_bases);
             }
-            return Some(ty);
+            return Some(if child.array {
+                Type::Array(Box::new(ty))
+            } else {
+                ty
+            });
         }
         let present: Vec<_> = self
             .availability
@@ -322,7 +417,14 @@ impl Ctx<'_> {
         Some(
             member
                 .flatten()
-                .map(|d| api::signature(m, d, 0))
+                .map(|d| {
+                    if d.ty.as_deref() == Some("Function") || d.ty.is_none() {
+                        api::signature(m, d, 0)
+                    } else {
+                        // A reviewed field: its declared value type.
+                        api::field_type(m, d)
+                    }
+                })
                 .unwrap_or(Type::Untyped),
         )
     }

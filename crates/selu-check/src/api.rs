@@ -242,6 +242,38 @@ fn argument_type(m: &Manifest, owner: &Declaration, argument: &Declaration, dept
     }
 }
 
+/// The value type of a declared field (not a function), with `Nilable`.
+pub(crate) fn field_type(m: &Manifest, d: &Declaration) -> Type {
+    // `SeluTemplates`: the frame (or each frame of a list) carries these
+    // templates, so their reviewed fields and methods are reachable.
+    fn tag(ty: &mut Type, templates: &[String]) {
+        match ty {
+            Type::Widget(_, bases) => {
+                bases.extend(templates.iter().map(|t| format!("@template:{t}")));
+            }
+            Type::Array(inner) | Type::Optional(inner) => tag(inner, templates),
+            _ => {}
+        }
+    }
+    let mut ty = map(m, d, 1);
+    if let Some(templates) = d.attributes.get("SeluTemplates").and_then(|v| v.as_array()) {
+        let templates: Vec<String> = templates
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
+        tag(&mut ty, &templates);
+        fn close(m: &Manifest, ty: &mut Type) {
+            match ty {
+                Type::Widget(_, bases) => crate::frames::tag_template_closure(m, bases),
+                Type::Array(inner) | Type::Optional(inner) => close(m, inner),
+                _ => {}
+            }
+        }
+        close(m, &mut ty);
+    }
+    ty
+}
+
 pub(crate) fn signature(m: &Manifest, d: &Declaration, depth: usize) -> Type {
     // A single trailing StrideIndex=1 argument is a homogeneous rest group.
     // Multi-field strides require tuple-group checking and remain fixed arity.
