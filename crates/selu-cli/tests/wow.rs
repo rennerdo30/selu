@@ -174,6 +174,18 @@ fn review_hook_targets() {
     let actual: Vec<_> = sources.iter().map(|src| codes(src)).collect();
     assert_eq!(actual, [vec!["SELU0446"], vec!["SELU0446"]]);
 }
+#[test]
+fn hooked_functions_and_methods_must_be_in_the_game_data() {
+    // Widget methods are covered in frames.rs (this fixture has no widgets).
+    let src = r#"allowTaint("probe", hook("GetTime", () => {}));"#;
+    assert!(codes(src).is_empty(), "{src}: {:?}", codes(src));
+    let sources = [
+        r#"allowTaint("probe", hook("NoSuchGameFunction", () => {}));"#,
+        r#"const name = "GetTime"; allowTaint("probe", hook(name, () => {}));"#,
+    ];
+    let actual: Vec<_> = sources.iter().map(|src| codes(src)).collect();
+    assert_eq!(actual, [vec!["SELU0447"], vec!["SELU0441"]]);
+}
 
 #[test]
 fn review_fallback_allocation() {

@@ -376,7 +376,7 @@ fn review_cross_module_error_identity() {
 #[test]
 fn recheck_callback_boundary_receives_text() {
     let lua = compile(
-        "global Target = () => {};\nconst frame = CreateFrame(\"Frame\");\nframe.Hide();\nhookScript(frame, \"OnShow\", (self) => {\n throw new Error(\"show\");\n});\nhook(\"Target\", () => {\n throw new Error(\"hook\");\n});\ncommand(\"/selutest\", (msg) => {\n throw new Error(\"command\");\n});\non PLAYER_LOGIN() {\n throw new Error(\"event\");\n}\nglobal trigger = () => {};\nglobal run = () => {\n try { trigger(); } catch (e) { print(\"caught\", e.message); }\n};",
+        "// The hooks below run inside the engine boundary.\nconst frame = CreateFrame(\"Frame\");\nframe.Hide();\nhookScript(frame, \"OnShow\", (self) => {\n throw new Error(\"show\");\n});\nallowTaint(\"the test hooks a game function\", hook(\"GetTime\", () => {\n throw new Error(\"hook\");\n}));\ncommand(\"/selutest\", (msg) => {\n throw new Error(\"command\");\n});\non PLAYER_LOGIN() {\n throw new Error(\"event\");\n}\nglobal trigger = () => {};\nglobal run = () => {\n try { trigger(); } catch (e) { print(\"caught\", e.message); }\n};",
     );
     let sim = selu_sim::Sim::new().unwrap();
     // The engine boundary: each hooked script runs under its own pcall. The
@@ -415,7 +415,7 @@ trigger = function()
       engine(scripts.OnEvent, f, "PLAYER_LOGIN")
     end
   end
-  engine(Target)
+  engine(GetTime)
   for _, handler in pairs(SlashCmdList) do engine(handler, "") end
 end
 run()

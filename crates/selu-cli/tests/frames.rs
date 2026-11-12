@@ -395,6 +395,37 @@ fn collision_manifest() -> Manifest {
     m
 }
 #[test]
+fn hooked_widget_methods_must_be_declared_by_the_widget_or_its_templates() {
+    let m = collision_manifest();
+    let frame = r#"const f = CreateFrame("Frame", null, null, "ReviewA,ReviewB");"#;
+    for hook in [
+        // A template's mixin method and a widget API method.
+        r#"hook(f, "Probe", () => {});"#,
+        r#"hook(f, "Show", () => {});"#,
+    ] {
+        let src = format!("{frame} {hook}");
+        let d = check(&src, std::slice::from_ref(&m), true);
+        assert!(!d.has_errors(), "{src}: {:?}", d.diagnostics);
+    }
+    let src = format!(r#"{frame} hook(f, "NoSuchMethod", () => {{}});"#);
+    let d = check(&src, std::slice::from_ref(&m), true);
+    assert!(
+        d.diagnostics.iter().any(|d| d.code == "SELU0582"),
+        "{:?}",
+        d.diagnostics
+    );
+    // A keyed child is a field, not a method.
+    let m = keyed_manifest();
+    let src = r#"allowTaint("probe", hook(MerchantFrame, "TitleText", () => {}));"#;
+    let d = check(src, std::slice::from_ref(&m), true);
+    assert!(
+        d.diagnostics.iter().any(|d| d.code == "SELU0447"),
+        "{:?}",
+        d.diagnostics
+    );
+}
+
+#[test]
 fn review_later_overrides_win_including_untyped_and_inherited() {
     let mut m = collision_manifest();
     let src = r#"const f = CreateFrame("Frame", null, null, "ReviewA,ReviewB"); f.Probe(true);"#;

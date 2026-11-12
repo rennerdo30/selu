@@ -74,6 +74,11 @@ User expressions still lower through the Lua syntax tree.
 
 SELU0445 caps L and log templates at 64 interpolations, conservatively below
 Lua 5.1 call/register limits. SELU0446 rejects invalid hook targets.
+SELU0447 rejects a hook on a function or method the game data does not
+declare: `hook("Name", ...)` needs a global function of the game, and
+`hook(widget, "Method", ...)` a method the widget or one of its templates and
+mixins declares (an unknown member reports SELU0582, as a call would). A hook
+name is a literal string (SELU0441).
 Diagnostics SELU0440-0444 cover arity, alias/hook name, callback, template types
 and sentence joining. Other unsupported template tags retain SELU0390.
 

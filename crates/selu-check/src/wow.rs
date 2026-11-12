@@ -170,6 +170,7 @@ impl Ctx<'_> {
             return Some(Type::Error);
         }
         let last = args.len() - 1;
+        let mut target = None;
         for (i, x) in args[..last].iter().enumerate() {
             if n == "command" {
                 if !matches!(&x.kind, ExprKind::Str(s) if s.starts_with('/') && s.len()>1 && !s.chars().any(char::is_whitespace))
@@ -187,9 +188,16 @@ impl Ctx<'_> {
                         err("SELU0441", "A hook name must be a string.", &x.span)
                             .with_help(r#"use "GetTime" for hook or "OnShow" for hookScript"#),
                     );
+                } else if n == "hook" && !matches!(x.kind, ExprKind::Str(_)) {
+                    // A name built at runtime would be a dynamic game lookup.
+                    self.out.push(
+                        err("SELU0441", "A hook name must be a literal string.", &x.span)
+                            .with_help(r#"write the function or method name, for example hook("GetTime", ...)"#),
+                    );
                 }
             } else {
                 let ty = crate::shape_of(&self.value(x));
+                target = Some(ty.clone());
                 if !matches!(
                     ty,
                     Type::Untyped | Type::Error | Type::Object(_) | Type::Widget(..)
@@ -203,6 +211,47 @@ impl Ctx<'_> {
                         .with_help(r#"use hook(GameTooltip, "SetUnit", (self) => { ... })"#),
                     );
                 }
+            }
+        }
+        // The hooked function or method must be part of the game data, as a
+        // call to it would have to be.
+        if n == "hook"
+            && let ExprKind::Str(name) = &args[last - 1].kind
+        {
+            match &target {
+                None if self.manifest.function(name).is_none() => {
+                    self.out.push(
+                        err(
+                            "SELU0447",
+                            format!("`{name}` is not a function in the game data"),
+                            &args[0].span,
+                        )
+                        .with_help("hook a global function the game declares"),
+                    );
+                }
+                Some(ty @ Type::Widget(..)) => {
+                    let ty = ty.clone();
+                    match self.api_member(&ty, name, &args[0]) {
+                        Some(Type::Function { .. } | Type::Error) => {}
+                        Some(_) => self.out.push(
+                            err(
+                                "SELU0447",
+                                format!("`{name}` is a field of this widget, not a method"),
+                                &args[1].span,
+                            )
+                            .with_help("hook a method of the widget or of its templates"),
+                        ),
+                        None => self.out.push(
+                            err(
+                                "SELU0447",
+                                format!("this widget has no method `{name}` in the game data"),
+                                &args[1].span,
+                            )
+                            .with_help("hook a method of the widget or of its templates"),
+                        ),
+                    }
+                }
+                _ => {}
             }
         }
         let mut expected = Type::Function {
