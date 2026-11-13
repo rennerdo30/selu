@@ -130,6 +130,18 @@ impl Lowerer<'_> {
         self.error_entry_callback(&mut vals);
         Some(match n.as_str() {
             "command" => lua::call(name("__selu_wow.command"), vals),
+            // `hook("Table.Function", ...)` hooks the field of that game
+            // table: hooksecurefunc(Table, "Function", ...). Lua would hook a
+            // global literally named "Table.Function".
+            "hook" if vals.len() == 2 && matches!(&vals[0], LExpr::Str(s) if s.contains('.')) => {
+                let LExpr::Str(path) = vals.remove(0) else {
+                    unreachable!()
+                };
+                let (table, field) = path.rsplit_once('.').unwrap();
+                let mut args = vec![name(table), LExpr::Str(field.into())];
+                args.append(&mut vals);
+                lua::call(name("hooksecurefunc"), args)
+            }
             "hook" => lua::call(name("hooksecurefunc"), vals),
             _ => {
                 let obj = vals.remove(0);

@@ -198,6 +198,22 @@ impl Ctx<'_> {
                 names.insert(template.name.clone(), ty);
             }
         }
+        // A documented structure (`TradeSkillRecipeInfo`) and a documented
+        // mixin value (`colorRGBA`) are written types too, so a helper can
+        // take one as a parameter. Frames and templates keep precedence.
+        for table in &self.manifest.tables {
+            if table.ty.as_deref() == Some("Structure") && !names.contains_key(&table.name) {
+                names.insert(
+                    table.name.clone(),
+                    api::named(self.manifest, &table.name, 0),
+                );
+            }
+        }
+        for (name, _) in api::MIXIN_VALUES {
+            if !names.contains_key(*name) {
+                names.insert((*name).into(), api::named(self.manifest, name, 0));
+            }
+        }
         names
     }
     pub(crate) fn frame_global(&self, name: &str) -> Option<Type> {

@@ -659,7 +659,7 @@ entry = { name = "SetTexCoord", type = "Function", arguments = [{ name = "left",
 [[tables]]
 evidence = "source"
 note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_SharedXMLGame/Tooltip/TooltipUtil.lua:55 C_TooltipInfo returns `TooltipData`; no generated documentation file defines it. Closed subset of the fields Blizzard's tooltip code reads; unlisted fields unsupported."
-entry = { name = "TooltipDataLine", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "type", type = "number", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:320", Nilable = false } }, { name = "leftText", type = "string", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:339", Nilable = true } }, { name = "rightText", type = "string", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:342", Nilable = true } }, { name = "wrapText", type = "bool", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:341", Nilable = true } }, { name = "leftOffset", type = "number", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:343", Nilable = true } }] }
+entry = { name = "TooltipDataLine", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "type", type = "number", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:320", Nilable = false } }, { name = "leftText", type = "string", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:339", Nilable = true } }, { name = "rightText", type = "string", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:342", Nilable = true } }, { name = "wrapText", type = "bool", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:341", Nilable = true } }, { name = "leftOffset", type = "number", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:343", Nilable = true } }, { name = "leftColor", type = "colorRGBA", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:340", Nilable = true } }, { name = "rightColor", type = "colorRGBA", attributes = { SeluSourceCitation = "e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:345", Nilable = true } }] }
 
 [[tables]]
 evidence = "source"
@@ -722,3 +722,31 @@ entry = { name = "ItemButtonMixin.GetBagID", params = [], evidence = "source", s
 evidence = "source"
 note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UnitFrame/Shared/CompactUnitFrame.lua:640 `CompactUnitFrame_UpdateHealthColor(frame)` recolours the health bar of a compact unit frame (raid, party and nameplate unit frames)."
 entry = { name = "CompactUnitFrame_UpdateHealthColor", params = ["frame"], evidence = "source", signature = { name = "CompactUnitFrame_UpdateHealthColor", type = "Function", arguments = [{ name = "frame", type = "Button", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_UnitFrame/Shared/CompactUnitFrame.lua" } } }
+
+# Extraction 19: equipped and quest item reads, quest reward buttons, profession recipes (M4)
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/TBC/QuestInfo.lua:557 Blizzard passes `GetQuestItemLink(type, index)` (type \"choice\" or \"reward\") on as an item link; an index without an item returns nothing. Not in the generated documentation."
+entry = { name = "GetQuestItemLink", params = ["type", "index"], evidence = "source", signature = { name = "GetQuestItemLink", type = "Function", arguments = [{ name = "type", type = "string", attributes = { Nilable = false } }, { name = "index", type = "luaIndex", attributes = { Nilable = false } }], returns = [{ name = "itemLink", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/QuestInfo.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/Classic/QuestFrame.lua:594 Blizzard reads `name, texture, numItems, quality, isUsable = GetQuestItemInfo(type, index)`; an index without an item returns nothing. Not in the generated documentation."
+entry = { name = "GetQuestItemInfo", params = ["type", "index"], evidence = "source", signature = { name = "GetQuestItemInfo", type = "Function", arguments = [{ name = "type", type = "string", attributes = { Nilable = false } }, { name = "index", type = "luaIndex", attributes = { Nilable = false } }], returns = [{ name = "name", type = "string", attributes = { Nilable = true } }, { name = "texture", type = "fileID", attributes = { Nilable = true } }, { name = "count", type = "number", attributes = { Nilable = true } }, { name = "quality", type = "number", attributes = { Nilable = true } }, { name = "isUsable", type = "bool", attributes = { Nilable = true } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/QuestFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/Classic/QuestFrame.lua:163 Blizzard compares `GetNumQuestChoices()` with a count: the number of reward choices the open quest offers. Not in the generated documentation."
+entry = { name = "GetNumQuestChoices", params = [], evidence = "source", signature = { name = "GetNumQuestChoices", type = "Function", arguments = [], returns = [{ name = "count", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/QuestFrame.lua" } } }
+
+[[fields]]
+owner = "LargeQuestRewardItemButtonTemplate"
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/Vanilla/QuestInfo.lua:550 QuestInfo_ShowRewards sets `type` on each reward button to \"choice\" or \"reward\" (:743), the argument GetQuestItemInfo and GetQuestItemLink take; the buttons come from the rewards frame's buttonTemplate (:383), LargeQuestRewardItemButtonTemplate (Blizzard_UIPanels_Game/Vanilla/QuestInfo.xml:438). Nil until the button first shows an item."
+entry = { name = "type", type = "string", attributes = { Nilable = true } }
+
+[[fields]]
+owner = "SmallQuestRewardItemButtonTemplate"
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/Vanilla/QuestInfo.lua:550 QuestInfo_ShowRewards sets `type` on each reward button to \"choice\" or \"reward\" (:743), the argument GetQuestItemInfo and GetQuestItemLink take; the buttons come from the rewards frame's buttonTemplate (:383), SmallQuestRewardItemButtonTemplate (Blizzard_UIPanels_Game/Vanilla/QuestInfo.xml:541). Nil until the button first shows an item."
+entry = { name = "type", type = "string", attributes = { Nilable = true } }

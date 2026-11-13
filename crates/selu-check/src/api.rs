@@ -21,7 +21,7 @@ fn closest<'a>(name: &str, choices: impl Iterator<Item = &'a str>) -> String {
         .unwrap_or("Frame")
         .into()
 }
-const MIXIN_VALUES: &[(&str, &str)] = &[
+pub(crate) const MIXIN_VALUES: &[(&str, &str)] = &[
     ("colorRGB", "SourceObject_CreateColor"),
     ("colorRGBA", "SourceObject_CreateColor"),
     ("vector2", "SourceObject_CreateVector2D"),
@@ -119,6 +119,10 @@ fn primitive(name: &str) -> Option<Type> {
             ret: Box::new(Type::Untyped),
         },
         "bool" | "boolean" => Type::Boolean,
+        // The documentation's "any Lua value" (GetItemStats' stat table,
+        // DeserializeJSON's result): `unknown`, narrowed before use. As an
+        // argument it accepts any value.
+        "LuaValueVariant" => Type::Unknown,
         // `UnitTokenType` is also the name of an enumeration, but every
         // argument, return and payload documented with it on every product
         // (the nameplate events, UnitPositionFrame units, SetUnit) carries a

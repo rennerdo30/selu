@@ -129,6 +129,11 @@ Manifest widget names are also valid written types, for example
 Frame, and derived widgets retain their existing nominal assignability.
 Widget declarations, class names and type aliases retain their usual precedence.
 
+So are the game data's documented structures and mixin values, so a helper
+can take one as a parameter: `function id(recipe: TradeSkillRecipeInfo?)`,
+`function red(color: colorRGBA)`. Widgets and templates of the same name
+keep precedence.
+
 The templated-frames example runs offline using declared Texture methods for
 its background and UIPanelButtonTemplate for the button. SetBackdrop and
 SetBackdropColor have source signatures in the shipped manifests; unannotated

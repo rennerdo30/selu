@@ -690,7 +690,7 @@ entry = { name = "SetTexCoord", type = "Function", arguments = [{ name = "left",
 [[tables]]
 evidence = "source"
 note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXMLGame/Tooltip/TooltipUtil.lua:55 C_TooltipInfo returns `TooltipData`; no generated documentation file defines it. Closed subset of the fields Blizzard's tooltip code reads; unlisted fields unsupported."
-entry = { name = "TooltipDataLine", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "type", type = "number", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:320", Nilable = false } }, { name = "leftText", type = "string", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:339", Nilable = true } }, { name = "rightText", type = "string", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:342", Nilable = true } }, { name = "wrapText", type = "bool", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:341", Nilable = true } }, { name = "leftOffset", type = "number", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:343", Nilable = true } }] }
+entry = { name = "TooltipDataLine", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "type", type = "number", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:320", Nilable = false } }, { name = "leftText", type = "string", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:339", Nilable = true } }, { name = "rightText", type = "string", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:342", Nilable = true } }, { name = "wrapText", type = "bool", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:341", Nilable = true } }, { name = "leftOffset", type = "number", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:343", Nilable = true } }, { name = "leftColor", type = "colorRGBA", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:340", Nilable = true } }, { name = "rightColor", type = "colorRGBA", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:345", Nilable = true } }] }
 
 [[tables]]
 evidence = "source"
@@ -769,3 +769,76 @@ entry = { name = "ItemButtonMixin.GetBagID", params = [], evidence = "source", s
 evidence = "source"
 note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_UnitFrame/Shared/CompactUnitFrame.lua:645 `CompactUnitFrame_UpdateHealthColor(frame)` recolours the health bar of a compact unit frame (raid, party and nameplate unit frames)."
 entry = { name = "CompactUnitFrame_UpdateHealthColor", params = ["frame"], evidence = "source", signature = { name = "CompactUnitFrame_UpdateHealthColor", type = "Function", arguments = [{ name = "frame", type = "Button", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_UnitFrame/Shared/CompactUnitFrame.lua" } } }
+
+# Extraction 19: equipped and quest item reads, quest reward buttons, profession recipes (M4)
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_InspectUI/Mainline/InspectPaperDollFrame.lua:136 Blizzard reads `link = GetInventoryItemLink(unit, slot)`; an empty slot returns nothing. Not in the generated documentation."
+entry = { name = "GetInventoryItemLink", params = ["unit", "invSlot"], evidence = "source", signature = { name = "GetInventoryItemLink", type = "Function", arguments = [{ name = "unit", type = "UnitToken", attributes = { Nilable = false } }, { name = "invSlot", type = "number", attributes = { Nilable = false } }], returns = [{ name = "itemLink", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_InspectUI/Mainline/InspectPaperDollFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/QuestInfo.lua:522 Blizzard passes `GetQuestItemLink(type, index)` (type \"choice\" or \"reward\") on as an item link; an index without an item returns nothing. Not in the generated documentation."
+entry = { name = "GetQuestItemLink", params = ["type", "index"], evidence = "source", signature = { name = "GetQuestItemLink", type = "Function", arguments = [{ name = "type", type = "string", attributes = { Nilable = false } }, { name = "index", type = "luaIndex", attributes = { Nilable = false } }], returns = [{ name = "itemLink", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_UIPanels_Game/Mainline/QuestInfo.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/QuestInfo.lua:521 Blizzard reads `name, texture, numItems, quality, isUsable, itemID = GetQuestItemInfo(type, index)`; an index without an item returns nothing. Not in the generated documentation."
+entry = { name = "GetQuestItemInfo", params = ["type", "index"], evidence = "source", signature = { name = "GetQuestItemInfo", type = "Function", arguments = [{ name = "type", type = "string", attributes = { Nilable = false } }, { name = "index", type = "luaIndex", attributes = { Nilable = false } }], returns = [{ name = "name", type = "string", attributes = { Nilable = true } }, { name = "texture", type = "fileID", attributes = { Nilable = true } }, { name = "count", type = "number", attributes = { Nilable = true } }, { name = "quality", type = "number", attributes = { Nilable = true } }, { name = "isUsable", type = "bool", attributes = { Nilable = true } }, { name = "itemID", type = "number", attributes = { Nilable = true } }], attributes = { file = "Blizzard_UIPanels_Game/Mainline/QuestInfo.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/QuestFrame.lua:146 Blizzard compares `GetNumQuestChoices()` with a count: the number of reward choices the open quest offers. Not in the generated documentation."
+entry = { name = "GetNumQuestChoices", params = [], evidence = "source", signature = { name = "GetNumQuestChoices", type = "Function", arguments = [], returns = [{ name = "count", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Mainline/QuestFrame.lua" } } }
+
+[[fields]]
+owner = "LargeQuestRewardItemButtonTemplate"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/QuestInfo.lua:774 QuestInfo_ShowRewards sets `type` on each reward button to \"choice\" or \"reward\" (:952), the argument GetQuestItemInfo and GetQuestItemLink take; the buttons come from the rewards frame's buttonTemplate (:445), LargeQuestRewardItemButtonTemplate (Blizzard_UIPanels_Game/Mainline/QuestInfo.xml:598). Nil until the button first shows an item."
+entry = { name = "type", type = "string", attributes = { Nilable = true } }
+
+[[fields]]
+owner = "SmallQuestRewardItemButtonTemplate"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/QuestInfo.lua:774 QuestInfo_ShowRewards sets `type` on each reward button to \"choice\" or \"reward\" (:952), the argument GetQuestItemInfo and GetQuestItemLink take; the buttons come from the rewards frame's buttonTemplate (:445), SmallQuestRewardItemButtonTemplate (Blizzard_UIPanels_Game/Mainline/QuestInfo.xml:706). Nil until the button first shows an item."
+entry = { name = "type", type = "string", attributes = { Nilable = true } }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ProfessionsTemplates/Blizzard_Professions.lua:963 the recipe list's tree nodes carry `{recipeInfo = ...}` for a recipe; category and divider nodes carry other data. Closed subset: only `recipeInfo` is read."
+entry = { name = "SeluProfessionsRecipeListNodeData", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "recipeInfo", type = "TradeSkillRecipeInfo", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_ProfessionsTemplates/Blizzard_ProfessionsRecipeList.lua:238", Nilable = true } }] }
+
+[[widgets]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/TreeListDataProvider.lua:40 a node of the recipe list's tree data provider (TreeNodeMixin); `GetData()` returns the table it was inserted with."
+entry = { name = "SeluProfessionsRecipeListNode", type = "ScriptObject", methods = [{ name = "GetData", type = "Function", arguments = [], returns = [{ name = "data", type = "SeluProfessionsRecipeListNodeData", attributes = { Nilable = false } }] }] }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ProfessionsTemplates/Blizzard_ProfessionsRecipeList.lua:236 `ProfessionsRecipeListRecipeMixin:Init(node, hideCraftableCount)` shows the recipe of a tree node (`node:GetData().recipeInfo`, :237) in a recipe row."
+entry = { name = "ProfessionsRecipeListRecipeMixin.Init", params = ["node", "hideCraftableCount"], evidence = "source", signature = { name = "Init", type = "Function", arguments = [{ name = "node", type = "SeluProfessionsRecipeListNode", attributes = { Nilable = false } }, { name = "hideCraftableCount", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_ProfessionsTemplates/Blizzard_ProfessionsRecipeList.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ProfessionsTemplates/Blizzard_Professions.lua:333 `Professions.GetHighestLearnedRecipe(recipeInfo)` returns the highest learned rank of a recipe, or nil."
+entry = { name = "Professions.GetHighestLearnedRecipe", params = ["recipeInfo"], evidence = "source", signature = { name = "GetHighestLearnedRecipe", type = "Function", arguments = [{ name = "recipeInfo", type = "TradeSkillRecipeInfo", attributes = { Nilable = false } }], returns = [{ name = "recipeInfo", type = "TradeSkillRecipeInfo", attributes = { Nilable = true } }], attributes = { file = "Blizzard_ProfessionsTemplates/Blizzard_Professions.lua" } } }
+
+[[widgets]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ProfessionsTemplates/Blizzard_ProfessionsTransaction.lua:197 the recipe transaction a schematic form passes to Professions.SetupOutputIcon (ProfessionsRecipeTransactionMixin); `GetRecipeID()` returns its recipe."
+entry = { name = "SeluProfessionsRecipeTransaction", type = "ScriptObject", methods = [{ name = "GetRecipeID", type = "Function", arguments = [], returns = [{ name = "recipeID", type = "number", attributes = { Nilable = false } }] }] }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ProfessionsTemplates/Blizzard_Professions.lua:390 `Professions.SetupOutputIcon(outputIcon, transaction, outputItemInfo)` shows a recipe's output item; the schematic form passes its OutputIcon, its transaction and the C_TradeSkillUI.GetRecipeOutputItemData result (Blizzard_ProfessionsTemplates/Blizzard_ProfessionsRecipeSchematicForm.lua:1367, :687)."
+entry = { name = "Professions.SetupOutputIcon", params = ["outputIcon", "transaction", "outputItemInfo"], evidence = "source", signature = { name = "SetupOutputIcon", type = "Function", arguments = [{ name = "outputIcon", type = "Button", attributes = { Nilable = false } }, { name = "transaction", type = "SeluProfessionsRecipeTransaction", attributes = { Nilable = false } }, { name = "outputItemInfo", type = "CraftingRecipeOutputInfo", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_ProfessionsTemplates/Blizzard_Professions.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ProfessionsTemplates/Blizzard_ProfessionsRecipeSchematicForm.lua:348 `ProfessionsRecipeSchematicFormMixin:Init(recipeInfo, isRecraftOverride)` shows a recipe (nil clears the form) and stores it as `currentRecipeInfo` (:387)."
+entry = { name = "ProfessionsRecipeSchematicFormMixin.Init", params = ["recipeInfo", "isRecraftOverride"], evidence = "source", signature = { name = "Init", type = "Function", arguments = [{ name = "recipeInfo", type = "TradeSkillRecipeInfo", attributes = { Nilable = true } }, { name = "isRecraftOverride", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_ProfessionsTemplates/Blizzard_ProfessionsRecipeSchematicForm.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ProfessionsTemplates/Blizzard_ProfessionsRecipeSchematicForm.lua:1496 `ProfessionsRecipeSchematicFormMixin:GetRecipeInfo()` returns `self.currentRecipeInfo`, set by Init (:387)."
+entry = { name = "ProfessionsRecipeSchematicFormMixin.GetRecipeInfo", params = [], evidence = "source", signature = { name = "GetRecipeInfo", type = "Function", arguments = [], returns = [{ name = "recipeInfo", type = "TradeSkillRecipeInfo", attributes = { Nilable = true } }], attributes = { file = "Blizzard_ProfessionsTemplates/Blizzard_ProfessionsRecipeSchematicForm.lua" } } }

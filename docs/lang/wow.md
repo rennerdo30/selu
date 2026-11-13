@@ -79,6 +79,25 @@ declare: `hook("Name", ...)` needs a global function of the game, and
 `hook(widget, "Method", ...)` a method the widget or one of its templates and
 mixins declares (an unknown member reports SELU0582, as a call would). A hook
 name is a literal string (SELU0441).
+
+A method hook's callback receives the widget, then the method's own
+arguments, typed from the game data: `hook(UIParent, "SetAlpha", (self,
+alpha) => ...)` gets a `number` alpha.
+
+`hook("Table.Function", ...)` hooks a function of a game table, for example
+`hook("Professions.SetupOutputIcon", ...)`; it lowers to
+`hooksecurefunc(Professions, "SetupOutputIcon", ...)`, not to a global of
+that dotted name.
+
+`hook(SomeMixin, "Method", ...)` hooks a Blizzard mixin's method, for
+example `hook(ProfessionsRecipeListRecipeMixin, "Init", (row, node) => ...)`.
+The mixin must be one a game template uses; the callback's first argument
+is the frame carrying it (the one template that uses it, or every frame with
+the mixin when several do), so its keyed children are typed. A mixin's
+methods are copied into each frame when the frame is created, so the hook
+reaches only frames created after it: hook when the mixin's addon loads
+(`ADDON_LOADED`), and hook an existing frame's own method directly. A mixin
+hook is always a game hook (SELU0604 unless reviewed with `allowTaint`).
 Diagnostics SELU0440-0444 cover arity, alias/hook name, callback, template types
 and sentence joining. Other unsupported template tags retain SELU0390.
 

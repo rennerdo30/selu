@@ -502,6 +502,7 @@ pub fn check(
                     if types.is_builtin_call(callee.id)
                         && ((n == "hook"
                             && (args.len() == 2
+                                || types.is_mixin_hook(callee.id)
                                 || args.first().is_some_and(|e| foreign(e, o, types, strict))))
                             || (n == "hookScript"
                                 && args.first().is_some_and(|e| foreign(e, o, types, strict))

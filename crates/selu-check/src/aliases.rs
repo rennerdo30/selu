@@ -513,6 +513,11 @@ impl Ctx<'_> {
                                             "table" if matches!(shape_of(t), Type::Opaque(_)) => {
                                                 Type::ApiOpaque("SeluOpaqueTable".into(), vec![])
                                             }
+                                            // A table of unknown contents: its
+                                            // fields stay protected reads.
+                                            "table" if matches!(shape_of(t), Type::Unknown) => {
+                                                Type::Unknown
+                                            }
                                             "table" => Type::Object(Default::default()),
                                             _ => t.clone(),
                                         })
@@ -579,6 +584,9 @@ impl Ctx<'_> {
                             "table" if matches!(shape, Type::Opaque(_)) => {
                                 Type::ApiOpaque("SeluOpaqueTable".into(), vec![])
                             }
+                            // A table of unknown contents: its fields stay
+                            // protected reads.
+                            "table" if matches!(shape, Type::Unknown) => Type::Unknown,
                             "table" => Type::Object(Default::default()),
                             "function" => Type::Function {
                                 multiple_results: false,

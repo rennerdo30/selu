@@ -93,6 +93,13 @@ const CONTRACTS: &[(u32, &str)] = &[
         18,
         "1557385c8363eb15722981a50618c018abdefc873fbb808578d5b7a52833aa12",
     ),
+    // 19: the overlays type the tooltip line colours, GetInventoryItemLink,
+    // the quest item reads and the quest reward buttons' `type`, and the
+    // profession recipe list rows, output icon and schematic form.
+    (
+        19,
+        "4512da51f2b30ff544fa1b077128f0b3cba3a60e6680669b231660125b942a85",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

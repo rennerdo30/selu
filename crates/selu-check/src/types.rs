@@ -976,6 +976,8 @@ pub struct TypeTable {
     game_types: std::collections::HashSet<ExprId>,
     api_receivers: std::collections::HashSet<ExprId>,
     builtin_calls: std::collections::HashSet<ExprId>,
+    /// `hook(SomeMixin, "Method", ...)` calls (by callee id): always a game hook.
+    mixin_hooks: std::collections::HashSet<ExprId>,
     pub(crate) origin_paths: HashMap<ExprId, crate::access_paths::AccessPath>,
     pub(crate) origin_initializers: HashMap<crate::access_paths::AccessPath, selu_syntax::Expr>,
 }
@@ -1010,6 +1012,12 @@ impl TypeTable {
     }
     pub(crate) fn is_builtin_call(&self, id: ExprId) -> bool {
         self.builtin_calls.contains(&id)
+    }
+    pub(crate) fn mark_mixin_hook(&mut self, id: ExprId) {
+        self.mixin_hooks.insert(id);
+    }
+    pub(crate) fn is_mixin_hook(&self, id: ExprId) -> bool {
+        self.mixin_hooks.contains(&id)
     }
     pub(crate) fn mark_api_receiver(&mut self, id: ExprId) {
         self.api_receivers.insert(id);

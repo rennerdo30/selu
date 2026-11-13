@@ -171,6 +171,16 @@ impl Ctx<'_> {
         }
         let last = args.len() - 1;
         let mut target = None;
+        // `hook(SomeMixin, "Method", ...)`: a Blizzard mixin's method, for
+        // every frame mixed after the hook.
+        let mixin_self = if n == "hook" && args.len() == 3 {
+            self.hook_mixin(&args[0])
+        } else {
+            None
+        };
+        if mixin_self.is_some() {
+            self.types.mark_mixin_hook(callee.id);
+        }
         for (i, x) in args[..last].iter().enumerate() {
             if n == "command" {
                 if !matches!(&x.kind, ExprKind::Str(s) if s.starts_with('/') && s.len()>1 && !s.chars().any(char::is_whitespace))
@@ -196,7 +206,10 @@ impl Ctx<'_> {
                     );
                 }
             } else {
-                let ty = crate::shape_of(&self.value(x));
+                let ty = match (&mixin_self, i) {
+                    (Some(t), 0) => t.clone(),
+                    _ => crate::shape_of(&self.value(x)),
+                };
                 target = Some(ty.clone());
                 if !matches!(
                     ty,
@@ -215,6 +228,7 @@ impl Ctx<'_> {
         }
         // The hooked function or method must be part of the game data, as a
         // call to it would have to be.
+        let mut method = None;
         if n == "hook"
             && let ExprKind::Str(name) = &args[last - 1].kind
         {
@@ -232,7 +246,8 @@ impl Ctx<'_> {
                 Some(ty @ Type::Widget(..)) => {
                     let ty = ty.clone();
                     match self.api_member(&ty, name, &args[0]) {
-                        Some(Type::Function { .. } | Type::Error) => {}
+                        Some(f @ Type::Function { .. }) => method = Some((ty, f)),
+                        Some(Type::Error) => {}
                         Some(_) => self.out.push(
                             err(
                                 "SELU0447",
@@ -300,6 +315,29 @@ impl Ctx<'_> {
                 *expected_params = params;
             }
         }
+        // A method post-hook receives the object, then the method's own
+        // arguments.
+        if let Some((
+            receiver,
+            Type::Function {
+                params,
+                api_semantics,
+                ..
+            },
+        )) = method
+            && let Type::Function {
+                params: expected_params,
+                ..
+            } = &mut expected
+        {
+            let mut params = params;
+            for (index, opaque) in api_semantics.opaque_inputs {
+                if let Some(parameter) = params.get_mut(index) {
+                    *parameter = opaque;
+                }
+            }
+            *expected_params = std::iter::once(receiver).chain(params).collect();
+        }
         let t = crate::shape_of(&self.value_expected(&args[last], Some(&expected)));
         if !matches!(t, Type::Function { .. } | Type::Error) {
             self.out.push(
@@ -347,5 +385,39 @@ fn handle_method(ret: Type) -> Type {
         required: 0,
         rest: None,
         ret: Box::new(ret),
+    }
+}
+
+impl Ctx<'_> {
+    /// The receiver type of `hook(SomeMixin, ...)` when `x` names a mixin a
+    /// game template uses: the frames carrying it (the one template that uses
+    /// it, or the mixin itself when several do).
+    fn hook_mixin(&mut self, x: &Expr) -> Option<Type> {
+        let ExprKind::Ident(name) = &x.kind else {
+            return None;
+        };
+        if self.lookup(name).is_some() {
+            return None;
+        }
+        let m = self.manifest;
+        let users: Vec<_> = m
+            .templates
+            .iter()
+            .filter(|t| t.mixins.iter().any(|x| x == name))
+            .collect();
+        let first = users.first()?;
+        let kind = first.ty.as_deref().unwrap_or("Frame");
+        let kind = if users.iter().all(|t| t.ty.as_deref() == Some(kind)) {
+            kind
+        } else {
+            "Frame"
+        };
+        let Type::Widget(widget, mut bases) = crate::api::widget(m, kind) else {
+            return None;
+        };
+        let tag = if users.len() == 1 { &first.name } else { name };
+        bases.push(format!("@template:{tag}"));
+        crate::frames::tag_template_closure(m, &mut bases);
+        Some(Type::Widget(widget, bases))
     }
 }
