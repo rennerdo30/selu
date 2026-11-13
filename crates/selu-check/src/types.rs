@@ -968,6 +968,9 @@ pub struct TypeTable {
     stable: std::collections::HashSet<ExprId>,
     frame_families: std::collections::HashSet<ExprId>,
     addon_names: std::collections::HashSet<ExprId>,
+    addon_globals: HashMap<ExprId, crate::boundary::AddonGlobal>,
+    addon_fields: std::collections::HashSet<ExprId>,
+    unknown_fields: std::collections::HashSet<ExprId>,
     method_calls: std::collections::HashSet<ExprId>,
     single_values: std::collections::HashSet<ExprId>,
     game_types: std::collections::HashSet<ExprId>,
@@ -1027,6 +1030,38 @@ impl TypeTable {
     }
     pub fn uses_addon_name(&self) -> bool {
         !self.addon_names.is_empty()
+    }
+    pub(crate) fn mark_addon_global(&mut self, id: ExprId, read: crate::boundary::AddonGlobal) {
+        self.addon_globals.insert(id, read);
+    }
+    /// `addon("Name").global("Global")` at this expression.
+    pub fn addon_global(&self, id: ExprId) -> Option<&crate::boundary::AddonGlobal> {
+        self.addon_globals.get(&id)
+    }
+    /// The other addons this module reads, for the TOC's OptionalDeps.
+    pub fn optional_deps(&self) -> std::collections::BTreeSet<String> {
+        self.addon_globals
+            .values()
+            .map(|r| r.addon.clone())
+            .collect()
+    }
+    pub(crate) fn mark_addon_field(&mut self, id: ExprId) {
+        self.addon_fields.insert(id);
+    }
+    /// `addonFields(frame).field` at this member expression.
+    pub fn is_addon_field(&self, id: ExprId) -> bool {
+        self.addon_fields.contains(&id)
+    }
+    pub(crate) fn mark_unknown_field(&mut self, id: ExprId) {
+        self.unknown_fields.insert(id);
+    }
+    /// `value.field` on an unknown value at this member expression.
+    pub fn is_unknown_field(&self, id: ExprId) -> bool {
+        self.unknown_fields.contains(&id)
+    }
+    /// Whether this module needs the protected field-read helpers.
+    pub fn uses_boundary_reads(&self) -> bool {
+        !self.addon_fields.is_empty() || !self.unknown_fields.is_empty()
     }
     pub fn is_frame_family(&self, id: ExprId) -> bool {
         self.frame_families.contains(&id)

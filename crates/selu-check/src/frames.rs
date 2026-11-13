@@ -58,6 +58,10 @@ fn effective<'a>(
     path.pop();
     result
 }
+/// Whether any of these templates (or mixins) declares `name`.
+pub(crate) fn template_declares(m: &Manifest, templates: &[&str], name: &str) -> bool {
+    applied(m, templates, name).is_some()
+}
 fn applied<'a>(m: &'a Manifest, templates: &[&str], name: &str) -> Option<Option<&'a Declaration>> {
     templates
         .iter()

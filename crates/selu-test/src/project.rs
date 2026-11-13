@@ -312,6 +312,9 @@ fn build_impl(
     let mut imports_time = std::time::Duration::ZERO;
     let mut saved_shapes = std::collections::BTreeMap::new();
     let mut saved_globals = Vec::new();
+    // Other addons read through the boundary: optional dependencies, so
+    // they load first when installed and are never required.
+    let mut optional_deps = std::collections::BTreeSet::new();
     let old_saved: SavedFile = match std::fs::read_to_string(project_dir.join("selu.saved.toml")) {
         Ok(text) => toml::from_str(&text).map_err(|e| {
             eprintln!("SELU0466: invalid selu.saved.toml: {e}");
@@ -409,6 +412,7 @@ fn build_impl(
             if checked.has_errors() {
                 return Err(ExitCode::FAILURE);
             }
+            optional_deps.extend(checked.types.optional_deps());
             collect_saved(
                 module,
                 &checked.types,
@@ -601,6 +605,13 @@ fn build_impl(
                     names.into_iter().collect::<Vec<_>>().join(", ")
                 );
             }
+        }
+        if !optional_deps.is_empty() {
+            toc = format!(
+                "## OptionalDeps: {}
+{toc}",
+                optional_deps.iter().cloned().collect::<Vec<_>>().join(", ")
+            );
         }
         std::fs::write(out_dir.join(format!("{}.toc", project.name)), toc).map_err(|e| {
             eprintln!("selu: cannot write .toc: {e}");

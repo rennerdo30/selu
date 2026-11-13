@@ -19,6 +19,7 @@ use selu_syntax::{Expr, ExprKind, Param, Program, Stmt, StmtKind, TypeExpr};
 use std::collections::HashMap;
 
 mod aliases;
+pub mod boundary;
 pub use aliases::shape_of;
 mod api;
 mod classes;
@@ -1303,6 +1304,9 @@ impl Ctx<'_> {
                 Type::Void
             }
             ExprKind::Member { object, name } => {
+                if let Some(t) = self.addon_field(e, object, name) {
+                    return t;
+                }
                 let t = self
                     .target_receiver(object)
                     .unwrap_or_else(|| self.value(object));
@@ -1341,6 +1345,12 @@ impl Ctx<'_> {
         }
         if matches!(&shaped, Type::ApiOpaque(n, ts) if n == "SeluOpaqueTable" && ts.is_empty()) {
             return Type::Opaque("UnprovenTableField".into());
+        }
+        // A field of an unknown value (another addon's): a protected read
+        // that is unknown again and never raises a Lua error.
+        if shaped == Type::Unknown {
+            self.types.mark_unknown_field(object.id);
+            return Type::Unknown;
         }
         let t = &shaped;
         if let Some(t) = self.target_member(t, name, object) {
@@ -1607,6 +1617,12 @@ impl Ctx<'_> {
         }
         if let Some(t) = self.frame_family(e, callee, args) {
             return t;
+        }
+        if let Some(t) = self.addon_global(e, callee, args) {
+            return t;
+        }
+        if self.addon_fields_misuse(e, callee) {
+            return Type::Error;
         }
         if matches!(&callee.kind, ExprKind::Ident(n) if n == "addonName" && self.lookup(n).is_none())
         {

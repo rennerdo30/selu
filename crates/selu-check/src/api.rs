@@ -590,6 +590,23 @@ impl Ctx<'_> {
             .map(|n| named(self.manifest, n, 0))
             .unwrap_or(Type::Untyped)
     }
+    /// Whether the game data declares `name` on this widget: a method or
+    /// field of its widget type, or a member of one of its templates or
+    /// mixins. Custom fields Selu code may add are not declared.
+    pub(crate) fn declares_member(&self, t: &Type, name: &str) -> bool {
+        let Type::Widget(widget, bases) = t else {
+            return false;
+        };
+        let templates: Vec<&str> = bases
+            .iter()
+            .filter_map(|b| b.strip_prefix("@template:"))
+            .collect();
+        self.availability.manifests().iter().any(|m| {
+            method(m, widget, name, &mut Vec::new()).is_some()
+                || widget_field(m, widget, name, &mut Vec::new()).is_some()
+                || crate::frames::template_declares(m, &templates, name)
+        })
+    }
     pub(crate) fn api_member(&mut self, t: &Type, name: &str, object: &Expr) -> Option<Type> {
         if let Some(root) = object.dotted_name()
             && self.lookup(root.split('.').next().unwrap_or("")).is_none()

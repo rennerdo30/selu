@@ -754,10 +754,50 @@ impl Lowerer<'_> {
                 }
             }
             ExprKind::Binary { op, left, right } => self.binary(e, op, left, right, pre),
+            // Another addon's field: a protected read (`unknown`), or a raw
+            // field another addon put on a frame.
+            ExprKind::Member {
+                object,
+                name: field,
+            } if self.types.is_unknown_field(e.id) => {
+                let v = self.expr(object, pre);
+                lua::call(name("__selu_field"), vec![v, LExpr::Str(field.clone())])
+            }
+            ExprKind::Member {
+                object,
+                name: field,
+            } if self.types.is_addon_field(e.id) => {
+                let ExprKind::Call { args, .. } = &object.kind else {
+                    unreachable!("checked addonFields")
+                };
+                let v = self.expr(&args[0], pre);
+                lua::call(name("__selu_rawfield"), vec![v, LExpr::Str(field.clone())])
+            }
             ExprKind::Member {
                 object,
                 name: field,
             } => self.data_field(object, field, pre),
+            // `addon("Name").global("Global")`: the global only while that
+            // addon is loaded; the load check cannot raise.
+            ExprKind::Call { .. } if self.types.addon_global(e.id).is_some() => {
+                let read = self.types.addon_global(e.id).expect("checked").clone();
+                let t = self.temp();
+                pre.push(LStmt::new(
+                    LStmtKind::Local(vec![t.clone()], vec![]),
+                    &e.span,
+                ));
+                pre.push(LStmt::new(
+                    LStmtKind::Raw(format!(
+                        "do
+  local ok, loaded = pcall({}, {:?})
+  if ok and loaded == true then {t} = {} end
+end",
+                        read.loaded, read.addon, read.global
+                    )),
+                    &e.span,
+                ));
+                name(&t)
+            }
             // The folder name the WoW loader passes as the first chunk argument.
             ExprKind::Call { .. } if self.types.is_addon_name(e.id) => name("__selu_addon"),
             ExprKind::Call { callee: _, args } if self.types.is_frame_family(e.id) => {
@@ -1080,6 +1120,28 @@ impl Lowerer<'_> {
         if found {
             out.push(LStmt {
                 kind: LStmtKind::Local(vec!["__selu_type".into()], vec![name("type")]),
+                span: None,
+            });
+        }
+        // Reads across the other-addon boundary: a field of an unknown value
+        // never raises (a metatable's __index runs protected), and a field
+        // another addon put on a frame is read raw.
+        if self.types.uses_boundary_reads() {
+            out.push(LStmt {
+                kind: LStmtKind::Raw(
+                    [
+                        "local __selu_boundary_type, __selu_boundary_pcall, __selu_boundary_rawget = type, pcall, rawget",
+                        "local function __selu_boundary_index(value, key) return value[key] end",
+                        "local function __selu_field(value, key)",
+                        "  if __selu_boundary_type(value) ~= \"table\" then return nil end",
+                        "  local ok, result = __selu_boundary_pcall(__selu_boundary_index, value, key)",
+                        "  if ok then return result end",
+                        "  return nil",
+                        "end",
+                        "local function __selu_rawfield(frame, key) return __selu_boundary_rawget(frame, key) end",
+                    ]
+                    .join("\n"),
+                ),
                 span: None,
             });
         }
