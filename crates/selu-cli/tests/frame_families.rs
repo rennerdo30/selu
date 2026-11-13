@@ -416,3 +416,47 @@ fn bounded_cli(cmd: &mut std::process::Command) -> std::process::Output {
     }
     child.wait_with_output().unwrap()
 }
+
+#[test]
+fn template_named_types_bag_items_and_tooltip_data_are_typed() {
+    // Extraction 17 on the Forever build: a named frame's own mixin, bag
+    // items from BaseContainerFrameMixin, ItemButton as a template type,
+    // TooltipData and its post-call.
+    let m = selu_manifest::store::load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wowf@1.60.1.70790",
+    )
+    .unwrap();
+    let typed = r#"
+        for (const item of ContainerFrameCombinedBags.Items) { const bag: number = item.GetBagID(); }
+        const size: number = ContainerFrame1.GetBagSize();
+        allowTaint("test", hook("SetItemButtonTexture", (button, texture) => { if (button != null) { print(readable(button.GetName())); } }));
+        const info = C_TooltipInfo.GetHyperlink("item:1");
+        if (info != null) { for (const line of info.lines) { const text: string? = line.leftText; } }
+        allowTaint("test", TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, (tooltip, data) => { const link: string? = data.hyperlink; tooltip.AddLine("x", 1, 1, 1); }));
+        const [kind, id] = GetActionInfo(1);
+    "#;
+    let (_, c) = check(typed, std::slice::from_ref(&m));
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    for (src, code) in [
+        (
+            "for (const item of ContainerFrameCombinedBags.Items) { const b: boolean = item; }",
+            "SELU0336",
+        ),
+        (
+            "allowTaint(\"t\", hook(\"SetItemButtonTexture\", (button, texture) => { const b: boolean = button; }));",
+            "SELU0336",
+        ),
+        (
+            "const info = C_TooltipInfo.GetHyperlink(\"x\"); if (info != null) { print(info.lines[0].missing); }",
+            "SELU0330",
+        ),
+    ] {
+        let (_, c) = check(src, std::slice::from_ref(&m));
+        assert!(
+            c.diagnostics.iter().any(|d| d.code == code),
+            "{src}: {:?}",
+            c.diagnostics
+        );
+    }
+}

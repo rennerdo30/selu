@@ -24,7 +24,13 @@ pub(crate) fn intersect(states: Vec<FlowState>) -> FlowState {
             // join merges; otherwise either fact may hold (a union). Open
             // types carry no usable fact.
             if value.ty != other.ty {
-                if value.ty.is_open() || other.ty.is_open() {
+                // Opaque payloads keep their identity only as the declared
+                // type: parts united again would no longer round-trip.
+                if value.ty.is_open()
+                    || other.ty.is_open()
+                    || value.ty.contains_opaque()
+                    || other.ty.contains_opaque()
+                {
                     return false;
                 }
                 value.ty = match Type::join(&value.ty, &other.ty) {

@@ -13,7 +13,7 @@ const HEADER: usize = 48;
 const LIMIT: u64 = 256 * 1024 * 1024;
 /// Generator contract version. Bump whenever extraction output rules change.
 /// Version 1 is the W2 extraction shipped in the original format-2 pack.
-pub const EXTRACTION_VERSION: u32 = 16;
+pub const EXTRACTION_VERSION: u32 = 17;
 const LEGACY_EXTRACTION_VERSION: u32 = 1;
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -190,6 +190,14 @@ definitions record `dataGlobals[].inherits` links in argument order. Template
 traversable without duplicating members. Local/shadowed helpers and dependencies,
 dynamic arguments and function-body definitions are excluded.
 
+A named, non-virtual frame's own `mixin` attribute is listed after the
+templates it inherits in its global entry (`ContainerFrameCombinedBags` carries
+`PortraitFrameFlatTemplate` and `ContainerFrameCombinedBagsMixin`), so member
+lookup reaches the mixin and its `CreateFromMixins` parents as it does for a
+template. An API or overlay type that names a template or intrinsic frame type
+(`ItemButton`) is that template's widget carrying the template, as when Selu
+code writes the name.
+
 Generated `globals` may contain groups: `{names: [...], type?, evidence,
 templates?}`. All names share that metadata and no value is stored on a group.
 Scalar entries with values retain the individual object form. The manifest

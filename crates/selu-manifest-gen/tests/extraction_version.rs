@@ -77,6 +77,14 @@ const CONTRACTS: &[(u32, &str)] = &[
         16,
         "8f22d7d25172a72720db83fb9ff0c0fbecbce08ac10907ad9fbf7d3d14fd91b1",
     ),
+    // 17: a named frame's own XML mixins follow its templates; the overlays
+    // type TooltipData and its post-call, GetActionInfo, GetRaidRosterInfo,
+    // GetShapeshiftForm, GetMacroSpell, SetItemButtonTexture and the bag
+    // frames' item buttons.
+    (
+        17,
+        "bb8b2f71e574697c6b7d87de8655bbfd898593cabace3d132f3947e89d0a345f",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

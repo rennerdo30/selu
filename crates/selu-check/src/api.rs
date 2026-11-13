@@ -172,6 +172,16 @@ pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     if widget_decl(m, n).is_some() {
         return widget(m, n);
     }
+    // A template or intrinsic frame type (`ItemButton`) named as a type: its
+    // widget, carrying the template, as when Selu code writes the name.
+    if let Some(template) = m.templates.iter().find(|t| t.name == n)
+        && let Some(base) = template.ty.as_deref().filter(|b| *b != n)
+        && let Type::Widget(name, mut bases) = named(m, base, depth + 1)
+    {
+        bases.push(format!("@template:{n}"));
+        crate::frames::tag_template_closure(m, &mut bases);
+        return Type::Widget(name, bases);
+    }
     if m.enums.iter().any(|e| e.name == n) {
         return Type::Number;
     }

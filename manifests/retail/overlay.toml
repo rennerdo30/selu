@@ -685,3 +685,55 @@ widget = "SimpleTextureBaseAPI"
 evidence = "source"
 note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_FrameXML/EquipmentFlyout.lua:644 Blizzard calls `SetTexCoord` with eight numbers, the four corners (upper left, lower left, upper right, lower right); the generated documentation lists only the four-number form."
 entry = { name = "SetTexCoord", type = "Function", arguments = [{ name = "left", type = "number", attributes = { Nilable = false } }, { name = "right", type = "number", attributes = { Nilable = false } }, { name = "top", type = "number", attributes = { Nilable = false } }, { name = "bottom", type = "number", attributes = { Nilable = false } }], overloads = [{ name = "SetTexCoord", type = "Function", arguments = [{ name = "ULx", type = "number", attributes = { Nilable = false } }, { name = "ULy", type = "number", attributes = { Nilable = false } }, { name = "LLx", type = "number", attributes = { Nilable = false } }, { name = "LLy", type = "number", attributes = { Nilable = false } }, { name = "URx", type = "number", attributes = { Nilable = false } }, { name = "URy", type = "number", attributes = { Nilable = false } }, { name = "LRx", type = "number", attributes = { Nilable = false } }, { name = "LRy", type = "number", attributes = { Nilable = false } }], attributes = { Environment = "All", SecretArguments = "AllowedWhenTainted", SecretArgumentsAddAspect = [8192] } }], attributes = { Environment = "All", SecretArguments = "AllowedWhenTainted", SecretArgumentsAddAspect = [8192] } }
+
+# Extraction 17: tooltip data, action and roster reads, item buttons and bag items (M4)
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXMLGame/Tooltip/TooltipUtil.lua:55 C_TooltipInfo returns `TooltipData`; no generated documentation file defines it. Closed subset of the fields Blizzard's tooltip code reads; unlisted fields unsupported."
+entry = { name = "TooltipDataLine", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "type", type = "number", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:320", Nilable = false } }, { name = "leftText", type = "string", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:339", Nilable = true } }, { name = "rightText", type = "string", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:342", Nilable = true } }, { name = "wrapText", type = "bool", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:341", Nilable = true } }, { name = "leftOffset", type = "number", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:343", Nilable = true } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXMLGame/Tooltip/TooltipUtil.lua:55 C_TooltipInfo returns `TooltipData`; no generated documentation file defines it. Closed subset of the fields Blizzard's tooltip code reads; unlisted fields unsupported."
+entry = { name = "TooltipData", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "type", type = "number", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:283", Nilable = false } }, { name = "id", type = "number", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipUtil.lua:20", Nilable = true } }, { name = "guid", type = "WOWGUID", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipUtil.lua:13", Nilable = true } }, { name = "hyperlink", type = "string", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipUtil.lua:15", Nilable = true } }, { name = "dataInstanceID", type = "number", attributes = { SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:426", Nilable = true } }, { name = "lines", type = "table", attributes = { InnerType = "TooltipDataLine", SeluSourceCitation = "18c6d677b605b312f3d813d498404631fb941977 Blizzard_SharedXMLGame/Tooltip/TooltipUtil.lua:55", Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:298 after processing the lines the tooltip calls every post-call of its data type with `(tooltip, tooltipData)`."
+entry = { name = "SeluTooltipPostCall", type = "CallbackType", arguments = [{ name = "tooltip", type = "GameTooltip", attributes = { Nilable = false } }, { name = "tooltipData", type = "TooltipData", attributes = { Nilable = false } }] }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua:199 `TooltipDataProcessor.AddTooltipPostCall(tooltipType, func)` registers `func` for tooltips of that `Enum.TooltipDataType`; insecure callbacks run through `forceinsecure`."
+entry = { name = "TooltipDataProcessor.AddTooltipPostCall", params = ["tooltipType", "func"], evidence = "source", signature = { name = "AddTooltipPostCall", type = "Function", arguments = [{ name = "tooltipType", type = "number", attributes = { Nilable = false } }, { name = "func", type = "SeluTooltipPostCall", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ActionBar/Mainline/AssistedCombatManager.lua:148 Blizzard reads `actionType, id, subType = GetActionInfo(slot)`; an empty slot returns nothing. Not in the generated documentation."
+entry = { name = "GetActionInfo", params = ["slot"], evidence = "source", signature = { name = "GetActionInfo", type = "Function", arguments = [{ name = "slot", type = "luaIndex", attributes = { Nilable = false } }], returns = [{ name = "actionType", type = "string", attributes = { Nilable = true } }, { name = "id", type = "number", attributes = { Nilable = true } }, { name = "subType", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_ActionBar/Mainline/AssistedCombatManager.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_CompactRaidFrames/Blizzard_CompactRaidFrameContainer.lua:341 Blizzard reads `name, rank, subgroup, level, class, fileName, zone, online, isDead, role, isML = GetRaidRosterInfo(index)`; an index outside the raid returns nothing. Not in the generated documentation."
+entry = { name = "GetRaidRosterInfo", params = ["raidIndex"], evidence = "source", signature = { name = "GetRaidRosterInfo", type = "Function", arguments = [{ name = "raidIndex", type = "luaIndex", attributes = { Nilable = false } }], returns = [{ name = "name", type = "string", attributes = { Nilable = true } }, { name = "rank", type = "number", attributes = { Nilable = true } }, { name = "subgroup", type = "number", attributes = { Nilable = true } }, { name = "level", type = "number", attributes = { Nilable = true } }, { name = "class", type = "string", attributes = { Nilable = true } }, { name = "fileName", type = "string", attributes = { Nilable = true } }, { name = "zone", type = "string", attributes = { Nilable = true } }, { name = "online", type = "bool", attributes = { Nilable = true } }, { name = "isDead", type = "bool", attributes = { Nilable = true } }, { name = "role", type = "string", attributes = { Nilable = true } }, { name = "isML", type = "bool", attributes = { Nilable = true } }], attributes = { file = "Blizzard_CompactRaidFrames/Blizzard_CompactRaidFrameContainer.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ActionBar/WoWLabs/ActionButtonOverrides.lua:115 Blizzard reads `spellID = GetMacroSpell(macroID)`; a macro without a spell returns nothing. Not in the generated documentation."
+entry = { name = "GetMacroSpell", params = ["macroID"], evidence = "source", signature = { name = "GetMacroSpell", type = "Function", arguments = [{ name = "macroID", type = "number", attributes = { Nilable = false } }], returns = [{ name = "spellID", type = "number", attributes = { Nilable = true } }], attributes = { file = "Blizzard_ActionBar/WoWLabs/ActionButtonOverrides.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_ItemButton/Mainline/ItemButtonTemplate.lua:94 `SetItemButtonTexture(button, texture)` sets the icon of an item button (its own SetItemButtonTexture method, else the icon texture); a nil button is ignored."
+entry = { name = "SetItemButtonTexture", params = ["button", "texture"], evidence = "source", signature = { name = "SetItemButtonTexture", type = "Function", arguments = [{ name = "button", type = "ItemButton", attributes = { Nilable = true } }, { name = "texture", type = "", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_ItemButton/Mainline/ItemButtonTemplate.lua" } } }
+
+[[fields]]
+owner = "BaseContainerFrameMixin"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/ContainerFrame.lua:908 `ContainerFrameMixin:AcquireNewItemButton` appends each button it acquires from `self.itemButtonPool`, a pool of ContainerFrameItemButtonTemplate item buttons (:685); ClearItems resets the list."
+entry = { name = "Items", type = "table", attributes = { InnerType = "ItemButton", SeluTemplates = ["ContainerFrameItemButtonTemplate"], Nilable = false } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/ContainerFrame.lua:482 `BaseContainerFrameMixin:GetBagSize()` returns the number of slots the frame shows (`self.size`)."
+entry = { name = "BaseContainerFrameMixin.GetBagSize", params = [], evidence = "source", signature = { name = "GetBagSize", type = "Function", arguments = [], returns = [{ name = "size", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Mainline/ContainerFrame.lua" } } }

@@ -295,13 +295,25 @@ impl Xml {
                                 ));
                             }
                         } else {
+                            // A named frame's own `mixin` applies after the
+                            // templates it inherits, so it is listed last:
+                            // member lookup resolves it like a template
+                            // (mixin data entries carry their own parents).
+                            let mut bases = inherits;
+                            if let Some(mixins) = attrs.get("mixin") {
+                                for mixin in mixins.split(',').map(str::trim) {
+                                    if !mixin.is_empty() && !bases.iter().any(|b| b == mixin) {
+                                        bases.push(mixin.to_owned());
+                                    }
+                                }
+                            }
                             self.globals.entry(n.clone()).or_insert((
                                 if font {
                                     "Font".into()
                                 } else {
                                     self.types.get(&tag).cloned().unwrap_or(tag)
                                 },
-                                inherits,
+                                bases,
                             ));
                         }
                     }
