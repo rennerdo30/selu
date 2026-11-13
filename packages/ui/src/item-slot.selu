@@ -59,9 +59,14 @@ export class ItemSlot {
   }
 
   // quality 2+ draws Blizzard's information colour as a thin edge.
-  SetItem(link: string?, icon: string?, count: number?, quality: number?) {
+  // `icon` is a texture path or a file ID (item icons are file IDs).
+  SetItem(link: string?, icon: string | number | null, count: number?, quality: number?) {
     this.link = link;
-    this.icon.SetTexture(icon ?? "Interface\\Icons\\INV_Misc_QuestionMark");
+    if (typeof icon == "number") {
+      this.icon.SetTexture(icon);
+    } else {
+      this.icon.SetTexture(icon ?? "Interface\\Icons\\INV_Misc_QuestionMark");
+    }
     this.count.region.SetText(count != null && count > 1 ? tostring(count) : "");
     // Item quality is Blizzard's information colour, never a theme token.
     const color = quality != null && quality >= 2 ? ITEM_QUALITY_COLORS.get(quality) : null;

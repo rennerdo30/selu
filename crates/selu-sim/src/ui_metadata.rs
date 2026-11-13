@@ -924,6 +924,28 @@ fn value(lua: &Lua, node: &Node) -> mlua::Result<Value> {
         _ => Value::Nil,
     })
 }
+/// How many `Enum.BagIndex` members are numbered tabs with this prefix.
+fn bank_tabs(lua: &Lua, prefix: &str) -> mlua::Result<i64> {
+    let Some(enums) = lua.globals().raw_get::<Option<Table>>("Enum")? else {
+        return Ok(0);
+    };
+    let Some(index) = enums.raw_get::<Option<Table>>("BagIndex")? else {
+        return Ok(0);
+    };
+    let mut count = 0;
+    for pair in index.pairs::<Value, Value>() {
+        let (key, _) = pair?;
+        if let Value::String(key) = key
+            && let Ok(key) = key.to_str()
+            && let Some(number) = key.strip_prefix(prefix)
+            && !number.is_empty()
+            && number.chars().all(|c| c.is_ascii_digit())
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
 fn missing(lua: &Lua, ctx: &crate::Ctx, table: &Table, path: &str) -> mlua::Result<()> {
     let mt = lua.create_table()?;
     let ctx = ctx.clone();
@@ -936,6 +958,20 @@ fn missing(lua: &Lua, ctx: &crate::Ctx, table: &Table, path: &str) -> mlua::Resu
                 match key.as_str() {
                     "NumBagSlots" => return Ok(Value::Integer(i64::from(slots.ordinary))),
                     "NumReagentBagSlots" => return Ok(Value::Integer(i64::from(slots.reagent))),
+                    // The bank's tab counts are the build's own tab
+                    // containers (Enum.BagIndex.CharacterBankTab_n and
+                    // AccountBankTab_n), not a product table.
+                    "NumCharacterBankSlots" | "NumAccountBankSlots" => {
+                        let prefix = if key == "NumCharacterBankSlots" {
+                            "CharacterBankTab_"
+                        } else {
+                            "AccountBankTab_"
+                        };
+                        let tabs = bank_tabs(lua, prefix)?;
+                        if tabs > 0 {
+                            return Ok(Value::Integer(tabs));
+                        }
+                    }
                     _ => {}
                 }
             }

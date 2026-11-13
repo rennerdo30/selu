@@ -205,6 +205,17 @@ pub fn share(files: &mut [Lowered]) -> Option<String> {
         }
     }
     if registry.is_empty() {
+        // No runtime: the files keep their own text, past the local limit
+        // too.
+        for file in files.iter_mut() {
+            let before = file.block.clone();
+            crate::spill::spill(&mut file.block);
+            if file.block != before {
+                let printed = lua::print_block(&file.block);
+                file.lua = printed.text;
+                file.statement_lines = printed.lines;
+            }
+        }
         return None;
     }
     let mut runtime = String::from("local __selu_addon, __selu_ns = ...\n");
@@ -248,6 +259,7 @@ pub fn share(files: &mut [Lowered]) -> Option<String> {
         // Module lowering uses an AST local rather than Raw for the varargs.
         file.block.retain(|s| !matches!(&s.kind, LStmtKind::Local(names, _) if names == &["__selu_addon", "__selu_ns"]));
         file.block.insert(0, raw(&prelude));
+        crate::spill::spill(&mut file.block);
         let printed = lua::print_block(&file.block);
         file.lua = printed.text;
         file.statement_lines = printed.lines;

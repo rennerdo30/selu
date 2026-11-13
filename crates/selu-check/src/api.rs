@@ -161,6 +161,19 @@ fn primitive(name: &str) -> Option<Type> {
 // XML widget names are literal global keys, even when they contain dots.
 // Only explicitly typed scalar entries authorize namespace-property lookup.
 pub(crate) fn qualified_global(m: &Manifest, name: &str) -> Option<Type> {
+    // A documented constant: `Constants.InventoryConstants.NumBagSlots` is a
+    // field of the generated `InventoryConstants` table of type Constants.
+    if let Some(rest) = name.strip_prefix("Constants.")
+        && let Some((table, field)) = rest.split_once('.')
+        && let Some(d) = m
+            .tables
+            .iter()
+            .find(|t| t.name == table && t.ty.as_deref() == Some("Constants"))
+    {
+        let f = d.fields.iter().find(|f| f.name == field)?;
+        let ty = primitive(f.ty.as_deref()?)?;
+        return matches!(ty, Type::Number | Type::String | Type::Boolean).then_some(ty);
+    }
     let global = m.globals.iter().find(|g| g.name == name)?;
     let ty = primitive(global.ty.as_deref()?)?;
     matches!(ty, Type::Number | Type::String | Type::Boolean).then_some(ty)
@@ -637,6 +650,35 @@ impl Ctx<'_> {
         {
             return Some(ty);
         }
+        // A documented constants table is closed: a field it does not list
+        // is no value.
+        // The member's object may be passed as the whole member expression.
+        if let Some(full) = object.dotted_name()
+            && let root = full
+                .strip_suffix(&format!(".{name}"))
+                .map(str::to_owned)
+                .unwrap_or(full.clone())
+            && self.lookup("Constants").is_none()
+            && let Some(table) = root.strip_prefix("Constants.")
+            && !table.contains('.')
+            && let Some(d) = self
+                .manifest
+                .tables
+                .iter()
+                .find(|t| t.name == table && t.ty.as_deref() == Some("Constants"))
+            && !d.fields.iter().any(|f| f.name == name)
+        {
+            self.out.push(err(
+                "SELU0310",
+                format!(
+                    "`{root}.{name}` is not declared on {}; Constants.{table} has {}",
+                    self.target(),
+                    d.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+                &object.span,
+            ));
+            return Some(Type::Error);
+        }
         let Type::Widget(widget, _) = t else {
             return None;
         };
@@ -870,6 +912,20 @@ impl Ctx<'_> {
             Some(ExprKind::Str(s)) => s.as_str(),
             _ => "Frame",
         };
+        // An intrinsic XML frame (`<Button name="ItemButton" intrinsic="true">`)
+        // is a frame type of its own: its base widget carrying the intrinsic.
+        let intrinsic = widget_decl(self.manifest, name).is_none()
+            && self.manifest.templates.iter().any(|t| {
+                t.name == name && t.values.get("SeluIntrinsic").and_then(|v| v.as_bool()) == Some(true)
+            });
+        if intrinsic {
+            let mut base = named(self.manifest, name, 0);
+            let plain = args.get(3).is_none_or(|e| matches!(&e.kind, ExprKind::Str(s) if s.split(',').all(|t| !t.trim().starts_with("Secure"))));
+            if plain && let Type::Widget(_, bases) = &mut base {
+                bases.push("@selu_plain".into());
+            }
+            return Type::Tuple(vec![self.frame_templates(base, args)]);
+        }
         if widget_decl(self.manifest, name).is_none() {
             self.out.push(
                 selu_diagnostics::Diagnostic::warning(

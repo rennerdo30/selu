@@ -284,6 +284,13 @@ fn reviewed_scripts(m: &mut Manifest) {
                 if method.name == "SetAttribute" {
                     for argument in &mut method.arguments {
                         if argument.name == "value" {
+                            // An attribute holds any of these, not only a
+                            // string: Blizzard stores booleans and numbers
+                            // (ActionButton.lua "checkselfcast" true,
+                            // "showgrid" 1) and SECURE_ACTIONS.click reads a
+                            // frame from "clickbutton" (SecureTemplates.lua).
+                            // The union is the overlay table SeluAttributeValue.
+                            argument.ty = Some("SeluAttributeValue".into());
                             argument
                                 .attributes
                                 .insert("SeluOpaqueInput".into(), json!("ScriptAttributeValue"));

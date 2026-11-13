@@ -273,6 +273,11 @@ impl Xml {
                             if !parent.1 {
                                 let mut d = declaration(n, &tag, file);
                                 d.inherits = inherits.clone();
+                                // An intrinsic is a frame type of its own:
+                                // CreateFrame("ItemButton") makes one.
+                                if !font && attrs.get("intrinsic").is_some_and(|v| v == "true") {
+                                    d.values.insert("SeluIntrinsic".into(), serde_json::json!(true));
+                                }
                                 if let Some(mixins) = attrs.get("mixin") {
                                     d.attributes.insert(
                                         "mixins".into(),

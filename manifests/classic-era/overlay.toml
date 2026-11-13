@@ -771,3 +771,162 @@ entry = { name = "GetNumSubgroupMembers", params = [], evidence = "source", sign
 evidence = "source"
 note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_Deprecated/Deprecated_1_15_8.lua:11 C_UnitAuras returns `AuraData`; no generated documentation file defines it. Closed subset of the fields Blizzard's aura code reads, each cited; unlisted fields unsupported."
 entry = { name = "AuraData", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "name", type = "string", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_CombatAudioAlerts/Blizzard_CombatAudioAlertManager.lua:1005", Nilable = true } }, { name = "icon", type = "fileID", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_BuffFrame/BuffFrame.lua:659", Nilable = true } }, { name = "applications", type = "number", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_BuffFrame/BuffFrame.lua:660", Nilable = true } }, { name = "duration", type = "number", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_BuffFrame/BuffFrame.lua:645", Nilable = true } }, { name = "expirationTime", type = "number", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_BuffFrame/BuffFrame.lua:485", Nilable = true } }, { name = "sourceUnit", type = "string", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_CooldownViewer/CooldownViewer.lua:425", Nilable = true } }, { name = "spellId", type = "number", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_BuffFrame/BuffFrame.lua:651", Nilable = true } }, { name = "auraInstanceID", type = "number", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_BuffFrame/BuffFrame.lua:799", Nilable = false } }, { name = "isHelpful", type = "bool", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_FrameXMLUtil/AuraUtil.lua:231", Nilable = true } }, { name = "isHarmful", type = "bool", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_CombatAudioAlerts/Blizzard_CombatAudioAlertManager.lua:995", Nilable = true } }, { name = "isFromPlayerOrPlayerPet", type = "bool", attributes = { SeluSourceCitation = "4192ac60067fc55566182291bc67c85dd9b6794d Blizzard_FrameXMLUtil/AuraUtil.lua:50", Nilable = true } }] }
+
+# Extraction 21: bag windows, bindings, item buttons, merchant and mail reads (M5)
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua:1570 `OpenAllBags` opens every bag frame; `frame` is the panel that asked (MerchantFrame, BankFrame). A Blizzard Lua function; not in the generated documentation."
+entry = { name = "OpenAllBags", params = ["frame", "forceUpdate"], evidence = "source", signature = { name = "OpenAllBags", type = "Function", arguments = [{ name = "frame", type = "Frame", attributes = { Nilable = true } }, { name = "forceUpdate", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua:1594 `CloseAllBags` closes every bag frame; `frame` is the panel that asked. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "CloseAllBags", params = ["frame", "forceUpdate"], evidence = "source", signature = { name = "CloseAllBags", type = "Function", arguments = [{ name = "frame", type = "Frame", attributes = { Nilable = true } }, { name = "forceUpdate", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua:371 `OpenBackpack` opens the backpack frame. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "OpenBackpack", params = [], evidence = "source", signature = { name = "OpenBackpack", type = "Function", arguments = [], returns = [], attributes = { file = "Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua:396 `CloseBackpack` closes the backpack frame. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "CloseBackpack", params = [], evidence = "source", signature = { name = "CloseBackpack", type = "Function", arguments = [], returns = [], attributes = { file = "Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua:147 `ToggleBackpack` toggles the backpack frame. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "ToggleBackpack", params = [], evidence = "source", signature = { name = "ToggleBackpack", type = "Function", arguments = [], returns = [], attributes = { file = "Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua:112 `ToggleBag` toggles the bag frame of a container ID. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "ToggleBag", params = ["id"], evidence = "source", signature = { name = "ToggleBag", type = "Function", arguments = [{ name = "id", type = "number", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua:1517 `ToggleAllBags` toggles every bag frame. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "ToggleAllBags", params = [], evidence = "source", signature = { name = "ToggleAllBags", type = "Function", arguments = [], returns = [], attributes = { file = "Blizzard_UIPanels_Game/Classic/ContainerFrame_Shared.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_FrameXMLUtil/Cooldown.lua:2 `CooldownFrame_Set` starts a cooldown swipe when `enable` is truthy and not 0 and the times are positive, otherwise clears it. Callers pass `enable` as a boolean (`cooldownInfo.isEnabled`) or a number (C_Container.GetContainerItemCooldown's `enable`). A Blizzard Lua function; not in the generated documentation."
+entry = { name = "CooldownFrame_Set", params = ["self", "start", "duration", "enable", "forceShowDrawEdge", "modRate"], evidence = "source", signature = { name = "CooldownFrame_Set", type = "Function", arguments = [{ name = "self", type = "Cooldown", attributes = { Nilable = false } }, { name = "start", type = "number", attributes = { Nilable = false } }, { name = "duration", type = "number", attributes = { Nilable = false } }, { name = "enable", type = "SeluCooldownEnable", attributes = { Nilable = true } }, { name = "forceShowDrawEdge", type = "bool", attributes = { Nilable = true } }, { name = "modRate", type = "number", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_FrameXMLUtil/Cooldown.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_SharedXML/FormattingUtil.lua:72 `GetMoneyString` formats copper as gold, silver and copper with coin icons; returns the string. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "GetMoneyString", params = ["money", "separateThousands", "checkGoldThreshold", "showZeroAsGold"], evidence = "source", signature = { name = "GetMoneyString", type = "Function", arguments = [{ name = "money", type = "number", attributes = { Nilable = false } }, { name = "separateThousands", type = "bool", attributes = { Nilable = true } }, { name = "checkGoldThreshold", type = "bool", attributes = { Nilable = true } }, { name = "showZeroAsGold", type = "bool", attributes = { Nilable = true } }], returns = [{ name = "text", type = "string", attributes = { Nilable = false } }], attributes = { file = "Blizzard_SharedXML/FormattingUtil.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_ItemButton/Classic/ItemButtonTemplate.lua:1 `SetItemButtonCount` shows an item button's stack count (hidden for 0 or 1). A Blizzard Lua function; not in the generated documentation."
+entry = { name = "SetItemButtonCount", params = ["button", "count", "abbreviate"], evidence = "source", signature = { name = "SetItemButtonCount", type = "Function", arguments = [{ name = "button", type = "ItemButton", attributes = { Nilable = false } }, { name = "count", type = "number", attributes = { Nilable = true } }, { name = "abbreviate", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_ItemButton/Classic/ItemButtonTemplate.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_ItemButton/Classic/ItemButtonTemplate.lua:79 `SetItemButtonDesaturated` desaturates an item button's icon (a locked item). A Blizzard Lua function; not in the generated documentation."
+entry = { name = "SetItemButtonDesaturated", params = ["button", "desaturated"], evidence = "source", signature = { name = "SetItemButtonDesaturated", type = "Function", arguments = [{ name = "button", type = "ItemButton", attributes = { Nilable = false } }, { name = "desaturated", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_ItemButton/Classic/ItemButtonTemplate.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_ItemButton/Classic/ItemButtonTemplate.lua:116 `SetItemButtonQuality` colours an item button's quality border and overlays from the quality and item. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "SetItemButtonQuality", params = ["button", "quality", "itemIDOrLink", "suppressOverlays", "isBound"], evidence = "source", signature = { name = "SetItemButtonQuality", type = "Function", arguments = [{ name = "button", type = "ItemButton", attributes = { Nilable = false } }, { name = "quality", type = "number", attributes = { Nilable = true } }, { name = "itemIDOrLink", type = "SeluItemIDOrLink", attributes = { Nilable = true } }, { name = "suppressOverlays", type = "bool", attributes = { Nilable = true } }, { name = "isBound", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_ItemButton/Classic/ItemButtonTemplate.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIParentPanelManager/Shared/UIParentPanelManager.lua:853 `HideUIPanel` closes a UI panel through the panel manager (runs the panel's OnHide). A Blizzard Lua function; not in the generated documentation."
+entry = { name = "HideUIPanel", params = ["frame", "skipSetPoint", "skipShownCheck"], evidence = "source", signature = { name = "HideUIPanel", type = "Function", arguments = [{ name = "frame", type = "Frame", attributes = { Nilable = false } }, { name = "skipSetPoint", type = "bool", attributes = { Nilable = true } }, { name = "skipShownCheck", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_UIParentPanelManager/Shared/UIParentPanelManager.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIParentPanelManager/Shared/UIParentPanelManager.lua:1120 `UpdateUIPanelPositions` re-lays out the managed UI panels around `currentFrame`. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "UpdateUIPanelPositions", params = ["currentFrame"], evidence = "source", signature = { name = "UpdateUIPanelPositions", type = "Function", arguments = [{ name = "currentFrame", type = "Frame", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_UIParentPanelManager/Shared/UIParentPanelManager.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_StaticPopup/StaticPopup.lua:882 `StaticPopupSpecial_Show` shows a special static popup frame. A Blizzard Lua function; not in the generated documentation."
+entry = { name = "StaticPopupSpecial_Show", params = ["dialog"], evidence = "source", signature = { name = "StaticPopupSpecial_Show", type = "Function", arguments = [{ name = "dialog", type = "Frame", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_StaticPopup/StaticPopup.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_CharacterFrame/Cata/PaperDollFrame.lua:2635 Blizzard reads `GetInventoryItemTexture(unit, slot)` as the equipped item's icon, nil for an empty slot. Not in the generated documentation."
+entry = { name = "GetInventoryItemTexture", params = ["unit", "invSlot"], evidence = "source", signature = { name = "GetInventoryItemTexture", type = "Function", arguments = [{ name = "unit", type = "UnitToken", attributes = { Nilable = false } }, { name = "invSlot", type = "number", attributes = { Nilable = false } }], returns = [{ name = "texture", type = "fileID", attributes = { Nilable = true } }], attributes = { file = "Blizzard_CharacterFrame/Cata/PaperDollFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_ActionBar/Shared/ActionButton.lua:491 Blizzard reads `GetBindingText(key, abbreviate)` as the display text of a key; the second argument abbreviates it (callers pass 1 or true). Not in the generated documentation."
+entry = { name = "GetBindingText", params = ["key", "abbreviate"], evidence = "source", signature = { name = "GetBindingText", type = "Function", arguments = [{ name = "key", type = "string", attributes = { Nilable = false } }, { name = "abbreviate", type = "bool", attributes = { Nilable = true } }], returns = [{ name = "text", type = "string", attributes = { Nilable = false } }], attributes = { file = "Blizzard_ActionBar/Shared/ActionButton.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_BindingUI/Blizzard_BindingUI.lua:346 Blizzard reads `GetBindingKey(command)` as the command's first and second key, each possibly nil. Not in the generated documentation."
+entry = { name = "GetBindingKey", params = ["command"], evidence = "source", signature = { name = "GetBindingKey", type = "Function", arguments = [{ name = "command", type = "string", attributes = { Nilable = false } }], returns = [{ name = "key1", type = "string", attributes = { Nilable = true } }, { name = "key2", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_BindingUI/Blizzard_BindingUI.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_RestrictedAddOnEnvironment/RestrictedFrames.lua:538 Blizzard calls `ClearOverrideBindings(owner)` to drop every override binding the owner set. Not in the generated documentation."
+entry = { name = "ClearOverrideBindings", params = ["owner"], evidence = "source", signature = { name = "ClearOverrideBindings", type = "Function", arguments = [{ name = "owner", type = "Frame", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_RestrictedAddOnEnvironment/RestrictedFrames.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_StaticPopup_Game/GameDialogDefs.lua:267 Blizzard calls `BuyMerchantItem(index, quantity)` to buy a merchant item. Not in the generated documentation."
+entry = { name = "BuyMerchantItem", params = ["index", "quantity"], evidence = "source", signature = { name = "BuyMerchantItem", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }, { name = "quantity", type = "number", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_StaticPopup_Game/GameDialogDefs.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/TBC/MerchantFrame.lua:769 Blizzard reads `GetRepairAllCost()` as the cost of repairing everything in copper and whether anything needs repair. Not in the generated documentation."
+entry = { name = "GetRepairAllCost", params = [], evidence = "source", signature = { name = "GetRepairAllCost", type = "Function", arguments = [], returns = [{ name = "repairAllCost", type = "number", attributes = { Nilable = false } }, { name = "canRepair", type = "bool", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/MerchantFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/TBC/MerchantFrame.lua:176 Blizzard reads `GetNumBuybackItems()` as the number of items in the merchant's buyback list. Not in the generated documentation."
+entry = { name = "GetNumBuybackItems", params = [], evidence = "source", signature = { name = "GetNumBuybackItems", type = "Function", arguments = [], returns = [{ name = "numBuybackItems", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/MerchantFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/TBC/MerchantFrame.lua:328 Blizzard reads `GetBuybackItemInfo(index)` as name, texture, price, quantity, number available, usable and bound; nil name when the slot is empty. Not in the generated documentation."
+entry = { name = "GetBuybackItemInfo", params = ["index"], evidence = "source", signature = { name = "GetBuybackItemInfo", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }], returns = [{ name = "name", type = "string", attributes = { Nilable = true } }, { name = "texture", type = "fileID", attributes = { Nilable = true } }, { name = "price", type = "number", attributes = { Nilable = true } }, { name = "quantity", type = "number", attributes = { Nilable = true } }, { name = "numAvailable", type = "number", attributes = { Nilable = true } }, { name = "isUsable", type = "bool", attributes = { Nilable = true } }, { name = "isBound", type = "bool", attributes = { Nilable = true } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/MerchantFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/TBC/MerchantFrame.lua:171 Blizzard reads `GetMerchantItemLink(index)` as the merchant item's link, or nil. Not in the generated documentation."
+entry = { name = "GetMerchantItemLink", params = ["index"], evidence = "source", signature = { name = "GetMerchantItemLink", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }], returns = [{ name = "itemLink", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/MerchantFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/Classic/MailFrame.lua:1183 Blizzard calls `TakeInboxMoney(index)` to take a mail's money. Not in the generated documentation."
+entry = { name = "TakeInboxMoney", params = ["index"], evidence = "source", signature = { name = "TakeInboxMoney", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_UIPanels_Game/Classic/MailFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_UIPanels_Game/Classic/MailFrame.lua:376 Blizzard reads `GetInboxInvoiceInfo(index)` as invoice type (\"seller\", \"buyer\", ...), item name, player name, bid, buyout, deposit and consignment; nil when the mail is no invoice. Not in the generated documentation."
+entry = { name = "GetInboxInvoiceInfo", params = ["index"], evidence = "source", signature = { name = "GetInboxInvoiceInfo", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }], returns = [{ name = "invoiceType", type = "string", attributes = { Nilable = true } }, { name = "itemName", type = "string", attributes = { Nilable = true } }, { name = "playerName", type = "string", attributes = { Nilable = true } }, { name = "bid", type = "number", attributes = { Nilable = true } }, { name = "buyout", type = "number", attributes = { Nilable = true } }, { name = "deposit", type = "number", attributes = { Nilable = true } }, { name = "consignment", type = "number", attributes = { Nilable = true } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/MailFrame.lua" } } }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_FrameXMLUtil/Cooldown.lua:2 CooldownFrame_Set's `enable`: a boolean or a number (`enable and enable ~= 0`)."
+entry = { name = "SeluCooldownEnable", attributes = { SeluUnion = ["bool", "number"] } }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_ItemButton/Classic/ItemButtonTemplate.lua:116 SetItemButtonQuality's `itemIDOrLink`: an item ID or an item link."
+entry = { name = "SeluItemIDOrLink", attributes = { SeluUnion = ["number", "string"] } }
+
+# Extraction 22: tooltip ownership, bank panel tabs, attribute values (M5)
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_ActionBar/Classic/MultiCastActionBarFrame.lua:954 Blizzard compares `GameTooltip:GetOwner()` with a frame: the frame the tooltip is anchored to, or nil. Not in the generated documentation."
+entry = { name = "GetOwner", type = "Function", arguments = [], returns = [{ name = "owner", type = "Frame", attributes = { Nilable = true } }] }
+
+[[methods]]
+widget = "GameTooltip"
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_BuffFrame/BuffFrame.lua:977 Blizzard tests `GameTooltip:IsOwned(frame)`: whether the tooltip is anchored to that frame. Not in the generated documentation."
+entry = { name = "IsOwned", type = "Function", arguments = [{ name = "frame", type = "Frame", attributes = { Nilable = false } }], returns = [{ name = "isOwned", type = "bool", attributes = { Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 4192ac60067fc55566182291bc67c85dd9b6794d Interface/AddOns/Blizzard_FrameXML/SecureTemplates.lua:557 SECURE_ACTIONS.click reads a frame from the \"clickbutton\" attribute and clicks it; Blizzard also stores booleans and numbers (Blizzard_ActionBar/Shared/ActionButton.lua:452 \"checkselfcast\" true). The value a frame attribute holds: a string, number, boolean or frame."
+entry = { name = "SeluAttributeValue", attributes = { SeluUnion = ["cstring", "number", "bool", "Frame"] } }

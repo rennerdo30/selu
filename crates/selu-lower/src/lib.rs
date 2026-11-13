@@ -28,6 +28,7 @@ mod purity;
 mod restrictions;
 pub mod runtime;
 pub mod saved;
+mod spill;
 pub use errors::uses_errors;
 pub use modules::ModuleBindings;
 pub mod bindings;
@@ -154,8 +155,12 @@ fn lower_addon_layout(
         addon_errors,
         error_entry: false,
     };
-    let out = l.assemble_file(program, false);
+    let mut out = l.assemble_file(program, false);
     let pieces = l.runtime_pieces(program);
+    // Shared layout prints the file again after adding its prelude.
+    if !shared {
+        spill::spill(&mut out);
+    }
     let printed = lua::print_block(&out);
     Lowered {
         block: out,
@@ -224,8 +229,11 @@ pub fn lower_module_layout(
         addon_errors,
         error_entry: false,
     };
-    let out = l.assemble_file(program, true);
+    let mut out = l.assemble_file(program, true);
     let pieces = l.runtime_pieces(program);
+    if !shared {
+        spill::spill(&mut out);
+    }
     let printed = lua::print_block(&out);
     Lowered {
         block: out,
