@@ -235,6 +235,12 @@ impl Lowerer<'_> {
                 }
                 {
                     out.push(assign(name(saved), helper("pending", vec![])));
+                    // `defaults()` evaluates the declared defaults again, so
+                    // every call returns fresh tables.
+                    let mut fresh = vec![];
+                    let value = self.expr(defaults, &mut fresh);
+                    fresh.push(s(LStmtKind::Return(vec![value])));
+                    out.push(assign(f(name(saved), "defaults"), fun(&[], fresh)));
                 }
                 let key = declaration_global(&self.module.addon_name, saved, *adopted);
                 let entry = ix(f(rt(), "entries"), st(&key));

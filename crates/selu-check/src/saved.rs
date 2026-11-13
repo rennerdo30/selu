@@ -377,8 +377,13 @@ fn adoption_type(ty: Type, adoption: bool) -> Type {
             ("data".into(), Type::Optional(Box::new(ty.clone()))),
             (
                 "whenReady".into(),
-                saved_function(vec![saved_function(vec![ty], Type::Void)], Type::Void),
+                saved_function(
+                    vec![saved_function(vec![ty.clone()], Type::Void)],
+                    Type::Void,
+                ),
             ),
+            // A fresh copy of the declared defaults, for "reset to defaults".
+            ("defaults".into(), saved_function(vec![], ty)),
         ]
         .into(),
     )

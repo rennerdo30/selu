@@ -1125,3 +1125,15 @@ fn adoption_deferred_inputs_are_general_nested_and_transactional() {
         assert_eq!(sim.logout_saved(&["DB"]).unwrap(), before);
     }
 }
+
+#[test]
+fn defaults_returns_a_fresh_copy_of_the_declared_defaults() {
+    let dir = project(
+        "saved s = { enabled: true, inner: { x: 3 }, list: [1, 2], map: new Map<string, number>() }; on PLAYER_LOGIN() { s.whenReady((data) => { data.inner.x = 9; data.list.push(5); const a = s.defaults(); const b = s.defaults(); a.inner.x = 4; a.map.set(\"k\", 1); print(data.inner.x, data.list.length, a.inner.x, b.inner.x, b.list.length, b.map.has(\"k\"), b.enabled); }); }",
+    );
+    success(&dir);
+    let sim = common::SavedVm::new();
+    sim.load_addon("Saved", &files(&dir)).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    assert_eq!(sim.prints(), vec!["9\t3\t4\t3\t2\tfalse\ttrue"]);
+}

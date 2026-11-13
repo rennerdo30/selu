@@ -141,7 +141,10 @@ Both exact global names enter the TOC in the declared scope. `legacy` is
 optional. `using` selects the sole persisted version key: this mode never adds
 Selu version metadata. The mapped key is compiler-owned and must be omitted
 from defaults; it cannot use the reserved retry-context namespace. The source binding is a load result with `status: string`,
-`data: <declared or defaults-inferred shape>?`, and `whenReady(callback)`. Status is `loading`,
+`data: <declared or defaults-inferred shape>?`, `whenReady(callback)` and
+`defaults()`. `defaults()` evaluates the declared defaults again and returns
+the fresh value (for a "reset to defaults" action); it never touches the saved
+data. Status is `loading`,
 `ready`, `collision`, `newer`, `corrupt`, or `failed`. Data is available only
 for ready/collision results. Ready callbacks run after publication and defaults;
 callbacks registered after success run immediately. Refusals discard pending

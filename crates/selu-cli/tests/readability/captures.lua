@@ -468,6 +468,9 @@ local function __selu_on(event, fn)
 end
 local settings
 settings = __selu_saved_runtime.pending()
+settings.defaults = function()
+  return { enabled = false }
+end
 __selu_saved_runtime.entries["Addon_settings"] = {}
 __selu_saved_runtime.readers["Addon_settings"] = {}
 __selu_saved_runtime.contexts["Addon_settings"] = {}
