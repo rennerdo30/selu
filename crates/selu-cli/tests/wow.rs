@@ -309,3 +309,27 @@ fn nameplate_payloads_are_unit_token_strings() {
     let codes: Vec<_> = checked.diagnostics.iter().map(|d| d.code.clone()).collect();
     assert!(codes.is_empty(), "{codes:?}");
 }
+
+#[test]
+fn global_strings_named_by_a_sibling_client_may_be_absent() {
+    // The build adds the installed client's global string names as typed
+    // globals; names borrowed from a sibling client are `string?`.
+    let mut manifest = manifest();
+    manifest.globals.push(
+        serde_json::from_str(r#"{"name":"DPS_TEMPLATE","type":"string?","evidence":"verified"}"#)
+            .unwrap(),
+    );
+    manifest.globals.push(
+        serde_json::from_str(r#"{"name":"OKAY","type":"string","evidence":"verified"}"#).unwrap(),
+    );
+    let check = |src: &str| {
+        let program = selu_syntax::parse("t.selu", src).unwrap();
+        selu_check::check_program(&program, &manifest)
+            .diagnostics
+            .iter()
+            .map(|d| d.code.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(check("const a: string? = DPS_TEMPLATE; const b: string = OKAY;").is_empty());
+    assert_eq!(check("const c: string = DPS_TEMPLATE;"), ["SELU0336"]);
+}

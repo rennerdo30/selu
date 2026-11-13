@@ -166,6 +166,11 @@ pub(crate) fn named(m: &Manifest, n: &str, depth: usize) -> Type {
     if let Some(t) = primitive(n) {
         return t;
     }
+    // Selu's own marker for a value that may be absent on this client
+    // (global strings named by a sibling client); never a Blizzard name.
+    if let Some(inner) = n.strip_suffix('?') {
+        return Type::optional(named(m, inner, depth + 1));
+    }
     if depth > 12 {
         return Type::Untyped;
     }

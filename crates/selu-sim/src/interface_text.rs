@@ -80,6 +80,44 @@ fn readable(root: &Path, build: &selu_gamedata::BuildInfo) -> Option<Text> {
     cache.insert(key, text.clone());
     text
 }
+/// The global string names of `product`'s installed client and its version,
+/// read from the user's own game files (cached decoded text outside the
+/// repository). The values stay the game's at runtime.
+pub fn installed_names(root: &Path, product: &str) -> Option<InstalledNames> {
+    let builds =
+        selu_gamedata::parse_build_info(&std::fs::read_to_string(root.join(".build.info")).ok()?)
+            .ok()?;
+    let own = builds.iter().find(|b| b.active && b.product == product)?;
+    let names = |text: Text| text.iter().map(|(name, _)| name.clone()).collect();
+    if let Some(text) = readable(root, own) {
+        return Some(InstalledNames {
+            version: own.version.clone(),
+            names: names(text),
+            borrowed_from: None,
+        });
+    }
+    // The client's own table is unreadable (encrypted): the nearest readable
+    // sibling names them, as for the simulator's interface text.
+    for donor in candidates(&own.product, &own.version, &builds) {
+        if let Some(text) = readable(root, donor) {
+            return Some(InstalledNames {
+                version: own.version.clone(),
+                names: names(text),
+                borrowed_from: Some(format!("{} {}", donor.product, donor.version)),
+            });
+        }
+    }
+    None
+}
+/// Global string names of an installed client.
+pub struct InstalledNames {
+    /// The client's own version.
+    pub version: String,
+    pub names: Vec<String>,
+    /// The sibling client that named them when the own table is unreadable;
+    /// such names may be absent on this client.
+    pub borrowed_from: Option<String>,
+}
 /// One concern/table: nearest-family preference, including cross-family ties.
 /// Channels inherit their base product row; builds break ties within a family.
 pub const TEXT_FAMILIES: &[(&str, &str)] = &[

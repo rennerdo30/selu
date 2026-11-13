@@ -45,6 +45,77 @@ pub fn ui_source(options: &crate::RunOptions, target: &str) -> Result<Option<UiS
     });
     Ok(Some((source, roots)))
 }
+/// The installed client a build reads game files from: the Studio setting,
+/// else the first discovered installation with this product. Off when
+/// client assets are disabled or `SELU_NO_CLIENT` is set.
+pub fn build_install(target: &str) -> Option<PathBuf> {
+    if std::env::var_os("SELU_NO_CLIENT").is_some() {
+        return None;
+    }
+    let settings = settings();
+    if settings.disable_client_assets {
+        return None;
+    }
+    if let Some(root) = settings.client_install {
+        return Some(root);
+    }
+    let product = target.split('@').next()?;
+    let mut roots = selu_gamedata::discovery::registry_roots();
+    roots.extend(selu_gamedata::discovery::common_roots());
+    roots.extend(settings.extra_roots);
+    roots.into_iter().find(|root| {
+        std::fs::read_to_string(root.join(".build.info"))
+            .ok()
+            .is_some_and(|s| {
+                s.lines()
+                    .skip(1)
+                    .any(|line| line.split('|').any(|cell| cell == product))
+            })
+    })
+}
+
+/// Blizzard's global strings (`DPS_TEMPLATE`, `ITEM_MOD_STAMINA_SHORT`...)
+/// as typed string globals, named by the user's installed client at build
+/// time (owner, 2026-11-13). Nothing is written to the project; names the
+/// game data already declares keep their declaration. Returns a note for
+/// the build output.
+pub fn add_global_strings(manifest: &mut selu_manifest::Manifest) -> Option<String> {
+    let product = selu_manifest::product(&manifest.flavour).to_string();
+    let root = build_install(&product)?;
+    let installed = selu_sim::interface_text::installed_names(&root, &product)?;
+    // Own names exist on this client; borrowed ones may not (`string?`).
+    let ty = if installed.borrowed_from.is_some() {
+        "string?"
+    } else {
+        "string"
+    };
+    let known: std::collections::HashSet<String> =
+        manifest.globals.iter().map(|g| g.name.clone()).collect();
+    let mut added = 0;
+    for name in installed.names {
+        if known.contains(&name) || manifest.function(&name).is_some() {
+            continue;
+        }
+        manifest.globals.push(selu_manifest::GlobalEntry {
+            value: None,
+            templates: Vec::new(),
+            ty: Some(ty.into()),
+            name,
+            evidence: selu_manifest::Evidence::Verified,
+        });
+        added += 1;
+    }
+    Some(match installed.borrowed_from {
+        None => format!(
+            "global strings: {added} names from the installed {product} {}",
+            installed.version
+        ),
+        Some(donor) => format!(
+            "global strings: {added} names (may be absent: string?) from {donor}; the installed {product} {} table is unreadable",
+            installed.version
+        ),
+    })
+}
 pub fn resolve(options: &crate::RunOptions, target: &str) -> Option<PathBuf> {
     if options.no_client_assets {
         return None;

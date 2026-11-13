@@ -139,3 +139,19 @@ placeholders, in each locale. SB adds no second compiler locale runtime: the
 production toolkit service, saved override, change notifications and complete
 catalogs are wave-1 toolkit integration work. The existing L template feature
 remains available where source sentences are used as keys.
+
+## Global strings
+
+Blizzard's interface texts (`DPS_TEMPLATE`, `ITEM_MOD_STAMINA_SHORT`,
+`CREATE_MACROS`...) are typed globals named by the user's installed client at
+build time (owner, 2026-11-13: reading the game files at build time is always
+fine). They are not in the UI source and are never written to the project:
+the build reads the installed client's GlobalStrings table (decoded text is
+cached under `%LOCALAPPDATA%/Selu/interface-text`) and adds each name the
+game data does not already declare. Names from the client's own table are
+`string`. When that table is unreadable (encrypted), the nearest readable
+sibling client names them, as for the simulator's interface text; such names
+are `string?`, because a borrowed name may be absent on this client. The
+installation comes from Studio's settings or discovery, like client assets;
+`SELU_NO_CLIENT=1` or `disable_client_assets` turns it off, and then these
+names are undeclared.

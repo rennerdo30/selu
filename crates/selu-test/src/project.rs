@@ -277,10 +277,19 @@ fn build_impl(
         ExitCode::FAILURE
     })?;
     let manifests = find_manifests(manifest_dir, project_dir, Some(&discovery))?;
-    let selected = lock.resolve(&target_strings, &manifests).map_err(|e| {
+    let mut selected = lock.resolve(&target_strings, &manifests).map_err(|e| {
         eprintln!("selu: {e}");
         ExitCode::FAILURE
     })?;
+    // The installed client names Blizzard's global strings; they become
+    // typed string globals for this build only.
+    for manifest in &mut selected {
+        if let Some(note) = crate::client_assets::add_global_strings(manifest)
+            && !quiet
+        {
+            println!("{note}");
+        }
+    }
     check_package_products(&sources, &selected)?;
     if !check_only {
         lock.write(project_dir).map_err(|e| {
