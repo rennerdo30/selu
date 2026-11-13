@@ -85,6 +85,14 @@ const CONTRACTS: &[(u32, &str)] = &[
         17,
         "bb8b2f71e574697c6b7d87de8655bbfd898593cabace3d132f3947e89d0a345f",
     ),
+    // 18: `update` takes the source clone as `--source`; widget overlays may
+    // carry templates (NamePlateFrame with NamePlateBaseMixin); the overlays
+    // type the plate's UnitFrame and GetUnit and ItemButtonMixin's
+    // GetItemLink and GetBagID, and CompactUnitFrame_UpdateHealthColor.
+    (
+        18,
+        "1557385c8363eb15722981a50618c018abdefc873fbb808578d5b7a52833aa12",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

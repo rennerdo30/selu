@@ -690,3 +690,35 @@ entry = { name = "GetRaidRosterInfo", params = ["raidIndex"], evidence = "source
 evidence = "source"
 note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_ItemButton/Classic/ItemButtonTemplate.lua:44 `SetItemButtonTexture(button, texture)` sets the icon of an item button (its own SetItemButtonTexture method, else the icon texture); a nil button is ignored."
 entry = { name = "SetItemButtonTexture", params = ["button", "texture"], evidence = "source", signature = { name = "SetItemButtonTexture", type = "Function", arguments = [{ name = "button", type = "ItemButton", attributes = { Nilable = true } }, { name = "texture", type = "", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_ItemButton/Classic/ItemButtonTemplate.lua" } } }
+
+# Extraction 18: nameplates and item button links (M4)
+[[widgets]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_NamePlates/Blizzard_NamePlates.lua:144 the generated documentation returns `NamePlateFrame` from C_NamePlate without defining it; the driver mixes NamePlateBaseMixin into every nameplate frame the client creates."
+entry = { name = "NamePlateFrame", type = "ScriptObject", inherits = ["Frame"], attributes = { SeluTemplates = ["NamePlateBaseMixin"] } }
+
+[[fields]]
+owner = "NamePlateBaseMixin"
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_NamePlates/Blizzard_NamePlateBase.lua:18 `NamePlateBaseMixin:AcquireUnitFrame` stores the unit frame it acquires from the driver's pool; ReleaseUnitFrame (:26) clears it. The pool's templates (NamePlateUnitFrameTemplate, ForbiddenNamePlateUnitFrameTemplate, Blizzard_NamePlates/Blizzard_NamePlates.lua:136) inherit BaseNamePlateUnitFrameTemplate (Blizzard_NamePlates/Blizzard_NamePlates.xml:93); a commentator's spectating template is not covered."
+entry = { name = "UnitFrame", type = "Button", attributes = { SeluTemplates = ["BaseNamePlateUnitFrameTemplate"], Nilable = true } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_NamePlates/Blizzard_NamePlateBase.lua:37 `NamePlateBaseMixin:GetUnit()` returns the plate's unit token (`self.unitToken`), set by SetUnit."
+entry = { name = "NamePlateBaseMixin.GetUnit", params = [], evidence = "source", signature = { name = "GetUnit", type = "Function", arguments = [], returns = [{ name = "unitToken", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_NamePlates/Blizzard_NamePlateBase.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_ItemButton/Shared/ItemButtonTemplate.lua:208 `ItemButtonMixin:GetItemLink()` returns `self.itemLink`, which SetItemInternal (:161) sets from the item's info, or nil before an item is set."
+entry = { name = "ItemButtonMixin.GetItemLink", params = [], evidence = "source", signature = { name = "GetItemLink", type = "Function", arguments = [], returns = [{ name = "itemLink", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_ItemButton/Shared/ItemButtonTemplate.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_ItemButton/Shared/ItemButtonTemplate.lua:245 `ItemButtonMixin:GetBagID()` returns `self.bagID`, set by SetBagID (:242), or nil."
+entry = { name = "ItemButtonMixin.GetBagID", params = [], evidence = "source", signature = { name = "GetBagID", type = "Function", arguments = [], returns = [{ name = "bagID", type = "number", attributes = { Nilable = true } }], attributes = { file = "Blizzard_ItemButton/Shared/ItemButtonTemplate.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UnitFrame/Shared/CompactUnitFrame.lua:640 `CompactUnitFrame_UpdateHealthColor(frame)` recolours the health bar of a compact unit frame (raid, party and nameplate unit frames)."
+entry = { name = "CompactUnitFrame_UpdateHealthColor", params = ["frame"], evidence = "source", signature = { name = "CompactUnitFrame_UpdateHealthColor", type = "Function", arguments = [{ name = "frame", type = "Button", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_UnitFrame/Shared/CompactUnitFrame.lua" } } }

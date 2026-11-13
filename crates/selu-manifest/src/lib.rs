@@ -687,9 +687,8 @@ mod tests {
                 "{product} has no client UI entry"
             );
         }
-        for suffixes in [&client_ui("wow_classic", Some(5)).unwrap().toc_suffixes] {
-            assert_eq!(suffixes.last(), Some(&"Classic"));
-        }
+        let suffixes = &client_ui("wow_classic", Some(5)).unwrap().toc_suffixes;
+        assert_eq!(suffixes.last(), Some(&"Classic"));
     }
 
     #[test]

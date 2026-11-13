@@ -5,7 +5,6 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-const SOURCE_REPOSITORY: &str = "E:/Development/wow-ui-source";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn git(repo: &str, args: &[&str]) -> Result<String> {
@@ -262,7 +261,7 @@ fn refresh_build_table(doc: &str, rows: &[String]) -> Result<String> {
     Ok(output)
 }
 
-fn extract_product(product: &str, commit: &str) -> Result<Manifest> {
+fn extract_product(repo: &str, product: &str, commit: &str) -> Result<Manifest> {
     // Reuse the reviewed widget supplements; interface remains a build convention.
     let family = match product {
         "wowf" => "forever",
@@ -284,7 +283,7 @@ fn extract_product(product: &str, commit: &str) -> Result<Manifest> {
             product.into(),
             commit.into(),
             output.to_str().ok_or("invalid temp path")?.into(),
-            SOURCE_REPOSITORY.into(),
+            repo.into(),
         ])?;
         selu_manifest::format::decode(&std::fs::read(&output)?)
     })();
@@ -336,7 +335,24 @@ fn retained_reextractions(
 }
 
 fn update(args: &[String]) -> Result<()> {
-    let repo = SOURCE_REPOSITORY;
+    // The owner's clone of the UI source; no default, so no machine's path
+    // is built into the tool.
+    let position = args
+        .iter()
+        .position(|a| a == "--source")
+        .ok_or("update needs --source <path to the wow-ui-source clone>")?;
+    let repo = args
+        .get(position + 1)
+        .ok_or("--source needs a path")?
+        .clone();
+    let args: Vec<String> = args
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != position && *i != position + 1)
+        .map(|(_, a)| a.clone())
+        .collect();
+    let args = args.as_slice();
+    let repo = repo.as_str();
     let directory = Path::new("manifests/store");
     let mut store = selu_manifest::store::Store::open(directory)?;
     let refs = git(
@@ -395,7 +411,7 @@ fn update(args: &[String]) -> Result<()> {
             .ok_or_else(|| format!("no build commit on {branch}"))?;
         let target = format!("{product}@{build}");
         if store.needs_extraction(&target, selu_manifest_gen::EXTRACTION_VERSION) {
-            pending.push(extract_product(product, commit)?);
+            pending.push(extract_product(repo, product, commit)?);
             println!("{target}: prepared");
         }
     }
@@ -406,7 +422,7 @@ fn update(args: &[String]) -> Result<()> {
         &selected,
         selu_manifest_gen::EXTRACTION_VERSION,
     )? {
-        pending.push(extract_product(&product, &commit)?);
+        pending.push(extract_product(repo, &product, &commit)?);
         println!("{target}: prepared retained build extraction");
     }
     let before: Vec<_> = pending

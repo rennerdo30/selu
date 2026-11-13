@@ -480,6 +480,18 @@ pub(crate) fn widget(m: &Manifest, name: &str) -> Type {
     }
     let mut inherited = Vec::new();
     bases(m, name, &mut inherited);
+    // `SeluTemplates`: a documented object type that Blizzard's Lua mixes
+    // into every instance (a nameplate gets NamePlateBaseMixin), so its
+    // reviewed methods and fields are reachable.
+    if let Some(templates) = widget_decl(m, name)
+        .and_then(|w| w.attributes.get("SeluTemplates"))
+        .and_then(|v| v.as_array())
+    {
+        for template in templates.iter().filter_map(|t| t.as_str()) {
+            inherited.push(format!("@template:{template}"));
+        }
+        crate::frames::tag_template_closure(m, &mut inherited);
+    }
     Type::Widget(name.into(), inherited)
 }
 fn method<'a>(

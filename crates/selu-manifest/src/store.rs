@@ -13,7 +13,7 @@ const HEADER: usize = 48;
 const LIMIT: u64 = 256 * 1024 * 1024;
 /// Generator contract version. Bump whenever extraction output rules change.
 /// Version 1 is the W2 extraction shipped in the original format-2 pack.
-pub const EXTRACTION_VERSION: u32 = 17;
+pub const EXTRACTION_VERSION: u32 = 18;
 const LEGACY_EXTRACTION_VERSION: u32 = 1;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -271,7 +271,7 @@ pub fn load_build(directory: &Path, target: &str) -> Result<Manifest> {
 }
 fn missing(target: &str) -> String {
     format!(
-        "locked build {target} missing from store; fetch E:/Development/wow-ui-source, then run selu-manifest-gen update"
+        "locked build {target} missing from store; fetch the wow-ui-source clone, then run selu-manifest-gen update --source <clone>"
     )
 }
 pub fn load_cached_selected(

@@ -3,7 +3,7 @@
 The source clone is owner-maintained. After the owner fetches it, run:
 
 ```powershell
-cargo run -p selu-manifest-gen -- update
+cargo run -p selu-manifest-gen -- update --source <path to the wow-ui-source clone>
 cargo run -p selu-manifest-gen -- list manifests/store
 cargo run -p selu-manifest-gen -- dump manifests/store wow@12.1.5.70783
 ```
@@ -207,7 +207,7 @@ names below the 40 MB package cap. XML EOF with open elements is an error.
 
 ## Release updates
 
-After the owner fetches the source clone, run `cargo run -p selu-manifest-gen -- update`.
+After the owner fetches the source clone, run `cargo run -p selu-manifest-gen -- update --source <clone>`.
 It discovers tracking branches without fetching or checking out, skips automation,
 and scans each branch's history for its newest build subject. Unknown branches
 are reported for a verified mapping; they are never guessed. Optional product or

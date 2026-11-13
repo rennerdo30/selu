@@ -1,4 +1,4 @@
-//! Session-local world data. Sources: read-only E:/Development/wow-ui-source,
+//! Session-local world data. Sources: the read-only wow-ui-source clone,
 //! forever build 1.60.1.70790, Interface/AddOns/Blizzard_APIDocumentationGenerated:
 //! UnitDocumentation.lua (unit events/APIs), CurrencyInfoDocumentation.lua (money),
 //! ContainerDocumentation.lua (bags), MapDocumentation.lua (zone events/map).

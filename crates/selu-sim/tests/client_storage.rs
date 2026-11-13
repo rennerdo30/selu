@@ -1,11 +1,15 @@
 use selu_sim::{Session, SessionConfig};
 
 #[test]
-#[ignore = "requires owner's Forever install"]
+#[ignore = "needs a local Forever install: SELU_WOW_CLIENT=<game folder>"]
 fn client_session_atlas_and_probes() {
     let session = Session::new(SessionConfig {
         target: Some("wowf@1.60.1.70790".into()),
-        client_install: Some("E:/Games/Battle.net/World of Warcraft".into()),
+        client_install: Some(
+            std::env::var("SELU_WOW_CLIENT")
+                .expect("set SELU_WOW_CLIENT to the game folder")
+                .into(),
+        ),
         ..Default::default()
     })
     .unwrap();

@@ -313,7 +313,7 @@ impl Lock {
                 if spec.parts.len() != 4 || crate::product(&spec.flavour) != crate::product(&requested.flavour) || (requested.parts.len() == 4 && requested.parts != spec.parts) {
                     return Err(format!("invalid locked target for {key}").into());
                 }
-                crate::resolve(&spec, manifests).map_err(|_| format!("locked build {locked} missing from store; fetch E:/Development/wow-ui-source, then run selu-manifest-gen update"))?
+                crate::resolve(&spec, manifests).map_err(|_| format!("locked build {locked} missing from store; fetch the wow-ui-source clone, then run selu-manifest-gen update --source <clone>"))?
             } else {
                 crate::resolve(&requested, manifests).map_err(|e| format!("{e:?}"))?
             };

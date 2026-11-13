@@ -424,10 +424,12 @@ mod tests {
         );
     }
     #[test]
-    #[ignore = "requires owner local install"]
+    #[ignore = "needs a local install: SELU_WOW_CLIENT=<game folder>"]
     fn forever_font() {
         let s = Storage::open(
-            Path::new("E:/Games/Battle.net/World of Warcraft"),
+            &std::path::PathBuf::from(
+                std::env::var("SELU_WOW_CLIENT").expect("set SELU_WOW_CLIENT to the game folder"),
+            ),
             "wowf",
             None,
         )

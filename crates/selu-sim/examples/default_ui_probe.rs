@@ -15,11 +15,7 @@ fn painted(r: &selu_sim::RegionSnapshot) -> bool {
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|s| s == "--micro-art") {
-        let storage = selu_gamedata::Storage::open(
-            std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),
-            "wowf",
-            None,
-        )?;
+        let storage = selu_gamedata::Storage::open(client().as_path(), "wowf", None)?;
         let ab = storage.read(897470)?;
         let mb = storage.read(897532)?;
         let eb = storage.read(1989276)?;
@@ -73,11 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if std::env::args().any(|s| s == "--ui-data") {
-        let storage = selu_gamedata::Storage::open(
-            std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),
-            "wowf",
-            None,
-        )?;
+        let storage = selu_gamedata::Storage::open(client().as_path(), "wowf", None)?;
         for (name, id) in [("GlobalColor", 4328468), ("GlobalStrings", 1394440)] {
             let bytes = storage.read(id)?;
             let u32_at = |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
@@ -136,11 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if std::env::args().any(|s| s == "--atlas") {
-        let storage = selu_gamedata::Storage::open(
-            std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),
-            "wowf",
-            None,
-        )?;
+        let storage = selu_gamedata::Storage::open(client().as_path(), "wowf", None)?;
         println!("client build {}", storage.build.version);
         if let Some(folder) = std::env::var_os("SELU_SIM_DUMP_ART") {
             for (name, file) in [
@@ -338,31 +326,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "C_CurveUtil.CreateCurve",
             "C_UnitAuras.GetAuraSlots",
         ] {
-            if let Some(function) = manifest.function(name) {
-                if let Some(signature) = &function.signature {
-                    println!("{name}: {:?}", signature.returns);
-                    for ty in signature.returns.iter().filter_map(|r| r.ty.as_deref()) {
-                        for schema in manifest
-                            .tables
-                            .iter()
-                            .chain(&manifest.widgets)
-                            .filter(|s| s.name == ty)
-                        {
-                            println!(
-                                "schema {}: fields={:?} methods={:?} inherits={:?}",
-                                schema.name,
-                                schema.fields.iter().map(|f| &f.name).collect::<Vec<_>>(),
-                                schema.methods.iter().map(|f| &f.name).collect::<Vec<_>>(),
-                                schema.inherits
-                            );
-                        }
+            if let Some(function) = manifest.function(name)
+                && let Some(signature) = &function.signature
+            {
+                println!("{name}: {:?}", signature.returns);
+                for ty in signature.returns.iter().filter_map(|r| r.ty.as_deref()) {
+                    for schema in manifest
+                        .tables
+                        .iter()
+                        .chain(&manifest.widgets)
+                        .filter(|s| s.name == ty)
+                    {
+                        println!(
+                            "schema {}: fields={:?} methods={:?} inherits={:?}",
+                            schema.name,
+                            schema.fields.iter().map(|f| &f.name).collect::<Vec<_>>(),
+                            schema.methods.iter().map(|f| &f.name).collect::<Vec<_>>(),
+                            schema.inherits
+                        );
                     }
                 }
             }
         }
         return Ok(());
     }
-    let root = std::path::Path::new("E:/Games/Battle.net/World of Warcraft");
+    let client_root = client();
+    let root = client_root.as_path();
     match selu_gamedata::Storage::open(root, "wowf", None) {
         Ok(storage) => {
             for path in [
@@ -382,10 +371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         client_install: Some(root.into()),
         ..Default::default()
     })?;
-    let report = session.load_default_ui(
-        std::path::Path::new("E:/Development/wow-ui-source"),
-        |name| println!("loading {name}"),
-    )?;
+    let report = session.load_default_ui(source().as_path(), |name| println!("loading {name}"))?;
     println!(
         "addons={} errors={} elapsed={:?}",
         report.addons_loaded,
@@ -679,4 +665,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     selu_sim::profile::report();
     Ok(())
+}
+
+/// The value after `flag` on the command line; the probe has no built-in
+/// paths, so every machine passes its own.
+fn path_arg(flag: &str) -> std::path::PathBuf {
+    let args: Vec<String> = std::env::args().collect();
+    let index = args
+        .iter()
+        .position(|a| a == flag)
+        .unwrap_or_else(|| panic!("pass {flag} <path>"));
+    std::path::PathBuf::from(
+        args.get(index + 1)
+            .unwrap_or_else(|| panic!("{flag} needs a path")),
+    )
+}
+/// The game installation (`--client`).
+fn client() -> std::path::PathBuf {
+    path_arg("--client")
+}
+/// The wow-ui-source clone (`--source`).
+fn source() -> std::path::PathBuf {
+    path_arg("--source")
 }

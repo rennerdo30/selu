@@ -460,3 +460,37 @@ fn template_named_types_bag_items_and_tooltip_data_are_typed() {
         );
     }
 }
+
+#[test]
+fn nameplates_and_item_button_links_are_typed() {
+    // Extraction 18: NamePlateFrame carries NamePlateBaseMixin; the plate's
+    // unit frame and its keyed bars; ItemButtonMixin links; the compact unit
+    // frame colour hook.
+    let m = selu_manifest::store::load_build(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/store"),
+        "wowf@1.60.1.70790",
+    )
+    .unwrap();
+    let typed = r#"
+        const plate = C_NamePlate.GetNamePlateForUnit("nameplate1");
+        if (plate != null) {
+            const unit: string? = readable(plate.GetUnit());
+            const uf = plate.UnitFrame;
+            if (uf != null) { uf.HealthBarsContainer.healthBar.SetStatusBarColor(1, 0, 0); uf.name.SetText(unit ?? ""); }
+        }
+        for (const other of C_NamePlate.GetNamePlates()) { const frame = other.UnitFrame; }
+        allowTaint("test", hook("CompactUnitFrame_UpdateHealthColor", (frame) => { frame.SetAlpha(1); }));
+        allowTaint("test", hook("SetItemButtonTexture", (button, texture) => { if (button != null) { const link: string? = readable(button.GetItemLink()); } }));
+    "#;
+    let (_, c) = check(typed, std::slice::from_ref(&m));
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+    let (_, c) = check(
+        "const p = C_NamePlate.GetNamePlateForUnit(\"nameplate1\"); const b: boolean = p;",
+        std::slice::from_ref(&m),
+    );
+    assert!(
+        c.diagnostics.iter().any(|d| d.code == "SELU0336"),
+        "{:?}",
+        c.diagnostics
+    );
+}

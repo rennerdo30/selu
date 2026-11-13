@@ -277,11 +277,13 @@ mod tests {
         assert!(matches!(r.lookup("WTF/Config.wtf"), Lookup::Missing));
     }
     #[test]
-    #[ignore = "requires owner's Forever install"]
+    #[ignore = "needs a local Forever install: SELU_WOW_CLIENT=<game folder>"]
     fn client_assets() {
         let mut r = Resolver::default();
         r.open_client(
-            std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),
+            &std::path::PathBuf::from(
+                std::env::var("SELU_WOW_CLIENT").expect("set SELU_WOW_CLIENT to the game folder"),
+            ),
             "wowf",
         )
         .unwrap();
@@ -300,7 +302,10 @@ mod tests {
         let mut fonts = crate::fonts::FontBook::default();
         fonts
             .open_client(
-                std::path::Path::new("E:/Games/Battle.net/World of Warcraft"),
+                &std::path::PathBuf::from(
+                    std::env::var("SELU_WOW_CLIENT")
+                        .expect("set SELU_WOW_CLIENT to the game folder"),
+                ),
                 "wowf",
             )
             .unwrap();
