@@ -1400,6 +1400,7 @@ impl Ctx<'_> {
             return t;
         }
         match t {
+            Type::Untyped if self.unknown_namespace_member(name, object) => Type::Error,
             Type::Untyped | Type::Error => Type::Untyped,
             Type::Optional(_) | Type::Null => {
                 let what = object.dotted_name().unwrap_or_else(|| "this value".into());

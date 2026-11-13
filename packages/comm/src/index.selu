@@ -32,8 +32,9 @@ const GROUP_CHANNELS = ["PARTY", "RAID", "INSTANCE_CHAT", "GUILD"];
 // The channel for a message to the group, or null when solo.
 export function groupChannel(): string? {
   try {
-    const instance = readable(IsInGroup(Enum.PartyCategory.Instance)) == true;
-    const home = readable(IsInGroup(Enum.PartyCategory.Home)) == true;
+    // The party categories are engine constants (no Enum table on any client).
+    const instance = readable(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) == true;
+    const home = readable(IsInGroup(LE_PARTY_CATEGORY_HOME)) == true;
     if (instance && !home) { return "INSTANCE_CHAT"; }
     if (readable(IsInRaid()) == true) { return "RAID"; }
     if (readable(IsInGroup()) == true) { return "PARTY"; }

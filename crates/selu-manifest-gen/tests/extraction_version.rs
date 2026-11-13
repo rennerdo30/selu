@@ -141,6 +141,13 @@ const CONTRACTS: &[(u32, &str)] = &[
         27,
         "d65b496acd788379725b9d5b337a8d60d3bf56600387e33a3fcdca996466002c",
     ),
+    // World map data providers as a closed table of the methods the canvas
+    // calls, map canvas reads, the Minimap widget, quest log, quest frame,
+    // taxi and group reads (M8).
+    (
+        28,
+        "2f46391ae21132b19ff2ddb858ee523270306fbc877253e6e75eafe5c61fa8b7",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

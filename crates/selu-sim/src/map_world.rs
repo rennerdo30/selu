@@ -17,6 +17,9 @@ pub(crate) fn install(lua: &Lua, ctx: &crate::Ctx) -> mlua::Result<()> {
             &["GetCorpseMapPosition", "GetDeathReleasePosition"][..],
         ),
         ("C_AreaPoiInfo", &["GetAreaPOIInfo"][..]),
+        // No zone story achievements in the synthetic world (documented
+        // MayReturnNothing for a map without one).
+        ("C_QuestLog", &["GetZoneStoryInfo"][..]),
         ("C_GossipInfo", &["GetPoiForUiMapID", "GetPoiInfo"][..]),
         (
             "C_InvasionInfo",

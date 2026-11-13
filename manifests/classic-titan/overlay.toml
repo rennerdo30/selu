@@ -1054,3 +1054,196 @@ entry = { name = "TalentFrameBaseMixin.IsInspecting", params = [], evidence = "s
 evidence = "source"
 note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_SharedTalentUI/Blizzard_SharedTalentFrame.lua:544 `TalentFrameBaseMixin:GetTalentButtonByNodeID(nodeID)` returns `self.nodeIDToButton[nodeID]`, the talent button shown for a node (nil when none)."
 entry = { name = "TalentFrameBaseMixin.GetTalentButtonByNodeID", params = ["nodeID"], evidence = "source", signature = { name = "GetTalentButtonByNodeID", type = "Function", arguments = [{ name = "nodeID", type = "number", attributes = { Nilable = false } }], returns = [{ name = "button", type = "Button", attributes = { Nilable = true } }], attributes = { file = "Blizzard_SharedTalentUI/Blizzard_SharedTalentFrame.lua" } } }
+
+# Extraction 28: map data providers, map canvas, Minimap, quest, taxi and group reads (M8)
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_CompactRaidFrames/Mainline/Blizzard_CompactRaidFrameManager.lua:427 Blizzard reads `IsInGroup(partyCategory)` as whether the player is in a group (of that category, optional). Not in the generated documentation."
+entry = { name = "IsInGroup", params = ["partyCategory"], evidence = "source", signature = { name = "IsInGroup", type = "Function", arguments = [{ name = "partyCategory", type = "number", attributes = { Nilable = true } }], returns = [{ name = "isInGroup", type = "bool", attributes = { Nilable = false } }], attributes = { file = "Blizzard_CompactRaidFrames/Mainline/Blizzard_CompactRaidFrameManager.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_UIPanels_Game/Classic/FriendsFrame.lua:1097 Blizzard reads `GetUnitName(unit, showServerName)` as the unit's name, with its realm when asked (nil without a unit). Not in the generated documentation."
+entry = { name = "GetUnitName", params = ["unit", "showServerName"], evidence = "source", signature = { name = "GetUnitName", type = "Function", arguments = [{ name = "unit", type = "string", attributes = { Nilable = false } }, { name = "showServerName", type = "bool", attributes = { Nilable = true } }], returns = [{ name = "name", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/FriendsFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_SharedMapDataProviders/QuestDataProvider.lua:250 Blizzard reads `GetNumQuestLeaderBoards(questLogIndex)` as the number of objectives of a quest log entry. Not in the generated documentation."
+entry = { name = "GetNumQuestLeaderBoards", params = ["questLogIndex"], evidence = "source", signature = { name = "GetNumQuestLeaderBoards", type = "Function", arguments = [{ name = "questLogIndex", type = "number", attributes = { Nilable = true } }], returns = [{ name = "numObjectives", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_SharedMapDataProviders/QuestDataProvider.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_SharedMapDataProviders/QuestBlobDataProvider.lua:222 Blizzard reads `GetQuestLogLeaderBoard(objectiveIndex, questLogIndex)` as an objective's text, type and whether it is finished. Not in the generated documentation."
+entry = { name = "GetQuestLogLeaderBoard", params = ["objectiveIndex", "questLogIndex"], evidence = "source", signature = { name = "GetQuestLogLeaderBoard", type = "Function", arguments = [{ name = "objectiveIndex", type = "number", attributes = { Nilable = false } }, { name = "questLogIndex", type = "number", attributes = { Nilable = true } }], returns = [{ name = "text", type = "string", attributes = { Nilable = true } }, { name = "objectiveType", type = "string", attributes = { Nilable = true } }, { name = "finished", type = "bool", attributes = { Nilable = true } }], attributes = { file = "Blizzard_SharedMapDataProviders/QuestBlobDataProvider.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_UIPanels_Game/Cata/QuestLogFrame.lua:362 Blizzard calls `SelectQuestLogEntry(questLogIndex)` to select a quest log entry. Not in the generated documentation."
+entry = { name = "SelectQuestLogEntry", params = ["questLogIndex"], evidence = "source", signature = { name = "SelectQuestLogEntry", type = "Function", arguments = [{ name = "questLogIndex", type = "number", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_UIPanels_Game/Cata/QuestLogFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_UIWidgets/Blizzard_UIWidgetTemplatePreyHuntProgress.lua:68 Blizzard reads `GetQuestUiMapID(questID, ignoreWaypoints)` as the uiMapID that shows a quest. Not in the generated documentation."
+entry = { name = "GetQuestUiMapID", params = ["questID", "ignoreWaypoints"], evidence = "source", signature = { name = "GetQuestUiMapID", type = "Function", arguments = [{ name = "questID", type = "number", attributes = { Nilable = false } }, { name = "ignoreWaypoints", type = "bool", attributes = { Nilable = true } }], returns = [{ name = "uiMapID", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIWidgets/Blizzard_UIWidgetTemplatePreyHuntProgress.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_UIPanels_Game/Classic/QuestFrame.lua:211 Blizzard reads `IsQuestCompletable()` as whether the quest shown at the quest giver can be completed now. Not in the generated documentation."
+entry = { name = "IsQuestCompletable", params = [], evidence = "source", signature = { name = "IsQuestCompletable", type = "Function", arguments = [], returns = [{ name = "isCompletable", type = "bool", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/QuestFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_UIPanels_Game/Classic/QuestFrame.lua:331 Blizzard reads `GetActiveTitle(index)` as an active quest's title at the quest giver and whether it is complete. Not in the generated documentation."
+entry = { name = "GetActiveTitle", params = ["index"], evidence = "source", signature = { name = "GetActiveTitle", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }], returns = [{ name = "title", type = "string", attributes = { Nilable = false } }, { name = "isComplete", type = "bool", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/QuestFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.lua:895 Blizzard reads `IsModifiedClick(action)` as whether the modifier bound to a click action is held. Not in the generated documentation."
+entry = { name = "IsModifiedClick", params = ["action"], evidence = "source", signature = { name = "IsModifiedClick", type = "Function", arguments = [{ name = "action", type = "string", attributes = { Nilable = true } }], returns = [{ name = "isHeld", type = "bool", attributes = { Nilable = false } }], attributes = { file = "Blizzard_AchievementUI/Cata/Blizzard_AchievementUI.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_UIPanels_Game/Classic/TaxiFrame.lua:138 Blizzard reads `GetNumRoutes(slotIndex)` as the number of hops of the route to a flight node. Not in the generated documentation."
+entry = { name = "GetNumRoutes", params = ["slotIndex"], evidence = "source", signature = { name = "GetNumRoutes", type = "Function", arguments = [{ name = "slotIndex", type = "number", attributes = { Nilable = false } }], returns = [{ name = "numRoutes", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/TaxiFrame.lua" } } }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:86 MapCanvasMixin calls `dataProvider:OnAdded(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnAdded", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }, { name = "owningMap", type = "Frame", attributes = { Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:92 MapCanvasMixin calls `dataProvider:OnRemoved(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnRemoved", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }, { name = "owningMap", type = "Frame", attributes = { Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:90 MapCanvasMixin calls `dataProvider:RemoveAllData(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderRemoveAllData", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:453 MapCanvasMixin calls `dataProvider:RefreshAllData(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderRefreshAllData", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }, { name = "fromOnShow", type = "bool", attributes = { Nilable = true } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:67 MapCanvasMixin calls `dataProvider:OnShow(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnShow", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:73 MapCanvasMixin calls `dataProvider:OnHide(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnHide", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:80 MapCanvasMixin calls `dataProvider:SignalEvent(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderSignalEvent", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }, { name = "event", type = "string", attributes = { Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:564 MapCanvasMixin calls `dataProvider:OnMapChanged(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnMapChanged", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:826 MapCanvasMixin calls `dataProvider:OnGlobalAlphaChanged(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnGlobalAlphaChanged", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:551 MapCanvasMixin calls `dataProvider:OnMapInsetSizeChanged(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnMapInsetSizeChanged", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }, { name = "mapInsetIndex", type = "number", attributes = { Nilable = false } }, { name = "expanded", type = "bool", attributes = { Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:555 MapCanvasMixin calls `dataProvider:OnMapInsetMouseEnter(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnMapInsetMouseEnter", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }, { name = "mapInsetIndex", type = "number", attributes = { Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:559 MapCanvasMixin calls `dataProvider:OnMapInsetMouseLeave(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnMapInsetMouseLeave", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }, { name = "mapInsetIndex", type = "number", attributes = { Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:577 MapCanvasMixin calls `dataProvider:OnCanvasScaleChanged(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnCanvasScaleChanged", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:581 MapCanvasMixin calls `dataProvider:OnCanvasPanChanged(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnCanvasPanChanged", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:585 MapCanvasMixin calls `dataProvider:OnCanvasSizeChanged(...)` on each provider it holds; the first value is the provider itself."
+entry = { name = "SeluMapCanvasProviderOnCanvasSizeChanged", type = "CallbackType", arguments = [{ name = "provider", type = "", attributes = { SeluOpaque = "SeluMapCanvasDataProviderSelf", Nilable = false } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:84 `MapCanvasMixin:AddDataProvider(dataProvider)` keeps the provider; the canvas calls exactly these methods on it (each cited on its field). Closed: a provider is a table of these functions and nothing else; OnUpdate is only called after RegisterDataProviderOnUpdate, which is not typed."
+entry = { name = "SeluMapCanvasDataProvider", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "OnAdded", type = "SeluMapCanvasProviderOnAdded", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:86" } }, { name = "OnRemoved", type = "SeluMapCanvasProviderOnRemoved", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:92" } }, { name = "RemoveAllData", type = "SeluMapCanvasProviderRemoveAllData", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:90" } }, { name = "RefreshAllData", type = "SeluMapCanvasProviderRefreshAllData", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:453" } }, { name = "OnShow", type = "SeluMapCanvasProviderOnShow", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:67" } }, { name = "OnHide", type = "SeluMapCanvasProviderOnHide", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:73" } }, { name = "SignalEvent", type = "SeluMapCanvasProviderSignalEvent", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:80" } }, { name = "OnMapChanged", type = "SeluMapCanvasProviderOnMapChanged", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:564" } }, { name = "OnGlobalAlphaChanged", type = "SeluMapCanvasProviderOnGlobalAlphaChanged", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:826" } }, { name = "OnMapInsetSizeChanged", type = "SeluMapCanvasProviderOnMapInsetSizeChanged", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:551" } }, { name = "OnMapInsetMouseEnter", type = "SeluMapCanvasProviderOnMapInsetMouseEnter", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:555" } }, { name = "OnMapInsetMouseLeave", type = "SeluMapCanvasProviderOnMapInsetMouseLeave", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:559" } }, { name = "OnCanvasScaleChanged", type = "SeluMapCanvasProviderOnCanvasScaleChanged", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:577" } }, { name = "OnCanvasPanChanged", type = "SeluMapCanvasProviderOnCanvasPanChanged", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:581" } }, { name = "OnCanvasSizeChanged", type = "SeluMapCanvasProviderOnCanvasSizeChanged", attributes = { Nilable = false, SeluSourceCitation = "7014c309a25338905c41dc3799a93f9719ebb533 Blizzard_MapCanvas/Blizzard_MapCanvas.lua:585" } }] }
+
+[[widgets]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/MapCanvas_PinFrameLevelsManager.lua:138 the map's pin frame level manager (MapCanvasPinFrameLevelsManagerMixin); `GetValidFrameLevel(frameLevelType, index)` returns the frame level of a pin level type."
+entry = { name = "SeluMapCanvasPinFrameLevelsManager", type = "ScriptObject", methods = [{ name = "GetValidFrameLevel", type = "Function", arguments = [{ name = "frameLevelType", type = "string", attributes = { Nilable = false } }, { name = "optionalIndex", type = "number", attributes = { Nilable = true } }], returns = [{ name = "frameLevel", type = "number", attributes = { Nilable = false } }] }] }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:47 `MapCanvasMixin:GetMapID()` returns the uiMapID the map shows."
+entry = { name = "MapCanvasMixin.GetMapID", params = [], evidence = "source", signature = { name = "GetMapID", type = "Function", arguments = [], returns = [{ name = "uiMapID", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_MapCanvas/Blizzard_MapCanvas.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:531 `MapCanvasMixin:GetCanvas()` returns the scroll child that holds the map's pins."
+entry = { name = "MapCanvasMixin.GetCanvas", params = [], evidence = "source", signature = { name = "GetCanvas", type = "Function", arguments = [], returns = [{ name = "canvas", type = "Frame", attributes = { Nilable = false } }], attributes = { file = "Blizzard_MapCanvas/Blizzard_MapCanvas.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:588 `MapCanvasMixin:GetCanvasScale()` returns the canvas's current scale."
+entry = { name = "MapCanvasMixin.GetCanvasScale", params = [], evidence = "source", signature = { name = "GetCanvasScale", type = "Function", arguments = [], returns = [{ name = "scale", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_MapCanvas/Blizzard_MapCanvas.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:592 `MapCanvasMixin:GetCanvasZoomPercent()` returns how far the map is zoomed in, 0 to 1."
+entry = { name = "MapCanvasMixin.GetCanvasZoomPercent", params = [], evidence = "source", signature = { name = "GetCanvasZoomPercent", type = "Function", arguments = [], returns = [{ name = "zoomPercent", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_MapCanvas/Blizzard_MapCanvas.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:802 `MapCanvasMixin:GetGlobalPinScale()` returns the scale applied to every pin."
+entry = { name = "MapCanvasMixin.GetGlobalPinScale", params = [], evidence = "source", signature = { name = "GetGlobalPinScale", type = "Function", arguments = [], returns = [{ name = "scale", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_MapCanvas/Blizzard_MapCanvas.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:743 `MapCanvasMixin:GetPinFrameLevelsManager()` returns the map's pin frame level manager."
+entry = { name = "MapCanvasMixin.GetPinFrameLevelsManager", params = [], evidence = "source", signature = { name = "GetPinFrameLevelsManager", type = "Function", arguments = [], returns = [{ name = "manager", type = "SeluMapCanvasPinFrameLevelsManager", attributes = { Nilable = false } }], attributes = { file = "Blizzard_MapCanvas/Blizzard_MapCanvas.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:84 `MapCanvasMixin:AddDataProvider(dataProvider)` keeps the provider and calls its methods (see SeluMapCanvasDataProvider)."
+entry = { name = "MapCanvasMixin.AddDataProvider", params = ["dataProvider"], evidence = "source", signature = { name = "AddDataProvider", type = "Function", arguments = [{ name = "dataProvider", type = "SeluMapCanvasDataProvider", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_MapCanvas/Blizzard_MapCanvas.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:89 `MapCanvasMixin:RemoveDataProvider(dataProvider)` calls the provider's RemoveAllData and OnRemoved and drops it."
+entry = { name = "MapCanvasMixin.RemoveDataProvider", params = ["dataProvider"], evidence = "source", signature = { name = "RemoveDataProvider", type = "Function", arguments = [{ name = "dataProvider", type = "SeluMapCanvasDataProvider", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_MapCanvas/Blizzard_MapCanvas.lua" } } }
+
+[[widgets]]
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_Minimap/Classic/Minimap.xml:89 creates the Minimap frame as a `<Minimap>` element; Blizzard_APIDocumentationGenerated MinimapFrameAPI documents its methods (GetZoom and others)."
+entry = { name = "Minimap", type = "ScriptObject", inherits = ["MinimapFrameAPI", "Frame"] }
+
+[[globals]]
+name = "LE_PARTY_CATEGORY_HOME"
+type = "number"
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_Calendar/Classic/Blizzard_Calendar.lua:3999 Blizzard uses the engine constant `LE_PARTY_CATEGORY_HOME` as a party category number; the value is the client own, not a literal."
+
+[[globals]]
+name = "LE_PARTY_CATEGORY_INSTANCE"
+type = "number"
+evidence = "source"
+note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_Channels/VoiceUtils.lua:116 Blizzard uses the engine constant `LE_PARTY_CATEGORY_INSTANCE` as a party category number; the value is the client own, not a literal."

@@ -317,6 +317,8 @@ pub fn install(lua: &Lua, ctx: &Ctx) -> mlua::Result<()> {
     )?;
     Ok(())
 }
+const MINIMAP_ZOOM_LEVELS: f64 = 6.0;
+
 pub fn create(
     lua: &Lua,
     ctx: &Ctx,
@@ -520,6 +522,9 @@ pub fn create(
                 "GetClampRectInsets",
                 "SetIconScale",
                 "GetIconScale",
+                "GetZoom",
+                "SetZoom",
+                "GetZoomLevels",
                 "SetAllowOverlappedModels",
                 "SetIndentedWordWrap",
                 "IsOwned",
@@ -551,6 +556,9 @@ pub fn create(
                 "Click",
             ]) {
                 if method == "Click" && !matches!(kind, "Button" | "CheckButton") {
+                    continue;
+                }
+                if matches!(method, "GetZoom" | "SetZoom" | "GetZoomLevels") && kind != "Minimap" {
                     continue;
                 }
                 if matches!(method, "AddMessage" | "GetNumMessages" | "Clear")
@@ -1109,6 +1117,19 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
             ));
         }
         return Ok(MultiValue::from_vec(result));
+    }
+    // The minimap's zoom (MinimapFrameAPI): six levels, 0 to 5, as the
+    // client's minimap has; SetZoom keeps the level in range.
+    if method == "GetZoomLevels" {
+        out!(MINIMAP_ZOOM_LEVELS);
+    }
+    if method == "GetZoom" {
+        out!(t.raw_get::<Option<f64>>("__selu_minimap_zoom")?.unwrap_or(0.0));
+    }
+    if method == "SetZoom" {
+        let zoom = number(v.first(), 0.0).floor().clamp(0.0, MINIMAP_ZOOM_LEVELS - 1.0);
+        t.raw_set("__selu_minimap_zoom", zoom)?;
+        out!(());
     }
     if method == "SetIconScale" {
         t.raw_set(
@@ -2305,7 +2326,11 @@ fn call(lua: &Lua, ctx: &Ctx, method: &str, args: MultiValue) -> mlua::Result<Mu
         "SetTexture" => {
             for axis in 0..2 {
                 let mode = string(v.get(axis + 1)).unwrap_or("CLAMP".into());
-                if !matches!(mode.as_str(), "CLAMP" | "REPEAT" | "MIRROR") {
+                // The client's WRAPMODE values (Blizzard_SharedXML/UI.xsd).
+                if !matches!(
+                    mode.as_str(),
+                    "CLAMP" | "REPEAT" | "MIRROR" | "CLAMPTOBLACK" | "CLAMPTOBLACKADDITIVE" | "CLAMPTOWHITE"
+                ) {
                     return Err(mlua::Error::runtime("invalid texture wrap mode"));
                 }
                 r.visual.wrap_modes[axis] = mode;

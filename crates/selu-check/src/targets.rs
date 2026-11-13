@@ -210,6 +210,63 @@ impl Ctx<'_> {
         }
         None
     }
+    /// A member of a game namespace (`C_Map`, `Enum`, an enum table,
+    /// `Constants`) that no target declares: an error, never an unchecked
+    /// value. Calls report their own SELU0301; this covers reads.
+    pub(crate) fn unknown_namespace_member(&mut self, field: &str, object: &Expr) -> bool {
+        // The member's object may be passed as the whole member expression.
+        let Some(dotted) = object.dotted_name() else {
+            return false;
+        };
+        let root = match dotted.strip_suffix(&format!(".{field}")) {
+            Some(root) if matches!(&object.kind, ExprKind::Member { .. }) => root.to_owned(),
+            _ => dotted,
+        };
+        if self.lookup(root.split('.').next().unwrap_or("")).is_some() {
+            return false;
+        }
+        let full = format!("{root}.{field}");
+        let enum_table = root.strip_prefix("Enum.").is_some_and(|name| {
+            !name.contains('.')
+                && self
+                    .availability
+                    .targets
+                    .iter()
+                    .any(|m| m.enums.iter().any(|e| e.name == name))
+        });
+        let known = if root == "Constants" {
+            self.availability.targets.iter().any(|m| {
+                m.tables
+                    .iter()
+                    .any(|t| t.name == field && t.ty.as_deref() == Some("Constants"))
+            })
+        } else if self.availability.namespaces.contains(&root) || enum_table {
+            self.availability.namespaces.contains(&full)
+                || self
+                    .availability
+                    .targets
+                    .iter()
+                    .any(|m| exists(m, &full) || crate::api::qualified_global(m, &full).is_some())
+        } else {
+            return false;
+        };
+        if known {
+            return false;
+        }
+        let target = self
+            .availability
+            .targets
+            .iter()
+            .map(Manifest::target_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.out.push(err(
+            "SELU0310",
+            format!("`{full}` is not declared on {target}"),
+            &object.span,
+        ));
+        true
+    }
     pub(crate) fn target_receiver(&mut self, e: &Expr) -> Option<Type> {
         let n = e.dotted_name()?;
         if self.lookup(n.split('.').next()?).is_some() {

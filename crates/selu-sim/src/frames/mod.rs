@@ -371,6 +371,13 @@ pub fn missing_method(widget: &str, key: &str, manifest: Option<&MethodList>) ->
     }
     let shape = if let Some(manifest) = manifest {
         manifest.get(widget)?.get(key)?.clone()
+    } else if widget == "Minimap" {
+        // A Minimap is a Frame with the documented MinimapFrameAPI.
+        manifest::MINIMAP_API
+            .iter()
+            .chain(manifest::methods("Frame"))
+            .find(|(name, _)| *name == key)
+            .map(|(_, shape)| (*shape).to_owned())?
     } else {
         manifest::methods(widget)
             .iter()
@@ -414,6 +421,25 @@ pub fn configure_ui_size(lua: &Lua, size: (f64, f64)) -> mlua::Result<()> {
 #[cfg(test)]
 mod fidelity_tests {
     use crate::Sim;
+    #[test]
+    fn a_minimap_keeps_its_zoom_in_range_and_masks_take_client_wrap_modes() {
+        let sim = Sim::new().unwrap();
+        sim.eval(
+            r#"
+            local m = CreateFrame("Minimap")
+            assert(m:GetZoom() == 0 and m:GetZoomLevels() == 6)
+            m:SetZoom(9); assert(m:GetZoom() == 5)
+            m:SetZoom(2.7); assert(m:GetZoom() == 2)
+            assert(m:IsObjectType("MinimapFrameAPI") and m:IsObjectType("Frame"))
+            m:SetMaskTexture("Interface\Buttons\WHITE8X8")
+            assert(CreateFrame("Frame").GetZoom == nil)
+            local mask = CreateFrame("Frame"):CreateMaskTexture()
+            mask:SetTexture("Interface\Buttons\WHITE8X8", "CLAMPTOBLACKADDITIVE", "CLAMPTOWHITE")
+            assert(not pcall(mask.SetTexture, mask, "x", "WRAP"))
+            "#,
+        )
+        .unwrap();
+    }
     #[test]
     fn moving_scroll_content_between_parents_refreshes_anchor_dependencies() {
         let sim = Sim::new().unwrap();

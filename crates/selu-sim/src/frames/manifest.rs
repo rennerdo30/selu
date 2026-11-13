@@ -2592,7 +2592,45 @@ pub fn methods(kind: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// MinimapFrameAPI (Blizzard_APIDocumentationGenerated), the methods a
+/// Minimap adds to Frame, with empty return shapes; zoom is modelled in
+/// widgets.rs.
+pub const MINIMAP_API: &[(&str, &str)] = &[
+    ("GetPingPosition", "dd"),
+    ("GetZoom", "d"),
+    ("GetZoomLevels", "d"),
+    ("PingLocation", ""),
+    ("SetArchBlobInsideAlpha", ""),
+    ("SetArchBlobInsideTexture", ""),
+    ("SetArchBlobOutsideAlpha", ""),
+    ("SetArchBlobOutsideTexture", ""),
+    ("SetArchBlobRingAlpha", ""),
+    ("SetArchBlobRingScalar", ""),
+    ("SetArchBlobRingTexture", ""),
+    ("SetIconScale", ""),
+    ("SetMaskTexture", ""),
+    ("SetQuestBlobInsideAlpha", ""),
+    ("SetQuestBlobInsideTexture", ""),
+    ("SetQuestBlobOutsideAlpha", ""),
+    ("SetQuestBlobOutsideTexture", ""),
+    ("SetQuestBlobRingAlpha", ""),
+    ("SetQuestBlobRingScalar", ""),
+    ("SetQuestBlobRingTexture", ""),
+    ("SetTaskBlobInsideAlpha", ""),
+    ("SetTaskBlobInsideTexture", ""),
+    ("SetTaskBlobOutsideAlpha", ""),
+    ("SetTaskBlobOutsideTexture", ""),
+    ("SetTaskBlobRingAlpha", ""),
+    ("SetTaskBlobRingScalar", ""),
+    ("SetTaskBlobRingTexture", ""),
+    ("SetUsingSoftCursor", ""),
+    ("SetZoom", ""),
+];
+
 pub fn inherits(kind: &str, wanted: &str) -> bool {
+    if kind == "Minimap" {
+        return wanted == "MinimapFrameAPI" || inherits("Frame", wanted);
+    }
     kind == wanted
         || match kind {
             "Frame" => [
