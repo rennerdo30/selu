@@ -105,3 +105,17 @@ fn optional_record_defaults_fill_only_literal_keys() {
     sim.eval("assert(DB==root and DB.pos.p=='BOTTOM' and DB.pos.x==0 and DB.pos.y==nil)")
         .unwrap();
 }
+#[test]
+fn a_union_of_arrays_iterates_as_either_element() {
+    assert_eq!(
+        run(r#"function total(list: number[] | string[]): string {
+            let out = "";
+            for (const x of list) { out = out + (typeof x == "number" ? `n${x}` : `s${x}`); }
+            return out;
+        }
+        print(total([1, 2]), total(["a"]));"#),
+        vec!["n1n2\tsa"]
+    );
+    // A set and an array do not iterate alike.
+    assert!(!codes("function f(x: number[] | Set<number>) { for (const v of x) { print(v); } }").is_empty());
+}

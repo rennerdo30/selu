@@ -10,6 +10,9 @@ pub(crate) struct Aliases {
     validated: std::collections::HashSet<String>,
     pub(crate) contexts: HashMap<String, std::sync::Arc<HashMap<String, Type>>>,
     pub(crate) context_stack: Vec<std::sync::Arc<HashMap<String, Type>>>,
+    /// Imported types that are already resolved (another addon's declared
+    /// types, which must keep their foreign view).
+    pub(crate) fixed: HashMap<String, Type>,
 }
 impl Ctx<'_> {
     pub(crate) fn finish_alias_diagnostics(&mut self) {
@@ -53,6 +56,23 @@ impl Ctx<'_> {
             if let StmtKind::Import { names, from, .. } = &s.kind {
                 for (remote, local, local_span, _) in names {
                     if let Some(export) = imports.get(from).and_then(|m| m.get(remote)) {
+                        if let Some(fixed) = &export.foreign_type {
+                            self.out.retain(|d| {
+                                !(d.code == "SELU0304" && d.span.as_ref() == Some(local_span))
+                            });
+                            if self.aliases.declarations.contains_key(local)
+                                || self.aliases.fixed.contains_key(local)
+                            {
+                                self.out.push(err(
+                                    "SELU0520",
+                                    format!("type `{local}` is already declared"),
+                                    local_span,
+                                ));
+                            } else {
+                                self.aliases.fixed.insert(local.clone(), fixed.clone());
+                            }
+                            continue;
+                        }
                         if !export.aliases.contains_key(remote) {
                             continue;
                         }
@@ -220,6 +240,13 @@ impl Ctx<'_> {
         match &mut t.kind {
             K::Named { name, args } => {
                 if let Some(value) = env.get(name) {
+                    names.insert(name.clone(), value.clone());
+                    return;
+                }
+                if args.is_empty()
+                    && !self.aliases.declarations.contains_key(name)
+                    && let Some(value) = self.aliases.fixed.get(name)
+                {
                     names.insert(name.clone(), value.clone());
                     return;
                 }

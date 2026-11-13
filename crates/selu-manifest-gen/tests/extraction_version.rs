@@ -115,6 +115,15 @@ const CONTRACTS: &[(u32, &str)] = &[
         22,
         "fbe90e98bfee6ed3294ecb988154212007f9934002145586930b582e193af62f",
     ),
+    (
+        23,
+        "80aff73a33c8fcda991eb4968793c54ac300e0416f224da8bbe26713feb14eba",
+    ),
+    // Lua 5.1 string.byte for the Quest Recorder's group sharing (M6).
+    (
+        24,
+        "97f8c9f356060df651d43e0b23f0dfb521f2723f2ddd4520a5cb11f6e817933b",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

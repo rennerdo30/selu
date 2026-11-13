@@ -11,7 +11,7 @@ use selu_syntax::{Expr, ExprKind, Stmt, StmtKind};
 /// Shared by every module that crosses the boundary. A value that does not
 /// match its declaration, or a call that raises, gives nil and one warning
 /// per place.
-pub(crate) const RUNTIME: &str = r##"local __selu_fx_type, __selu_fx_pcall, __selu_fx_print, __selu_fx_tostring, __selu_fx_unpack, __selu_fx_tonumber = type, pcall, print, tostring, unpack, tonumber
+pub(crate) const RUNTIME: &str = r##"local __selu_fx_type, __selu_fx_pcall, __selu_fx_print, __selu_fx_tostring, __selu_fx_unpack, __selu_fx_tonumber, __selu_fx_next = type, pcall, print, tostring, unpack, tonumber, next
 local __selu_fx_warned, __selu_fx_parsed, __selu_fx_owner = {}, {}, {}
 -- Selu addons whose published API matches the one this addon was built
 -- against: their values pass directly (shared by this addon's modules).
@@ -30,6 +30,13 @@ local function __selu_fparse(d, i)
     local e
     e, i = __selu_fparse(d, i + 1)
     node.k, node.e = "a", e
+    return node, i
+  end
+  if c == "m" then
+    local key, e
+    key, i = __selu_fparse(d, i + 1)
+    e, i = __selu_fparse(d, i)
+    node.k, node.key, node.e = "m", key, e
     return node, i
   end
   if c == "(" then
@@ -64,27 +71,47 @@ local function __selu_fparse(d, i)
   node.k = c
   return node, i + 1
 end
-local function __selu_fok(v, n)
-  if v == nil then return n.opt == true end
+-- true and the value to use, or false. Arrays and maps become checked
+-- copies: the other addon cannot change them after the check, and Selu code
+-- never writes into its tables. Tables and functions stay its own values,
+-- read through checked, protected reads.
+local function __selu_fconv(v, n)
+  if v == nil then return n.opt == true, nil end
   local k = n.k
-  if k == "u" then return true end
+  if k == "u" then return true, v end
   local t = __selu_fx_type(v)
-  if k == "n" then return t == "number" end
-  if k == "s" then return t == "string" end
-  if k == "b" then return t == "boolean" end
-  if k == "t" then return t == "table" end
-  if k == "f" then return t == "function" end
-  if k == "=" then return v == n.v end
+  if k == "n" then return t == "number", v end
+  if k == "s" then return t == "string", v end
+  if k == "b" then return t == "boolean", v end
+  if k == "t" then return t == "table", v end
+  if k == "f" then return t == "function", v end
+  if k == "=" then return v == n.v, v end
   if k == "a" then
     if t ~= "table" then return false end
+    local out = {}
     for i = 1, #v do
-      if not __selu_fok(v[i], n.e) then return false end
+      local ok, e = __selu_fconv(v[i], n.e)
+      if not ok then return false end
+      out[i] = e
     end
-    return true
+    return true, out
+  end
+  if k == "m" then
+    if t ~= "table" then return false end
+    local out = {}
+    for key, value in __selu_fx_next, v do
+      local okKey, ck = __selu_fconv(key, n.key)
+      if not okKey then return false end
+      local okValue, cv = __selu_fconv(value, n.e)
+      if not okValue then return false end
+      out[ck] = cv
+    end
+    return true, out
   end
   if k == "|" then
     for i = 1, #n.alts do
-      if __selu_fok(v, n.alts[i]) then return true end
+      local ok, c = __selu_fconv(v, n.alts[i])
+      if ok then return true, c end
     end
   end
   return false
@@ -101,7 +128,9 @@ local function __selu_fcheck(v, d, path)
     n = __selu_fparse(d, 1)
     __selu_fx_parsed[d] = n
   end
-  if __selu_fok(v, n) then return v end
+  -- Protected: a metatable on the other addon's table may raise.
+  local ran, ok, value = __selu_fx_pcall(__selu_fconv, v, n)
+  if ran and ok then return value end
   __selu_fwarn(path, "does not match its declaration")
   return nil
 end

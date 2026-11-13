@@ -74,8 +74,9 @@ if (lib != null && lib.RequireContract(4) == true) {
 - The file holds exactly one `addon "Name" { ... }` with `global Name: Type;`
   entries and `type` declarations (SELU0710). A global the game data knows,
   or a `Blizzard_` addon, is refused (SELU0702). Declarable types: numbers,
-  strings, booleans, literals, arrays, `{ ... }` tables, functions, unions,
-  optionals and `unknown` (SELU0711).
+  strings, booleans, literals, arrays, maps (`Map<K, V>` with number or
+  string keys), `{ ... }` tables, functions, unions, optionals and `unknown`
+  (SELU0711).
 - An imported global is read live on every use: `null` while the addon is
   not loaded, otherwise the global checked against its declaration. The
   addon becomes an `## OptionalDeps` entry.
@@ -86,10 +87,21 @@ if (lib != null && lib.RequireContract(4) == true) {
   parameters are optional.
 - Calls into the other addon are protected: an error there gives `null` and
   one warning, never a Lua error in Selu code.
+- Arrays and maps cross as checked copies: every element (and, for a map,
+  every key, read raw) is checked, then copied into a fresh Selu table. The
+  other addon cannot change them after the check, and writing the copy never
+  reaches its table. A Lua table with holes or keys that are not 1..n is a
+  map, not an array: declare it as `Map<number, T>`.
 - The other addon's tables and functions stay foreign values. They fit only
   their own declared types (or `unknown`), never a Selu type of the same
   shape, so every later read stays checked. Their fields are read-only
   (SELU0713); an undeclared field is an error (SELU0712).
+- The declaration's own types can be imported by name
+  (`import { Quest } from addon "QuestieDB"`), so Selu functions can take the
+  other addon's values as parameters. An imported type is that addon's type:
+  its values keep their checked reads, and they still never fit a Selu type
+  of the same shape. A Selu value (an argument passed into the other addon)
+  fits it.
 - Functions are called with `.` (`lib.Quest(1)`); Lua methods called with
   `:` are not declarable yet.
 
@@ -105,7 +117,7 @@ export addon { quest as findQuest, version };
 
 - Only constants, functions and imports are published (SELU0714), and only
   plain data and functions cross (SELU0711): numbers, strings, booleans,
-  literals, arrays, `{ ... }` tables, functions, unions and optionals.
+  literals, arrays, maps, `{ ... }` tables, functions, unions and optionals.
   Classes and game objects stay inside the addon. One `export addon` list
   per addon.
 - `selu build` writes `dist/<Addon>.selu-api`: the published names and their

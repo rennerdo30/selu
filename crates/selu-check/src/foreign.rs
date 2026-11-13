@@ -33,7 +33,13 @@ pub enum ForeignShape {
     NumberLiteral(String),
     Table,
     Function,
+    /// A Lua table read as an array: every element checked, then copied
+    /// into a fresh Selu table (the other addon can never change it after
+    /// the check, and Selu code never writes into the other addon's table).
     Array(Box<ForeignCheck>),
+    /// A Lua table read as a map: every key and value checked (raw `next`),
+    /// then copied like an array.
+    Map(Box<ForeignCheck>, Box<ForeignCheck>),
     Union(Vec<ForeignShape>),
 }
 
@@ -46,7 +52,8 @@ pub struct ForeignCheck {
 
 impl ForeignCheck {
     /// The descriptor the runtime parses (and caches): `?` marks a declared
-    /// `nil`, then `u n s b t f`, `a<element>`, `(a|b)`, `'text'` or `#5`.
+    /// `nil`, then `u n s b t f`, `a<element>`, `m<key><value>`, `(a|b)`,
+    /// `'text'` or `#5`.
     pub fn descriptor(&self) -> String {
         fn shape(s: &ForeignShape, out: &mut String) {
             match s {
@@ -69,6 +76,11 @@ impl ForeignCheck {
                 ForeignShape::Array(e) => {
                     out.push('a');
                     out.push_str(&e.descriptor());
+                }
+                ForeignShape::Map(k, v) => {
+                    out.push('m');
+                    out.push_str(&k.descriptor());
+                    out.push_str(&v.descriptor());
                 }
                 ForeignShape::Union(alts) => {
                     out.push('(');
@@ -174,6 +186,7 @@ pub(crate) fn foreign(t: &Type, addon: &str) -> Type {
         }
         Type::Optional(inner) => Type::optional(foreign(inner, addon)),
         Type::Array(inner) => Type::Array(Box::new(foreign(inner, addon))),
+        Type::Map(k, v) => Type::Map(k.clone(), Box::new(foreign(v, addon))),
         Type::Union(ts) => Type::union(ts.iter().map(|t| foreign(t, addon)).collect()),
         _ => t.clone(),
     }
@@ -216,6 +229,29 @@ pub(crate) fn check_of(t: &Type) -> Result<ForeignCheck, String> {
                 shape(&inner, optional)?
             }
             Type::Array(e) => ForeignShape::Array(Box::new(check_of(&e)?)),
+            Type::Map(k, v) => {
+                let key = check_of(&k)?;
+                let keyed = |s: &ForeignShape| {
+                    matches!(
+                        s,
+                        ForeignShape::Number
+                            | ForeignShape::String
+                            | ForeignShape::StringLiteral(_)
+                            | ForeignShape::NumberLiteral(_)
+                    )
+                };
+                let fits = match &key.shape {
+                    ForeignShape::Union(alts) => alts.iter().all(keyed),
+                    s => keyed(s),
+                };
+                if !fits || key.optional {
+                    return Err(format!(
+                        "`{}` cannot cross from another addon: a map's keys are numbers or strings",
+                        Type::Map(k.clone(), v.clone())
+                    ));
+                }
+                ForeignShape::Map(Box::new(key), Box::new(check_of(&v)?))
+            }
             Type::Union(ts) => {
                 let mut alts = Vec::new();
                 for t in ts {
@@ -236,7 +272,7 @@ pub(crate) fn check_of(t: &Type) -> Result<ForeignCheck, String> {
             }
             other => {
                 return Err(format!(
-                    "`{}` cannot cross from another addon: declare numbers, strings, booleans, literals, arrays, `{{ ... }}` tables, functions or `unknown`",
+                    "`{}` cannot cross from another addon: declare numbers, strings, booleans, literals, arrays, maps, `{{ ... }}` tables, functions or `unknown`",
                     other
                 ));
             }
@@ -277,6 +313,10 @@ fn validate(t: &Type, out: &mut Vec<String>, depth: usize) {
             }
         }
         Type::Optional(inner) | Type::Array(inner) => validate(&inner, out, depth + 1),
+        Type::Map(k, v) => {
+            validate(&k, out, depth + 1);
+            validate(&v, out, depth + 1);
+        }
         Type::Union(ts) => {
             for t in ts {
                 validate(&t, out, depth + 1);
@@ -343,6 +383,32 @@ impl Ctx<'_> {
         self.predeclare_aliases(types);
         for t in types {
             self.stmt(t);
+        }
+        // Each declared type is importable as its foreign view, so Selu code
+        // can name it (`import { Quest } from addon "Name"`) without ever
+        // turning the other addon's values into a Selu type of that shape.
+        for t in types {
+            let StmtKind::TypeDecl(d) = &t.kind else {
+                continue;
+            };
+            // A global of the same name keeps the name for its value.
+            if !d.params.is_empty() || globals.iter().any(|(g, _, _)| *g == d.name) {
+                continue;
+            }
+            let named = selu_syntax::TypeExpr {
+                kind: selu_syntax::TypeExprKind::Named {
+                    name: d.name.clone(),
+                    args: vec![],
+                },
+                span: d.name_span.clone(),
+            };
+            let declared = self.alias_annotation(&named);
+            if format!("{declared:?}").contains("Error") || check_of(&declared).is_err() {
+                continue;
+            }
+            let e = self.module.exports.entry(d.name.clone()).or_default();
+            e.has_value = false;
+            e.foreign_type = Some(foreign(&declared, name));
         }
         for (global, span, ty) in globals {
             // A Selu addon's published values are no globals.
@@ -760,6 +826,11 @@ pub(crate) fn type_text(t: &Type, depth: usize) -> Result<String, String> {
         Type::BooleanLiteral(b) => b.to_string(),
         Type::Optional(inner) => format!("{}?", wrapped(&inner)?),
         Type::Array(inner) => format!("{}[]", wrapped(&inner)?),
+        Type::Map(k, v) => format!(
+            "Map<{}, {}>",
+            type_text(&k, depth + 1)?,
+            type_text(&v, depth + 1)?
+        ),
         Type::Union(ts) => ts
             .iter()
             .map(wrapped)

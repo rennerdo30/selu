@@ -930,3 +930,80 @@ entry = { name = "IsOwned", type = "Function", arguments = [{ name = "frame", ty
 evidence = "source"
 note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_FrameXML/SecureTemplates.lua:557 SECURE_ACTIONS.click reads a frame from the \"clickbutton\" attribute and clicks it; Blizzard also stores booleans and numbers (Blizzard_ActionBar/Shared/ActionButton.lua:452 \"checkselfcast\" true). The value a frame attribute holds: a string, number, boolean or frame."
 entry = { name = "SeluAttributeValue", attributes = { SeluUnion = ["cstring", "number", "bool", "Frame"] } }
+
+# Extraction 23: quest frame, loot, merchant cost, trainer and profession reads (M6)
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/TBC/QuestInfo.lua:162 Blizzard reads `GetQuestText()` as the open quest's description text. Not in the generated documentation."
+entry = { name = "GetQuestText", params = [], evidence = "source", signature = { name = "GetQuestText", type = "Function", arguments = [], returns = [{ name = "text", type = "string", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/QuestInfo.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/TBC/QuestInfo.lua:333 Blizzard reads `GetObjectiveText()` as the open quest's objective text. Not in the generated documentation."
+entry = { name = "GetObjectiveText", params = [], evidence = "source", signature = { name = "GetObjectiveText", type = "Function", arguments = [], returns = [{ name = "text", type = "string", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/QuestInfo.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/Wrath/QuestInfo.lua:491 Blizzard reads `GetRewardXP()` as the open quest's experience reward. Not in the generated documentation."
+entry = { name = "GetRewardXP", params = [], evidence = "source", signature = { name = "GetRewardXP", type = "Function", arguments = [], returns = [{ name = "xp", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Wrath/QuestInfo.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/Classic/QuestFrame.lua:511 Blizzard reads `GetRewardMoney()` as the open quest's money reward in copper. Not in the generated documentation."
+entry = { name = "GetRewardMoney", params = [], evidence = "source", signature = { name = "GetRewardMoney", type = "Function", arguments = [], returns = [{ name = "money", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/QuestFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/Classic/QuestFrame.lua:509 Blizzard reads `GetNumQuestRewards()` as the number of item rewards of the open quest. Not in the generated documentation."
+entry = { name = "GetNumQuestRewards", params = [], evidence = "source", signature = { name = "GetNumQuestRewards", type = "Function", arguments = [], returns = [{ name = "numRewards", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/QuestFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/Classic/QuestFrame.lua:321 Blizzard reads `GetNumAvailableQuests()` as the quests the open quest greeting offers. Not in the generated documentation."
+entry = { name = "GetNumAvailableQuests", params = [], evidence = "source", signature = { name = "GetNumAvailableQuests", type = "Function", arguments = [], returns = [{ name = "numQuests", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/QuestFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/Classic/QuestFrame.lua:320 Blizzard reads `GetNumActiveQuests()` as the player's quests the open quest greeting can take back. Not in the generated documentation."
+entry = { name = "GetNumActiveQuests", params = [], evidence = "source", signature = { name = "GetNumActiveQuests", type = "Function", arguments = [], returns = [{ name = "numQuests", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/Classic/QuestFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/TBC/MerchantFrame.lua:166 Blizzard reads `GetMerchantNumItems()` as the open merchant's item count. Not in the generated documentation."
+entry = { name = "GetMerchantNumItems", params = [], evidence = "source", signature = { name = "GetMerchantNumItems", type = "Function", arguments = [], returns = [{ name = "numItems", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/MerchantFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/TBC/MerchantFrame.lua:390 Blizzard reads `GetMerchantItemCostInfo(index)` as the number of alternative costs of a merchant item. Not in the generated documentation."
+entry = { name = "GetMerchantItemCostInfo", params = ["index"], evidence = "source", signature = { name = "GetMerchantItemCostInfo", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }], returns = [{ name = "itemCount", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/MerchantFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_UIPanels_Game/TBC/MerchantFrame.lua:609 Blizzard reads `GetMerchantItemCostItem(index, costIndex)` as texture, amount, item link and currency name of one alternative cost. Not in the generated documentation."
+entry = { name = "GetMerchantItemCostItem", params = ["index", "costIndex"], evidence = "source", signature = { name = "GetMerchantItemCostItem", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }, { name = "costIndex", type = "number", attributes = { Nilable = false } }], returns = [{ name = "itemTexture", type = "fileID", attributes = { Nilable = true } }, { name = "itemValue", type = "number", attributes = { Nilable = true } }, { name = "itemLink", type = "string", attributes = { Nilable = true } }, { name = "currencyName", type = "string", attributes = { Nilable = true } }], attributes = { file = "Blizzard_UIPanels_Game/TBC/MerchantFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_TrainerUI/Blizzard_TrainerUI.lua:165 Blizzard reads `GetNumTrainerServices()` as the open trainer's service count. Not in the generated documentation."
+entry = { name = "GetNumTrainerServices", params = [], evidence = "source", signature = { name = "GetNumTrainerServices", type = "Function", arguments = [], returns = [{ name = "numServices", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_TrainerUI/Blizzard_TrainerUI.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_TrainerUI/Blizzard_TrainerUI.lua:429 Blizzard reads `GetTrainerServiceCost(index)` as the money cost and whether it is a profession. Not in the generated documentation."
+entry = { name = "GetTrainerServiceCost", params = ["index"], evidence = "source", signature = { name = "GetTrainerServiceCost", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }], returns = [{ name = "moneyCost", type = "number", attributes = { Nilable = true } }, { name = "isProfession", type = "bool", attributes = { Nilable = true } }], attributes = { file = "Blizzard_TrainerUI/Blizzard_TrainerUI.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_TrainerUI/Blizzard_TrainerUI.lua:407 Blizzard reads `GetTrainerServiceNumAbilityReq(index)` as the number of ability requirements. Not in the generated documentation."
+entry = { name = "GetTrainerServiceNumAbilityReq", params = ["index"], evidence = "source", signature = { name = "GetTrainerServiceNumAbilityReq", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }], returns = [{ name = "numRequirements", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_TrainerUI/Blizzard_TrainerUI.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_AddOnList/AddonList.lua:604 Blizzard calls `ReloadUI()` to reload the interface. Not in the generated documentation."
+entry = { name = "ReloadUI", params = [], evidence = "source", signature = { name = "ReloadUI", type = "Function", arguments = [], returns = [], attributes = { file = "Blizzard_AddOnList/AddonList.lua" } } }
+
+# Extraction 24: Lua 5.1 string.byte (M6)
+[[functions]]
+evidence = "documented"
+note = "Lua 5.1 Reference Manual 5.4 string.byte; one position, so one optional code (nil past the end); fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "string.byte", "params" = ["s", "i"], "evidence" = "documented", "signature" = { "name" = "string.byte", "type" = "Function", "arguments" = [{ "name" = "s", "type" = "string" }, { "name" = "i", "type" = "number", "attributes" = { "Optional" = true } }], "returns" = [{ "name" = "code", "type" = "number", "attributes" = { "Optional" = true } }] } }

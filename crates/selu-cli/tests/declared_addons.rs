@@ -156,6 +156,152 @@ if (lib != null) { lib.version = 5; }"#)],
     assert!(String::from_utf8_lossy(&out.stderr).contains("SELU0710"), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
+#[test]
+fn maps_and_arrays_cross_as_checked_copies() {
+    let declaration = r#"
+addon "FakeLib" {
+    type Spot = { x: number; y: number };
+    global FakeLib: {
+        Spawns: (id: number) => Map<number, number[][]>;
+        Names: () => Map<string, string>;
+        Ids: () => number[];
+        Bad: () => Map<number, string>;
+        Raising: () => number[];
+        Points: () => Map<number, Spot>;
+    };
+}
+"#;
+    let main = r#"
+import { FakeLib } from addon "FakeLib";
+on PLAYER_LOGIN() {
+    const lib = FakeLib;
+    if (lib == null) { return; }
+    const spawns = lib.Spawns(1);
+    if (spawns != null) {
+        const keys: number[] = [];
+        for (const [area, list] of spawns) { keys.push(area * 100 + list.length); }
+        keys.sort();
+        print(keys.join(","));
+        const first = spawns.get(12);
+        if (first != null) { print(first[0][0]); }
+        // A copy: writing it never reaches the other addon's table.
+        spawns.set(99, []);
+    }
+    print(lib.Spawns(2) == null);
+    const names = lib.Names();
+    if (names != null) { print(names.get("a") ?? "?"); print(names.count()); }
+    const ids = lib.Ids();
+    if (ids != null) { ids.push(4); print(ids.length); }
+    print(lib.Bad() == null);
+    const raising = lib.Raising();
+    print(raising != null ? raising.length : -1);
+    const points = lib.Points();
+    if (points != null) {
+        const p = points.get(5);
+        if (p != null) { print(p.x ?? -1); print(p.y ?? -1); }
+    }
+}
+"#;
+    let setup = "C_AddOns = C_AddOns or {}; C_AddOns.IsAddOnLoaded = function(name) return name == 'FakeLib' end
+local spawns = { [12] = { { 1, 2 }, { 3, 4 } }, [7] = { { 5, 6 } } }
+local ids = { 1, 2, 3 }
+FakeLib = {
+  Spawns = function(id) if id == 1 then return spawns end return { [1] = { { 'x', 2 } } } end,
+  Names = function() return { a = 'A', b = 'B' } end,
+  Ids = function() return ids end,
+  Bad = function() return { [1] = 'one', two = 'two' } end,
+  Raising = function() return setmetatable({ 1, 2 }, { __index = function() error('boom') end }) end,
+  Points = function() return { [5] = { x = 0.5, y = 'north' } } end,
+}
+function FakeLibProbe() return spawns[99] == nil and #ids == 3 end";
+    let (dir, output) = build("maps", &[("FakeLib.selu", declaration)], &[("main.selu", main)]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let dist = dir.join("dist/Consumer");
+    let toc = std::fs::read_to_string(dist.join("Consumer.toc")).unwrap();
+    let files: Vec<_> = toc
+        .lines()
+        .filter(|s| s.ends_with(".lua"))
+        .map(|n| (n.to_owned(), std::fs::read_to_string(dist.join(n)).unwrap()))
+        .collect();
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval(setup).unwrap();
+    sim.load_addon("Consumer", &files).unwrap_or_else(|e| panic!("{e}\n{files:#?}"));
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    sim.eval("print(FakeLibProbe())").unwrap();
+    let prints = sim.prints();
+    let values: Vec<_> = prints.iter().filter(|p| !p.contains("it is ignored")).cloned().collect();
+    // Keys 7 (one spot) and 12 (two); the first coordinate; a wrong element
+    // makes the whole map null; a string map; the copy grows, the source not;
+    // a string key in a number map is null; a table whose __index raises is
+    // copied from its own elements, never raising; a table value stays
+    // foreign with checked fields (y is wrong).
+    assert_eq!(
+        values,
+        ["701,1202", "1", "true", "A", "2", "4", "true", "2", "0.5", "-1", "true"],
+        "{prints:#?}"
+    );
+    // Only number or string keys.
+    let (_, out) = build(
+        "mapkeys",
+        &[("FakeLib.selu", r#"addon "FakeLib" { global FakeLib: { M: () => Map<boolean, number> }; }"#)],
+        &[("main.selu", r#"import { FakeLib } from addon "FakeLib"; print(FakeLib != null);"#)],
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SELU0711"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn declared_types_are_importable_and_stay_foreign() {
+    let declaration = r#"
+addon "FakeLib" {
+    type Entry = { name: string; level?: number };
+    global FakeLib: { Lookup: (id: number) => Entry?; All: () => Entry[] };
+}
+"#;
+    let main = r#"
+import { FakeLib, Entry } from addon "FakeLib";
+function label(entry: Entry): string { return `${entry.name ?? "?"}/${entry.level ?? 0}`; }
+on PLAYER_LOGIN() {
+    const lib = FakeLib;
+    if (lib == null) { return; }
+    const one = lib.Lookup(1);
+    if (one != null) { print(label(one)); }
+    const all = lib.All();
+    if (all != null) { for (const e of all) { print(label(e)); } }
+}
+"#;
+    let setup = "C_AddOns = C_AddOns or {}; C_AddOns.IsAddOnLoaded = function(name) return name == 'FakeLib' end
+FakeLib = {
+  Lookup = function() return { name = 'One', level = 3 } end,
+  All = function() return { { name = 'A' }, { name = 5, level = 2 } } end,
+}";
+    let (dir, output) = build("types", &[("FakeLib.selu", declaration)], &[("main.selu", main)]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let dist = dir.join("dist/Consumer");
+    let toc = std::fs::read_to_string(dist.join("Consumer.toc")).unwrap();
+    let files: Vec<_> = toc
+        .lines()
+        .filter(|s| s.ends_with(".lua"))
+        .map(|n| (n.to_owned(), std::fs::read_to_string(dist.join(n)).unwrap()))
+        .collect();
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval(setup).unwrap();
+    sim.load_addon("Consumer", &files).unwrap_or_else(|e| panic!("{e}\n{files:#?}"));
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    let values: Vec<_> = sim.prints().into_iter().filter(|p| !p.contains("it is ignored")).collect();
+    // Field reads through the imported type stay checked: a number name is null.
+    assert_eq!(values, ["One/3", "A/0", "?/2"]);
+    // The other addon's value never becomes a Selu type of the same shape.
+    let (_, out) = build(
+        "typesplain",
+        &[("FakeLib.selu", declaration)],
+        &[("main.selu", r#"import { FakeLib } from addon "FakeLib";
+type Plain = { name: string; level?: number };
+const lib = FakeLib;
+if (lib != null) { const e = lib.Lookup(1); if (e != null) { const p: Plain = e; print(p.name); } }"#)],
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SELU03"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
 // ---- Selu addons using each other (level 4) -------------------------------
 
 fn project(dir: &Path, name: &str, toml_extra: &str, files: &[(&str, &str)]) -> std::process::Output {

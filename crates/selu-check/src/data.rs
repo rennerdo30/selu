@@ -399,6 +399,23 @@ impl Ctx<'_> {
         } else if crate::game_iterator(&t).is_none() {
             t = crate::shape_of(&self.check_tuple_value(iter, iter_type));
         }
+        // A union of arrays iterates as one array of either element:
+        // `for (x of list)` with `list: A[] | B[]` binds `x: A | B`.
+        if let Type::Union(members) = &t {
+            let elements: Option<Vec<Type>> = members
+                .iter()
+                .map(|m| match crate::shape_of(m) {
+                    Type::Array(e) => Some(*e),
+                    _ => None,
+                })
+                .collect();
+            if let Some(elements) = elements
+                && !elements.is_empty()
+            {
+                t = Type::Array(Box::new(Type::union(elements)));
+                self.types.set(iter.id, t.clone());
+            }
+        }
         if self.pattern_for_of(s, &t) {
             return;
         }

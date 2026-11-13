@@ -15,6 +15,9 @@ pub struct ModuleExport {
     pub saved: bool,
     /// Class signatures reachable through this export, keyed by module and declaration.
     pub classes: std::sync::Arc<std::collections::HashMap<String, crate::ClassInfo>>,
+    /// A type declared for another addon: its foreign view, imported as a
+    /// fixed type (it is never re-resolved, so it stays foreign).
+    pub foreign_type: Option<Type>,
 }
 impl Default for ModuleExport {
     fn default() -> Self {
@@ -26,6 +29,7 @@ impl Default for ModuleExport {
             mutable: false,
             classes: Default::default(),
             saved: false,
+            foreign_type: None,
         }
     }
 }
