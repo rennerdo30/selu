@@ -1247,3 +1247,9 @@ name = "LE_PARTY_CATEGORY_INSTANCE"
 type = "number"
 evidence = "source"
 note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_Channels/VoiceUtils.lua:116 Blizzard uses the engine constant `LE_PARTY_CATEGORY_INSTANCE` as a party category number; the value is the client own, not a literal."
+
+# Extraction 29: constants tables under the names the client publishes (M8)
+[[tables]]
+evidence = "source"
+note = "wow-ui-source e5d9b3a22c3f0f6f41ebac0e454f4969594261cf Interface/AddOns/Blizzard_APIDocumentationGenerated/QuestConstantsDocumentation.lua:145 documents the Constants table `QuestWatchConsts_Classic`; the client publishes it as `Constants.QuestWatchConsts`, which Blizzard's Lua reads (Blizzard_UIPanels_Game/Wrath/QuestMapFrame.lua:207). Same fields and values."
+entry = { name = "QuestWatchConsts", type = "Constants", fields = [{ name = "MAX_QUEST_WATCHES", type = "number", attributes = { Value = 25 } }, { name = "MAX_WORLD_QUEST_WATCHES", type = "number", attributes = { Value = 1 } }, { name = "MAX_WORLD_QUEST_HARD_WATCHES", type = "number", attributes = { Value = 5 } }] }

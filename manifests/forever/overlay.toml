@@ -1470,3 +1470,24 @@ name = "LE_PARTY_CATEGORY_INSTANCE"
 type = "number"
 evidence = "source"
 note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_Channels/Classic/VoiceUtils.lua:119 Blizzard uses the engine constant `LE_PARTY_CATEGORY_INSTANCE` as a party category number; the value is the client own, not a literal."
+
+# Extraction 29: constants tables under the names the client publishes (M8)
+[[tables]]
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_APIDocumentationGenerated/LootConstants_MainlineDocumentation.lua:39 documents the Constants table `LootConsts_Camelot`; the client publishes it as `Constants.LootConsts`, which Blizzard's Lua reads (Blizzard_UIPanels_Game/Mainline/GroupLootFrame.lua:988). Same fields and values."
+entry = { name = "LootConsts", type = "Constants", fields = [{ name = "MasterLootQualityThreshold", type = "number", attributes = { Value = 4 } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_APIDocumentationGenerated/PetConstantsDocumentation.lua:44 documents the Constants table `PetConsts_Camelot`; the client publishes it as `Constants.PetConsts`, which Blizzard's Lua reads (Blizzard_StableUI/Camelot/Blizzard_StableUI.lua:216). Same fields and values."
+entry = { name = "PetConsts", type = "Constants", fields = [{ name = "PET_XP_LEVEL_MODIFIER", type = "number", attributes = { Value = 0.25 } }, { name = "NUM_PET_SLOTS_THAT_NEED_LEARNED_SPELL", type = "number", attributes = { Value = 1 } }, { name = "MAX_STABLE_SLOTS", type = "number", attributes = { Value = 2 } }, { name = "DEFAULT_PET_PERSONALITY", type = "number", attributes = { Value = 1 } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_APIDocumentationGenerated/QuestConstantsDocumentation.lua:156 documents the Constants table `QuestLogConstsMainlineCamelot`; the client publishes it as `Constants.QuestLogConsts`, which Blizzard's Lua reads (Blizzard_FrameXMLBase/Constants.lua:464). Same fields and values."
+entry = { name = "QuestLogConsts", type = "Constants", fields = [{ name = "MAXIMUM_NUM_QUESTS_LOG_CAN_ACCEPT", type = "number", attributes = { Value = 40 } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_ChatFrameBase/Shared/SlashCommands.lua:1164 Blizzard's Lua reads the engine table `Constants.CharacterNameSeparatorConsts` (CHARACTERNAME_REALMNAME_SEPARATOR, CHARACTERNAME_SURNAME_SEPARATOR), separators it joins and splits character names with; no documentation declares it. Typed as strings, the values stay the client's."
+entry = { name = "CharacterNameSeparatorConsts", type = "Constants", fields = [{ name = "CHARACTERNAME_REALMNAME_SEPARATOR", type = "cstring" }, { name = "CHARACTERNAME_SURNAME_SEPARATOR", type = "cstring" }] }

@@ -148,6 +148,13 @@ const CONTRACTS: &[(u32, &str)] = &[
         28,
         "2f46391ae21132b19ff2ddb858ee523270306fbc877253e6e75eafe5c61fa8b7",
     ),
+    // Constants tables under the names the client publishes: flavour-suffixed
+    // documentation tables under their base name, and the undocumented
+    // character name separators (M8).
+    (
+        29,
+        "17827de02891603adf3ead318d447f1c97701244bf1a3d91700978f48bad022f",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

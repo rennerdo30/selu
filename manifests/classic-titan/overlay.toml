@@ -1247,3 +1247,5 @@ name = "LE_PARTY_CATEGORY_INSTANCE"
 type = "number"
 evidence = "source"
 note = "wow-ui-source 7014c309a25338905c41dc3799a93f9719ebb533 Interface/AddOns/Blizzard_Channels/VoiceUtils.lua:116 Blizzard uses the engine constant `LE_PARTY_CATEGORY_INSTANCE` as a party category number; the value is the client own, not a literal."
+
+# Extraction 29: constants tables under the names the client publishes (M8)
