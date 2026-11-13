@@ -753,3 +753,22 @@ fn an_object_literal_fallback_takes_the_left_type() {
         ["0\t-", "3\t-"]
     );
 }
+
+#[test]
+fn a_conditional_with_null_fits_an_optional_union() {
+    assert_eq!(
+        run(r#"
+        type Value = string | number | boolean;
+        function take(get: () => Value?) { print(get()); }
+        let n: number? = 3;
+        function direct(): Value? { return n != null ? n : null; }
+        take(() => n != null ? n : null);
+        print(direct());
+        n = null;
+        take(() => n != null ? n : null);
+        const flag: boolean = false;
+        take(() => flag ? "on" : null);
+    "#),
+        ["3", "3", "nil", "nil"]
+    );
+}

@@ -13,13 +13,17 @@ by one. Any assignment to the binding anywhere in the body disables this
 optimization. Fractional, dynamic and other headers use while; dynamic
 bounds are evaluated each turn. No bound invariance is guessed across calls.
 
-Direct captures of counted-loop header bindings are rejected with SELU0343,
-for both numeric and fallback loops. This is the acceptance-item-8 error
-option: until per-turn environment copying is implemented, silently sharing
-a fallback binding would differ from TypeScript. Detection is conservative
-by spelling, so a same-named shadow inside a nested function can also be
-rejected. Copy to a body-local variable and capture that variable instead.
-This restriction covers function declarations and function expressions.
+A `let` header binding gets one binding per turn, as in TypeScript. A
+numeric for already has one: Lua makes a fresh loop variable each turn. When
+a fallback loop's body, condition or update names the binding inside a
+function, method, class or event handler, the loop takes a per-turn form.
+Each turn declares a fresh local copied from a carrier. From the second turn
+on, the update runs on that fresh copy, then the condition, then the body.
+The turn's final value goes back to the carrier. So a closure keeps the
+value of its own turn, and a closure's later write does not reach the next
+turn. Loops without such a capture keep the plain while form. Detection
+goes by spelling, so a nested function's own same-named variable only costs
+the per-turn form.
 
 ## Helper for package B
 
@@ -75,11 +79,6 @@ legal Lua 5.1. Continue wrappers stay inside this body scope.
 
 For-of still reports SELU0390 until B implements it; it must never reach the
 control-flow checker's unreachable arm.
-
-The capture restriction remains blanket for numeric and fallback counted
-loops. Event handlers count as closures too, and SELU0343 points at the
-first captured identifier. The conservative spelling-based shadowing
-restriction described above remains in effect.
 
 Updates receive the condition-true narrowings in a separate scope. A fact is
 removed if any body subtree writes that name, contains a call, or contains

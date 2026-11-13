@@ -125,8 +125,10 @@ impl Ctx<'_> {
     /// Package B can use this for callbacks: records the expression's type.
     pub(crate) fn value_expected(&mut self, e: &Expr, expected: Option<&Type>) -> Type {
         let shaped = expected.map(|t| self.alias_shape(t.clone()));
+        // A conditional keeps the null: each branch strips it for itself, so
+        // `ok ? value : null` fits an optional union.
         let shaped = shaped.map(|t| {
-            if !matches!(e.kind, ExprKind::Null) {
+            if !matches!(e.kind, ExprKind::Null | ExprKind::Conditional { .. }) {
                 self.alias_shape(t.non_null())
             } else {
                 t

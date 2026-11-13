@@ -115,6 +115,73 @@ impl Lowerer<'_> {
                 if let Some(i) = init {
                     self.stmt(i, false, &mut outer);
                 }
+                // A `let` that a closure captures gets one binding per turn,
+                // as in JavaScript: each turn starts with a fresh local
+                // copied from the carrier, the update runs on that fresh
+                // copy (from the second turn on), and the turn's final value
+                // goes back to the carrier.
+                if let Some(init) = init
+                    && let StmtKind::VarDecl {
+                        name: var,
+                        is_const: false,
+                        ..
+                    } = &init.kind
+                    && (body.iter().any(|s| captures_stmt(s, var, false))
+                        || cond
+                            .iter()
+                            .chain(update.iter())
+                            .any(|e| captures_expr(e, var, false)))
+                {
+                    let carrier = self.temp();
+                    outer.push(stmt(
+                        LStmtKind::Local(vec![carrier.clone()], vec![name(var)]),
+                        sp,
+                    ));
+                    let first = update.is_some().then(|| self.temp());
+                    if let Some(f) = &first {
+                        outer.push(stmt(
+                            LStmtKind::Local(vec![f.clone()], vec![LExpr::Bool(true)]),
+                            sp,
+                        ));
+                    }
+                    let mut b = vec![stmt(
+                        LStmtKind::Local(vec![var.clone()], vec![name(&carrier)]),
+                        sp,
+                    )];
+                    if let (Some(f), Some(u)) = (&first, update) {
+                        let mut step = Vec::new();
+                        self.expr_stmt(u, sp, &mut step);
+                        b.push(stmt(
+                            LStmtKind::If(
+                                vec![(
+                                    name(f),
+                                    vec![stmt(
+                                        LStmtKind::Assign(vec![name(f)], vec![LExpr::Bool(false)]),
+                                        sp,
+                                    )],
+                                )],
+                                Some(step),
+                            ),
+                            sp,
+                        ));
+                    }
+                    if let Some(c) = cond {
+                        let c = self.expr(c, &mut b);
+                        b.push(stmt(
+                            LStmtKind::If(vec![(not(c), vec![stmt(LStmtKind::Break, sp)])], None),
+                            sp,
+                        ));
+                    }
+                    let body = self.loop_body(body, sp);
+                    b.push(stmt(LStmtKind::Do(body), sp));
+                    b.push(stmt(
+                        LStmtKind::Assign(vec![name(&carrier)], vec![name(var)]),
+                        sp,
+                    ));
+                    outer.push(stmt(LStmtKind::While(LExpr::Bool(true), b), sp));
+                    out.push(stmt(LStmtKind::Do(outer), sp));
+                    return;
+                }
                 let mut b = Vec::new();
                 if let Some(c) = cond {
                     let c = self.expr(c, &mut b);
@@ -257,6 +324,41 @@ impl Lowerer<'_> {
         pre.push(stmt(LStmtKind::If(vec![(c, a_pre)], Some(b_pre)), &e.span));
         name(&t)
     }
+}
+
+// Whether a function, method or event handler inside `s` names `var`. A
+// closure that declares its own `var` still counts; that only costs the
+// per-turn form, never correctness.
+fn captures_stmt(s: &Stmt, var: &str, inside: bool) -> bool {
+    let inside = inside
+        || matches!(
+            s.kind,
+            StmtKind::FuncDecl { .. } | StmtKind::OnHandler { .. } | StmtKind::Class(_)
+        );
+    let mut found = false;
+    visit::child_stmts_and_exprs(s, &mut |c| {
+        found = found
+            || match c {
+                visit::Child::Stmt(s) => captures_stmt(s, var, inside),
+                visit::Child::Expr(e) => captures_expr(e, var, inside),
+            };
+    });
+    found
+}
+fn captures_expr(e: &Expr, var: &str, inside: bool) -> bool {
+    if inside && matches!(&e.kind, ExprKind::Ident(n) if n == var) {
+        return true;
+    }
+    let inside = inside || matches!(e.kind, ExprKind::Function { .. });
+    let mut found = false;
+    visit::child_exprs_and_stmts(e, &mut |c| {
+        found = found
+            || match c {
+                visit::Child::Stmt(s) => captures_stmt(s, var, inside),
+                visit::Child::Expr(e) => captures_expr(e, var, inside),
+            };
+    });
+    found
 }
 
 fn transfers(s: &Stmt, continues: &mut bool, breaks: &mut bool) {

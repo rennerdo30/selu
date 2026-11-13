@@ -1,6 +1,6 @@
 //! Control-flow checking, including lexical loop boundaries.
 use crate::{Ctx, Scope, Type, err};
-use selu_syntax::{Expr, ExprKind, Stmt, StmtKind, visit};
+use selu_syntax::{Expr, ExprKind, Stmt, StmtKind};
 
 #[derive(Clone)]
 pub(crate) struct LoopCtx;
@@ -68,13 +68,6 @@ impl Ctx<'_> {
                 }
                 self.restore_flow(entry);
                 self.loops.pop();
-                if let Some(init) = init
-                    && let StmtKind::VarDecl { name, .. } = &init.kind
-                {
-                    for stmt in body {
-                        reject_capture(stmt, name, self.out);
-                    }
-                }
                 self.close_scope();
             }
             _ => unreachable!(),
@@ -163,76 +156,4 @@ impl Ctx<'_> {
             _ => unreachable!(),
         }
     }
-}
-
-// Until package C can cooperate in per-turn environment copying, reject
-// captures rather than silently giving fallback loops Lua's shared binding.
-fn reject_capture(s: &Stmt, name: &str, out: &mut Vec<selu_diagnostics::Diagnostic>) {
-    if matches!(
-        s.kind,
-        StmtKind::FuncDecl { .. } | StmtKind::OnHandler { .. }
-    ) {
-        if let Some(span) = captured_stmt(s, name) {
-            out.push(
-                err(
-                    "SELU0343",
-                    "capturing a counted loop binding is not supported yet",
-                    &span,
-                )
-                .with_help("copy the value into a body-local variable and capture that variable"),
-            );
-        }
-        return;
-    }
-    visit::child_stmts_and_exprs(s, &mut |c| match c {
-        visit::Child::Stmt(s) => reject_capture(s, name, out),
-        visit::Child::Expr(e) => reject_expr_capture(e, name, out),
-    });
-}
-fn reject_expr_capture(e: &Expr, name: &str, out: &mut Vec<selu_diagnostics::Diagnostic>) {
-    if matches!(e.kind, ExprKind::Function { .. }) {
-        if let Some(span) = captured_expr(e, name) {
-            out.push(
-                err(
-                    "SELU0343",
-                    "capturing a counted loop binding is not supported yet",
-                    &span,
-                )
-                .with_help("copy the value into a body-local variable and capture that variable"),
-            );
-        }
-        return;
-    }
-    visit::child_exprs_and_stmts(e, &mut |c| match c {
-        visit::Child::Stmt(s) => reject_capture(s, name, out),
-        visit::Child::Expr(e) => reject_expr_capture(e, name, out),
-    });
-}
-
-fn captured_stmt(s: &Stmt, name: &str) -> Option<selu_diagnostics::Span> {
-    let mut found = None;
-    visit::child_stmts_and_exprs(s, &mut |c| {
-        if found.is_none() {
-            found = match c {
-                visit::Child::Stmt(s) => captured_stmt(s, name),
-                visit::Child::Expr(e) => captured_expr(e, name),
-            };
-        }
-    });
-    found
-}
-fn captured_expr(e: &Expr, name: &str) -> Option<selu_diagnostics::Span> {
-    if matches!(&e.kind, ExprKind::Ident(n) if n == name) {
-        return Some(e.span.clone());
-    }
-    let mut found = None;
-    visit::child_exprs_and_stmts(e, &mut |c| {
-        if found.is_none() {
-            found = match c {
-                visit::Child::Stmt(s) => captured_stmt(s, name),
-                visit::Child::Expr(e) => captured_expr(e, name),
-            };
-        }
-    });
-    found
 }

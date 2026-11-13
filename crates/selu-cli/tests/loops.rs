@@ -45,11 +45,28 @@ fn loop_errors() {
     assert!(codes("const x = 1; x++;").contains(&"SELU0311".into()));
 }
 #[test]
-fn closures_rejected_until_exact() {
-    assert!(
-        codes("for (let i = 0; i < 3; i++) { function capture() { print(i); } }")
-            .contains(&"SELU0343".into())
-    );
+fn each_turn_has_its_own_binding() {
+    // Numeric and fallback forms: every closure keeps its own turn's value.
+    let src = "on PLAYER_LOGIN() { const fs: (() => number)[] = []; for (let i = 0; i < 3; i++) { fs.push(() => i); } let limit = 3; for (let j = 0; j < limit; j++) { fs.push(() => j * 10); } for (const f of fs) { print(f()); } }";
+    assert_eq!(run(src), ["0", "1", "2", "0", "10", "20"]);
+}
+#[test]
+fn per_turn_writes_and_continue() {
+    // A body write carries into the next turn; a closure's write after its
+    // turn does not; continue still runs the update.
+    let src = "on PLAYER_LOGIN() { let limit = 6; const bumps: (() => void)[] = []; const reads: (() => number)[] = []; for (let i = 0; i < limit; i++) { if (i == 1) { continue; } bumps.push(() => { i += 100; }); reads.push(() => i); i++; } for (const b of bumps) { b(); } for (const r of reads) { print(r()); } }";
+    assert_eq!(run(src), ["101", "103", "105"]);
+}
+#[test]
+fn per_turn_condition_and_update_closures() {
+    // The condition and the update run on the turn's own binding.
+    let src = "const seen: (() => number)[] = []; function note(f: () => number): boolean { seen.push(f); return true; } on PLAYER_LOGIN() { let limit = 3; let k = 0; for (let i = 0; note(() => i) && i < limit; i = i + 1) { k++; } print(seen.length, k); print(seen[0](), seen[3]()); }";
+    assert_eq!(run(src), ["4	3", "0	3"]);
+}
+#[test]
+fn breaks_and_returns_in_per_turn_loops() {
+    let src = "function find(limit: number): (() => number)? { for (let i = 0; i < limit; i++) { if (i == 2) { return () => i; } } return null; } on PLAYER_LOGIN() { const f = find(5); print(f != null ? f() : -1); let limit = 9; const fs: (() => number)[] = []; for (let i = 0; i < limit; i++) { fs.push(() => i); if (i == 1) { break; } } print(fs.length, fs[1]()); }";
+    assert_eq!(run(src), ["2", "2	1"]);
 }
 
 #[test]
@@ -143,10 +160,10 @@ fn compound_binary_diagnostics() {
     );
 }
 #[test]
-fn event_capture_is_rejected() {
+fn event_handlers_capture_their_turn() {
     assert!(
         codes("let limit = 3; for (let i = 0; i < limit; i++) { on PLAYER_LOGIN() { print(i); } }")
-            .contains(&"SELU0343".into())
+            .is_empty()
     );
 }
 #[test]
