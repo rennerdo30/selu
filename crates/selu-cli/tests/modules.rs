@@ -780,3 +780,16 @@ fn for_of_destructures_tuples_in_an_array() {
     );
     assert_eq!(prints, ["3\tab", "1\t2", "3\t-1"]);
 }
+
+#[test]
+fn a_generic_alias_is_its_own_instance_in_each_generic_function() {
+    // `Part<T>` inside `one` and inside `each` names two different `T`s.
+    let (prints, _) = run(
+        "generic-alias-slots",
+        &[(
+            "main.selu",
+            "type Part<T> = (n: number) => T?; function one<T>(n: number, read: Part<T>?): T? { return read != null ? read(n) : null; } function each<T>(n: number, reads: Part<T>[], use: (x: T) => void) { for (const read of reads) { const v = read(n); if (v != null) { use(v); } } } const text: Part<string> = (n) => `#${n}`; const none: Part<string> = (_n) => null; print(one(2, text) ?? \"-\"); each(3, [text, none, text], (s) => { print(s); });",
+        )],
+    );
+    assert_eq!(prints, ["#2", "#3", "#3"]);
+}

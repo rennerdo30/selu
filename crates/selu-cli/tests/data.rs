@@ -694,3 +694,62 @@ fn w3_union_array_reads_and_writes() {
     assert!(!codes("function write(xs: number[] | string[]) { xs[0] = 1; }").is_empty());
     assert!(!codes("function read(xs: number[] | boolean): number { return xs[0]; }").is_empty());
 }
+
+#[test]
+fn optional_calls_run_only_with_a_receiver() {
+    assert_eq!(
+        run(r#"
+        class Counter {
+            n = 0;
+            bump(by: number): number { this.n += by; return this.n; }
+            reset() { this.n = 0; }
+            pair(): [number, string] { return [this.n, "n"]; }
+        }
+        let calls = 0;
+        function counter(present: boolean): Counter? {
+            calls += 1;
+            return present ? new Counter() : null;
+        }
+        const some = counter(true);
+        const none = counter(false);
+        print(some?.bump(2), none?.bump(2));
+        some?.reset();
+        none?.reset();
+        print(some?.bump(5));
+        const [a, b] = some?.pair();
+        const [c, d] = none?.pair();
+        print(a, b, c, d);
+        // The receiver is evaluated once; the arguments only with a receiver.
+        let argued = 0;
+        function arg(): number { argued += 1; return 1; }
+        print(counter(true)?.bump(arg()), counter(false)?.bump(arg()), calls, argued);
+        const m: Map<string, number>? = new Map<string, number>();
+        m?.set("x", 3);
+        print(m?.get("x"));
+    "#),
+        ["2\tnil", "5", "5\tn\tnil\tnil", "1\tnil\t4\t1", "3"]
+    );
+}
+
+#[test]
+fn optional_call_results_may_be_null() {
+    // A result read from an optional call is optional itself.
+    let codes = codes(
+        "class C { f(): number { return 1; } } const c: C? = null; const n: number = c?.f();",
+    );
+    assert!(codes.contains(&"SELU0336".into()), "{codes:?}");
+}
+
+#[test]
+fn an_object_literal_fallback_takes_the_left_type() {
+    assert_eq!(
+        run(r#"
+        type Options = { size?: number; label?: string };
+        function use(options: Options) { print(options.size ?? 0, options.label ?? "-"); }
+        const given: Options? = null;
+        use(given ?? {});
+        use(given ?? { size: 3 });
+    "#),
+        ["0\t-", "3\t-"]
+    );
+}

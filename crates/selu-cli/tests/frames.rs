@@ -691,3 +691,21 @@ fn a_template_name_is_a_type_that_frames_must_carry() {
         assert!(d.has_errors(), "{src}: {:?}", d.diagnostics);
     }
 }
+
+#[test]
+fn generic_aliases_keep_template_types_apart() {
+    // `Get<KeyedShell>` and `Get<Frame>` are two instances of one alias; the
+    // template's identity must survive generic inference.
+    let m = keyed_manifest();
+    let src = r#"
+        type Get<T> = () => T?;
+        function one<T>(read: Get<T>): T? { return read(); }
+        function title(shell: KeyedShell?) { if (shell != null) { shell.TitleText.SetText("shell"); } }
+        const plain: Get<Frame> = () => null;
+        const shell: Get<KeyedShell> = () => MerchantFrame;
+        print(one(plain) == null);
+        title(one(shell));
+    "#;
+    let c = check(src, std::slice::from_ref(&m), true);
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+}

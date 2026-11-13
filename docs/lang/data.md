@@ -158,4 +158,15 @@ all specified data constructs are implemented.
 by position (`a` and `b` have the tuple's slot types); over an array of
 arrays each name is the element type or null.
 
-An empty array as the fallback of `??` takes its type from the left side: `const names = saved ?? [];`.
+An empty array or an object literal as the fallback of `??` takes its type from
+the left side: `const names = saved ?? [];`, `use(options ?? {})` for an
+`options` whose fields are all optional.
+
+`object?.method(args)` calls the method only when `object` is not null. The
+receiver is evaluated once, and the arguments are evaluated only when the call
+runs. A method without a result stays without one; any other result becomes
+nullable (`count?.bump(1)` is a `number?`). A method with several results can be
+destructured (`const [point, relativeTo] = region?.GetPoint(1);`, all null
+without a receiver) or read as one value (its first result, or null). The
+chain is not extended past the call: `a?.b.c()` reports that `a?.b` may be
+null, so check it first.

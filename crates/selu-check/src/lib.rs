@@ -1419,10 +1419,11 @@ impl Ctx<'_> {
             }
             "??" => {
                 let l = self.value(left);
-                // An empty array fallback takes its element type from the
-                // left side (`names ?? []`).
-                let empty_array = matches!(&right.kind, ExprKind::Array(items) if items.is_empty());
-                let r = if empty_array && l.is_optional() && !l.is_open() {
+                // An empty array or an object literal fallback takes its
+                // type from the left side (`names ?? []`, `options ?? {}`).
+                let contextual = matches!(&right.kind, ExprKind::Array(items) if items.is_empty())
+                    || matches!(&right.kind, ExprKind::Object(_));
+                let r = if contextual && l.is_optional() && !l.is_open() {
                     self.value_expected(right, Some(&l.non_null()))
                 } else {
                     self.value(right)
@@ -1593,6 +1594,9 @@ impl Ctx<'_> {
     }
 
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+        if let ExprKind::OptionalMember { object, name } = &callee.kind {
+            return self.optional_call(e, callee, object, name, args);
+        }
         if let ExprKind::Ident(name) = &callee.kind
             && self.test_intrinsic_error(name, &callee.span)
         {
@@ -1700,6 +1704,42 @@ impl Ctx<'_> {
             return Type::union(results);
         }
         self.call_signature(e, callee, args, &callee_type)
+    }
+    /// `object?.name(args)`: checked as `object.name(args)` on the non-null
+    /// receiver. The call runs only when the receiver is there, so its result
+    /// may be null (a method without a result stays without one).
+    fn optional_call(
+        &mut self,
+        e: &Expr,
+        callee: &Expr,
+        object: &Expr,
+        name: &str,
+        args: &[Expr],
+    ) -> Type {
+        let present = self.value(object).non_null();
+        if present == Type::Null {
+            for arg in args {
+                self.value(arg);
+            }
+            self.types.set(callee.id, Type::Null);
+            return Type::Null;
+        }
+        self.types.set(object.id, present);
+        let member = Expr {
+            string_offsets: None,
+            id: callee.id,
+            kind: ExprKind::Member {
+                object: Box::new(object.clone()),
+                name: name.to_string(),
+            },
+            span: callee.span.clone(),
+        };
+        match self.call(e, &member, args) {
+            t @ (Type::Void | Type::Error | Type::Untyped) => t,
+            // An API method without results.
+            Type::Tuple(ts) if ts.is_empty() => Type::Tuple(ts),
+            t => Type::optional(t),
+        }
     }
     fn call_signature(
         &mut self,

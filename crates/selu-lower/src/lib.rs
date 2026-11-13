@@ -639,6 +639,96 @@ impl Lowerer<'_> {
     }
 
     /// A temporary holding `value`, declared in `pre`.
+    /// `object?.name(args)`: the receiver is evaluated once; the call (and
+    /// its arguments) run only when it is not nil. Several results come back
+    /// through a function so that none is lost.
+    fn optional_call(&mut self, e: &Expr, callee: &Expr, args: &[Expr], pre: &mut LBlock) -> LExpr {
+        let ExprKind::OptionalMember {
+            object,
+            name: method,
+        } = &callee.kind
+        else {
+            unreachable!("an optional call has an optional member callee")
+        };
+        let value = self.expr(object, pre);
+        let receiver = self.hold(value, &object.span, pre);
+        let call = Expr {
+            string_offsets: None,
+            id: e.id,
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    string_offsets: None,
+                    id: callee.id,
+                    kind: ExprKind::Member {
+                        object: Box::new(Expr {
+                            string_offsets: None,
+                            id: object.id,
+                            kind: ExprKind::Ident(receiver.clone()),
+                            span: object.span.clone(),
+                        }),
+                        name: method.clone(),
+                    },
+                    span: callee.span.clone(),
+                }),
+                args: args.to_vec(),
+            },
+            span: e.span.clone(),
+        };
+        let present = bin(BinOp::Ne, name(&receiver), LExpr::Nil);
+        let mut body = Vec::new();
+        let v = self.expr(&call, &mut body);
+        let result = self.types.get(e.id).map(selu_check::shape_of);
+        match result {
+            // No result: a method of Selu's own or an API method.
+            Some(selu_check::Type::Void) | Some(selu_check::Type::Tuple(_)) if !matches!(&result, Some(selu_check::Type::Tuple(ts)) if !ts.is_empty()) =>
+            {
+                // A collection method may lower to statements alone
+                // (`map.set` stores into the table).
+                if matches!(v, LExpr::Call(..) | LExpr::Method(..)) {
+                    body.push(LStmt::new(LStmtKind::Call(v), &e.span));
+                }
+                pre.push(LStmt::new(
+                    LStmtKind::If(vec![(present, body)], None),
+                    &e.span,
+                ));
+                LExpr::Nil
+            }
+            Some(selu_check::Type::Optional(inner))
+                if matches!(selu_check::shape_of(&inner), selu_check::Type::Tuple(_)) =>
+            {
+                body.push(LStmt::new(LStmtKind::Return(vec![v]), &e.span));
+                let guarded = vec![LStmt::new(
+                    LStmtKind::If(vec![(present, body)], None),
+                    &e.span,
+                )];
+                LExpr::Call(
+                    Box::new(LExpr::Paren(Box::new(LExpr::Function(lua::LFunction {
+                        params: Vec::new(),
+                        vararg: false,
+                        body: guarded,
+                    })))),
+                    Vec::new(),
+                )
+            }
+            _ => {
+                let out = self.temp();
+                pre.push(LStmt::new(
+                    LStmtKind::Local(vec![out.clone()], Vec::new()),
+                    &e.span,
+                ));
+                body.push(LStmt::new(
+                    LStmtKind::Assign(vec![name(&out)], vec![v]),
+                    &e.span,
+                ));
+                pre.push(LStmt::new(
+                    LStmtKind::If(vec![(present, body)], None),
+                    &e.span,
+                ));
+                name(&out)
+            }
+        }
+    }
+
     pub(crate) fn hold(&mut self, value: LExpr, span: &Span, pre: &mut LBlock) -> String {
         let t = self.temp();
         pre.push(LStmt::new(
@@ -678,6 +768,11 @@ impl Lowerer<'_> {
                     key = bin(BinOp::Concat, key, self.expr(suffix, pre));
                 }
                 LExpr::Index(Box::new(name("_G")), Box::new(key))
+            }
+            ExprKind::Call { callee, args }
+                if matches!(callee.kind, ExprKind::OptionalMember { .. }) =>
+            {
+                self.optional_call(e, callee, args, pre)
             }
             ExprKind::Call { callee, args } => {
                 let v = self.restricted_call(callee, args, pre);

@@ -724,6 +724,24 @@ impl Ctx<'_> {
             self.types.set(e.id, first.clone());
             return first;
         }
+        // `object?.Method()` of a method with several results, used as one
+        // value: its first result, or null when the receiver was missing.
+        if let ExprKind::Call { callee, .. } = &e.kind
+            && matches!(callee.kind, ExprKind::OptionalMember { .. })
+            && matches!(
+                self.types.get(callee.id),
+                Some(Type::Function {
+                    multiple_results: true,
+                    ..
+                })
+            )
+            && let Type::Optional(inner) = &t
+            && let Type::Tuple(ts) = crate::shape_of(inner)
+        {
+            let first = Type::optional(ts.first().cloned().unwrap_or(Type::Null));
+            self.types.set(e.id, first.clone());
+            return first;
+        }
 
         let tuple_result = match &t {
             Type::Tuple(_) => true,

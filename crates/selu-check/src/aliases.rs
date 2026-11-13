@@ -660,9 +660,16 @@ pub(crate) fn declaration_key(d: &TypeDecl) -> String {
 pub(crate) fn identity_key(t: &Type) -> String {
     let parts = match t {
         Type::Named(_, s) => return s.key.clone(),
-        Type::StringLiteral(s) | Type::NumberLiteral(s) => vec![s.clone()],
+        // A generic function's type parameter is its own slot: `Part<T>` in
+        // one generic function is not `Part<T>` in another.
+        Type::StringLiteral(s) | Type::NumberLiteral(s) | Type::Opaque(s) => vec![s.clone()],
         Type::BooleanLiteral(b) => vec![b.to_string()],
-        Type::Class(n, ..) | Type::ClassObject(n) | Type::Widget(n, _) => vec![n.clone()],
+        Type::Class(n, ..) | Type::ClassObject(n) => vec![n.clone()],
+        // Template tags are part of a widget's identity (`Part<TabSystemTemplate>`
+        // is not `Part<Frame>`).
+        Type::Widget(n, tags) => std::iter::once(n.clone())
+            .chain(tags.iter().cloned())
+            .collect(),
         Type::Optional(t)
         | Type::SavedRepair(t)
         | Type::Secret(t)
