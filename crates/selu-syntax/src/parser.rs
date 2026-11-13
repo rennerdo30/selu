@@ -1,3 +1,4 @@
+use crate::ADDON_IMPORT_PREFIX;
 use crate::ast::*;
 use crate::lexer::{Tok, Token, lex};
 use selu_diagnostics::{Diagnostic, Span};
@@ -547,6 +548,10 @@ impl Parser {
             {
                 self.type_decl()?
             }
+            // `addon "Name" { ... }`: a declared other-addon API.
+            Tok::Ident(ref w) if w == "addon" && matches!(self.peek_at(1), Some(Tok::Str(_))) => {
+                self.addon_decl()?
+            }
             Tok::Ident(ref w) if w == "saved" && matches!(self.peek_at(1), Some(Tok::Ident(_))) => {
                 self.bump();
                 let adopted = self.at_ident("global");
@@ -828,11 +833,19 @@ impl Parser {
             }));
         }
         self.bump();
+        // `from addon "Name"`: a declared other addon (addons/<Name>.selu).
+        let other_addon = !reexport && self.at_ident("addon") && matches!(self.peek_at(1), Some(Tok::Str(_)));
+        if other_addon {
+            if default.is_some() {
+                return Err(self.unexpected("`{` and the names to import; an addon's globals are imported by name"));
+            }
+            self.bump();
+        }
         let (from, from_span) = match self.peek().clone() {
             Tok::Str(s) => {
                 let span = self.peek_span();
                 self.bump();
-                (s, span)
+                (if other_addon { format!("{ADDON_IMPORT_PREFIX}{s}") } else { s }, span)
             }
             _ => return Err(self.unexpected("the file as a string, for example `\"./other\"`")),
         };
@@ -843,6 +856,52 @@ impl Parser {
             from,
             from_span,
             reexport,
+        })
+    }
+
+    /// `addon "Name" { global X: T; type T = ...; }`
+    fn addon_decl(&mut self) -> PResult<StmtKind> {
+        self.bump();
+        let name_span = self.peek_span();
+        let name = match self.peek().clone() {
+            Tok::Str(s) => {
+                self.bump();
+                s
+            }
+            _ => return Err(self.unexpected("the other addon's folder name as a string")),
+        };
+        self.expect(&Tok::LBrace, "`{` and the addon's declared globals")?;
+        let mut globals = Vec::new();
+        let mut types = Vec::new();
+        while !self.at(&Tok::RBrace) {
+            let start = self.pos;
+            if self.at_ident("global") {
+                self.bump();
+                let (global, span) = self.ident("the global's name")?;
+                self.expect(&Tok::Colon, "`:` and the global's type")?;
+                let ty = self.ty()?;
+                self.semi(start)?;
+                globals.push((global, span, ty));
+            } else if (self.at_ident("type") || self.at_ident("interface"))
+                && matches!(self.peek_at(1), Some(Tok::Ident(_)))
+            {
+                let kind = self.type_decl()?;
+                types.push(Stmt {
+                    kind,
+                    span: self.span_from(start),
+                });
+            } else {
+                return Err(self.unexpected(
+                    "`global Name: Type;` or a `type` declaration; a declared addon lists only its globals and their types",
+                ));
+            }
+        }
+        self.expect(&Tok::RBrace, "`}`")?;
+        Ok(StmtKind::AddonDecl {
+            name,
+            name_span,
+            globals,
+            types,
         })
     }
 

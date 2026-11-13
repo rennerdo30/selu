@@ -193,6 +193,15 @@ pub enum StmtKind {
     /// `export` before a declaration (`function`, `const`, `let`, `class`,
     /// `global`).
     Export(Box<Stmt>),
+    /// `addon "Name" { global X: T; type T = ...; }`: the part of another
+    /// addon's public Lua API a project uses (`addons/<Name>.selu`,
+    /// docs/lang/addons.md). `types` holds the `type` declarations.
+    AddonDecl {
+        name: String,
+        name_span: Span,
+        globals: Vec<(String, Span, TypeExpr)>,
+        types: Vec<Stmt>,
+    },
     Class(ClassDecl),
 }
 

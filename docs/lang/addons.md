@@ -44,8 +44,56 @@ frame (a method, a widget field, a template or mixin member, a keyed child)
 or a reviewed Lua field of any Blizzard mixin is refused (SELU0705): read it
 as the typed member it is.
 
+## Declared addons
+
+A project can declare the part of another addon's public Lua API it uses, in
+`addons/<Name>.selu` beside `src/` (one file per addon, named after its
+folder):
+
+```selu
+addon "QuestieDB" {
+    type Quest = { name: string; level?: number };
+    global LibQuestieDB: {
+        RequireContract: (contract: number) => boolean;
+        Quest: (id: number) => Quest?;
+        Each: (visit: (id: number, name: string) => void) => void;
+    };
+}
+```
+
+```selu
+import { LibQuestieDB } from addon "QuestieDB";
+
+const lib = LibQuestieDB;            // the declared table, or null
+if (lib != null && lib.RequireContract(4) == true) {
+    const quest = lib.Quest(1234);   // checked; null when absent or wrong
+    if (quest != null) { print(quest.name ?? "?"); }
+}
+```
+
+- The file holds exactly one `addon "Name" { ... }` with `global Name: Type;`
+  entries and `type` declarations (SELU0710). A global the game data knows,
+  or a `Blizzard_` addon, is refused (SELU0702). Declarable types: numbers,
+  strings, booleans, literals, arrays, `{ ... }` tables, functions, unions,
+  optionals and `unknown` (SELU0711).
+- An imported global is read live on every use: `null` while the addon is
+  not loaded, otherwise the global checked against its declaration. The
+  addon becomes an `## OptionalDeps` entry.
+- Every value that crosses in is checked at runtime: the global, each field
+  read, each call result, and each argument the other addon passes to a Selu
+  callback. A value of the wrong shape becomes `null`, with one warning per
+  place in the chat. So every crossing value is typed `T?`, and a callback's
+  parameters are optional.
+- Calls into the other addon are protected: an error there gives `null` and
+  one warning, never a Lua error in Selu code.
+- The other addon's tables and functions stay foreign values. They fit only
+  their own declared types (or `unknown`), never a Selu type of the same
+  shape, so every later read stays checked. Their fields are read-only
+  (SELU0713); an undeclared field is an error (SELU0712).
+- Functions are called with `.` (`lib.Quest(1)`); Lua methods called with
+  `:` are not declarable yet.
+
 ## Still to come
 
-Declared APIs (`addons/<name>.selu` with generated shape checks) and Selu
-addons using each other (`export addon`, `.selu-api`, `[addons]` in
+Selu addons using each other (`export addon`, `.selu-api`, `[addons]` in
 `selu.toml`) are the next step of the same design.

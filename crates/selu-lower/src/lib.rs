@@ -29,6 +29,7 @@ mod restrictions;
 pub mod runtime;
 pub mod saved;
 mod spill;
+mod foreign;
 pub use errors::uses_errors;
 pub use modules::ModuleBindings;
 pub mod bindings;
@@ -196,6 +197,7 @@ pub fn lower_module_layout(
                     | StmtKind::Import { .. }
                     | StmtKind::Export(_)
                     | StmtKind::OnHandler { .. }
+                    | StmtKind::AddonDecl { .. }
             )
     }) {
         return lower_addon_layout(
@@ -414,6 +416,7 @@ impl Lowerer<'_> {
             StmtKind::Destructure { .. } => self.destructure(s, forward, out),
             StmtKind::TypeDecl(_) => {}
             StmtKind::Import { .. } => self.import_stmt(s, out),
+            StmtKind::AddonDecl { .. } => self.addon_decl(s, out),
             StmtKind::Export(inner) => self.export_stmt(s, inner, forward, out),
             StmtKind::Class(c) => self.class_decl(s, c, forward, out),
         }
@@ -762,6 +765,13 @@ impl Lowerer<'_> {
                 }
             }
             ExprKind::Binary { op, left, right } => self.binary(e, op, left, right, pre),
+            // A declared other addon: a checked field read, a protected call.
+            ExprKind::Member { .. } if self.types.foreign_read(e.id).is_some() => {
+                self.foreign_read(e, pre).expect("checked foreign read")
+            }
+            ExprKind::Call { .. } if self.types.foreign_call(e.id).is_some() => {
+                self.foreign_call(e, pre).expect("checked foreign call")
+            }
             // Another addon's field: a protected read (`unknown`), or a raw
             // field another addon put on a frame.
             ExprKind::Member {
@@ -1134,6 +1144,13 @@ impl Lowerer<'_> {
         // Reads across the other-addon boundary: a field of an unknown value
         // never raises (a metatable's __index runs protected), and a field
         // another addon put on a frame is read raw.
+        // Declared other addons: the runtime checks of crossing values.
+        if self.types.uses_foreign() {
+            out.push(LStmt {
+                kind: LStmtKind::Raw(foreign::RUNTIME.into()),
+                span: None,
+            });
+        }
         if self.types.uses_boundary_reads() {
             out.push(LStmt {
                 kind: LStmtKind::Raw(

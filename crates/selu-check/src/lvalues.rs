@@ -20,6 +20,16 @@ impl Ctx<'_> {
             ExprKind::Member { object, name } => {
                 let receiver = self.value(object);
                 let members = receiver.members();
+                if members.iter().any(crate::foreign::is_foreign) {
+                    self.out.push(
+                        err(
+                            "SELU0713",
+                            "another addon's table is read-only: the boundary reads its values, it never writes them",
+                            &target.span,
+                        )
+                        .with_help("call one of the addon's declared functions to change its state"),
+                    );
+                }
                 if members.iter().any(
                     |t| matches!(t.operand_type(), Type::ApiOpaque(n, _) if n == "SeluOpaqueTable"),
                 ) {

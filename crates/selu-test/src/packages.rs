@@ -171,14 +171,25 @@ pub fn source(key: &str) -> Option<&'static str> {
 /// Output path of a module below the built addon folder, without `.lua`.
 /// Package modules go under `selu_packages/<name>/`.
 pub fn output_key(key: &str) -> String {
+    if let Some(name) = key.strip_prefix(selu_syntax::ADDON_IMPORT_PREFIX) {
+        return format!("selu_addons/{name}");
+    }
     match key.strip_prefix(PREFIX) {
         Some(rest) => format!("selu_packages/{rest}"),
         None => key.to_string(),
     }
 }
 
+/// A declared other addon's module (`addons/<Name>.selu`).
+pub fn is_addon_key(key: &str) -> bool {
+    key.starts_with(selu_syntax::ADDON_IMPORT_PREFIX)
+}
+
 /// The source path a source map and diagnostics name for a module.
 pub fn source_name(key: &str) -> String {
+    if let Some(name) = key.strip_prefix(selu_syntax::ADDON_IMPORT_PREFIX) {
+        return format!("addons/{name}.selu");
+    }
     if is_package_key(key) {
         format!("{key}.selu")
     } else {

@@ -234,6 +234,11 @@ impl Type {
     }
     /// Runtime alternatives, resolving nested aliases and optional wrappers.
     pub(crate) fn members(&self) -> Vec<Type> {
+        // Another addon's value keeps its foreign identity (its reads and
+        // calls stay checked).
+        if crate::foreign::is_foreign(self) {
+            return vec![self.clone()];
+        }
         match crate::shape_of(self) {
             Type::Union(ts) => ts.iter().flat_map(Type::members).collect(),
             Type::Optional(t) => t.members().into_iter().chain([Type::Null]).collect(),
@@ -383,6 +388,17 @@ impl Type {
             && a.key == b.key
         {
             return true;
+        }
+        // Another addon's table or function stays a foreign value: its reads
+        // and calls stay checked, so it fits only its own foreign type (or
+        // `unknown`), never a Selu type of the same shape.
+        if crate::foreign::is_foreign(self) {
+            return match to {
+                Type::Optional(inner) => self.assignable_seen(inner, seen),
+                Type::Union(ts) => ts.iter().any(|t| self.assignable_seen(t, &mut seen.clone())),
+                Type::Untyped => true,
+                _ => false,
+            };
         }
         if let Type::Named(_, t) = self {
             let key = (t.key.clone(), crate::aliases::identity_key(to));
@@ -971,6 +987,9 @@ pub struct TypeTable {
     addon_globals: HashMap<ExprId, crate::boundary::AddonGlobal>,
     addon_fields: std::collections::HashSet<ExprId>,
     unknown_fields: std::collections::HashSet<ExprId>,
+    foreign_globals: Vec<crate::foreign::ForeignGlobal>,
+    foreign_reads: HashMap<ExprId, crate::foreign::ForeignRead>,
+    foreign_calls: HashMap<ExprId, crate::foreign::ForeignCall>,
     method_calls: std::collections::HashSet<ExprId>,
     single_values: std::collections::HashSet<ExprId>,
     game_types: std::collections::HashSet<ExprId>,
@@ -1051,7 +1070,33 @@ impl TypeTable {
         self.addon_globals
             .values()
             .map(|r| r.addon.clone())
+            .chain(self.foreign_globals.iter().map(|g| g.addon.clone()))
             .collect()
+    }
+    pub(crate) fn mark_foreign_global(&mut self, global: crate::foreign::ForeignGlobal) {
+        self.foreign_globals.push(global);
+    }
+    /// The globals a declared addon's module reads (`addons/<Name>.selu`).
+    pub fn foreign_globals(&self) -> &[crate::foreign::ForeignGlobal] {
+        &self.foreign_globals
+    }
+    pub(crate) fn mark_foreign_read(&mut self, id: ExprId, read: crate::foreign::ForeignRead) {
+        self.foreign_reads.insert(id, read);
+    }
+    /// A checked field read of another addon's table at this member expression.
+    pub fn foreign_read(&self, id: ExprId) -> Option<&crate::foreign::ForeignRead> {
+        self.foreign_reads.get(&id)
+    }
+    pub(crate) fn mark_foreign_call(&mut self, id: ExprId, call: crate::foreign::ForeignCall) {
+        self.foreign_calls.insert(id, call);
+    }
+    /// A protected call into another addon at this call expression.
+    pub fn foreign_call(&self, id: ExprId) -> Option<&crate::foreign::ForeignCall> {
+        self.foreign_calls.get(&id)
+    }
+    /// Whether this module needs the declared-addon runtime checks.
+    pub fn uses_foreign(&self) -> bool {
+        !self.foreign_globals.is_empty() || !self.foreign_reads.is_empty() || !self.foreign_calls.is_empty()
     }
     pub(crate) fn mark_addon_field(&mut self, id: ExprId) {
         self.addon_fields.insert(id);
@@ -1095,8 +1140,14 @@ impl TypeTable {
         } else {
             self.game_types.remove(&id);
         }
-        self.types
-            .insert(id, std::sync::Arc::new(crate::aliases::shape_of(&t)));
+        // Another addon's value keeps its foreign identity: reads and calls
+        // on it stay checked.
+        let stored = if crate::foreign::is_foreign(&t) {
+            t
+        } else {
+            crate::aliases::shape_of(&t)
+        };
+        self.types.insert(id, std::sync::Arc::new(stored));
     }
     pub fn get(&self, id: ExprId) -> Option<&Type> {
         self.types.get(&id).map(std::sync::Arc::as_ref)

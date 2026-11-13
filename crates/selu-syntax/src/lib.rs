@@ -9,6 +9,10 @@ pub mod visit;
 pub use ast::*;
 pub use parser::parse;
 
+/// The module key prefix of a declared other addon: `import { X } from addon
+/// "Name"` imports from the module `addon:Name` (`addons/Name.selu`).
+pub const ADDON_IMPORT_PREFIX: &str = "addon:";
+
 /// Lua 5.1 reserved words. Selu source may spell them as names, but the
 /// generated Lua can't use them as identifiers.
 pub const LUA_KEYWORDS: &[&str] = &[

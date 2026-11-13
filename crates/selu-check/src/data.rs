@@ -243,6 +243,10 @@ impl Ctx<'_> {
         } else {
             self.data_receiver(object)
         };
+        // A declared other addon's function field: one protected step.
+        if let Some(r) = self.foreign_member_call(e, callee, args, &t, name) {
+            return Some(r);
+        }
         if t == Type::String
             && let Some(t) = self.pattern_call(e, callee, name, args)
         {

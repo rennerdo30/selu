@@ -911,6 +911,20 @@ fn actual_module_key(src: &Path, key: &str) -> Option<String> {
 }
 /// The source of a module key: a package module, or a file below `src/`.
 fn read_module(src: &Path, key: &str) -> Result<String, String> {
+    if let Some(name) = key.strip_prefix(selu_syntax::ADDON_IMPORT_PREFIX) {
+        // Declared other addons live beside src/: <project>/addons/<Name>.selu.
+        let path = src
+            .parent()
+            .unwrap_or(src)
+            .join("addons")
+            .join(format!("{name}.selu"));
+        return std::fs::read_to_string(&path).map_err(|_| {
+            format!(
+                "SELU0710 the addon `{name}` is not declared: {} is missing (docs/lang/addons.md)",
+                path.display()
+            )
+        });
+    }
     if crate::packages::is_package_key(key) {
         return crate::packages::source(key)
             .map(str::to_string)
@@ -924,6 +938,19 @@ fn read_module(src: &Path, key: &str) -> Result<String, String> {
 /// to the package entry point, a relative path within the project or within
 /// the importing package (docs/lang/packages.md).
 pub fn resolve_import(key: &str, from: &str) -> Result<String, Diagnostic> {
+    if let Some(name) = from.strip_prefix(selu_syntax::ADDON_IMPORT_PREFIX) {
+        let plain = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ' '));
+        if !plain || name.contains("..") {
+            return Err(Diagnostic::error(
+                "SELU0710",
+                format!("`{name}` is not an addon folder name"),
+            ));
+        }
+        return Ok(from.to_string());
+    }
     let packages = crate::packages::packages();
     if let Some(rest) = from.strip_prefix(crate::packages::PREFIX) {
         if let Some((name, path)) = rest.split_once('/') {
@@ -1063,7 +1090,9 @@ pub fn project_sources_roots(src: &Path, roots: &[String]) -> Result<Vec<ModuleS
                     Ok(dep) => dep,
                     Err(d) => return Err(fail(&d.with_span(from_span.clone()), &source)),
                 };
-                if crate::packages::is_package_key(&dep) {
+                if crate::packages::is_addon_key(&dep) {
+                    // Read (and reported when missing) when it is visited.
+                } else if crate::packages::is_package_key(&dep) {
                     if crate::packages::source(&dep).is_none() {
                         return Err(fail(
                             &Diagnostic::error(
@@ -1091,6 +1120,7 @@ pub fn project_sources_roots(src: &Path, roots: &[String]) -> Result<Vec<ModuleS
                     ));
                 }
                 if !crate::packages::is_package_key(&dep)
+                    && !crate::packages::is_addon_key(&dep)
                     && !src.join(format!("{dep}.selu")).is_file()
                 {
                     return Err(fail(

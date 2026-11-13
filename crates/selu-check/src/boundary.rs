@@ -55,7 +55,7 @@ fn identifier(s: &str) -> bool {
 impl Ctx<'_> {
     /// Whether any selected target's game data knows `name`: a function,
     /// a global, a frame template or a mixin. Such names stay typed.
-    fn game_knows(&self, name: &str) -> bool {
+    pub(crate) fn game_knows(&self, name: &str) -> bool {
         self.availability.manifests().iter().any(|m| {
             m.function(name).is_some()
                 || m.globals.iter().any(|g| g.name == name)

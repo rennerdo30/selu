@@ -260,6 +260,10 @@ pub(crate) fn walk_expr(e: &Expr, active: &HashSet<String>, out: &mut HashSet<u3
         visit::Child::Expr(e) => walk_expr(e, active, out),
     });
 }
+/// `__selu_ns["key"]`: a module's export table.
+pub(crate) fn module_table(key: &str) -> LExpr {
+    table(key)
+}
 fn table(key: &str) -> LExpr {
     LExpr::Index(
         Box::new(name("__selu_ns")),

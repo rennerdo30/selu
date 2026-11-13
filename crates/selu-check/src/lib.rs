@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 mod aliases;
 pub mod boundary;
+pub mod foreign;
 pub use aliases::shape_of;
 mod api;
 mod classes;
@@ -516,6 +517,9 @@ impl Ctx<'_> {
             }
         }
         self.declare_block_imports(stmts);
+        if self.scopes.len() == 1 {
+            self.addon_module_rules(stmts);
+        }
         self.predeclare_aliases(stmts);
         self.predeclare_class_names(stmts);
         let top = self.scopes.len() == 1;
@@ -834,6 +838,7 @@ impl Ctx<'_> {
             StmtKind::Destructure { .. } => self.destructure(s),
             StmtKind::TypeDecl(d) => self.check_alias(d),
             StmtKind::Import { .. } => self.import_stmt(s),
+            StmtKind::AddonDecl { .. } => self.addon_decl(s),
             StmtKind::Export(inner) => self.export_stmt(s, inner),
             StmtKind::Class(c) => self.class_decl(s, c),
             StmtKind::Expr(e) => {
@@ -1338,6 +1343,10 @@ impl Ctx<'_> {
     }
 
     fn member(&mut self, t: &Type, name: &str, object: &Expr) -> Type {
+        // Another addon's declared table: a checked read.
+        if let Some(t) = self.foreign_member(t, name, object) {
+            return t;
+        }
         let shaped = shape_of(t);
         if let Type::Union(ts) = &shaped {
             let members: Vec<_> = ts.iter().map(|t| self.member(t, name, object)).collect();
@@ -1690,11 +1699,18 @@ impl Ctx<'_> {
                     Type::Untyped
                 } else {
                     let t = self.data_receiver(object);
+                    // A declared other addon's function field: one protected step.
+                    if let Some(r) = self.foreign_member_call(e, callee, args, &t, name) {
+                        return r;
+                    }
                     self.function_member(&t, name, callee)
                 }
             }
             _ => self.value(callee),
         };
+        if let Some(r) = self.foreign_direct_call(e, callee, args, &callee_type) {
+            return r;
+        }
         let callee_type = self.alias_shape(callee_type);
         let callee_type = self.restriction_value_type(callee, callee_type);
         let callee_type = self.restriction_call_policy(e, &callee_type);
