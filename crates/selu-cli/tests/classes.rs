@@ -860,3 +860,19 @@ fn a_class_instance_fits_an_optional_option_of_its_class() {
     // A class value still keeps its own type where no class is expected.
     assert!(!codes("class State { open = false; } const s = new State(); const o: { state: number } = { state: s };").is_empty());
 }
+#[test]
+fn a_field_declared_after_the_method_that_uses_it_keeps_its_type() {
+    assert_eq!(
+        run(r#"class Box {
+            read(key: string): number { return this.later.get(key) ?? 0; }
+            weak(key: Box): boolean { return this.marks.get(key) == true; }
+            later = new Map<string, number>();
+            marks = new WeakMap<Box, boolean>();
+        }
+        const b = new Box();
+        b.later.set("a", 3);
+        b.marks.set(b, true);
+        print(b.read("a"), b.read("z"), b.weak(b));"#),
+        vec!["3\t0\ttrue"]
+    );
+}

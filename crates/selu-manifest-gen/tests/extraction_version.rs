@@ -124,6 +124,23 @@ const CONTRACTS: &[(u32, &str)] = &[
         24,
         "97f8c9f356060df651d43e0b23f0dfb521f2723f2ddd4520a5cb11f6e817933b",
     ),
+    // Inventory, totem bar, macro and chat-link reads for the class tools (M7).
+    (
+        25,
+        "16fa7ebd32f6a4e5e0b00295bc01efc3f3ba1cf2c1812f29a1aed9ebeca73c6d",
+    ),
+    // Talent frame mixin reads for the Class Guide marker (M7); string.byte
+    // marks its optional argument and result Nilable.
+    (
+        26,
+        "21c02c6c5164fb52ed816a842556655cead5eb45907bc1587a36f0a47d4ae23f",
+    ),
+    // ClassTalentsFrameMixin.IsInspecting, the override the talents frame
+    // actually runs (M7).
+    (
+        27,
+        "d65b496acd788379725b9d5b337a8d60d3bf56600387e33a3fcdca996466002c",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

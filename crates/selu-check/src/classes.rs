@@ -442,7 +442,12 @@ impl Ctx<'_> {
                 .push(err("SELU0420", "The base must be a declared class.", span));
         }
         self.finish_decl(&c.name, Type::ClassObject(key.clone()));
-        for m in &c.members {
+        // Fields first: a field typed only by its initializer gets that type
+        // before any method or constructor body reads it, wherever it is
+        // declared in the class.
+        let fields = c.members.iter().filter(|m| matches!(m.kind, M::Field { .. }));
+        let rest = c.members.iter().filter(|m| !matches!(m.kind, M::Field { .. }));
+        for m in fields.chain(rest) {
             let saved = self.classes.receiver.replace((key.clone(), m.is_static));
             let saved_initialized = self.classes.initialized;
             self.classes.initialized = true;

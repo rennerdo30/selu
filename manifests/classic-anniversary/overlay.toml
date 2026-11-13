@@ -1005,5 +1005,52 @@ entry = { name = "ReloadUI", params = [], evidence = "source", signature = { nam
 # Extraction 24: Lua 5.1 string.byte (M6)
 [[functions]]
 evidence = "documented"
-note = "Lua 5.1 Reference Manual 5.4 string.byte; one position, so one optional code (nil past the end); fixed specification https://www.lua.org/manual/5.1/manual.html"
-entry = { "name" = "string.byte", "params" = ["s", "i"], "evidence" = "documented", "signature" = { "name" = "string.byte", "type" = "Function", "arguments" = [{ "name" = "s", "type" = "string" }, { "name" = "i", "type" = "number", "attributes" = { "Optional" = true } }], "returns" = [{ "name" = "code", "type" = "number", "attributes" = { "Optional" = true } }] } }
+note = "Lua 5.1 Reference Manual 5.4 string.byte; one position, so one code, nil past the end; fixed specification https://www.lua.org/manual/5.1/manual.html"
+entry = { "name" = "string.byte", "params" = ["s", "i"], "evidence" = "documented", "signature" = { "name" = "string.byte", "type" = "Function", "arguments" = [{ "name" = "s", "type" = "string" }, { "name" = "i", "type" = "number", "attributes" = { "Nilable" = true } }], "returns" = [{ "name" = "code", "type" = "number", "attributes" = { "Nilable" = true } }] } }
+
+# Extraction 25: inventory, totem bar, macro and chat-link reads (M7)
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_FrameXML/Wrath/EquipmentManager.lua:88 Blizzard reads `GetInventoryItemID(unit, slot)` as the item ID equipped in a slot (nil when empty). Not in the generated documentation."
+entry = { name = "GetInventoryItemID", params = ["unit", "slot"], evidence = "source", signature = { name = "GetInventoryItemID", type = "Function", arguments = [{ name = "unit", type = "string", attributes = { Nilable = false } }, { name = "slot", type = "number", attributes = { Nilable = false } }], returns = [{ name = "itemID", type = "number", attributes = { Nilable = true } }], attributes = { file = "Blizzard_FrameXML/Wrath/EquipmentManager.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_FrameXML/Wrath/EquipmentManager.lua:282 Blizzard reads `GetInventoryItemCount(unit, slot)` as the stack count in an equipment slot. Not in the generated documentation."
+entry = { name = "GetInventoryItemCount", params = ["unit", "slot"], evidence = "source", signature = { name = "GetInventoryItemCount", type = "Function", arguments = [{ name = "unit", type = "string", attributes = { Nilable = false } }, { name = "slot", type = "number", attributes = { Nilable = false } }], returns = [{ name = "count", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_FrameXML/Wrath/EquipmentManager.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_ActionBar/Classic/MultiCastActionBarFrame.lua:613 Blizzard passes `GetMultiCastTotemSpells(slot)` as the totem spell IDs of a totem bar slot (any number of them). Not in the generated documentation."
+entry = { name = "GetMultiCastTotemSpells", params = ["slot"], evidence = "source", signature = { name = "GetMultiCastTotemSpells", type = "Function", arguments = [{ name = "slot", type = "number", attributes = { Nilable = false } }], returns = [{ name = "totemSpellIDs", type = "number", attributes = { StrideIndex = 1, Nilable = false } }], attributes = { file = "Blizzard_ActionBar/Classic/MultiCastActionBarFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_MacroUI/Blizzard_MacroIconSelector.lua:52 Blizzard reads `GetNumMacros()` as the account and character macro counts. Not in the generated documentation."
+entry = { name = "GetNumMacros", params = [], evidence = "source", signature = { name = "GetNumMacros", type = "Function", arguments = [], returns = [{ name = "numAccountMacros", type = "number", attributes = { Nilable = false } }, { name = "numCharacterMacros", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_MacroUI/Blizzard_MacroIconSelector.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_MacroUI/Blizzard_MacroIconSelector.lua:109 Blizzard calls `CreateMacro(name, icon, body, perCharacter)` and uses the result as the new macro's index. Not in the generated documentation."
+entry = { name = "CreateMacro", params = ["name", "icon", "body", "perCharacter"], evidence = "source", signature = { name = "CreateMacro", type = "Function", arguments = [{ name = "name", type = "string", attributes = { Nilable = false } }, { name = "icon", type = "fileID", attributes = { Nilable = false } }, { name = "body", type = "string", attributes = { Nilable = true } }, { name = "perCharacter", type = "bool", attributes = { Nilable = true } }], returns = [{ name = "macroIndex", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_MacroUI/Blizzard_MacroIconSelector.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_MacroUI/Blizzard_MacroIconSelector.lua:112 Blizzard calls `EditMacro(index, name, icon, body)` and uses the result as the macro's index. Not in the generated documentation."
+entry = { name = "EditMacro", params = ["index", "name", "icon", "body"], evidence = "source", signature = { name = "EditMacro", type = "Function", arguments = [{ name = "index", type = "number", attributes = { Nilable = false } }, { name = "name", type = "string", attributes = { Nilable = true } }, { name = "icon", type = "fileID", attributes = { Nilable = true } }, { name = "body", type = "string", attributes = { Nilable = true } }], returns = [{ name = "macroIndex", type = "number", attributes = { Nilable = false } }], attributes = { file = "Blizzard_MacroUI/Blizzard_MacroIconSelector.lua" } } }
+
+# Extraction 26: talent frame mixin reads for the Class Guide marker (M7)
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_SharedTalentUI/Blizzard_SharedTalentFrame.lua:1326 `TalentFrameBaseMixin:GetConfigID()` returns `self.configurationInfo and self.configurationInfo.ID or nil`, the shown loadout's config ID."
+entry = { name = "TalentFrameBaseMixin.GetConfigID", params = [], evidence = "source", signature = { name = "GetConfigID", type = "Function", arguments = [], returns = [{ name = "configID", type = "number", attributes = { Nilable = true } }], attributes = { file = "Blizzard_SharedTalentUI/Blizzard_SharedTalentFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_SharedTalentUI/Blizzard_SharedTalentFrame.lua:2023 `TalentFrameBaseMixin:IsInspecting()` returns `self:GetInspectUnit() ~= nil`, whether the frame shows another player's talents."
+entry = { name = "TalentFrameBaseMixin.IsInspecting", params = [], evidence = "source", signature = { name = "IsInspecting", type = "Function", arguments = [], returns = [{ name = "isInspecting", type = "bool", attributes = { Nilable = false } }], attributes = { file = "Blizzard_SharedTalentUI/Blizzard_SharedTalentFrame.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_SharedTalentUI/Blizzard_SharedTalentFrame.lua:544 `TalentFrameBaseMixin:GetTalentButtonByNodeID(nodeID)` returns `self.nodeIDToButton[nodeID]`, the talent button shown for a node (nil when none)."
+entry = { name = "TalentFrameBaseMixin.GetTalentButtonByNodeID", params = ["nodeID"], evidence = "source", signature = { name = "GetTalentButtonByNodeID", type = "Function", arguments = [{ name = "nodeID", type = "number", attributes = { Nilable = false } }], returns = [{ name = "button", type = "Button", attributes = { Nilable = true } }], attributes = { file = "Blizzard_SharedTalentUI/Blizzard_SharedTalentFrame.lua" } } }
