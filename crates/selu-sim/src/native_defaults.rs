@@ -56,6 +56,7 @@ pub(crate) fn value(
         | "cstring"
         | "WOWGUID"
         | "UnitToken"
+        | "UnitTokenType"
         | "UnitTokenVariant"
         | "FramePoint"
         | "DrawLayer"

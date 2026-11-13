@@ -289,3 +289,23 @@ fn modules_share_wow_runtime_in_toc_order() {
     );
     assert_eq!(lowered.locale_keys, ["Module {0}"]);
 }
+
+#[test]
+fn nameplate_payloads_are_unit_token_strings() {
+    // Blizzard documents these payloads with the name of the UnitTokenType
+    // enumeration; the value is the nameplate's unit token string.
+    let mut manifest = manifest();
+    manifest.events.push(
+        serde_json::from_str(r#"{"name":"NAME_PLATE_UNIT_ADDED","params":[{"name":"unitToken","type":"UnitTokenType"}],"evidence":"documented"}"#)
+            .unwrap(),
+    );
+    manifest.enums.push(
+        serde_json::from_str(r#"{"name":"UnitTokenType","type":"Enumeration","fields":[{"name":"Player","type":"UnitTokenType","attributes":{"EnumValue":1}}]}"#)
+            .unwrap(),
+    );
+    let src = "on NAME_PLATE_UNIT_ADDED(unit) { const token: string? = readable(unit); print(token ?? \"-\"); }";
+    let program = selu_syntax::parse("t.selu", src).unwrap();
+    let checked = selu_check::check_program(&program, &manifest);
+    let codes: Vec<_> = checked.diagnostics.iter().map(|d| d.code.clone()).collect();
+    assert!(codes.is_empty(), "{codes:?}");
+}

@@ -119,8 +119,13 @@ fn primitive(name: &str) -> Option<Type> {
             ret: Box::new(Type::Untyped),
         },
         "bool" | "boolean" => Type::Boolean,
-        "string" | "cstring" | "WOWGUID" | "UnitToken" | "UnitTokenVariant" | "FramePoint"
-        | "DrawLayer" => Type::String,
+        // `UnitTokenType` is also the name of an enumeration, but every
+        // argument, return and payload documented with it on every product
+        // (the nameplate events, UnitPositionFrame units, SetUnit) carries a
+        // unit token string: Blizzard_NamePlates.lua passes the payload on
+        // as `namePlateUnitToken`. `Enum.UnitTokenType` stays the enum.
+        "string" | "cstring" | "WOWGUID" | "UnitToken" | "UnitTokenType" | "UnitTokenVariant"
+        | "FramePoint" | "DrawLayer" => Type::String,
         "textureAtlas"
         | "textureKit"
         | "stringView"
