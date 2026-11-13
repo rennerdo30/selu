@@ -318,3 +318,16 @@ fn delayed_field_initializer_does_not_execute_at_class_definition() {
 fn creating_a_closure_does_not_execute_its_writes() {
     assert!(codes("function f(x:number?):number{if(x!=null){const clear=()=>{x=null;};return x;}return 0;}").is_empty());
 }
+
+#[test]
+fn branch_assignments_merge_into_one_fact() {
+    // Each path assigned a different type: after the merge either may hold.
+    let src = "const c = GetTime() > 1; let k: number | string | null = null; if (c) { k = 3; } else { k = \"x\"; } const j: number | string = k; let p: number | string | null = null; if (p == null) { p = 3; } else if (typeof p == \"string\") { p = \"x\"; } const q: number | string = p;";
+    assert!(codes(src).is_empty(), "{:?}", codes(src));
+    assert_eq!(
+        codes(
+            "const c = GetTime() > 1; let k: number | string | null = null; if (c) { k = 3; } else { k = \"x\"; } const bad: number = k;"
+        ),
+        ["SELU0336"]
+    );
+}

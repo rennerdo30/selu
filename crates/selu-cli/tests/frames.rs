@@ -709,3 +709,21 @@ fn generic_aliases_keep_template_types_apart() {
     let c = check(src, std::slice::from_ref(&m), true);
     assert!(!c.has_errors(), "{:?}", c.diagnostics);
 }
+
+#[test]
+fn widget_facts_merge_across_provenance() {
+    // An addon-created texture and a declared Texture are one class; the
+    // fact survives a branch that builds its own frame first.
+    let m = keyed_manifest();
+    let src = r#"
+        class Holder { tex: Texture? = null; }
+        const h = new Holder();
+        function get(): Texture {
+            let s = h.tex;
+            if (s == null) { const f = CreateFrame("Frame"); s = f.CreateTexture(); h.tex = s; }
+            return s;
+        }
+    "#;
+    let c = check(src, std::slice::from_ref(&m), true);
+    assert!(!c.has_errors(), "{:?}", c.diagnostics);
+}

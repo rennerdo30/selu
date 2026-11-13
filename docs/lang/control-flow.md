@@ -1,7 +1,10 @@
 # Control flow decisions (package A)
 
 Conditions use the existing boolean/optional truthiness rule, including
-branch narrowing. Loop condition preludes execute on every evaluation.
+branch narrowing. Where paths meet, a name keeps a fact only when every
+path has one; the facts are joined (widgets of one class that differ only in
+provenance merge to that class) or, when they share no common type, united
+(`k = 3` on one path and `k = "x"` on the other leave `number | string`). Loop condition preludes execute on every evaluation.
 A do-loop body is a Lua `do` block inside `repeat`, so body declarations
 cannot shadow the names read by `until`.
 

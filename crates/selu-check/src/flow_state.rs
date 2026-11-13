@@ -12,16 +12,29 @@ pub(crate) fn intersect(states: Vec<FlowState>) -> FlowState {
     };
     for state in states {
         out.retain(|key, value| {
-            if let Some(other) = state.get(key)
-                && value.ty == other.ty
-                && value.fn_depth == other.fn_depth
-            {
-                value.external |= other.external;
-                value.field |= other.field;
-                true
-            } else {
-                false
+            let Some(other) = state.get(key) else {
+                return false;
+            };
+            if value.fn_depth != other.fn_depth {
+                return false;
             }
+            // Both paths narrowed the name: keep what holds on either one.
+            // Widgets of one class can differ only in provenance tags (an
+            // addon-created texture against a declared `Texture`), which the
+            // join merges; otherwise either fact may hold (a union). Open
+            // types carry no usable fact.
+            if value.ty != other.ty {
+                if value.ty.is_open() || other.ty.is_open() {
+                    return false;
+                }
+                value.ty = match Type::join(&value.ty, &other.ty) {
+                    Some(joined) if !joined.is_open() => joined,
+                    _ => Type::union(vec![value.ty.clone(), other.ty.clone()]),
+                };
+            }
+            value.external |= other.external;
+            value.field |= other.field;
+            true
         });
     }
     out
