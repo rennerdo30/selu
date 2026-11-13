@@ -9,15 +9,6 @@ fn word(lua: &Lua, value: Value) -> mlua::Result<u32> {
     }
     Ok(n.trunc().rem_euclid(4294967296.0) as u32)
 }
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn removevalue_releases_every_array_reference_and_keeps_hash_fields() {
-        let s = crate::Session::new(Default::default()).unwrap();
-        super::install(s.lua()).unwrap();
-        s.eval("local released={GetElementData=function() return 1 end};local live={GetElementData=function() return 2 end};local active={released,live,released,tag='keep'};assert(table.removevalue(active,released)==2);released.GetElementData=nil;assert(#active==1 and active[1]:GetElementData()==2 and active.tag=='keep');assert(table.removevalue(active,{})==0);assert(table.removevalue({},nil)==0);local remove=table.removevalue;table={};assert(remove(active,live)==1 and #active==0)").unwrap();
-    }
-}
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     // Ordered array compaction. Pool releases depend on actually removing all
     // matching entries before invalidating accessors on the released object.
@@ -144,4 +135,14 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     lua.globals().raw_set("bit", bit)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn removevalue_releases_every_array_reference_and_keeps_hash_fields() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        super::install(s.lua()).unwrap();
+        s.eval("local released={GetElementData=function() return 1 end};local live={GetElementData=function() return 2 end};local active={released,live,released,tag='keep'};assert(table.removevalue(active,released)==2);released.GetElementData=nil;assert(#active==1 and active[1]:GetElementData()==2 and active.tag=='keep');assert(table.removevalue(active,{})==0);assert(table.removevalue({},nil)==0);local remove=table.removevalue;table={};assert(remove(active,live)==1 and #active==0)").unwrap();
+    }
 }

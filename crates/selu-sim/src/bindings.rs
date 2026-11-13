@@ -140,15 +140,6 @@ fn binding_order(lua: &Lua) -> mlua::Result<Table> {
     lua.create_sequence_from(names)
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn binding_enumeration_uses_registered_bodies_and_assigned_keys() {
-        let s = crate::Session::new(Default::default()).unwrap();
-        s.eval("assert(GetNumBindings()==0);__selu_binding_actions.SELF_ACTION={header='SELF_HEADER',handler=function()end,runOnUp=false};SELF_HEADER='Self category';SetBinding('K','SELF_ACTION');SetBinding('L','SELF_ACTION');local action,category,a,b=GetBinding(1);assert(GetNumBindings()==1 and action=='SELF_ACTION' and category=='SELF_HEADER' and a=='K' and b=='L');assert(GetBindingCategoryName(category)=='Self category' and GetBinding(2)==nil)").unwrap();
-    }
-}
-
 fn run(lua: &Lua, action: &str, down: bool) -> mlua::Result<()> {
     let actions = lua.named_registry_value::<Table>("selu.binding_actions")?;
     let Some(entry) = actions.raw_get::<Option<Table>>(action)? else {
@@ -172,4 +163,13 @@ pub(crate) fn key(lua: &Lua, key: &str, down: bool) -> mlua::Result<()> {
         run(lua, &action, down)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn binding_enumeration_uses_registered_bodies_and_assigned_keys() {
+        let s = crate::Session::new(Default::default()).unwrap();
+        s.eval("assert(GetNumBindings()==0);__selu_binding_actions.SELF_ACTION={header='SELF_HEADER',handler=function()end,runOnUp=false};SELF_HEADER='Self category';SetBinding('K','SELF_ACTION');SetBinding('L','SELF_ACTION');local action,category,a,b=GetBinding(1);assert(GetNumBindings()==1 and action=='SELF_ACTION' and category=='SELF_HEADER' and a=='K' and b=='L');assert(GetBindingCategoryName(category)=='Self category' and GetBinding(2)==nil)").unwrap();
+    }
 }
