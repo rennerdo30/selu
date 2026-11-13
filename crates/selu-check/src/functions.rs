@@ -310,9 +310,12 @@ impl Ctx<'_> {
                 .map(|v| {
                     (v.key.clone(), {
                         let actual = self.value_expected(&v.value, fields.get(&v.key));
+                        // A class value keeps its own type, unless the field
+                        // itself expects a class (an option of that class).
                         if let Some(want) = fields.get(&v.key)
                             && actual.assignable_to(want)
-                            && !crate::saved::contains_class(&actual)
+                            && (!crate::saved::contains_class(&actual)
+                                || crate::saved::contains_class(want))
                         {
                             want.clone()
                         } else {

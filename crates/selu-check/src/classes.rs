@@ -275,7 +275,38 @@ impl Ctx<'_> {
         t: &TypeExpr,
         aliases: &HashMap<String, Type>,
     ) -> Type {
-        let mut names = self.frame_type_names();
+        fn leaves(t: &TypeExpr, out: &mut std::collections::HashSet<String>) {
+            use selu_syntax::TypeExprKind as K;
+            match &t.kind {
+                K::Named { name, args } => {
+                    out.insert(name.clone());
+                    for a in args {
+                        leaves(a, out);
+                    }
+                }
+                K::Union(items) | K::Tuple(items) => {
+                    for a in items {
+                        leaves(a, out);
+                    }
+                }
+                K::Optional(inner) | K::Array(inner) => leaves(inner, out),
+                K::Object(fields) => {
+                    for f in fields {
+                        leaves(&f.ty, out);
+                    }
+                }
+                K::Function { params, ret, .. } => {
+                    for a in params {
+                        leaves(a, out);
+                    }
+                    leaves(ret, out);
+                }
+                K::StringLiteral(_) | K::NumberLiteral(_) | K::BooleanLiteral(_) => {}
+            }
+        }
+        let mut wanted = std::collections::HashSet::new();
+        leaves(t, &mut wanted);
+        let mut names = self.frame_type_names(&wanted);
         names.extend(self.class_type_names());
         names.extend(aliases.clone());
         types::resolve_classes(t, self.out, &names)

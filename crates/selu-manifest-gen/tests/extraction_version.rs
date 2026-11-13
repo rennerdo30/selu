@@ -100,6 +100,13 @@ const CONTRACTS: &[(u32, &str)] = &[
         19,
         "4512da51f2b30ff544fa1b077128f0b3cba3a60e6680669b231660125b942a85",
     ),
+    // 20: the overlays type AuraData (C_UnitAuras), IsInRaid,
+    // GetNumGroupMembers and GetNumSubgroupMembers, and let
+    // GameTooltip:SetText take nil colours with alpha and wrap.
+    (
+        20,
+        "1ef24e8c90487e9765401e585fa777de2131ba674873d5b2e5bef8aac421786b",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

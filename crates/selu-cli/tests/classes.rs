@@ -847,3 +847,16 @@ fn readable_alias_in_another_scope_does_not_choose_the_base() {
         ["1"]
     );
 }
+#[test]
+fn a_class_instance_fits_an_optional_option_of_its_class() {
+    // An object literal widens a class value to the field's own class type
+    // (CreateListWell(parent, { collapse: CollapseStore() })).
+    assert!(
+        codes(
+            "class State { open = false; } type Options = { width?: number; state?: State }; function take(o: Options?): number { return 1; } const s = new State(); take({ width: 2, state: s });"
+        )
+        .is_empty()
+    );
+    // A class value still keeps its own type where no class is expected.
+    assert!(!codes("class State { open = false; } const s = new State(); const o: { state: number } = { state: s };").is_empty());
+}

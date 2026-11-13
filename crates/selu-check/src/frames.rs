@@ -166,55 +166,47 @@ pub(crate) fn tag_template_closure(m: &Manifest, bases: &mut Vec<String>) {
     }
 }
 impl Ctx<'_> {
-    pub(crate) fn frame_type_names(&self) -> std::collections::HashMap<String, Type> {
-        let mut names: std::collections::HashMap<String, Type> = self
-            .manifest
-            .widgets
+    /// The game's written type names an annotation uses: widgets (and their
+    /// names without "API"), templates (the template's widget carrying it),
+    /// documented structures (`TradeSkillRecipeInfo`) and documented mixin
+    /// values (`colorRGBA`), in that order of precedence. Only the names in
+    /// `wanted` are resolved: resolving every structure for every annotation
+    /// made checking a large project take minutes.
+    pub(crate) fn frame_type_names(
+        &self,
+        wanted: &std::collections::HashSet<String>,
+    ) -> std::collections::HashMap<String, Type> {
+        wanted
             .iter()
-            .flat_map(|w| {
-                let mut names = vec![w.name.clone()];
-                if let Some(n) = w.name.strip_suffix("API") {
-                    names.push(n.into());
-                }
-                names.into_iter().map(|n| {
-                    let ty = api::named(self.manifest, &n, 0);
-                    (n, ty)
-                })
-            })
-            .collect();
-        // A template name is a written type too: the template's widget,
-        // carrying that template. A widget of the same name keeps precedence.
-        for template in &self.manifest.templates {
-            let Some(widget) = template.ty.as_deref() else {
-                continue;
-            };
-            if names.contains_key(&template.name) {
-                continue;
-            }
-            let mut ty = api::named(self.manifest, widget, 0);
+            .filter_map(|n| self.frame_type_name(n).map(|t| (n.clone(), t)))
+            .collect()
+    }
+    fn frame_type_name(&self, n: &str) -> Option<Type> {
+        let m = self.manifest;
+        if m.widgets
+            .iter()
+            .any(|w| w.name == n || w.name.strip_suffix("API") == Some(n))
+        {
+            return Some(api::named(m, n, 0));
+        }
+        if let Some(template) = m.templates.iter().find(|t| t.name == n)
+            && let Some(widget) = template.ty.as_deref()
+        {
+            let mut ty = api::named(m, widget, 0);
             if let Type::Widget(_, bases) = &mut ty {
                 bases.push(format!("@template:{}", template.name));
-                tag_template_closure(self.manifest, bases);
-                names.insert(template.name.clone(), ty);
+                tag_template_closure(m, bases);
+                return Some(ty);
             }
         }
-        // A documented structure (`TradeSkillRecipeInfo`) and a documented
-        // mixin value (`colorRGBA`) are written types too, so a helper can
-        // take one as a parameter. Frames and templates keep precedence.
-        for table in &self.manifest.tables {
-            if table.ty.as_deref() == Some("Structure") && !names.contains_key(&table.name) {
-                names.insert(
-                    table.name.clone(),
-                    api::named(self.manifest, &table.name, 0),
-                );
-            }
+        if m.tables
+            .iter()
+            .any(|t| t.name == n && t.ty.as_deref() == Some("Structure"))
+            || api::MIXIN_VALUES.iter().any(|(v, _)| *v == n)
+        {
+            return Some(api::named(m, n, 0));
         }
-        for (name, _) in api::MIXIN_VALUES {
-            if !names.contains_key(*name) {
-                names.insert((*name).into(), api::named(self.manifest, name, 0));
-            }
-        }
-        names
+        None
     }
     pub(crate) fn frame_global(&self, name: &str) -> Option<Type> {
         let g = &self.manifest.globals[*self.index.globals.get(name)?];
