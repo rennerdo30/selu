@@ -839,6 +839,7 @@ impl Ctx<'_> {
             StmtKind::TypeDecl(d) => self.check_alias(d),
             StmtKind::Import { .. } => self.import_stmt(s),
             StmtKind::AddonDecl { .. } => self.addon_decl(s),
+            StmtKind::ExportAddon { .. } => self.export_addon(s),
             StmtKind::Export(inner) => self.export_stmt(s, inner),
             StmtKind::Class(c) => self.class_decl(s, c),
             StmtKind::Expr(e) => {

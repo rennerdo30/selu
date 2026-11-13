@@ -990,6 +990,7 @@ pub struct TypeTable {
     foreign_globals: Vec<crate::foreign::ForeignGlobal>,
     foreign_reads: HashMap<ExprId, crate::foreign::ForeignRead>,
     foreign_calls: HashMap<ExprId, crate::foreign::ForeignCall>,
+    selu_api: Option<crate::foreign::SeluApi>,
     method_calls: std::collections::HashSet<ExprId>,
     single_values: std::collections::HashSet<ExprId>,
     game_types: std::collections::HashSet<ExprId>,
@@ -1093,6 +1094,13 @@ impl TypeTable {
     /// A protected call into another addon at this call expression.
     pub fn foreign_call(&self, id: ExprId) -> Option<&crate::foreign::ForeignCall> {
         self.foreign_calls.get(&id)
+    }
+    pub(crate) fn set_selu_api(&mut self, api: crate::foreign::SeluApi) {
+        self.selu_api = Some(api);
+    }
+    /// What this module publishes with `export addon { ... }`.
+    pub fn selu_api(&self) -> Option<&crate::foreign::SeluApi> {
+        self.selu_api.as_ref()
     }
     /// Whether this module needs the declared-addon runtime checks.
     pub fn uses_foreign(&self) -> bool {

@@ -99,6 +99,19 @@ pub struct ForeignGlobal {
     pub check: ForeignCheck,
     /// `C_AddOns.IsAddOnLoaded` or `IsAddOnLoaded`.
     pub loaded: String,
+    /// A Selu addon's published value (a `.selu-api` import): the API
+    /// fingerprint the consumer was built against. A matching provider's
+    /// values pass directly; a different or missing one is checked per value.
+    pub api: Option<String>,
+}
+
+/// What `export addon { ... }` publishes: the `.selu-api` body and its
+/// fingerprint, and (local, published) names for the lowering.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SeluApi {
+    pub body: String,
+    pub fingerprint: String,
+    pub names: Vec<(String, String)>,
 }
 
 /// A checked field read of a foreign table.
@@ -280,6 +293,7 @@ impl Ctx<'_> {
         let StmtKind::AddonDecl {
             name,
             name_span,
+            fingerprint,
             globals,
             types,
         } = &s.kind
@@ -331,7 +345,8 @@ impl Ctx<'_> {
             self.stmt(t);
         }
         for (global, span, ty) in globals {
-            if self.game_knows(global) {
+            // A Selu addon's published values are no globals.
+            if fingerprint.is_none() && self.game_knows(global) {
                 self.out.push(
                     err(
                         "SELU0702",
@@ -361,6 +376,7 @@ impl Ctx<'_> {
                 global: global.clone(),
                 check,
                 loaded: loaded.clone(),
+                api: fingerprint.clone(),
             });
             let e = self.module.exports.entry(global.clone()).or_default();
             e.has_value = true;
@@ -646,6 +662,140 @@ impl Ctx<'_> {
         ));
         None
     }
+}
+
+impl Ctx<'_> {
+    /// `export addon { a, b as c };`: the values this addon publishes to
+    /// other Selu addons, with their types written out for `.selu-api`.
+    pub(crate) fn export_addon(&mut self, s: &Stmt) {
+        let StmtKind::ExportAddon { names } = &s.kind else {
+            return;
+        };
+        if self.scopes.len() != 1 {
+            self.out.push(err(
+                "SELU0714",
+                "`export addon` belongs at the top level of a module",
+                &s.span,
+            ));
+            return;
+        }
+        if self.types.selu_api().is_some() {
+            self.out.push(err(
+                "SELU0714",
+                "an addon publishes one `export addon { ... }` list",
+                &s.span,
+            ));
+            return;
+        }
+        let mut api = SeluApi::default();
+        let mut body = String::new();
+        let mut published = std::collections::HashSet::new();
+        for (local, name, span) in names {
+            let Some(binding) = self.lookup(local).map(|(_, b)| b.clone()) else {
+                self.out.push(err("SELU0310", format!("`{local}` is not declared"), span));
+                continue;
+            };
+            if !matches!(
+                binding.kind,
+                crate::Kind::Const | crate::Kind::Function | crate::Kind::Import
+            ) {
+                self.out.push(
+                    err(
+                        "SELU0714",
+                        format!("`{local}` can change; an addon publishes constants and functions"),
+                        span,
+                    )
+                    .with_help("publish a function that returns the current value"),
+                );
+                continue;
+            }
+            if !published.insert(name.clone()) {
+                self.out.push(err("SELU0714", format!("`{name}` is published twice"), span));
+                continue;
+            }
+            let ty = self.type_of(local).unwrap_or(Type::Error);
+            let mut problems = Vec::new();
+            validate(&ty, &mut problems, 0);
+            let text = match (problems.first().cloned(), type_text(&ty, 0)) {
+                (None, Ok(text)) => text,
+                (Some(problem), _) | (None, Err(problem)) => {
+                    self.out.push(
+                        err("SELU0711", format!("`{local}` cannot be published: {problem}"), span)
+                            .with_help("publish plain data and functions; classes and game objects stay inside the addon"),
+                    );
+                    continue;
+                }
+            };
+            body.push_str(&format!("    global {name}: {text};\n"));
+            api.names.push((local.clone(), name.clone()));
+        }
+        api.fingerprint = format!("{:016x}", stable_hash(&body));
+        api.body = body;
+        self.types.set_selu_api(api);
+    }
+}
+
+/// A type as Selu source, for a `.selu-api` file: aliases are written out
+/// structurally, so the file needs no other declarations.
+pub(crate) fn type_text(t: &Type, depth: usize) -> Result<String, String> {
+    if depth > 24 {
+        return Err("the type is too deeply nested".into());
+    }
+    let wrapped = |t: &Type| -> Result<String, String> {
+        let text = type_text(t, depth + 1)?;
+        Ok(match crate::shape_of(t) {
+            Type::Function { .. } | Type::Union(_) => format!("({text})"),
+            _ => text,
+        })
+    };
+    Ok(match crate::shape_of(t) {
+        Type::Number => "number".into(),
+        Type::String => "string".into(),
+        Type::Boolean => "boolean".into(),
+        Type::Unknown => "unknown".into(),
+        Type::Null => "null".into(),
+        Type::Void => "void".into(),
+        Type::StringLiteral(s) => serde_json::to_string(&s).unwrap_or_default(),
+        Type::NumberLiteral(n) => n,
+        Type::BooleanLiteral(b) => b.to_string(),
+        Type::Optional(inner) => format!("{}?", wrapped(&inner)?),
+        Type::Array(inner) => format!("{}[]", wrapped(&inner)?),
+        Type::Union(ts) => ts
+            .iter()
+            .map(wrapped)
+            .collect::<Result<Vec<_>, _>>()?
+            .join(" | "),
+        Type::Object(fields) => {
+            let mut parts = Vec::new();
+            for (k, v) in &fields {
+                match crate::shape_of(v) {
+                    Type::Optional(inner) => {
+                        parts.push(format!("{k}?: {}", type_text(&inner, depth + 1)?))
+                    }
+                    _ => parts.push(format!("{k}: {}", type_text(v, depth + 1)?)),
+                }
+            }
+            format!("{{ {} }}", parts.join("; "))
+        }
+        Type::Function {
+            params,
+            ret,
+            required,
+            rest,
+            ..
+        } => {
+            let mut parts = Vec::new();
+            for (i, p) in params.iter().enumerate() {
+                let optional = if i >= required { "?" } else { "" };
+                parts.push(format!("p{}{optional}: {}", i + 1, type_text(p, depth + 1)?));
+            }
+            if let Some(r) = rest {
+                parts.push(format!("...rest: {}[]", wrapped(&r)?));
+            }
+            format!("({}) => {}", parts.join(", "), type_text(&ret, depth + 1)?)
+        }
+        other => return Err(format!("`{other}` is not plain data")),
+    })
 }
 
 /// `a.b.c` as written, for warnings.

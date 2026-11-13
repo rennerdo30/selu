@@ -745,6 +745,32 @@ impl Parser {
             Tok::Export if matches!(self.peek_at(1), Some(Tok::LBrace)) => {
                 self.import_names(start, true)?
             }
+            // `export addon { a, b as c };`: values published to other Selu addons.
+            Tok::Export
+                if matches!(self.peek_at(1), Some(Tok::Ident(w)) if w == "addon")
+                    && matches!(self.peek_at(2), Some(Tok::LBrace)) =>
+            {
+                self.bump();
+                self.bump();
+                self.bump();
+                let mut names = Vec::new();
+                while !self.at(&Tok::RBrace) {
+                    let (local, span) = self.ident("a name to publish")?;
+                    let published = if self.at_ident("as") {
+                        self.bump();
+                        self.ident("the published name after `as`")?.0
+                    } else {
+                        local.clone()
+                    };
+                    names.push((local, published, span));
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+                self.expect(&Tok::RBrace, "`}`")?;
+                self.semi(start)?;
+                StmtKind::ExportAddon { names }
+            }
             Tok::Export => {
                 self.bump();
                 let inner = self.stmt()?;
@@ -870,6 +896,18 @@ impl Parser {
             }
             _ => return Err(self.unexpected("the other addon's folder name as a string")),
         };
+        let fingerprint = if self.at_ident("fingerprint") {
+            self.bump();
+            match self.peek().clone() {
+                Tok::Str(s) => {
+                    self.bump();
+                    Some(s)
+                }
+                _ => return Err(self.unexpected("the API fingerprint as a string")),
+            }
+        } else {
+            None
+        };
         self.expect(&Tok::LBrace, "`{` and the addon's declared globals")?;
         let mut globals = Vec::new();
         let mut types = Vec::new();
@@ -900,6 +938,7 @@ impl Parser {
         Ok(StmtKind::AddonDecl {
             name,
             name_span,
+            fingerprint,
             globals,
             types,
         })

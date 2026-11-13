@@ -417,6 +417,7 @@ impl Lowerer<'_> {
             StmtKind::TypeDecl(_) => {}
             StmtKind::Import { .. } => self.import_stmt(s, out),
             StmtKind::AddonDecl { .. } => self.addon_decl(s, out),
+            StmtKind::ExportAddon { .. } => self.export_addon(s, out),
             StmtKind::Export(inner) => self.export_stmt(s, inner, forward, out),
             StmtKind::Class(c) => self.class_decl(s, c, forward, out),
         }

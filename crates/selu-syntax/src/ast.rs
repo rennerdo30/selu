@@ -199,8 +199,18 @@ pub enum StmtKind {
     AddonDecl {
         name: String,
         name_span: Span,
+        /// `addon "Name" fingerprint "..." { ... }`: a Selu addon's published
+        /// API (a generated `.selu-api` file); its `global` entries are the
+        /// values the provider publishes with `export addon`.
+        fingerprint: Option<String>,
         globals: Vec<(String, Span, TypeExpr)>,
         types: Vec<Stmt>,
+    },
+    /// `export addon { a, b as c };`: values this Selu addon publishes to
+    /// other Selu addons (`selu build` writes `<Addon>.selu-api`).
+    ExportAddon {
+        /// (local name, published name, span).
+        names: Vec<(String, String, Span)>,
     },
     Class(ClassDecl),
 }

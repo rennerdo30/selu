@@ -155,3 +155,112 @@ if (lib != null) { lib.version = 5; }"#)],
     let (_, out) = build("missing", &[], &[("main.selu", r#"import { X } from addon "Nowhere"; print(X != null);"#)]);
     assert!(String::from_utf8_lossy(&out.stderr).contains("SELU0710"), "{}", String::from_utf8_lossy(&out.stderr));
 }
+
+// ---- Selu addons using each other (level 4) -------------------------------
+
+fn project(dir: &Path, name: &str, toml_extra: &str, files: &[(&str, &str)]) -> std::process::Output {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("selu.toml"),
+        format!("[addon]\nname = \"{name}\"\ntargets = [\"wowf@1.60.1.70790\"]\n{toml_extra}"),
+    )
+    .unwrap();
+    for (file, source) in files {
+        std::fs::write(dir.join("src").join(file), source).unwrap();
+    }
+    Command::new(env!("CARGO_BIN_EXE_selu"))
+        .arg("build")
+        .arg(dir)
+        .arg("--manifest-dir")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests"))
+        .output()
+        .unwrap()
+}
+
+fn addon_files(dir: &Path, name: &str) -> Vec<(String, String)> {
+    let dist = dir.join("dist").join(name);
+    let toc = std::fs::read_to_string(dist.join(format!("{name}.toc"))).unwrap();
+    toc.lines()
+        .filter(|s| s.ends_with(".lua"))
+        .map(|n| (n.to_owned(), std::fs::read_to_string(dist.join(n)).unwrap()))
+        .collect()
+}
+
+const PROVIDER: &str = r#"
+type Quest = { id: number; title: string };
+const version = 2;
+function quest(id: number): Quest? { return id == 1 ? { id: 1, title: "First" } : null; }
+function each(visit: (title: string) => void) { visit("a"); visit("b"); }
+export addon { version, quest as findQuest, each };
+"#;
+
+const CONSUMER: &str = r#"
+import { version, findQuest, each } from addon "Provider";
+on PLAYER_LOGIN() {
+    print(version ?? -1);
+    const find = findQuest;
+    if (find != null) {
+        const q = find(1);
+        if (q != null) { print(q.title ?? "?"); }
+        print(find(2) == null);
+    }
+    const visit = each;
+    if (visit != null) { visit((title) => { print(title ?? "?"); }); }
+}
+"#;
+
+fn two_addons(label: &str, tamper: Option<&str>) -> Vec<String> {
+    let root = std::env::temp_dir().join(format!("selu-api-{label}-{}", std::process::id()));
+    let provider = root.join("provider");
+    let out = project(&provider, "Provider", "", &[("main.selu", PROVIDER)]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let api_path = provider.join("dist/Provider.selu-api");
+    let mut api = std::fs::read_to_string(&api_path).unwrap();
+    assert!(api.contains("addon \"Provider\" fingerprint"), "{api}");
+    assert!(api.contains("global findQuest: (p1: number) => { id: number; title: string }?;"), "{api}");
+    if let Some(fake) = tamper {
+        // The consumer was built against another version of the API.
+        let start = api.find("fingerprint \"").unwrap() + 13;
+        api.replace_range(start..start + 16, fake);
+        std::fs::write(&api_path, &api).unwrap();
+    }
+    let consumer = root.join("consumer");
+    let out = project(
+        &consumer,
+        "Consumer",
+        &format!("[addons]\nProvider = {:?}\n", api_path.to_string_lossy()),
+        &[("main.selu", CONSUMER)],
+    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let sim = selu_sim::Sim::new().unwrap();
+    sim.eval("C_AddOns = C_AddOns or {}; C_AddOns.IsAddOnLoaded = function(name) return name == 'Provider' or name == 'Consumer' end").unwrap();
+    sim.load_addon("Provider", &addon_files(&provider, "Provider")).unwrap();
+    sim.load_addon("Consumer", &addon_files(&consumer, "Consumer")).unwrap();
+    sim.fire("PLAYER_LOGIN", vec![]).unwrap();
+    sim.prints()
+}
+
+#[test]
+fn a_selu_addon_uses_another_through_its_published_api() {
+    assert_eq!(two_addons("match", None), ["2", "First", "true", "a", "b"]);
+}
+
+#[test]
+fn a_different_api_version_is_checked_per_value() {
+    // Same values, so the per-value checks pass them; nothing raises.
+    assert_eq!(two_addons("stale", Some("0000000000000000")), ["2", "First", "true", "a", "b"]);
+}
+
+#[test]
+fn only_plain_data_and_functions_are_published() {
+    let dir = std::env::temp_dir().join(format!("selu-api-bad-{}", std::process::id()));
+    let out = project(
+        &dir,
+        "Provider",
+        "",
+        &[("main.selu", "class Box { n = 1; }\nconst box = new Box();\nlet counter = 1;\nexport addon { box, counter };")],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("SELU0711") && stderr.contains("SELU0714"), "{stderr}");
+}

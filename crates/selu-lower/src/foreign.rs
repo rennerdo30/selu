@@ -12,7 +12,11 @@ use selu_syntax::{Expr, ExprKind, Stmt, StmtKind};
 /// match its declaration, or a call that raises, gives nil and one warning
 /// per place.
 pub(crate) const RUNTIME: &str = r##"local __selu_fx_type, __selu_fx_pcall, __selu_fx_print, __selu_fx_tostring, __selu_fx_unpack, __selu_fx_tonumber = type, pcall, print, tostring, unpack, tonumber
-local __selu_fx_warned, __selu_fx_parsed = {}, {}
+local __selu_fx_warned, __selu_fx_parsed, __selu_fx_owner = {}, {}, {}
+-- Selu addons whose published API matches the one this addon was built
+-- against: their values pass directly (shared by this addon's modules).
+local __selu_fx_trusted = (__selu_ns ~= nil and __selu_ns.__selu_fx_trusted) or {}
+if __selu_ns ~= nil then __selu_ns.__selu_fx_trusted = __selu_fx_trusted end
 local function __selu_fwarn(path, what)
   if __selu_fx_warned[path] then return end
   __selu_fx_warned[path] = true
@@ -86,6 +90,12 @@ local function __selu_fok(v, n)
   return false
 end
 local function __selu_fcheck(v, d, path)
+  local owner = __selu_fx_owner[path]
+  if owner == nil then
+    owner = path:match("^(%S+)") or ""
+    __selu_fx_owner[path] = owner
+  end
+  if __selu_fx_trusted[owner] then return v end
   local n = __selu_fx_parsed[d]
   if n == nil then
     n = __selu_fparse(d, 1)
@@ -145,6 +155,23 @@ impl Lowerer<'_> {
         };
         for g in self.types.foreign_globals() {
             let path = format!("{} {}", g.addon, g.global);
+            if let Some(fingerprint) = &g.api {
+                // A Selu addon's published value: from its API table. A
+                // matching fingerprint passes values directly; otherwise each
+                // value is checked like a declared addon's.
+                out.push(LStmt::new(
+                    LStmtKind::Raw(format!(
+                        "{table}.{global} = function()\n  local ok, loaded = __selu_fx_pcall({loaded}, {addon:?})\n  if not (ok and loaded == true) then return nil end\n  local entry = __selu_fread(SeluAPI, {addon:?}, \"?t\", {path:?})\n  if entry == nil then return nil end\n  local values = __selu_fread(entry, \"values\", \"?t\", {path:?})\n  if values == nil then return nil end\n  if __selu_fread(entry, \"fingerprint\", \"?s\", {path:?}) == {fingerprint:?} then\n    __selu_fx_trusted[{addon:?}] = true\n    return values[{global:?}]\n  end\n  __selu_fx_trusted[{addon:?}] = nil\n  return __selu_fread(values, {global:?}, {desc:?}, {path:?})\nend",
+                        table = lua::print_expr(&crate::modules::module_table(&self.module.key)),
+                        global = g.global,
+                        loaded = g.loaded,
+                        addon = g.addon,
+                        desc = g.check.descriptor(),
+                    )),
+                    &s.span,
+                ));
+                continue;
+            }
             out.push(LStmt::new(
                 LStmtKind::Raw(format!(
                     "{table}.{global} = function()\n  local ok, loaded = __selu_fx_pcall({loaded}, {addon:?})\n  if not (ok and loaded == true) then return nil end\n  return __selu_fcheck({global}, {desc:?}, {path:?})\nend",
@@ -157,6 +184,44 @@ impl Lowerer<'_> {
                 &s.span,
             ));
         }
+    }
+
+    /// `export addon { ... }`: the addon's API table in the shared
+    /// `SeluAPI` registry, with the fingerprint of its `.selu-api` file.
+    pub(crate) fn export_addon(&mut self, s: &Stmt, out: &mut Vec<LStmt>) {
+        let Some(api) = self.types.selu_api().cloned() else {
+            return;
+        };
+        let registry = name("SeluAPI");
+        out.push(LStmt::new(
+            LStmtKind::Assign(
+                vec![registry.clone()],
+                vec![lua::bin(
+                    lua::BinOp::Or,
+                    registry.clone(),
+                    LExpr::Table(vec![]),
+                )],
+            ),
+            &s.span,
+        ));
+        let values = api
+            .names
+            .iter()
+            .map(|(local, published)| lua::LField::Named(published.clone(), name(local)))
+            .collect();
+        out.push(LStmt::new(
+            LStmtKind::Assign(
+                vec![LExpr::Index(
+                    Box::new(registry),
+                    Box::new(LExpr::Str(self.module.addon_name.clone())),
+                )],
+                vec![LExpr::Table(vec![
+                    lua::LField::Named("fingerprint".into(), LExpr::Str(api.fingerprint.clone())),
+                    lua::LField::Named("values".into(), LExpr::Table(values)),
+                ])],
+            ),
+            &s.span,
+        ));
     }
 
     /// A checked field read of another addon's table.

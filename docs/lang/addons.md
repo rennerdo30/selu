@@ -93,7 +93,43 @@ if (lib != null && lib.RequireContract(4) == true) {
 - Functions are called with `.` (`lib.Quest(1)`); Lua methods called with
   `:` are not declarable yet.
 
-## Still to come
+## Selu addons using each other
 
-Selu addons using each other (`export addon`, `.selu-api`, `[addons]` in
-`selu.toml`) are the next step of the same design.
+A Selu addon publishes values for other Selu addons with one list:
+
+```selu
+type Quest = { id: number; title: string };
+function quest(id: number): Quest? { ... }
+export addon { quest as findQuest, version };
+```
+
+- Only constants, functions and imports are published (SELU0714), and only
+  plain data and functions cross (SELU0711): numbers, strings, booleans,
+  literals, arrays, `{ ... }` tables, functions, unions and optionals.
+  Classes and game objects stay inside the addon. One `export addon` list
+  per addon.
+- `selu build` writes `dist/<Addon>.selu-api`: the published names and their
+  types, written out in the declared-addon syntax with the API's
+  fingerprint (`addon "Provider" fingerprint "..." { global findQuest: ...; }`).
+  It holds types only, nothing of the addon's code.
+- At runtime the addon puts its values and the fingerprint in the shared
+  `SeluAPI` table under its name.
+
+A consumer lists the file under `[addons]` in its `selu.toml` and imports
+the names:
+
+```toml
+[addons]
+Provider = "../Provider/dist/Provider.selu-api"
+```
+
+```selu
+import { findQuest } from addon "Provider";
+```
+
+- Imports are read live, `null` while the provider is not loaded, and
+  read-only; calls are protected, as for any declared addon.
+- When the provider's fingerprint matches the one the consumer was built
+  against, its values pass directly. A different or missing fingerprint (the
+  provider changed its API) falls back to the per-value checks of a declared
+  addon: a value of the wrong shape is `null` with one warning.
