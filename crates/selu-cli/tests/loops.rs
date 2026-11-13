@@ -223,3 +223,16 @@ fn update_narrowing_survives_an_unmodified_continue() {
         ["2"]
     );
 }
+
+#[test]
+fn exponent_operator() {
+    let src = "on PLAYER_LOGIN() { let x = 3; x **= 2; print(2 ** 10, 2 ** 3 ** 2, (-2) ** 2, -(2 ** 2), x, 2 * 3 ** 2); }";
+    assert_eq!(run(src), ["1024\t512\t4\t-4\t9\t18"]);
+    assert_eq!(
+        selu_syntax::parse("t.selu", "const y = -2 ** 2;")
+            .unwrap_err()
+            .code,
+        "SELU0112"
+    );
+    assert!(codes("const z = 2 ** \"a\";").contains(&"SELU0325".into()));
+}

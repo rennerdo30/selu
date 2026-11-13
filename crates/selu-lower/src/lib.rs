@@ -837,6 +837,7 @@ impl Lowerer<'_> {
             "*" => BinOp::Mul,
             "/" => BinOp::Div,
             "%" => BinOp::Mod,
+            "**" => BinOp::Pow,
             "==" => BinOp::Eq,
             "!=" => BinOp::Ne,
             "<" => BinOp::Lt,

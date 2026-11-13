@@ -94,3 +94,11 @@ binding remained non-null across these uncertain paths.
 Plain-local updates with pure RHS expressions print directly as `i = i + 1`.
 Receivers, indices, effectful right operands and expression preludes retain
 snapshots to preserve evaluation order and the old value.
+
+## Exponent
+
+`a ** b` raises `a` to the power `b` and lowers to Lua's `^`; `x **= y` is its
+compound form. It is right-associative (`2 ** 3 ** 2` is `2 ** 9`) and binds
+tighter than `*`. As in TypeScript, a unary operator on its left needs
+parentheses: `(-2) ** 2` or `-(2 ** 2)`, never `-2 ** 2` (SELU0112). Both
+operands must be numbers (SELU0325).

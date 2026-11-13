@@ -1008,6 +1008,7 @@ impl Parser {
             Tok::PlusEq => Some("+"),
             Tok::MinusEq => Some("-"),
             Tok::StarEq => Some("*"),
+            Tok::StarStarEq => Some("**"),
             Tok::SlashEq => Some("/"),
             Tok::PercentEq => Some("%"),
             _ => return Ok(left),
@@ -1101,9 +1102,37 @@ impl Parser {
     }
     fn multiplicative(&mut self) -> PResult<Expr> {
         self.binary_level(
-            Self::unary,
+            Self::exponent,
             &[(Tok::Star, "*"), (Tok::Slash, "/"), (Tok::Percent, "%")],
         )
+    }
+    // `a ** b ** c` is `a ** (b ** c)`. As in TypeScript, a unary operand on
+    // the left needs parentheses: `(-2) ** 2`, never `-2 ** 2`.
+    fn exponent(&mut self) -> PResult<Expr> {
+        let starts_with_paren = self.at(&Tok::LParen);
+        let left = self.unary()?;
+        if !self.at(&Tok::StarStar) {
+            return Ok(left);
+        }
+        if !starts_with_paren && matches!(left.kind, ExprKind::Unary { .. }) {
+            return Err(Diagnostic::error(
+                "SELU0112",
+                "a unary operator before `**` needs parentheses",
+            )
+            .with_span(left.span.clone())
+            .with_help("write `(-x) ** y` or `-(x ** y)`"));
+        }
+        self.bump();
+        let right = self.exponent()?;
+        let span = Span::new(&self.file, left.span.start, right.span.end);
+        Ok(self.mk(
+            ExprKind::Binary {
+                op: "**".to_string(),
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            span,
+        ))
     }
     fn type_gt(&mut self) -> PResult<()> {
         if self.at(&Tok::GtEq) {
