@@ -390,6 +390,7 @@ impl Ctx<'_> {
             returns: self.returns.clone(),
             function_expected: self.function_expected.clone(),
             types: self.types.clone(),
+            hook_target: self.hook_target,
         };
         let t = trial.value_expected(e, Some(expected));
         if !t.assignable_to(expected)

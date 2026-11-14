@@ -45,3 +45,28 @@ fn an_undeclared_member_of_a_game_namespace_is_an_error() {
     // A local of the same name is the program's own value.
     assert!(codes("const Enum = { a: 1 }; const n: number = Enum.a;", &m).is_empty());
 }
+
+// A game value the game data gives no type is an error (SELU0360): its
+// value would be unchecked. Typed FrameXML tables (extractions 30 and 31)
+// pass.
+#[test]
+fn an_untyped_game_value_is_an_error() {
+    let m = manifest();
+    for src in [
+        "const names = LOCALIZED_CLASS_NAMES_MALE;",
+        "const container = WorldMapFrame.GetCanvasContainer();",
+    ] {
+        assert!(codes(src, &m).contains(&"SELU0360".to_string()), "{src}: {:?}", codes(src, &m));
+    }
+    for src in [
+        "const id: number = SOUNDKIT.RAID_WARNING;",
+        "tinsert(UISpecialFrames, \"MyFrame\");",
+        "const r: number = QuestDifficultyColors.trivial.r;",
+        "const zone: number = Enum.UIMapType.Zone;",
+        "const consts: number = Constants.QuestLogConsts.MAXIMUM_NUM_QUESTS_LOG_CAN_ACCEPT;",
+    ] {
+        assert!(codes(src, &m).is_empty(), "{src}: {:?}", codes(src, &m));
+    }
+    // A sound kit name the client does not declare is no value.
+    assert!(!codes("const id: number = SOUNDKIT.NO_SUCH_SOUND;", &m).is_empty());
+}

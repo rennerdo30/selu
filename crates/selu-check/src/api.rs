@@ -150,6 +150,10 @@ fn primitive(name: &str) -> Option<Type> {
         | "LoopType"
         | "FilterMode"
         | "SimpleButtonStateToken"
+        // Font flags ("OUTLINE", "MONOCHROME, THICK"): the documentation
+        // names the type without defining it; Blizzard passes literal
+        // strings (Blizzard_PTRFeedback_Frames.lua:120 SetFont(..., "OUTLINE, THICK")).
+        | "TBFFlags"
         | "ClickButton" => Type::String,
         "number" | "luaIndex" | "uiUnit" | "WOWMONEY" | "fileID" | "Seconds" | "BigUInteger"
         | "BigInteger" | "time_t" | "Milliseconds" | "normalizedValue" | "SingleColorValue"
@@ -559,6 +563,37 @@ fn widget_field<'a>(
     })
 }
 impl Ctx<'_> {
+    /// A game value whose type the game data does not give (a global with no
+    /// declared type, or a function or method whose result type the data
+    /// names but never defines). Using it would be unchecked, so it is an
+    /// error (SELU0360) until the game data types it.
+    pub(crate) fn untyped_game(&mut self, what: &str, ty: &Type, span: &selu_diagnostics::Span) {
+        // Untyped, or untyped behind `?` / a secret; a result list
+        // (multiple results) is open when any of its values is.
+        fn open(t: &Type) -> bool {
+            match t {
+                Type::Tuple(items) => items.iter().any(open),
+                t => t.is_open() && !matches!(crate::shape_of(t), Type::Error),
+            }
+        }
+        let open = match ty {
+            Type::Function { ret, unspecified_callback: false, .. } => !self.hook_target && open(ret),
+            t => open(t),
+        };
+        // Hand-made test fixtures name globals without types on purpose;
+        // generated game data never sets the flag.
+        if !open || self.manifest.fixture {
+            return;
+        }
+        self.out.push(
+            err(
+                "SELU0360",
+                format!("`{what}` has no checked type in the game data on {}", self.target()),
+                span,
+            )
+            .with_help("its value would be unchecked; the game data needs a type for it (an extraction overlay)"),
+        );
+    }
     // Only immutable declarations borrowed from prepared manifests may be cached.
     fn cached_api_signature(&self, m: &Manifest, d: &Declaration, name: Option<&str>) -> Type {
         let key = (
@@ -637,17 +672,19 @@ impl Ctx<'_> {
                 .function(self.manifest, &format!("{root}.{name}"))
         {
             self.types.mark_api_receiver(object.id);
-            return Some(
-                f.signature
-                    .as_ref()
-                    .map(|d| self.cached_api_signature(self.manifest, d, Some(&f.name)))
-                    .unwrap_or(Type::Untyped),
-            );
+            let ty = f
+                .signature
+                .as_ref()
+                .map(|d| self.cached_api_signature(self.manifest, d, Some(&f.name)))
+                .unwrap_or(Type::Untyped);
+            self.untyped_game(&format!("{root}.{name}"), &ty, &object.span);
+            return Some(ty);
         }
         if let Some(root) = object.dotted_name()
             && self.lookup(root.split('.').next().unwrap_or("")).is_none()
             && let Some(ty) = qualified_global(self.manifest, &format!("{root}.{name}"))
         {
+            self.untyped_game(&format!("{root}.{name}"), &ty, &object.span);
             return Some(ty);
         }
         // A documented constants table is closed: a field it does not list
@@ -744,6 +781,7 @@ impl Ctx<'_> {
                     api_semantics.plain_result = d.name.starts_with("Create");
                 }
             }
+            self.untyped_game(&format!("{widget}:{name}"), &ty, &object.span);
             return Some(ty);
         }
         let mut field_type = None;
@@ -798,6 +836,7 @@ impl Ctx<'_> {
         if let Some(member) = self.frame_member(t, name, object)
             && member != Type::Untyped
         {
+            self.untyped_game(&format!("{widget}:{name}"), &member, &object.span);
             return Some(member);
         }
         self.out.push(err("SELU0582",format!("widget `{widget}` has no declared member `{name}` on {}",self.target()),&object.span).with_help("use a declared widget member or a typed frameFamily suffix lookup for a named child global"));

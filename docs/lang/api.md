@@ -115,6 +115,30 @@ arguments of native APIs; ordinary Selu function assignment keeps its existing
 contract.
 
 
+## Untyped game values (SELU0360)
+
+"It compiles" means "it was checked", so a game value whose type the game
+data does not give is an error, SELU0360, where Selu code uses it:
+
+- a global with no declared type (`LOCALIZED_CLASS_NAMES_MALE` until the game
+  data types it);
+- a game function or method whose result type the data names but never
+  defines, including a multiple-result function where any result is
+  untyped (`WorldMapFrame:GetCanvasContainer()`, a Lua mixin method the
+  data only names).
+
+The fix is in the game data, never in the program: an extraction overlay
+types the value from Blizzard's own source, cited (extractions 30 to 33
+typed `QuestDifficultyColors`, `SOUNDKIT`, `UISpecialFrames`, the bag item
+button setters and the backdrop methods this way; the documentation's
+undefined font flag type `TBFFlags` is a string).
+
+Not reported: `Constants` (the root of the documented constants tables;
+each member is typed where it is read), the method a `hook` names (a
+post-hook never sees the result; its arguments are still the method's), and
+hand-made test fixtures (`fixture = true` in the manifest), which name
+globals without types on purpose. Generated game data never sets that flag.
+
 ## Opaque native callback payloads
 
 A reviewed callback slot with no evidenced payload type is `opaque<slot>` in

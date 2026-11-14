@@ -245,7 +245,10 @@ impl Ctx<'_> {
                 }
                 Some(ty @ Type::Widget(..)) => {
                     let ty = ty.clone();
-                    match self.api_member(&ty, name, &args[0]) {
+                    self.hook_target = true;
+                    let member = self.api_member(&ty, name, &args[0]);
+                    self.hook_target = false;
+                    match member {
                         Some(f @ Type::Function { .. }) => method = Some((ty, f)),
                         Some(Type::Error) => {}
                         Some(_) => self.out.push(

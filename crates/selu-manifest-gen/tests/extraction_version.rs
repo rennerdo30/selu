@@ -161,6 +161,24 @@ const CONTRACTS: &[(u32, &str)] = &[
         30,
         "5855b50a2e7c51b109c5174a4f8fe6dddfc0cdfc54a4e4a60b6b5a41a7ca9738",
     ),
+    // FrameXML tables Selu code reads that had no type: SOUNDKIT and
+    // UISpecialFrames (untyped game values are an error, SELU0360).
+    (
+        31,
+        "5f281a38c5df1352429c77f85c4304c5f49db70bc04968d1d6edc158aea1712f",
+    ),
+    // The bag item button setters Selu code calls (SetBagID, SetHasItem,
+    // SetReadable), typed from their Blizzard bodies (SELU0360).
+    (
+        32,
+        "81d7b4c0b72be2f4594249a62ca046c3799f6abc201660984514a88c28d5477a",
+    ),
+    // The backdrop methods Selu code calls (SetBackdrop with its backdrop
+    // table, SetBackdropBorderColor), typed from Backdrop.lua (SELU0360).
+    (
+        33,
+        "2f29791a95d6816bb8a0a071dd412fa984eb473d5605d23390dedcae11aa4a06",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

@@ -68,12 +68,23 @@ export class ItemSlot {
       this.icon.SetTexture(icon ?? "Interface\\Icons\\INV_Misc_QuestionMark");
     }
     this.count.region.SetText(count != null && count > 1 ? tostring(count) : "");
-    // Item quality is Blizzard's information colour, never a theme token.
-    const color = quality != null && quality >= 2 ? ITEM_QUALITY_COLORS.get(quality) : null;
-    for (const edge of this.edges) {
-      if (color != null) { edge.SetVertexColor(color.r, color.g, color.b, 0.9); }
-      edge.SetShown(color != null);
+    // Item quality is Blizzard's information colour, never a theme token:
+    // C_Item.GetItemQualityColor, which Blizzard's own ITEM_QUALITY_COLORS
+    // table is built from (ColorConstants.lua).
+    let shown = false;
+    if (quality != null && quality >= 2) {
+      try {
+        const [r, g, b] = C_Item.GetItemQualityColor(quality);
+        const cr = readable(r);
+        const cg = readable(g);
+        const cb = readable(b);
+        if (cr != null && cg != null && cb != null) {
+          for (const edge of this.edges) { edge.SetVertexColor(cr, cg, cb, 0.9); }
+          shown = true;
+        }
+      } catch {}
     }
+    for (const edge of this.edges) { edge.SetShown(shown); }
   }
 
   Clear() {

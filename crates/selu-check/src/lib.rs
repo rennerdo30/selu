@@ -117,6 +117,7 @@ pub fn check_program_with_options(
         aliases: Default::default(),
         classes: Default::default(),
         types: TypeTable::default(),
+        hook_target: false,
     };
     ctx.block(&program.stmts, &[], Vec::new());
     ctx.finish_alias_diagnostics();
@@ -240,6 +241,7 @@ impl PreparedTarget {
             aliases: Default::default(),
             classes,
             types: TypeTable::default(),
+            hook_target: false,
         };
         let setup = clock.elapsed();
         ctx.block(&program.stmts, &[], Vec::new());
@@ -359,6 +361,10 @@ struct Ctx<'a> {
     returns: Vec<Vec<(Type, Span)>>,
     function_expected: Vec<Option<Type>>,
     types: TypeTable,
+    /// Resolving the method a `hook` names: its result never reaches Selu
+    /// code (a post-hook sees only the arguments), so an untyped result is
+    /// no unchecked value there.
+    hook_target: bool,
 }
 
 fn err(code: &str, msg: impl Into<String>, span: &Span) -> Diagnostic {
@@ -964,7 +970,15 @@ impl Ctx<'_> {
                 self.check_ready(name, &b, span);
                 self.type_of(name).unwrap_or(Type::Error)
             }
-            None if self.index.has_global(name) => self.api_global(name),
+            None if self.index.has_global(name) => {
+                let t = self.api_global(name);
+                // `Constants` is the root of the documented constants tables
+                // (like `Enum`); its members are typed where they are read.
+                if name != "Constants" {
+                    self.untyped_game(name, &t, span);
+                }
+                t
+            }
             None => {
                 self.out.push(
                     err("SELU0310", format!("`{name}` is not declared"), span)
