@@ -580,11 +580,16 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
         method.entry.evidence = Some(method.evidence);
         note(&method.note)?;
         evidence(method.evidence, &method.live_probe)?;
-        let widget = m
-            .widgets
-            .iter_mut()
-            .find(|w| w.name == method.widget)
-            .ok_or("method overlay widget does not exist")?;
+        // One overlay serves every build of its family. A factory type
+        // (`SourceObject_<Factory>`) exists only in builds whose source
+        // proves the factory, so an older build without it is skipped; any
+        // other missing widget is a mistake in the overlay.
+        let Some(widget) = m.widgets.iter_mut().find(|w| w.name == method.widget) else {
+            if method.widget.starts_with("SourceObject_") {
+                continue;
+            }
+            return Err("method overlay widget does not exist".into());
+        };
         widget.methods.retain(|f| f.name != method.entry.name);
         widget.methods.push(method.entry);
         widget.methods.sort_by(|a, b| a.name.cmp(&b.name));
@@ -730,6 +735,19 @@ mod tests {
         assert_eq!(m.member_fields[0].owner, "TabMixin");
         m.member_fields.clear();
         m.data_globals.pop();
+        // A method overlay on a factory type this build does not generate
+        // does not apply; on any other missing widget it is an error.
+        let method = |widget: &str| {
+            format!(
+                "[[methods]]
+widget='{widget}'
+evidence='source'
+note='pin abc file.lua:1'
+entry={{ name='Insert', type='Function' }}"
+            )
+        };
+        apply_overlay(&mut m, &method("SourceObject_CreateNothing")).unwrap();
+        assert!(apply_overlay(&mut m, &method("NoSuchWidget")).is_err());
         assert!(apply_overlay(&mut m, "[interface]\nvalue=1\nnote=''").is_err());
         assert!(apply_overlay(&mut m, "[[globals]]\nname='Test'").is_err());
         let a = encode(&mut m).unwrap();

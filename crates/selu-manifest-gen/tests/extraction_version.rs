@@ -179,6 +179,21 @@ const CONTRACTS: &[(u32, &str)] = &[
         33,
         "2f29791a95d6816bb8a0a071dd412fa984eb473d5605d23390dedcae11aa4a06",
     ),
+    // Tab system, scroll box view and map canvas methods Selu code calls
+    // (AddTab, SetTabVisuallySelected, SetElementExtent,
+    // SetElementInitializer, SetMapID), typed from their bodies (SELU0360).
+    (
+        34,
+        "dc69ed45f4eef10942f1a0c948d24b565f3fa561e5db194d8a0fa52921161084",
+    ),
+    // The scroll box list API Selu code drives: list views' element extent
+    // and initializer, ScrollBoxListMixin Init and SetDataProvider, data
+    // providers' Insert (SELU0360). A method overlay on a factory type an
+    // older build of the family does not generate is skipped there.
+    (
+        35,
+        "31d5270bc6067550cd6c5a931c3ce0bb1cb45e78b6585495f2ef19d929894d5d",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

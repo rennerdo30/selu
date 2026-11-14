@@ -1488,3 +1488,121 @@ entry = { name = "BackdropTemplateMixin.SetBackdrop", params = ["backdropInfo"],
 evidence = "source"
 note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Backdrop.lua:429 `BackdropTemplateMixin:SetBackdropBorderColor(r, g, b, a)` colours the edge pieces (`a or 1`); returns nothing."
 entry = { name = "BackdropTemplateMixin.SetBackdropBorderColor", params = ["r", "g", "b", "a"], evidence = "source", signature = { name = "SetBackdropBorderColor", type = "Function", arguments = [{ name = "r", type = "number", attributes = { Nilable = false } }, { name = "g", type = "number", attributes = { Nilable = false } }, { name = "b", type = "number", attributes = { Nilable = false } }, { name = "a", type = "number", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_SharedXML/Backdrop.lua" } } }
+
+# Extraction 34: tab system, scroll box view and map canvas methods (SELU0360)
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:489 the element factory creates each row from the template or frame type and calls `initializer(frame, elementData)`."
+entry = { name = "SeluScrollBoxElementInitializer", type = "CallbackType", arguments = [{ name = "frame", type = "SimpleFrame", attributes = { Nilable = false } }, { name = "elementData", type = "LuaValueVariant", attributes = { Nilable = true } }] }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/TabSystem/TabSystemTemplates.lua:234 `TabSystemMixin:SetTabVisuallySelected` marks the tab whose ID equals `tabID` selected; returns nothing."
+entry = { name = "TabSystemMixin.SetTabVisuallySelected", params = ["tabID"], evidence = "source", signature = { name = "SetTabVisuallySelected", type = "Function", arguments = [{ name = "tabID", type = "number", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_SharedXML/Shared/TabSystem/TabSystemTemplates.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:668 `ScrollBoxListViewMixin:SetElementExtent` stores `math.max(extent, 1)`; returns nothing."
+entry = { name = "ScrollBoxListViewMixin.SetElementExtent", params = ["extent"], evidence = "source", signature = { name = "SetElementExtent", type = "Function", arguments = [{ name = "extent", type = "number", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxLinearView.lua:102 `ScrollBoxListLinearViewMixin:SetElementExtent` clears cached data and calls ScrollBoxListViewMixin.SetElementExtent; returns nothing."
+entry = { name = "ScrollBoxListLinearViewMixin.SetElementExtent", params = ["extent"], evidence = "source", signature = { name = "SetElementExtent", type = "Function", arguments = [{ name = "extent", type = "number", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_SharedXML/Shared/Scroll/ScrollBoxLinearView.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:487 `ScrollBoxListViewMixin:SetElementInitializer` sets an element factory calling `factory(frameTemplateOrFrameType, initializer)`; returns nothing."
+entry = { name = "ScrollBoxListViewMixin.SetElementInitializer", params = ["frameTemplateOrFrameType", "initializer"], evidence = "source", signature = { name = "SetElementInitializer", type = "Function", arguments = [{ name = "frameTemplateOrFrameType", type = "cstring", attributes = { Nilable = false } }, { name = "initializer", type = "SeluScrollBoxElementInitializer", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua" } } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_MapCanvas/Blizzard_MapCanvas.lua:37 `MapCanvasMixin:SetMapID` shows the map `mapID` on the canvas; returns nothing."
+entry = { name = "MapCanvasMixin.SetMapID", params = ["mapID"], evidence = "source", signature = { name = "SetMapID", type = "Function", arguments = [{ name = "mapID", type = "number", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_MapCanvas/Blizzard_MapCanvas.lua" } } }
+
+# Extraction 35: scroll box list views and data providers (SELU0360)
+[[methods]]
+widget = "SourceObject_CreateScrollBoxListLinearView"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:668 `CreateScrollBoxListLinearView()` returns a list view whose SetElementExtent stores `math.max(extent, 1)`."
+entry = { name = "SetElementExtent", type = "Function", arguments = [{ name = "extent", type = "number", attributes = { Nilable = false } }], returns = [] }
+
+[[methods]]
+widget = "SourceObject_CreateScrollBoxListLinearView"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:487 `CreateScrollBoxListLinearView()` returns a list view; SetElementInitializer creates rows from the template or frame type and calls `initializer(frame, elementData)` (the callback type of extraction 34)."
+entry = { name = "SetElementInitializer", type = "Function", arguments = [{ name = "frameTemplateOrFrameType", type = "cstring", attributes = { Nilable = false } }, { name = "initializer", type = "SeluScrollBoxElementInitializer", attributes = { Nilable = false } }], returns = [] }
+
+[[methods]]
+widget = "SourceObject_CreateScrollBoxListGridView"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:668 `CreateScrollBoxListGridView()` returns a list view whose SetElementExtent stores `math.max(extent, 1)`."
+entry = { name = "SetElementExtent", type = "Function", arguments = [{ name = "extent", type = "number", attributes = { Nilable = false } }], returns = [] }
+
+[[methods]]
+widget = "SourceObject_CreateScrollBoxListGridView"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:487 `CreateScrollBoxListGridView()` returns a list view; SetElementInitializer creates rows from the template or frame type and calls `initializer(frame, elementData)` (the callback type of extraction 34)."
+entry = { name = "SetElementInitializer", type = "Function", arguments = [{ name = "frameTemplateOrFrameType", type = "cstring", attributes = { Nilable = false } }, { name = "initializer", type = "SeluScrollBoxElementInitializer", attributes = { Nilable = false } }], returns = [] }
+
+[[methods]]
+widget = "SourceObject_CreateScrollBoxListSequenceView"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:668 `CreateScrollBoxListSequenceView()` returns a list view whose SetElementExtent stores `math.max(extent, 1)`."
+entry = { name = "SetElementExtent", type = "Function", arguments = [{ name = "extent", type = "number", attributes = { Nilable = false } }], returns = [] }
+
+[[methods]]
+widget = "SourceObject_CreateScrollBoxListSequenceView"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:487 `CreateScrollBoxListSequenceView()` returns a list view; SetElementInitializer creates rows from the template or frame type and calls `initializer(frame, elementData)` (the callback type of extraction 34)."
+entry = { name = "SetElementInitializer", type = "Function", arguments = [{ name = "frameTemplateOrFrameType", type = "cstring", attributes = { Nilable = false } }, { name = "initializer", type = "SeluScrollBoxElementInitializer", attributes = { Nilable = false } }], returns = [] }
+
+[[methods]]
+widget = "SourceObject_CreateScrollBoxListTreeListView"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:668 `CreateScrollBoxListTreeListView()` returns a list view whose SetElementExtent stores `math.max(extent, 1)`."
+entry = { name = "SetElementExtent", type = "Function", arguments = [{ name = "extent", type = "number", attributes = { Nilable = false } }], returns = [] }
+
+[[methods]]
+widget = "SourceObject_CreateScrollBoxListTreeListView"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxListView.lua:487 `CreateScrollBoxListTreeListView()` returns a list view; SetElementInitializer creates rows from the template or frame type and calls `initializer(frame, elementData)` (the callback type of extraction 34)."
+entry = { name = "SetElementInitializer", type = "Function", arguments = [{ name = "frameTemplateOrFrameType", type = "cstring", attributes = { Nilable = false } }, { name = "initializer", type = "SeluScrollBoxElementInitializer", attributes = { Nilable = false } }], returns = [] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBoxLinearView.lua:246 the list views ScrollBoxListMixin:Init accepts: CreateScrollBoxListLinearView, CreateScrollBoxListGridView, CreateScrollBoxListSequenceView, CreateScrollBoxListTreeListView."
+entry = { name = "SeluScrollBoxListView", attributes = { SeluUnion = ["SourceObject_CreateScrollBoxListLinearView", "SourceObject_CreateScrollBoxListGridView", "SourceObject_CreateScrollBoxListSequenceView", "SourceObject_CreateScrollBoxListTreeListView"] } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua:563 `ScrollBoxListMixin:Init(view)` flushes and installs the list view; returns nothing."
+entry = { name = "ScrollBoxListMixin.Init", params = ["view"], evidence = "source", signature = { name = "Init", type = "Function", arguments = [{ name = "view", type = "SeluScrollBoxListView", attributes = { Nilable = false } }], returns = [], attributes = { file = "Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua" } } }
+
+[[methods]]
+widget = "SourceObject_CreateDataProvider"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/DataProvider.lua:77 `CreateDataProvider()` returns a data provider whose Insert(...) inserts each value as is."
+entry = { name = "Insert", type = "Function", arguments = [{ name = "...", type = "LuaValueVariant", attributes = { Nilable = true } }], returns = [] }
+
+[[methods]]
+widget = "SourceObject_CreateTreeDataProvider"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/DataProvider.lua:77 `CreateTreeDataProvider()` returns a data provider whose Insert(...) inserts each value as is."
+entry = { name = "Insert", type = "Function", arguments = [{ name = "...", type = "LuaValueVariant", attributes = { Nilable = true } }], returns = [] }
+
+[[methods]]
+widget = "SourceObject_CreateIndexRangeDataProvider"
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/DataProvider.lua:77 `CreateIndexRangeDataProvider()` returns a data provider whose Insert(...) inserts each value as is."
+entry = { name = "Insert", type = "Function", arguments = [{ name = "...", type = "LuaValueVariant", attributes = { Nilable = true } }], returns = [] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/DataProvider.lua:277 the data providers a list view takes: CreateDataProvider, CreateTreeDataProvider, CreateIndexRangeDataProvider."
+entry = { name = "SeluScrollBoxDataProvider", attributes = { SeluUnion = ["SourceObject_CreateDataProvider", "SourceObject_CreateTreeDataProvider", "SourceObject_CreateIndexRangeDataProvider"] } }
+
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 18c6d677b605b312f3d813d498404631fb941977 Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua:703 `ScrollBoxListMixin:SetDataProvider(dataProvider, retainScrollPosition)` hands the provider to the view and scrolls to the start unless `retainScrollPosition` (ScrollBoxConstants.RetainScrollPosition is true); returns nothing."
+entry = { name = "ScrollBoxListMixin.SetDataProvider", params = ["dataProvider", "retainScrollPosition"], evidence = "source", signature = { name = "SetDataProvider", type = "Function", arguments = [{ name = "dataProvider", type = "SeluScrollBoxDataProvider", attributes = { Nilable = false } }, { name = "retainScrollPosition", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua" } } }
