@@ -155,6 +155,12 @@ const CONTRACTS: &[(u32, &str)] = &[
         29,
         "17827de02891603adf3ead318d447f1c97701244bf1a3d91700978f48bad022f",
     ),
+    // Blizzard's quest difficulty colours (QuestDifficultyColors) for the
+    // Quest Guide (M8).
+    (
+        30,
+        "5855b50a2e7c51b109c5174a4f8fe6dddfc0cdfc54a4e4a60b6b5a41a7ca9738",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

@@ -1249,3 +1249,20 @@ evidence = "source"
 note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_Channels/VoiceUtils.lua:116 Blizzard uses the engine constant `LE_PARTY_CATEGORY_INSTANCE` as a party category number; the value is the client own, not a literal."
 
 # Extraction 29: constants tables under the names the client publishes (M8)
+
+# Extraction 30: quest difficulty colours (M8)
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_FrameXMLBase/Classic/Constants.lua:257 declares each QuestDifficultyColors entry as { r, g, b, font }; Blizzard reads the colour channels and the font name."
+entry = { name = "SeluQuestDifficultyColor", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "r", type = "number" }, { name = "g", type = "number" }, { name = "b", type = "number" }, { name = "font", type = "cstring" }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_FrameXMLBase/Classic/Constants.lua:257 declares the QuestDifficultyColors keys (impossible, verydifficult, difficult, standard, trivial, header); Blizzard reads them by name (Blizzard_GroupFinder/Shared/LFGFrame.lua:1673)."
+entry = { name = "SeluQuestDifficultyColors", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "impossible", type = "SeluQuestDifficultyColor" }, { name = "verydifficult", type = "SeluQuestDifficultyColor" }, { name = "difficult", type = "SeluQuestDifficultyColor" }, { name = "standard", type = "SeluQuestDifficultyColor" }, { name = "trivial", type = "SeluQuestDifficultyColor" }, { name = "header", type = "SeluQuestDifficultyColor" }] }
+
+[[globals]]
+name = "QuestDifficultyColors"
+type = "SeluQuestDifficultyColors"
+evidence = "source"
+note = "wow-ui-source 68e0a2ec559d9761dfc4e7f864c3944f9d758a49 Interface/AddOns/Blizzard_FrameXMLBase/Classic/Constants.lua:257 Blizzard FrameXML global table of quest difficulty colours; typed by the structure above, the values are the client own."

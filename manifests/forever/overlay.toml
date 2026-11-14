@@ -1491,3 +1491,20 @@ entry = { name = "QuestLogConsts", type = "Constants", fields = [{ name = "MAXIM
 evidence = "source"
 note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_ChatFrameBase/Shared/SlashCommands.lua:1164 Blizzard's Lua reads the engine table `Constants.CharacterNameSeparatorConsts` (CHARACTERNAME_REALMNAME_SEPARATOR, CHARACTERNAME_SURNAME_SEPARATOR), separators it joins and splits character names with; no documentation declares it. Typed as strings, the values stay the client's."
 entry = { name = "CharacterNameSeparatorConsts", type = "Constants", fields = [{ name = "CHARACTERNAME_REALMNAME_SEPARATOR", type = "cstring" }, { name = "CHARACTERNAME_SURNAME_SEPARATOR", type = "cstring" }] }
+
+# Extraction 30: quest difficulty colours (M8)
+[[tables]]
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua:195 declares each QuestDifficultyColors entry as { r, g, b, font }; Blizzard reads the colour channels and the font name."
+entry = { name = "SeluQuestDifficultyColor", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "r", type = "number" }, { name = "g", type = "number" }, { name = "b", type = "number" }, { name = "font", type = "cstring" }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua:195 declares the QuestDifficultyColors keys (impossible, verydifficult, difficult, standard, trivial, header, disabled); Blizzard reads them by name (Blizzard_FrameXMLUtil/Mainline/DifficultyUtil.lua:3)."
+entry = { name = "SeluQuestDifficultyColors", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "impossible", type = "SeluQuestDifficultyColor" }, { name = "verydifficult", type = "SeluQuestDifficultyColor" }, { name = "difficult", type = "SeluQuestDifficultyColor" }, { name = "standard", type = "SeluQuestDifficultyColor" }, { name = "trivial", type = "SeluQuestDifficultyColor" }, { name = "header", type = "SeluQuestDifficultyColor" }, { name = "disabled", type = "SeluQuestDifficultyColor" }] }
+
+[[globals]]
+name = "QuestDifficultyColors"
+type = "SeluQuestDifficultyColors"
+evidence = "source"
+note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua:195 Blizzard FrameXML global table of quest difficulty colours; typed by the structure above, the values are the client own."
