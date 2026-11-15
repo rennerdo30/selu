@@ -25,7 +25,7 @@ license = "MIT"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
+toml = "1.2"
 
 # The test suite runs `selu` hundreds of times; each run parses large manifest
 # JSON files. Optimising dependencies and the manifest crate even in dev and

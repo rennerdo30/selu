@@ -16,6 +16,6 @@ selu-manifest = { path = "../selu-manifest" }
 selu-check = { path = "../selu-check" }
 selu-lower = { path = "../selu-lower" }
 toml.workspace = true
-mlua = { version = "0.10", features = ["lua51", "vendored"] }
+mlua = { version = "0.12", features = ["lua51", "vendored"] }
 
 selu-gamedata = { path = "../selu-gamedata" }
