@@ -991,3 +991,51 @@ test("world", () => {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn npc_interactions_drive_gossip_quest_dialog_and_loot_natives() {
+    let dir = project(
+        "npc-interactions",
+        r#"
+test("npc", () => {
+  sim.interact("gossip", { text: "Hello.", options: [{ id: 11, name: "Train me." }], available: [{ questID: 5, title: "Boars" }] });
+  expect(C_GossipInfo.GetText()).toBe("Hello.");
+  const options = C_GossipInfo.GetOptions();
+  expect(options.length).toBe(1);
+  expect(options[0].gossipOptionID).toBe(11);
+  expect(options[0].orderIndex).toBe(0);
+  expect(C_GossipInfo.GetAvailableQuests()[0].questID).toBe(5);
+  C_GossipInfo.SelectOption(11);
+  C_GossipInfo.CloseGossip();
+  expect(C_GossipInfo.GetOptions().length).toBe(0);
+  sim.interact("questComplete", { questID: 7, title: "Boars", money: 120, choices: [{ itemID: 2000, name: "Boots" }, { itemID: 2001, name: "Gloves" }] });
+  expect(GetNumQuestChoices()).toBe(2);
+  expect(GetTitleText()).toBe("Boars");
+  expect(GetRewardMoney()).toBe(120);
+  expect(C_Item.DoesItemExistByID(2001)).toBe(true);
+  GetQuestReward(2);
+  expect(GetNumQuestChoices()).toBe(0);
+  sim.interact("loot", { slots: [{ itemID: 2589, name: "Linen Cloth", count: 2, money: false }] });
+  expect(GetNumLootItems()).toBe(1);
+  expect(GetLootSlotType(1)).toBe(Enum.LootSlotType.Item);
+  LootSlot(1);
+  expect(GetNumLootItems()).toBe(0);
+  expect(sim.interactions().join("|")).toBe("SelectOption 11|CloseGossip|GetQuestReward 2|LootSlot 1");
+  expect(sim.uiErrors().length).toBe(0);
+});
+"#,
+    );
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"Runner\"\ntargets = [\"wowf@1.60.1.70790\"]\n",
+    )
+    .unwrap();
+    let out = run(&dir, None);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

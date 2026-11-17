@@ -34,13 +34,16 @@ function C_Item.GetItemIcon(location) if locationItem(location) then return 1344
 function C_Item.GetItemQuality(location) if locationItem(location) then return 1 end end
 function C_Item.GetItemName(location) local id=locationItem(location);return id and 'Simulated item '..id end
 local cached={}
+-- Items other world state names (quest rewards, loot): known like carried ones.
+__selu_world_known_items={}
 local function known(value)
     local id=tonumber(value) or (type(value)=='string' and tonumber(string.match(value,'item:(%d+)')))
     if not id or id<=0 then return nil end
-    if cached[id] then return id end
+    if cached[id] or __selu_world_known_items[id] then return id end
     for _,slots in pairs(__selu_world_bags) do for _,entry in ipairs(slots) do if entry==id then cached[id]=true;return id end end end
 end
 function C_Item.IsItemDataCachedByID(value) return known(value)~=nil end
+function C_Item.DoesItemExistByID(value) return known(value)~=nil end
 function C_Item.IsItemDataCached(location) return locationItem(location)~=nil end
 function C_Item.GetItemInfo(value)
     local id=known(value);if not id then return nil end

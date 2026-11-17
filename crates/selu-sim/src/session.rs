@@ -90,6 +90,10 @@ pub enum HostCommand {
     Eval {
         code: String,
     },
+    Interact {
+        kind: String,
+        data: HostValue,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -700,6 +704,16 @@ impl Session {
     pub fn default_ui_log_end(&self) -> usize {
         self.default_ui_log_end
     }
+    /// Errors Blizzard's UI or the addon raised since the current observation
+    /// began (each test starts one): handler failures, protected-range
+    /// failures and the engine's error reports.
+    pub fn ui_errors(&self) -> Vec<String> {
+        lock(&self.sim.logs)
+            .iter()
+            .filter(|s| s.starts_with("error:") || s.starts_with("callback error"))
+            .cloned()
+            .collect()
+    }
     pub fn default_ui_startup_errors(&self) -> Vec<String> {
         lock(&self.sim.logs)
             .iter()
@@ -1134,6 +1148,16 @@ impl Session {
             items: items.to_vec(),
         });
         self.sim.set_bag(bag, items)
+    }
+    pub fn interact(&self, kind: &str, data: HostValue) -> SimResult<()> {
+        lock(&self.sim.state).commands.push(HostCommand::Interact {
+            kind: kind.into(),
+            data: data.clone(),
+        });
+        self.sim.interact(kind, &data)
+    }
+    pub fn interactions(&self) -> SimResult<Vec<String>> {
+        self.sim.interactions()
     }
     pub fn host_commands(&self) -> Vec<HostCommand> {
         lock(&self.sim.state).commands.clone()
@@ -1794,7 +1818,24 @@ impl Vm {
                 Ok(())
             })?,
         )?;
+        // The engine's error report, which Blizzard's error handler
+        // (Blizzard_ScriptErrors, assertsafe) hands every UI error to: kept
+        // in the session log like the client's own error report.
+        let error_logs = logs.clone();
+        lua.globals().raw_set(
+            "ProcessExceptionClient",
+            lua.create_function(move |_, (message, error): (Value, Value)| {
+                let text = |v: &Value| match v {
+                    Value::String(s) => Some(s.to_string_lossy().to_string()),
+                    _ => None,
+                };
+                let line = text(&error).or_else(|| text(&message)).unwrap_or_default();
+                lock(&error_logs).push(format!("error: {line}"));
+                Ok(())
+            })?,
+        )?;
         crate::host_lua::load(&lua, include_str!("inventory.lua")).exec()?;
+        crate::host_lua::load(&lua, include_str!("interaction.lua")).exec()?;
         crate::world::install_restrictions(&lua, &ctx)?;
         crate::taint::install(&lua, &ctx)?;
         crate::trace::install(&lua, &ctx)?;

@@ -455,6 +455,22 @@ impl Vm {
         Ok(())
     }
 
+    /// Opens an NPC interaction (gossip, the quest dialog's greeting, detail,
+    /// progress or reward panel, a loot window) with its data, or `close`s
+    /// the open one, firing the event the server would (interaction.lua).
+    pub fn interact(&self, kind: &str, data: &crate::session::HostValue) -> SimResult<()> {
+        let interact: mlua::Function = self.lua.globals().raw_get("__selu_interact")?;
+        let value = data.to_lua(&self.lua)?;
+        crate::core::call_lua::<()>(&self.lua, interact, (kind, value))
+    }
+
+    /// What the player chose in NPC interactions, in order (`SelectOption 12`,
+    /// `AcceptQuest`, `GetQuestReward 2`, `LootSlot 1`, ...).
+    pub fn interactions(&self) -> SimResult<Vec<String>> {
+        let log: Table = self.lua.globals().raw_get("__selu_world_interaction_log")?;
+        log.sequence_values::<String>().map(|v| v.map_err(Into::into)).collect()
+    }
+
     /// The minimap tracking list; MINIMAP_UPDATE_TRACKING.
     pub fn set_tracking(&self, entries: &[TrackingInfo]) -> SimResult<()> {
         let globals = self.lua.globals();

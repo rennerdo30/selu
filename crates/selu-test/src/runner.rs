@@ -120,6 +120,21 @@ fn overlay(m: &mut selu_manifest::Manifest) {
             json!([{"name":"prints","type":"table","attributes":{"InnerType":"string"}}]),
         ),
         (
+            "sim.interact",
+            json!([{"name":"kind","type":"string"},{"name":"data","type":"unknown","attributes":{"Nilable":true}}]),
+            json!([]),
+        ),
+        (
+            "sim.uiErrors",
+            json!([]),
+            json!([{"name":"errors","type":"table","attributes":{"InnerType":"string"}}]),
+        ),
+        (
+            "sim.interactions",
+            json!([]),
+            json!([{"name":"interactions","type":"table","attributes":{"InnerType":"string"}}]),
+        ),
+        (
             "sim.frame",
             json!([{"name":"name","type":"string"}]),
             json!([{"name":"frame","type":"Frame","attributes":{"Nilable":true}}]),
@@ -1159,6 +1174,24 @@ fn install(
     sim.set(
         "frame",
         lua.create_function(move |lua, name: String| frame_proxy(lua, s.clone(), name))?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "interact",
+        lua.create_function(move |_, (kind, data): (String, Value)| {
+            let data = selu_sim::session::HostValue::capture(&data)?;
+            s.borrow().interact(&kind, data)
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "uiErrors",
+        lua.create_function(move |lua, ()| lua.create_sequence_from(s.borrow().ui_errors()))?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "interactions",
+        lua.create_function(move |lua, ()| lua.create_sequence_from(s.borrow().interactions()?))?,
     )?;
     let s = session.clone();
     sim.set(
