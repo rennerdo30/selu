@@ -125,6 +125,41 @@ fn overlay(m: &mut selu_manifest::Manifest) {
             json!([]),
         ),
         (
+            "sim.hover",
+            json!([{"name":"x","type":"number"},{"name":"y","type":"number"}]),
+            json!([]),
+        ),
+        (
+            "sim.click",
+            json!([{"name":"x","type":"number"},{"name":"y","type":"number"},{"name":"button","type":"string","attributes":{"Nilable":true}}]),
+            json!([]),
+        ),
+        (
+            "sim.mouseDown",
+            json!([{"name":"x","type":"number"},{"name":"y","type":"number"},{"name":"button","type":"string","attributes":{"Nilable":true}}]),
+            json!([]),
+        ),
+        (
+            "sim.mouseUp",
+            json!([{"name":"x","type":"number"},{"name":"y","type":"number"},{"name":"button","type":"string","attributes":{"Nilable":true}}]),
+            json!([]),
+        ),
+        (
+            "sim.drag",
+            json!([{"name":"fromX","type":"number"},{"name":"fromY","type":"number"},{"name":"toX","type":"number"},{"name":"toY","type":"number"}]),
+            json!([]),
+        ),
+        (
+            "sim.wheel",
+            json!([{"name":"x","type":"number"},{"name":"y","type":"number"},{"name":"delta","type":"number"}]),
+            json!([]),
+        ),
+        (
+            "sim.typeText",
+            json!([{"name":"text","type":"string"}]),
+            json!([]),
+        ),
+        (
             "sim.pressKey",
             json!([{"name":"key","type":"string"}]),
             json!([]),
@@ -1190,6 +1225,55 @@ fn install(
     )?;
     let s = session.clone();
     sim.set(
+        "hover",
+        lua.create_function(move |_, (x, y): (f64, f64)| s.borrow().hover(x, y).map(|_| ()))?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "click",
+        lua.create_function(move |_, (x, y, button): (f64, f64, Option<String>)| {
+            s.borrow()
+                .click(x, y, button.as_deref().unwrap_or("LeftButton"))
+                .map(|_| ())
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "mouseDown",
+        lua.create_function(move |_, (x, y, button): (f64, f64, Option<String>)| {
+            s.borrow()
+                .mouse_down(x, y, button.as_deref().unwrap_or("LeftButton"))
+                .map(|_| ())
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "mouseUp",
+        lua.create_function(move |_, (x, y, button): (f64, f64, Option<String>)| {
+            s.borrow()
+                .mouse_up(x, y, button.as_deref().unwrap_or("LeftButton"))
+                .map(|_| ())
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "drag",
+        lua.create_function(move |_, (fx, fy, tx, ty): (f64, f64, f64, f64)| {
+            s.borrow().drag((fx, fy), (tx, ty))
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "wheel",
+        lua.create_function(move |_, (x, y, delta): (f64, f64, f64)| s.borrow().wheel(x, y, delta))?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "typeText",
+        lua.create_function(move |_, text: String| s.borrow().type_text(&text))?,
+    )?;
+    let s = session.clone();
+    sim.set(
         "pressKey",
         lua.create_function(move |_, key: String| {
             let session = s.borrow();
@@ -1430,7 +1514,13 @@ fn guard_game_apis(lua: &Lua, stale: Rc<std::cell::Cell<bool>>) -> mlua::Result<
             namespaces.push(name);
         }
     }
+    // The secret-value checks only inspect the value they are given and read
+    // no Session state, so `readable(...)` keeps working after a reload.
+    const VALUE_CHECKS: [&str; 4] = ["canaccessvalue", "issecretvalue", "canaccesstable", "issecrettable"];
     for name in functions {
+        if VALUE_CHECKS.contains(&name.as_str()) {
+            continue;
+        }
         if name == "print" || standard.globals().get::<Value>(name.as_str())?.is_nil() {
             wrap(lua, &globals, name, stale.clone())?;
         }

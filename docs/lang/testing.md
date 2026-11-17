@@ -83,6 +83,7 @@ Helpers:
 | `sim.lockCVar(name)` | The addon's SetCVar on it returns but changes nothing, as for a CVar the client refuses |
 | `sim.interact(kind, data)` | Open an NPC interaction as the server would and fire its event: `"gossip"` (`text`, `options: [{ id, name, orderIndex }]`, `available`/`active: [{ questID, title, complete }]`), `"questGreeting"` (`text`, `active`, `available`), `"questDetail"` (`questID`, `title`, `text`, `objectives`), `"questProgress"` (`completable`, `required: [{ itemID, name, count }]`, `moneyRequired`), `"questComplete"` (`choices`, `rewards`, `money`, `xp`), `"loot"` (`slots: [{ itemID, name, count, money }]`); `"close"` ends the open one. Blizzard's own frames answer the events and read C_GossipInfo, the quest dialog functions and the loot functions; the named items exist in the client's item data |
 | `sim.interactions()` | What the player chose, in order, as the server would receive it: `SelectOption 12`, `SelectOptionByIndex 1`, `SelectAvailableQuest 5`, `AcceptQuest`, `CompleteQuest`, `GetQuestReward 2`, `CloseQuest`, `LootSlot 1`, `CloseGossip`, ... |
+| `sim.hover(x, y)`, `sim.click(x, y, button?)`, `sim.mouseDown(x, y, button?)`, `sim.mouseUp(x, y, button?)`, `sim.drag(fromX, fromY, toX, toY)`, `sim.wheel(x, y, delta)`, `sim.typeText(text)` | Mouse and keyboard input as the player gives it, in UIParent coordinates (a frame's `GetCenter()`), through the same hit testing, scripts, drag and focus rules as Studio. `drag` moves at once; to drag something that follows the cursor in `OnUpdate`, press, `hover`, `sim.advanceTime` and release |
 | `sim.pressKey(key)` | Press and release a key as the player would: a focused edit box, then shown keyboard-enabled frames (top to bottom, until one does not pass the key on), then override bindings (`SetOverrideBinding`, `SetOverrideBindingClick`: priority ones first, the most recent first) and the ordinary bindings. A click binding clicks its button with the binding's mouse button on the edge the button registered for (`RegisterForClicks`) |
 | `sim.uiErrors()` | The errors Blizzard's UI or the addon raised during this test (handler failures, protected-range failures, the engine's error reports), so a test can show a flow ran without one |
 | `sim.prints()` | Read captured prints as an array |
@@ -101,7 +102,7 @@ transparent rebinding of imported code across reload is not implemented.
 If addon loading or login throws after VM replacement, the retired generation is
 still invalidated. An error before replacement leaves the existing generation current.
 
-Use Session helpers after reload. `sim.now()` reads the current clock, and
+Use Session helpers after reload. The secret-value checks (`canaccessvalue`, `issecretvalue` and their table forms) read no Session state and stay usable, so `readable(...)` works on frames looked up after a reload. `sim.now()` reads the current clock, and
 `sim.frame(name)` looks up the current generation's frame. Lookups are canonical
 within a generation; old frames and replacement frames have different identities.
 Frame methods preserve multiple results and translate frame arguments, returned
