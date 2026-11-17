@@ -1701,3 +1701,52 @@ entry = { name = "SeluScrollBoxDataProvider", attributes = { SeluUnion = ["Sourc
 evidence = "source"
 note = "wow-ui-source ca8368f2f2380cbe696854f7f2646387c278a61b Interface/AddOns/Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua:703 `ScrollBoxListMixin:SetDataProvider(dataProvider, retainScrollPosition)` hands the provider to the view and scrolls to the start unless `retainScrollPosition` (ScrollBoxConstants.RetainScrollPosition is true); returns nothing."
 entry = { name = "ScrollBoxListMixin.SetDataProvider", params = ["dataProvider", "retainScrollPosition"], evidence = "source", signature = { name = "SetDataProvider", type = "Function", arguments = [{ name = "dataProvider", type = "SeluScrollBoxDataProvider", attributes = { Nilable = false } }, { name = "retainScrollPosition", type = "bool", attributes = { Nilable = true } }], returns = [], attributes = { file = "Blizzard_SharedXML/Shared/Scroll/ScrollBox.lua" } } }
+
+# Extraction 36: one frame's own Lua fields and typed list rows (M9 Dialog Keys)
+[[fields]]
+owner = "StaticPopupTemplate"
+evidence = "source"
+note = "wow-ui-source 9dc84f0d3bbae1768ac3405b3716000bd93eda06 Interface/AddOns/Blizzard_StaticPopup/StaticPopup.lua:405 StaticPopup_Show stores the dialog name it shows on the dialog frame (`dialog.which = which`); the frames are StaticPopupTemplate frames (Blizzard_StaticPopup_Game/GameDialog.xml:348). Nil before the frame first shows a dialog."
+entry = { name = "which", type = "string", attributes = { Nilable = true } }
+
+[[fields]]
+owner = "QuestFrameGreetingPanel"
+evidence = "source"
+note = "wow-ui-source 9dc84f0d3bbae1768ac3405b3716000bd93eda06 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/QuestFrame.lua:316 QuestFrameGreetingPanel_OnLoad creates the panel's pool of quest title buttons (`CreateFramePool(\"BUTTON\", self, \"QuestTitleButtonTemplate\")`); QuestFrameGreetingPanel_OnShow (:346, :392) acquires one per active, then available quest and gives each its section index with SetID."
+entry = { name = "titleButtonPool", type = "W3SecureFramePool_Button", attributes = { Nilable = false } }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 9dc84f0d3bbae1768ac3405b3716000bd93eda06 Interface/AddOns/Blizzard_UIPanels_Game/Shared/GossipFrameShared.lua:251-281 the `info` of a gossip row is the C_GossipInfo quest or option entry it shows: GetAvailableQuests/GetActiveQuests entries (questID, title) or GetOptions entries (gossipOptionID, orderIndex, name). Each field is present only on its kind of row."
+entry = { name = "SeluGossipElementInfo", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "questID", type = "number", attributes = { Nilable = true } }, { name = "title", type = "string", attributes = { Nilable = true } }, { name = "gossipOptionID", type = "number", attributes = { Nilable = true } }, { name = "orderIndex", type = "number", attributes = { Nilable = true } }, { name = "name", type = "string", attributes = { Nilable = true } }] }
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 9dc84f0d3bbae1768ac3405b3716000bd93eda06 Interface/AddOns/Blizzard_UIPanels_Game/Shared/GossipFrameShared.lua:251-281 GossipFrameSharedMixin:Update inserts each row as { buttonType, text, info, index }: GOSSIP_BUTTON_TYPE_TITLE (1) with text, DIVIDER (2), OPTION (3), ACTIVE_QUEST (4) and AVAILABLE_QUEST (5) with info and index (:1-5)."
+entry = { name = "SeluGossipElementData", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "buttonType", type = "number", attributes = { Nilable = false } }, { name = "text", type = "string", attributes = { Nilable = true } }, { name = "info", type = "SeluGossipElementInfo", attributes = { Nilable = true } }, { name = "index", type = "number", attributes = { Nilable = true } }] }
+
+[[lists]]
+owner = "GossipFrame.GreetingPanel.ScrollBox"
+rows = { type = "Frame", templates = [] }
+data = "SeluGossipElementData"
+evidence = "source"
+note = "wow-ui-source 9dc84f0d3bbae1768ac3405b3716000bd93eda06 Interface/AddOns/Blizzard_UIPanels_Game/Shared/GossipFrameShared.lua:151-163 the greeting list's rows are GossipGreetingTextTemplate and GossipSpacerFrameTemplate frames and GossipTitleOptionButtonTemplate, GossipTitleActiveQuestButtonTemplate and GossipTitleAvailableQuestButtonTemplate buttons, chosen by the element data's buttonType."
+
+[[tables]]
+evidence = "source"
+note = "wow-ui-source 9dc84f0d3bbae1768ac3405b3716000bd93eda06 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/LootFrame.lua:237 LootFrame:UpdateLootFrame inserts each loot slot as { slotIndex, group, quality }; LootFrameBaseElementMixin:GetSlotIndex (:433) reads slotIndex."
+entry = { name = "SeluLootElementData", type = "Structure", attributes = { SeluClosed = true }, fields = [{ name = "slotIndex", type = "number", attributes = { Nilable = false } }, { name = "group", type = "number", attributes = { Nilable = true } }, { name = "quality", type = "number", attributes = { Nilable = true } }] }
+
+[[lists]]
+owner = "LootFrame.ScrollBox"
+rows = { type = "Frame", templates = ["LootFrameBaseElementTemplate"] }
+data = "SeluLootElementData"
+evidence = "source"
+note = "wow-ui-source 9dc84f0d3bbae1768ac3405b3716000bd93eda06 Interface/AddOns/Blizzard_UIPanels_Game/Mainline/LootFrame.lua:91-99 the loot list's rows are LootFrameItemElementTemplate, LootFrameMoneyElementTemplate or LootFrameBaseElementTemplate frames, by the slot's loot type; all inherit LootFrameBaseElementTemplate (Mainline/LootFrame.xml:3-100)."
+
+# Extraction 37: a list or field on a child a frame gets from its template
+# (LootFrame.ScrollBox), and the keyboard focus read
+[[functions]]
+evidence = "source"
+note = "wow-ui-source 9dc84f0d3bbae1768ac3405b3716000bd93eda06 Interface/AddOns/Blizzard_Game/Mainline/EventImplementation.lua:119 `GetCurrentKeyBoardFocus()` returns the frame that holds keyboard focus (an edit box Blizzard then asks for ClearFocus/HasStickyFocus), or nil when none does."
+entry = { name = "GetCurrentKeyBoardFocus", params = [], evidence = "source", signature = { name = "GetCurrentKeyBoardFocus", type = "Function", arguments = [], returns = [{ name = "focus", type = "SimpleFrame", attributes = { Nilable = true } }], attributes = { file = "Blizzard_Game/Mainline/EventImplementation.lua" } } }

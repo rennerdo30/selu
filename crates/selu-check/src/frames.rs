@@ -1,6 +1,6 @@
 //! Template identities travel with nominal widgets, including aliases/imports.
 use crate::{Ctx, Type, api, err};
-use selu_manifest::{ChildKey, Declaration, Manifest};
+use selu_manifest::{ChildKey, Declaration, ListRows, Manifest};
 use selu_syntax::{Expr, ExprKind};
 
 // Outer Some means the member exists. Inner None is an untyped override and
@@ -133,6 +133,90 @@ fn child_key<'a>(m: &'a Manifest, bases: &[String], key: &str) -> Option<(&'a Ch
 /// Adds `@has:<template>` for every template in `templates` and all the
 /// templates they inherit. Member lookup keeps using the `@template:` tags
 /// and their order; `@has:` only answers "does this frame carry template X".
+/// The frame identities a widget type carries: its global name and the keyed
+/// child path it was reached through.
+fn identities(bases: &[String]) -> impl Iterator<Item = &str> {
+    bases
+        .iter()
+        .filter_map(|b| {
+            b.strip_prefix("@global:")
+                .or_else(|| b.strip_prefix("@element:"))
+                .or_else(|| b.strip_prefix("@path:"))
+        })
+}
+/// A value Blizzard's Lua assigns on this one frame (`InboxFrame.openMailID`).
+fn own_field<'a>(m: &'a Manifest, bases: &[String], name: &str) -> Option<&'a Declaration> {
+    identities(bases).find_map(|id| {
+        m.member_fields
+            .iter()
+            .find(|f| f.owner == id && f.entry.name == name)
+            .map(|f| &f.entry)
+    })
+}
+/// The list (ScrollBox) this frame is, when an overlay types its rows.
+fn list_of<'a>(m: &'a Manifest, bases: &[String]) -> Option<&'a ListRows> {
+    identities(bases).find_map(|id| m.lists.iter().find(|l| l.owner == id))
+}
+/// The list a row frame belongs to (`@list:<owner>`).
+fn row_list<'a>(m: &'a Manifest, bases: &[String]) -> Option<&'a ListRows> {
+    bases
+        .iter()
+        .find_map(|b| b.strip_prefix("@list:"))
+        .and_then(|owner| m.lists.iter().find(|l| l.owner == owner))
+}
+/// One row frame of `list`: its widget type and templates, tagged with the
+/// list so `GetElementData` knows its element data.
+fn row_type(m: &Manifest, list: &ListRows) -> Type {
+    let mut ty = api::named(m, &list.row_type, 0);
+    if let Type::Widget(_, bases) = &mut ty {
+        bases.extend(list.row_templates.iter().map(|t| format!("@template:{t}")));
+        bases.push(format!("@list:{}", list.owner));
+        tag_template_closure(m, bases);
+    }
+    ty
+}
+/// `GetFrames` and `ForEachFrame` of a typed list hand out its row type
+/// instead of a plain frame.
+fn with_rows(ty: Type, name: &str, row: &Type) -> Type {
+    let Type::Function {
+        multiple_results,
+        unspecified_callback,
+        api,
+        api_semantics,
+        mut params,
+        ret,
+        required,
+        rest,
+    } = ty
+    else {
+        return ty;
+    };
+    // Results are a result list; GetFrames' one value is the row array.
+    fn rows_of(ty: Type, row: &Type) -> Type {
+        match ty {
+            Type::Array(_) => Type::Array(Box::new(row.clone())),
+            Type::Tuple(values) => Type::Tuple(values.into_iter().map(|v| rows_of(v, row)).collect()),
+            other => other,
+        }
+    }
+    let ret = if name == "GetFrames" { rows_of(*ret, row) } else { *ret };
+    if name == "ForEachFrame"
+        && let Some(Type::Function { params: inner, .. }) = params.first_mut()
+        && let Some(frame) = inner.first_mut()
+    {
+        *frame = row.clone();
+    }
+    Type::Function {
+        multiple_results,
+        unspecified_callback,
+        api,
+        api_semantics,
+        params,
+        ret: Box::new(ret),
+        required,
+        rest,
+    }
+}
 pub(crate) fn tag_template_closure(m: &Manifest, bases: &mut Vec<String>) {
     fn visit(m: &Manifest, template: &str, out: &mut Vec<String>) {
         let tag = format!("@has:{template}");
@@ -281,7 +365,7 @@ impl Ctx<'_> {
             .iter()
             .filter(|m| self.target_is_active(m))
             .any(|m| {
-                if child_key(m, bases, name).is_some() {
+                if child_key(m, bases, name).is_some() || own_field(m, bases, name).is_some() {
                     return true;
                 }
                 let names: Vec<_> = if let Some(g) = global {
@@ -300,6 +384,72 @@ impl Ctx<'_> {
             })
     }
     pub(crate) fn frame_member(&mut self, ty: &Type, name: &str, object: &Expr) -> Option<Type> {
+        let Type::Widget(_, bases) = ty else {
+            return None;
+        };
+        let active: Vec<&Manifest> = self
+            .availability
+            .manifests()
+            .iter()
+            .filter(|m| self.target_is_active(m))
+            .collect();
+        // A row of a typed list: the list view gives it GetElementData.
+        if name == "GetElementData"
+            && let Some((m, data)) = active.iter().find_map(|m| {
+                row_list(m, bases).and_then(|l| l.data.as_deref()).map(|d| (*m, d))
+            })
+        {
+            if let Some(missing) = active
+                .iter()
+                .find(|m| row_list(m, bases).and_then(|l| l.data.as_ref()).is_none())
+            {
+                self.out.push(err("SELU0581", format!("the element data of these rows is unavailable on {}", missing.target_string()), &object.span)
+                    .with_help("use lists typed on every selected target, or guard with has(...)"));
+                return Some(Type::Error);
+            }
+            return Some(Type::Function {
+                multiple_results: false,
+                unspecified_callback: false,
+                api: Default::default(),
+                api_semantics: Default::default(),
+                params: vec![],
+                ret: Box::new(api::named(m, data, 0)),
+                required: 0,
+                rest: None,
+            });
+        }
+        // A value Blizzard's Lua assigns on this one frame.
+        if let Some((m, d)) = active
+            .iter()
+            .find_map(|m| own_field(m, bases, name).map(|d| (*m, d)))
+        {
+            if let Some(missing) = active.iter().find(|m| own_field(m, bases, name).is_none()) {
+                self.out.push(err("SELU0581", format!("frame field `{name}` is unavailable on {}", missing.target_string()), &object.span)
+                    .with_help("use fields available on every selected target, or guard with has(...)"));
+                return Some(Type::Error);
+            }
+            return Some(api::field_type(m, d));
+        }
+        // A typed list's rows.
+        let rows = if matches!(name, "GetFrames" | "ForEachFrame") {
+            active
+                .iter()
+                .find_map(|m| list_of(m, bases).map(|l| row_type(m, l)))
+        } else {
+            None
+        };
+        if let Some(row) = rows {
+            if let Some(missing) = active.iter().find(|m| list_of(m, bases).is_none()) {
+                self.out.push(err("SELU0581", format!("the rows of this list are untyped on {}", missing.target_string()), &object.span)
+                    .with_help("use lists typed on every selected target, or guard with has(...)"));
+                return Some(Type::Error);
+            }
+            let plain = self.frame_member_plain(ty, name, object)?;
+            return Some(with_rows(plain, name, &row));
+        }
+        self.frame_member_plain(ty, name, object)
+    }
+    fn frame_member_plain(&mut self, ty: &Type, name: &str, object: &Expr) -> Option<Type> {
         let Type::Widget(_, bases) = ty else {
             return None;
         };
@@ -338,6 +488,17 @@ impl Ctx<'_> {
                 // A list element has no single place in the XML tree.
                 if !child.array {
                     child_bases.push(format!("@element:{element}"));
+                    // The child of this one frame, also when a shared
+                    // template declares it (`LootFrame.ScrollBox`).
+                    if let Some(owner) = bases
+                        .iter()
+                        .find_map(|b| b.strip_prefix("@global:").or_else(|| b.strip_prefix("@path:")))
+                    {
+                        let path = format!("{owner}.{name}");
+                        if path != *element {
+                            child_bases.push(format!("@path:{path}"));
+                        }
+                    }
                 }
                 child_bases.extend(child.templates.iter().map(|t| format!("@template:{t}")));
                 tag_template_closure(m, child_bases);

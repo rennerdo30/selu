@@ -289,7 +289,7 @@ newest stored extraction, so a compiler extraction fix can improve an existing p
 No project target, output directory, TOC or lock key contains an extraction ID.
 
 The generator's `EXTRACTION_VERSION` is re-exported from
-`selu_manifest::store::EXTRACTION_VERSION`. It is **5 for timer-handle metadata** (4 is non-fatal pool withholding warnings, 3 the corrected W3 overlay, 2 its retained initial revision, and 1 the W2 baseline). Bump this
+`selu_manifest::store::EXTRACTION_VERSION`. It is **37** (2026-11-18: a frame's own Lua fields and typed list rows for Dialog Keys); `CONTRACTS` in `crates/selu-manifest-gen/tests/extraction_version.rs` notes what each version added (5 timer-handle metadata, 4 non-fatal pool withholding warnings, 3 the corrected W3 overlay, 2 its retained initial revision, 1 the W2 baseline). Bump this
 constant whenever extraction output rules change, including sourced signatures or
 overlay changes. The workspace test `extraction_sources_and_overlays_require_version_bump`
 enforces this with a frozen SHA-256 contract per version in

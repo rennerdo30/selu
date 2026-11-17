@@ -463,14 +463,41 @@ pub struct Overlay {
     pub globals: Vec<GlobalOverlay>,
     #[serde(default)]
     pub methods: Vec<MethodOverlay>,
-    /// Values Blizzard's Lua assigns on frames of a mixin or template.
+    /// Values Blizzard's Lua assigns on frames of a mixin or template, or on
+    /// one named frame or keyed child.
     #[serde(default)]
     pub fields: Vec<FieldOverlay>,
+    /// Lists (ScrollBoxes) whose rows and element data Blizzard's Lua builds.
+    #[serde(default)]
+    pub lists: Vec<ListOverlay>,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListRowsOverlay {
+    #[serde(rename = "type")]
+    pub ty: String,
+    #[serde(default)]
+    pub templates: Vec<String>,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListOverlay {
+    /// The list's identity: a frame global or a keyed child path.
+    pub owner: String,
+    pub rows: ListRowsOverlay,
+    /// A structure table naming the element data's fields.
+    #[serde(default)]
+    pub data: Option<String>,
+    pub note: String,
+    pub evidence: Evidence,
+    #[serde(default)]
+    pub live_probe: Option<String>,
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FieldOverlay {
-    /// The mixin or template that carries the field.
+    /// The mixin or template that carries the field, or the one frame (a
+    /// frame global or a keyed child path) Blizzard's Lua assigns it on.
     pub owner: String,
     pub entry: Declaration,
     pub note: String,
@@ -607,12 +634,13 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
             return Err("field overlay needs a value type".into());
         }
         // One overlay serves every build of its family. A build whose source
-        // does not have this mixin or template has no such field.
+        // does not have this mixin, template or frame has no such field.
         if !m
             .templates
             .iter()
             .chain(&m.data_globals)
             .any(|d| d.name == field.owner)
+            && !frame_identity(m, &field.owner)
         {
             continue;
         }
@@ -621,6 +649,29 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
         m.member_fields.push(selu_manifest::MemberField {
             owner: field.owner,
             entry: field.entry,
+        });
+    }
+    for list in overlay.lists {
+        note(&list.note)?;
+        evidence(list.evidence, &list.live_probe)?;
+        if list.rows.ty.is_empty() {
+            return Err("list overlay needs a row widget type".into());
+        }
+        // A build without this list (or its structure) has no such rows.
+        if !frame_identity(m, &list.owner)
+            || list
+                .data
+                .as_ref()
+                .is_some_and(|data| !m.tables.iter().any(|t| &t.name == data))
+        {
+            continue;
+        }
+        m.lists.retain(|l| l.owner != list.owner);
+        m.lists.push(selu_manifest::ListRows {
+            owner: list.owner,
+            row_type: list.rows.ty,
+            row_templates: list.rows.templates,
+            data: list.data,
         });
     }
     for g in overlay.globals {
@@ -642,6 +693,46 @@ pub fn apply_overlay(m: &mut Manifest, text: &str) -> Result<()> {
         });
     }
     Ok(())
+}
+/// Whether `owner` names one frame of this build: a frame global, or a keyed
+/// child path (`GossipFrame.GreetingPanel.ScrollBox`) recorded from the XML,
+/// including a child a frame global gets from its templates
+/// (`LootFrame.ScrollBox`).
+fn frame_identity(m: &Manifest, owner: &str) -> bool {
+    if m.globals.iter().any(|g| g.name == owner) {
+        return true;
+    }
+    let Some((parent, key)) = owner.rsplit_once('.') else {
+        return false;
+    };
+    let keyed = |element: &str| {
+        m.child_keys
+            .iter()
+            .any(|entry| entry.owner == element && entry.children.iter().any(|c| c.key == key))
+    };
+    if keyed(parent) {
+        return true;
+    }
+    // A frame global's templates, and the templates they inherit.
+    let mut pending: Vec<String> = m
+        .globals
+        .iter()
+        .find(|g| g.name == parent)
+        .map(|g| g.templates.clone())
+        .unwrap_or_default();
+    let mut seen = BTreeSet::new();
+    while let Some(template) = pending.pop() {
+        if !seen.insert(template.clone()) {
+            continue;
+        }
+        if keyed(&template) {
+            return true;
+        }
+        if let Some(d) = m.templates.iter().find(|t| t.name == template) {
+            pending.extend(d.inherits.iter().cloned());
+        }
+    }
+    false
 }
 pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
     detect_frame_families(m);
@@ -672,6 +763,7 @@ pub fn encode(m: &mut Manifest) -> Result<Vec<u8>> {
     m.child_keys.sort_by(|a, b| a.owner.cmp(&b.owner));
     m.member_fields
         .sort_by(|a, b| (&a.owner, &a.entry.name).cmp(&(&b.owner, &b.entry.name)));
+    m.lists.sort_by(|a, b| a.owner.cmp(&b.owner));
     selu_manifest::format::encode_manifest(m)
 }
 #[cfg(test)]
@@ -735,6 +827,63 @@ mod tests {
         assert_eq!(m.member_fields[0].owner, "TabMixin");
         m.member_fields.clear();
         m.data_globals.pop();
+        // One frame's own field: a frame global or a keyed child path.
+        m.globals.push(selu_manifest::GlobalEntry {
+            name: "InboxFrame".into(),
+            ty: Some("Frame".into()),
+            value: None,
+            templates: vec![],
+            evidence: selu_manifest::Evidence::Source,
+        });
+        m.child_keys.push(selu_manifest::ChildKeys {
+            owner: "InboxFrame".into(),
+            children: vec![selu_manifest::ChildKey {
+                key: "ScrollBox".into(),
+                ty: "Frame".into(),
+                templates: vec![],
+                element: None,
+                array: false,
+            }],
+        });
+        apply_overlay(&mut m, &field("InboxFrame", "number")).unwrap();
+        apply_overlay(&mut m, &field("InboxFrame.ScrollBox", "number")).unwrap();
+        apply_overlay(&mut m, &field("InboxFrame.Missing", "number")).unwrap();
+        // A child the frame gets from its template.
+        m.globals[0].templates = vec!["PanelTemplate".into()];
+        m.child_keys.push(selu_manifest::ChildKeys {
+            owner: "PanelTemplate".into(),
+            children: vec![selu_manifest::ChildKey {
+                key: "Inset".into(),
+                ty: "Frame".into(),
+                templates: vec![],
+                element: None,
+                array: false,
+            }],
+        });
+        apply_overlay(&mut m, &field("InboxFrame.Inset", "number")).unwrap();
+        let owners: Vec<_> = m.member_fields.iter().map(|f| f.owner.as_str()).collect();
+        assert_eq!(owners, ["InboxFrame", "InboxFrame.ScrollBox", "InboxFrame.Inset"]);
+        m.member_fields.clear();
+        // A list's rows and element data; a build without the list or the
+        // structure gets none.
+        let list = |owner: &str, data: &str| {
+            format!(
+                "[[lists]]\nowner='{owner}'\ndata='{data}'\nevidence='source'\nnote='pin abc file.lua:1'\nrows={{ type='Button', templates=['RowTemplate'] }}"
+            )
+        };
+        apply_overlay(&mut m, &list("InboxFrame.ScrollBox", "RowData")).unwrap();
+        assert!(m.lists.is_empty());
+        m.tables
+            .push(serde_json::from_str(r#"{"name":"RowData","type":"Structure"}"#).unwrap());
+        apply_overlay(&mut m, &list("InboxFrame.ScrollBox", "RowData")).unwrap();
+        apply_overlay(&mut m, &list("InboxFrame.Missing", "RowData")).unwrap();
+        assert_eq!(m.lists.len(), 1);
+        assert_eq!(m.lists[0].row_type, "Button");
+        assert_eq!(m.lists[0].row_templates, ["RowTemplate"]);
+        m.lists.clear();
+        m.tables.clear();
+        m.child_keys.clear();
+        m.globals.clear();
         // A method overlay on a factory type this build does not generate
         // does not apply; on any other missing widget it is an error.
         let method = |widget: &str| {

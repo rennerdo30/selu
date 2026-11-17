@@ -87,6 +87,29 @@ with the source line as evidence:
 - `[[fields]]` types a value a mixin or template assigns. It is read-only.
   A build whose source lacks that mixin has no such field.
 - `[[functions]]` named `<Mixin>.<Method>` types a mixin method.
+- A `[[fields]]` owner may also name one frame: a frame global
+  (`QuestFrameGreetingPanel.titleButtonPool`) or a keyed child path
+  (`GossipFrame.GreetingPanel`), including a child the frame gets from a
+  shared template (`LootFrame.ScrollBox`). The field exists on that frame
+  only.
+- `[[lists]]` types the rows of one list (a ScrollBox) that Blizzard's Lua
+  builds: `owner` is the list's frame identity as above, `rows` the row
+  frames' widget type and templates, `data` a structure for the element data
+  the list view hands each row. `list.GetFrames()` and
+  `list.ForEachFrame(fn)` then give rows of that type, and
+  `row.GetElementData()` returns the structure:
+
+```selu
+for (const row of GossipFrame.GreetingPanel.ScrollBox.GetFrames()) {
+    const info = row.GetElementData().info;
+    if (info != null) { print(info.questID); }
+}
+```
+
+  A plain frame has no `GetElementData` (SELU0582), and a list typed on only
+  some selected targets is SELU0581. Rows of different templates share the
+  widget type and templates the overlay names; reach a sub-template's child
+  through `GetChildren()` and `IsObjectType`.
 
 The overlays currently type, on every family: the scroll list
 (`ForEachFrame`, `GetFrames`, `RegisterCallback` for the frame events), the

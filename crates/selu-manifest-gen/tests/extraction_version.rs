@@ -194,6 +194,21 @@ const CONTRACTS: &[(u32, &str)] = &[
         35,
         "31d5270bc6067550cd6c5a931c3ce0bb1cb45e78b6585495f2ef19d929894d5d",
     ),
+    // One frame's own Lua fields (a field overlay owned by a frame global or
+    // keyed child path) and typed list rows ([[lists]]: a ScrollBox's row
+    // type and element data), for Dialog Keys: StaticPopup `which`, the quest
+    // greeting's title button pool, the gossip and loot lists.
+    (
+        36,
+        "717a097f8e19797818db66dded0c2509438e2b3df6e87ff36267a5b0aa793d5c",
+    ),
+    // A frame identity includes a child the frame global gets from its
+    // templates (`LootFrame.ScrollBox`, from ScrollingFlatPanelTemplate), so
+    // a list or field overlay can name it; GetCurrentKeyBoardFocus.
+    (
+        37,
+        "a5457c33a7a35dc3f2a46a2febb3d41a195aa44937e0c26bc63a2e5598732331",
+    ),
 ];
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>, accept: fn(&Path) -> bool) {

@@ -178,7 +178,8 @@ pub struct ChildKey {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemberField {
-    /// The mixin or template name.
+    /// The mixin or template name; or one frame's identity (a frame global or
+    /// a keyed child path) for a value Blizzard assigns on that frame alone.
     pub owner: String,
     pub entry: Declaration,
 }
@@ -192,6 +193,24 @@ pub struct ChildKeys {
     pub children: Vec<ChildKey>,
 }
 
+/// A list (a ScrollBox) whose rows Blizzard's Lua builds: the widget type and
+/// templates of its row frames, and the structure of the element data each
+/// row carries (`row:GetElementData()`, set by the list view). XML records
+/// neither; a reviewed overlay types them for one list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRows {
+    /// The list's identity: a frame global or a keyed child path
+    /// (`GossipFrame.GreetingPanel.ScrollBox`).
+    pub owner: String,
+    pub row_type: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub row_templates: Vec<String>,
+    /// A structure table naming the element data's fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
@@ -203,6 +222,9 @@ pub struct Manifest {
     /// Sorted by owner, then name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_fields: Vec<MemberField>,
+    /// Sorted by owner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lists: Vec<ListRows>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
