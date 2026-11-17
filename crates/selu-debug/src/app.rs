@@ -652,6 +652,18 @@ impl Studio {
             studio.send(Command::LoadAddon { dir });
         }
         studio.send(Command::Login);
+        // `SELU_STUDIO_SLASH="/rk;/rklog"`: slash commands run after login,
+        // in order (for screenshots of an addon's windows without a person).
+        if let Ok(lines) = std::env::var("SELU_STUDIO_SLASH") {
+            // A second of game time first: addons finish their login work
+            // (timers after PLAYER_LOGIN) before a player could type.
+            studio.send(Command::AdvanceTime { seconds: 1.0 });
+            for line in lines.split(';').map(str::trim).filter(|l| !l.is_empty()) {
+                studio.send(Command::Slash { line: line.into() });
+            }
+            // Windows that fade in are fully shown in the shot.
+            studio.send(Command::AdvanceTime { seconds: 0.5 });
+        }
         studio.send(Command::Snapshot);
         studio
     }
