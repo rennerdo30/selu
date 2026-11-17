@@ -5,3 +5,4 @@ export { hexEncode, hexDecode, adler32, truncateBytes, plainText } from "./text"
 export { now, durationParts, DurationParts, TimerHandle, after, every } from "./time";
 export { warnOnceTo } from "./log";
 export { inCombatLockdown, playerInCombat, playerClassToken, playerLevel, shiftKeyDown } from "./game";
+export { addonFile } from "./files";

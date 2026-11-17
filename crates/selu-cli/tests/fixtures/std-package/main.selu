@@ -1,9 +1,9 @@
-import { finite, wholeNumber, clampOr, inUnitRange, roundTo, hasBit, hexEncode, hexDecode, adler32, truncateBytes, plainText, now, durationParts, after, every, warnOnceTo, inCombatLockdown, playerInCombat, playerClassToken, playerLevel, shiftKeyDown } from "@selu/std";
+import { finite, wholeNumber, clampOr, inUnitRange, roundTo, hasBit, hexEncode, hexDecode, adler32, truncateBytes, plainText, now, durationParts, after, every, warnOnceTo, inCombatLockdown, playerInCombat, playerClassToken, playerLevel, shiftKeyDown, addonFile } from "@selu/std";
 on PLAYER_LOGIN() {
   const warn = warnOnceTo((m) => { print(m); });
   warn("a", `${finite(1) ?? 0} ${wholeNumber(2) ?? 0} ${clampOr(3, 0, 1, 0)} ${inUnitRange(0.5)} ${roundTo(1.25, 1)} ${hasBit(5, 4)}`);
   warn("b", `${hexDecode(hexEncode("x"))} ${adler32("x")} ${truncateBytes("abc", 2)} ${plainText("a|b")} ${now()} ${durationParts(90).minutes}`);
   const t = after(1, () => {}); t.cancel();
   const e = every(1, () => {}); e.cancel();
-  warn("c", `${inCombatLockdown(true)} ${playerInCombat()} ${playerClassToken() ?? ""} ${playerLevel() ?? 0} ${shiftKeyDown()}`);
+  warn("c", `${inCombatLockdown(true)} ${playerInCombat()} ${playerClassToken() ?? ""} ${playerLevel() ?? 0} ${shiftKeyDown()} ${addonFile("Media/Logo")}`);
 }

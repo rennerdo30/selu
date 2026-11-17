@@ -87,6 +87,6 @@ fn std_helpers_behave_under_the_simulator() {
         String::from_utf8_lossy(&out.stderr)
     );
     let report: selu_test::Report = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(report.results.len(), 11, "{stdout}");
+    assert_eq!(report.results.len(), 12, "{stdout}");
     std::fs::remove_dir_all(root).unwrap();
 }

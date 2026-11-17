@@ -975,7 +975,7 @@ pub struct Scenario {
     pub vignettes: Vec<Vignette>,
     pub combat: bool,
     pub money: u64,
-    #[serde(with = "bag_keys")]
+    #[serde(with = "number_keys")]
     pub bags: std::collections::BTreeMap<i32, Vec<u32>>,
     pub zone: String,
     pub subzone: String,
@@ -983,6 +983,12 @@ pub struct Scenario {
     /// The instance type IsInInstance reports: "" or "none" outdoors, else
     /// "party", "raid", "pvp", "arena" or "scenario".
     pub instance: String,
+    /// Maps of the simulated world (as sim.setMap), keyed by map ID: what the
+    /// C_Map position functions, user waypoints and map info answer from.
+    #[serde(with = "number_keys")]
+    pub maps: std::collections::BTreeMap<u32, MapArea>,
+    /// Where the player stands and looks (as sim.setPlayerPosition).
+    pub position: Option<PlayerPosition>,
 }
 impl Scenario {
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
@@ -1068,6 +1074,14 @@ impl Scenario {
             if prior != *items {
                 vm.set_bag(*b, items)?;
             }
+        }
+        let maps: Table = vm.lua.globals().raw_get("__selu_world_maps")?;
+        maps.clear()?;
+        for (id, area) in &self.maps {
+            vm.set_map(*id, area)?;
+        }
+        if let Some(position) = &self.position {
+            vm.set_player_position(position)?;
         }
         let zone: Table = vm.lua.globals().get("__selu_zone")?;
         let map_changed = zone.get::<u32>("map")? != self.map;
@@ -1253,6 +1267,39 @@ impl Scenario {
             .get::<Option<String>>("instance")?
             .filter(|i| i != "none")
             .unwrap_or_default();
+        let maps: Table = globals.raw_get("__selu_world_maps")?;
+        for pair in maps.pairs::<u32, Table>() {
+            let (id, m) = pair?;
+            result.maps.insert(
+                id,
+                MapArea {
+                    name: m.raw_get("name")?,
+                    continent: m.raw_get("continent")?,
+                    north: m.raw_get("north")?,
+                    west: m.raw_get("west")?,
+                    width: m.raw_get("width")?,
+                    height: m.raw_get("height")?,
+                    parent: m.raw_get::<Option<u32>>("parent")?.unwrap_or(0),
+                    user_waypoints: m
+                        .raw_get::<Option<bool>>("user_waypoints")?
+                        .unwrap_or(false),
+                },
+            );
+        }
+        let at: Table = globals.raw_get("__selu_world_position")?;
+        let position = PlayerPosition {
+            continent: at.raw_get("continent")?,
+            north: at.raw_get("north")?,
+            west: at.raw_get("west")?,
+            facing: at.raw_get("facing")?,
+            speed: at.raw_get("speed")?,
+            run_speed: at.raw_get("run")?,
+            unknown: at.raw_get("unknown")?,
+            facing_unknown: at.raw_get("facing_unknown")?,
+        };
+        if position != PlayerPosition::default() {
+            result.position = Some(position);
+        }
         let list: Table = globals.get("__selu_vignettes")?;
         for pair in list.pairs::<String, Table>() {
             let (guid, v) = pair?;
@@ -1271,22 +1318,29 @@ impl Scenario {
 }
 
 // TOML table keys are strings; retain numeric bag IDs in the runtime model.
-mod bag_keys {
+/// Number-keyed tables (bag IDs, map IDs) as TOML tables, whose keys are
+/// strings.
+mod number_keys {
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
-    pub fn serialize<S: serde::Serializer>(
-        bags: &BTreeMap<i32, Vec<u32>>,
+    pub fn serialize<S: serde::Serializer, K: ToString, V: Serialize>(
+        table: &BTreeMap<K, V>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        bags.iter()
+        table
+            .iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect::<BTreeMap<_, _>>()
             .serialize(serializer)
     }
-    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<BTreeMap<i32, Vec<u32>>, D::Error> {
-        BTreeMap::<String, Vec<u32>>::deserialize(deserializer)?
+    pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        K: std::str::FromStr + Ord,
+        K::Err: std::fmt::Display,
+        V: Deserialize<'de>,
+    {
+        BTreeMap::<String, V>::deserialize(deserializer)?
             .into_iter()
             .map(|(k, v)| Ok((k.parse().map_err(serde::de::Error::custom)?, v)))
             .collect()

@@ -3,8 +3,8 @@
 `@selu/std` is the standard library that ships with Selu (SL-74, owner-approved
 2026-11-17). It holds the small helpers addons kept writing for themselves:
 number checks, bit flags, byte-level text encodings, the game clock,
-durations, timers, warn-once logging and protected reads of the player's
-state. Every function is typed and works on every product
+durations, timers, warn-once logging, protected reads of the player's
+state and paths to the addon's own files. Every function is typed and works on every product
 (`wow`, `wowf`, `wow_classic`, `wow_classic_era`, `wow_anniversary`,
 `wow_classic_titan`).
 
@@ -83,6 +83,12 @@ stated fallback, never a Lua error.
 | `playerClassToken(): string?` | The class token (`"WARRIOR"`, `"MAGE"`, ...) |
 | `playerLevel(): number?` | The player's level |
 | `shiftKeyDown(): boolean` | True while a Shift key is held |
+
+## Files
+
+| Function | Result |
+|---|---|
+| `addonFile(path): string` | The client path of a file in this addon's folder, for `SetTexture`, `PlaySoundFile` and fonts: `addonFile("Media\Logo")` is `Interface\AddOns\<folder>\Media\Logo`. It follows the folder the game loaded the addon from (`addonName()`), so a copy installed under another folder name still finds its own art. Forward slashes count as backslashes |
 
 ## Tests
 

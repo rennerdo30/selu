@@ -588,8 +588,35 @@ not discoveries from a game client. Reaction runs from 1 (hated) to 8 (exalted).
 The editor's fields apply with Add / update unit; clear removes the token.
 
 Save/load uses `scenarios/<name>.toml` beneath the open project. The file contains
-units, vignettes, combat, copper, bag item IDs and zone/subzone/map. Loading is a
-replacement of that world setup, emitting transitions for the differences.
+units, vignettes, combat, copper, bag item IDs and zone/subzone/map, plus the
+world's maps and the player's position (the same state as `sim.setMap` and
+`sim.setPlayerPosition`):
+
+```toml
+map = 7001
+zone = "Test fields"
+
+[maps.7001]
+name = "Test fields"
+continent = 3
+north = 1000.0
+west = 2000.0
+width = 400.0
+height = 200.0
+parent = 0
+user_waypoints = true
+
+[position]
+continent = 3
+north = 900.0
+west = 1900.0
+facing = 0.5
+```
+
+Map IDs and geometry in a scenario are made up for the test, never exported
+from client data. Loading is a replacement of that world setup, emitting
+transitions for the differences. Studio preloads one with
+`SELU_STUDIO_SCENARIO_FILE=<file.toml>` (for screenshots of a world state).
 From a test script, call `sim.loadScenario("scenarios/rare-test.toml")` with a
 path relative to the test runner's working directory (or an absolute path).
 No language/checker declarations or Lua project interop are introduced.

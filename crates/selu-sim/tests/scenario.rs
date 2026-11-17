@@ -108,3 +108,48 @@ fn other_state_event_payloads() {
     s.eval("assert(not InCombatLockdown()); assert(events.PLAYER_REGEN_ENABLED)")
         .unwrap();
 }
+#[test]
+fn scenario_maps_and_player_position_round_trip_and_answer_c_map() {
+    use selu_sim::world::{MapArea, PlayerPosition};
+    let s = session();
+    let mut state = Scenario {
+        map: 7001,
+        zone: "Test fields".into(),
+        ..Default::default()
+    };
+    state.maps.insert(
+        7001,
+        MapArea {
+            name: "Test fields".into(),
+            continent: 3,
+            north: 1000.0,
+            west: 2000.0,
+            width: 400.0,
+            height: 200.0,
+            parent: 0,
+            user_waypoints: true,
+        },
+    );
+    state.position = Some(PlayerPosition {
+        continent: Some(3),
+        north: Some(900.0),
+        west: Some(1900.0),
+        facing: Some(0.5),
+        ..Default::default()
+    });
+    // Through TOML, as Studio saves and loads it.
+    let path = std::env::temp_dir().join(format!("selu-scenario-maps-{}.toml", std::process::id()));
+    state.save(&path).unwrap();
+    let loaded = Scenario::load(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(loaded, state);
+    loaded.apply(s.sim()).unwrap();
+    // The same world tables sim.setMap and sim.setPlayerPosition fill, which
+    // the C_Map position functions read once a manifest is installed.
+    s.eval("assert(C_Map.GetBestMapForUnit('player')==7001); local m=__selu_world_maps[7001]; assert(m.name=='Test fields' and m.width==400 and m.user_waypoints==true); local at=__selu_world_position; assert(at.continent==3 and at.north==900 and at.west==1900 and at.facing==0.5)").unwrap();
+    assert_eq!(Scenario::capture(s.sim()).unwrap().maps, state.maps);
+    assert_eq!(Scenario::capture(s.sim()).unwrap().position, state.position);
+    // A scenario without maps removes the ones an earlier one defined.
+    Scenario::default().apply(s.sim()).unwrap();
+    s.eval("assert(__selu_world_maps[7001]==nil)").unwrap();
+}

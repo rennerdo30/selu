@@ -1,4 +1,4 @@
-import { finite, wholeNumber, clampOr, inUnitRange, roundTo, hasBit, hexEncode, hexDecode, adler32, truncateBytes, plainText, now, durationParts, after, every, warnOnceTo, inCombatLockdown, playerInCombat, playerClassToken, playerLevel } from "@selu/std";
+import { finite, wholeNumber, clampOr, inUnitRange, roundTo, hasBit, hexEncode, hexDecode, adler32, truncateBytes, plainText, now, durationParts, after, every, warnOnceTo, inCombatLockdown, playerInCombat, playerClassToken, playerLevel, addonFile } from "@selu/std";
 
 describe("numbers", () => {
   test("finite and whole", () => {
@@ -100,4 +100,9 @@ describe("game", () => {
     expect(playerClassToken()).toBe("MAGE");
     expect(playerLevel()).toBe(42);
   });
+});
+
+test("addonFile names a file in the folder the game loaded the addon from", () => {
+  expect(addonFile("Media\\Logo")).toBe("Interface\\AddOns\\StdCheck\\Media\\Logo");
+  expect(addonFile("Media/HUD/GlyphClose")).toBe("Interface\\AddOns\\StdCheck\\Media\\HUD\\GlyphClose");
 });
