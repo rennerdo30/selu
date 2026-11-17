@@ -94,6 +94,10 @@ pub enum HostCommand {
         kind: String,
         data: HostValue,
     },
+    World {
+        call: String,
+        args: Vec<HostValue>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1156,6 +1160,16 @@ impl Session {
         });
         self.sim.interact(kind, &data)
     }
+    pub fn world_call(&self, call: &str, args: Vec<HostValue>) -> SimResult<()> {
+        lock(&self.sim.state).commands.push(HostCommand::World {
+            call: call.into(),
+            args: args.clone(),
+        });
+        self.sim.world_call(call, &args)
+    }
+    pub fn addon_messages(&self) -> SimResult<Vec<String>> {
+        self.sim.addon_messages()
+    }
     pub fn interactions(&self) -> SimResult<Vec<String>> {
         self.sim.interactions()
     }
@@ -1836,6 +1850,7 @@ impl Vm {
         )?;
         crate::host_lua::load(&lua, include_str!("inventory.lua")).exec()?;
         crate::host_lua::load(&lua, include_str!("interaction.lua")).exec()?;
+        crate::host_lua::load(&lua, include_str!("world_extra.lua")).exec()?;
         crate::world::install_restrictions(&lua, &ctx)?;
         crate::taint::install(&lua, &ctx)?;
         crate::trace::install(&lua, &ctx)?;

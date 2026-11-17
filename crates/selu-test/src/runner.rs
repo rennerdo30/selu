@@ -125,6 +125,21 @@ fn overlay(m: &mut selu_manifest::Manifest) {
             json!([]),
         ),
         (
+            "sim.setWeaponEnchant",
+            json!([{"name":"slot","type":"number"},{"name":"enchant","type":"unknown","attributes":{"Nilable":true}}]),
+            json!([]),
+        ),
+        (
+            "sim.receiveAddonMessage",
+            json!([{"name":"prefix","type":"string"},{"name":"text","type":"string"},{"name":"channel","type":"string","attributes":{"Nilable":true}},{"name":"sender","type":"string","attributes":{"Nilable":true}}]),
+            json!([]),
+        ),
+        (
+            "sim.addonMessages",
+            json!([]),
+            json!([{"name":"messages","type":"table","attributes":{"InnerType":"string"}}]),
+        ),
+        (
             "sim.hover",
             json!([{"name":"x","type":"number"},{"name":"y","type":"number"}]),
             json!([]),
@@ -1225,6 +1240,47 @@ fn install(
     )?;
     let s = session.clone();
     sim.set(
+        "setWeaponEnchant",
+        lua.create_function(move |_, (slot, enchant): (f64, Value)| {
+            let args = vec![
+                selu_sim::session::HostValue::Number(slot),
+                selu_sim::session::HostValue::capture(&enchant)?,
+            ];
+            s.borrow().world_call("setWeaponEnchant", args)
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "receiveAddonMessage",
+        lua.create_function(
+            move |_,
+                  (prefix, text, channel, sender): (
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+            )| {
+                use selu_sim::session::HostValue as H;
+                let opt = |v: Option<String>| v.map(H::String).unwrap_or(H::Nil);
+                s.borrow().world_call(
+                    "receiveAddonMessage",
+                    vec![
+                        H::String(prefix),
+                        H::String(text),
+                        opt(channel),
+                        opt(sender),
+                    ],
+                )
+            },
+        )?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "addonMessages",
+        lua.create_function(move |lua, ()| lua.create_sequence_from(s.borrow().addon_messages()?))?,
+    )?;
+    let s = session.clone();
+    sim.set(
         "hover",
         lua.create_function(move |_, (x, y): (f64, f64)| s.borrow().hover(x, y).map(|_| ()))?,
     )?;
@@ -1265,7 +1321,9 @@ fn install(
     let s = session.clone();
     sim.set(
         "wheel",
-        lua.create_function(move |_, (x, y, delta): (f64, f64, f64)| s.borrow().wheel(x, y, delta))?,
+        lua.create_function(move |_, (x, y, delta): (f64, f64, f64)| {
+            s.borrow().wheel(x, y, delta)
+        })?,
     )?;
     let s = session.clone();
     sim.set(
@@ -1516,7 +1574,12 @@ fn guard_game_apis(lua: &Lua, stale: Rc<std::cell::Cell<bool>>) -> mlua::Result<
     }
     // The secret-value checks only inspect the value they are given and read
     // no Session state, so `readable(...)` keeps working after a reload.
-    const VALUE_CHECKS: [&str; 4] = ["canaccessvalue", "issecretvalue", "canaccesstable", "issecrettable"];
+    const VALUE_CHECKS: [&str; 4] = [
+        "canaccessvalue",
+        "issecretvalue",
+        "canaccesstable",
+        "issecrettable",
+    ];
     for name in functions {
         if VALUE_CHECKS.contains(&name.as_str()) {
             continue;

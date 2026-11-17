@@ -1056,7 +1056,11 @@ pub fn dispatch<R>(
 pub(crate) fn renew_callback_budget(ctx: &Ctx) {
     let mut b = ctx.budget.borrow_mut();
     if !b.exhausted {
+        // Each frame of a long advance gets its own allowance of callbacks
+        // and queued script transitions: a frame that shows and hides
+        // something every frame is not a runaway over many seconds.
         b.callbacks = 0;
+        b.pending_tasks = 0;
     }
 }
 

@@ -68,7 +68,7 @@ Helpers:
 | --- | --- |
 | `sim.fire(event, ...args)` | Dispatch an event |
 | `sim.slash(line)` | Run a registered slash command |
-| `sim.advanceTime(seconds)` | Advance the simulated clock; negative/nonfinite time is an error |
+| `sim.advanceTime(seconds)` | Advance the simulated clock frame by frame; each frame has its own callback and task allowance, so minutes of a full UI are no runaway. Negative or nonfinite time is an error |
 | `sim.reload()` | Save and reload the addon in a new VM |
 | `sim.now()` | Read the current Session clock in seconds |
 | `sim.setMoney(copper)` | Set player money |
@@ -86,6 +86,9 @@ Helpers:
 | `sim.hover(x, y)`, `sim.click(x, y, button?)`, `sim.mouseDown(x, y, button?)`, `sim.mouseUp(x, y, button?)`, `sim.drag(fromX, fromY, toX, toY)`, `sim.wheel(x, y, delta)`, `sim.typeText(text)` | Mouse and keyboard input as the player gives it, in UIParent coordinates (a frame's `GetCenter()`), through the same hit testing, scripts, drag and focus rules as Studio. `drag` moves at once; to drag something that follows the cursor in `OnUpdate`, press, `hover`, `sim.advanceTime` and release |
 | `sim.pressKey(key)` | Press and release a key as the player would: a focused edit box, then shown keyboard-enabled frames (top to bottom, until one does not pass the key on), then override bindings (`SetOverrideBinding`, `SetOverrideBindingClick`: priority ones first, the most recent first) and the ordinary bindings. A click binding clicks its button with the binding's mouse button on the edge the button registered for (`RegisterForClicks`) |
 | `sim.uiErrors()` | The errors Blizzard's UI or the addon raised during this test (handler failures, protected-range failures, the engine's error reports), so a test can show a flow ran without one |
+| `sim.setWeaponEnchant(slot, enchant)` | Give a weapon slot (`Enum.WeaponSlot`: 0 main hand, 1 off hand, 2 ranged) a temporary enchant (`{ enchantID, seconds, charges, icon }`; `null` removes it) and fire WEAPON_ENCHANT_CHANGED and UNIT_INVENTORY_CHANGED. `C_Item.GetWeaponEnchantInfo` and the older `GetWeaponEnchantInfo` read it, and it runs out with the client clock |
+| `sim.receiveAddonMessage(prefix, text, channel?, sender?)` | Another player's addon message arrives: CHAT_MSG_ADDON fires only for a prefix the addon registered (`C_ChatInfo.RegisterAddonMessagePrefix`). Channel defaults to `PARTY`, sender to `Friend-Realm` |
+| `sim.addonMessages()` | What the addon sent with `C_ChatInfo.SendAddonMessage` (or `SendAddonMessageLogged`), in order, as `prefix\|channel\|target\|text` |
 | `sim.prints()` | Read captured prints as an array |
 | `sim.frame(name)` | Look up a named frame; null if missing |
 

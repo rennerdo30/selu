@@ -464,11 +464,36 @@ impl Vm {
         crate::core::call_lua::<()>(&self.lua, interact, (kind, value))
     }
 
+    /// A host change to native world state that world_extra.lua models
+    /// (`__selu_host_<name>`: setWeaponEnchant, receiveAddonMessage).
+    pub fn world_call(&self, name: &str, args: &[crate::session::HostValue]) -> SimResult<()> {
+        let function: mlua::Function = self
+            .lua
+            .globals()
+            .raw_get(format!("__selu_host_{name}"))
+            .map_err(|_| mlua::Error::runtime(format!("unknown world call {name}")))?;
+        let values = args
+            .iter()
+            .map(|a| a.to_lua(&self.lua))
+            .collect::<SimResult<Vec<_>>>()?;
+        crate::core::call_lua::<()>(&self.lua, function, mlua::MultiValue::from_vec(values))
+    }
+
+    /// The addon messages the addon sent, in order: `prefix|chatType|target|message`.
+    pub fn addon_messages(&self) -> SimResult<Vec<String>> {
+        let log: Table = self.lua.globals().raw_get("__selu_world_addon_messages")?;
+        log.sequence_values::<String>()
+            .map(|v| v.map_err(Into::into))
+            .collect()
+    }
+
     /// What the player chose in NPC interactions, in order (`SelectOption 12`,
     /// `AcceptQuest`, `GetQuestReward 2`, `LootSlot 1`, ...).
     pub fn interactions(&self) -> SimResult<Vec<String>> {
         let log: Table = self.lua.globals().raw_get("__selu_world_interaction_log")?;
-        log.sequence_values::<String>().map(|v| v.map_err(Into::into)).collect()
+        log.sequence_values::<String>()
+            .map(|v| v.map_err(Into::into))
+            .collect()
     }
 
     /// The minimap tracking list; MINIMAP_UPDATE_TRACKING.

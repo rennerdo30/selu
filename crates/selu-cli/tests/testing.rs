@@ -1083,3 +1083,67 @@ test("keys", () => {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn weapon_enchants_and_addon_messages_are_world_state_tests_can_set() {
+    let dir = project(
+        "world-extra",
+        r##"
+test("enchants", () => {
+  const changes: string[] = [];
+  const events = CreateFrame("Frame");
+  events.RegisterEvent("WEAPON_ENCHANT_CHANGED");
+  events.SetScript("OnEvent", (_self, event) => { changes.push(event); });
+  const hasMain = (): boolean => {
+    for (const enchant of C_Item.GetWeaponEnchantInfo(Enum.WeaponSlot.MainHand)) {
+      if (readable(enchant.hasEnchant) == true) { return true; }
+    }
+    return false;
+  };
+  expect(hasMain()).toBe(false);
+  sim.setWeaponEnchant(0, { enchantID: 29, seconds: 60, charges: 0 });
+  expect(hasMain()).toBe(true);
+  expect(changes.length).toBe(1);
+  // The enchant runs out with the client clock.
+  sim.advanceTime(61);
+  expect(hasMain()).toBe(false);
+  sim.setWeaponEnchant(0, { enchantID: 29, seconds: 60, charges: 0 });
+  sim.setWeaponEnchant(0, null);
+  expect(hasMain()).toBe(false);
+  expect(changes.length).toBe(3);
+});
+test("addon messages", () => {
+  const got: string[] = [];
+  const events = CreateFrame("Frame");
+  events.RegisterEvent("CHAT_MSG_ADDON");
+  events.SetScript("OnEvent", (_self, _event, prefix, text, channel, sender) => {
+    got.push(`${tostring(prefix)}|${tostring(text)}|${tostring(channel)}|${tostring(sender)}`);
+  });
+  // Only a registered prefix is delivered.
+  sim.receiveAddonMessage("RunnerPfx", "early");
+  expect(C_ChatInfo.RegisterAddonMessagePrefix("RunnerPfx")).toBe(true);
+  sim.receiveAddonMessage("RunnerPfx", "hello", "GUILD", "Friend-Realm");
+  expect(got.join(",")).toBe("RunnerPfx|hello|GUILD|Friend-Realm");
+  C_ChatInfo.SendAddonMessage("RunnerPfx", "out", "PARTY");
+  expect(sim.addonMessages().join(",")).toBe("RunnerPfx|PARTY||out");
+});
+test("a false actual is reported as false", () => {
+  const text = "missing";
+  expect(text != "missing" && text != "").toBe(true);
+});
+"##,
+    );
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"Runner\"\ntargets = [\"wowf@1.60.1.70790\"]\n",
+    )
+    .unwrap();
+    let out = run(&dir, None);
+    assert_eq!(out.status.code(), Some(1));
+    let report = report(&out);
+    let human = report.to_human();
+    assert_eq!(report.results.len(), 3, "{human}");
+    assert_eq!(report.failed(), 1, "{human}");
+    assert!(human.contains("expected false to be true"), "{human}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

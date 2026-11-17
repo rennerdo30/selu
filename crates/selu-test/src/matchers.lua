@@ -43,7 +43,11 @@ local function expectation(actual, negated)
   local result = {}
   local function check(ok, name, expected, observed)
     if ok == negated then
-      error("expected " .. render(observed == nil and actual or observed) .. (negated and " not " or " ") .. name .. " " .. render(expected), 3)
+      -- An explicit branch: `observed == nil and actual or observed` would
+      -- report an actual `false` as nil.
+      local shown = observed
+      if shown == nil then shown = actual end
+      error("expected " .. render(shown) .. (negated and " not " or " ") .. name .. " " .. render(expected), 3)
     end
   end
   result.toBe = function(expected) check(actual == expected, "to be", expected) end

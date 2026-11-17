@@ -394,3 +394,19 @@ fn forbidden_constructor_and_parent_status_follow_regular_frames() {
     let s = selu_sim::Session::new(Default::default()).unwrap();
     s.eval("local f=CreateForbiddenFrame('Frame','ForbiddenFixture');assert(f:IsForbidden());local c=CreateFrame('Button',nil,f);assert(c:IsForbidden());c:SetParent(UIParent);assert(not c:IsForbidden());c:SetForbidden();assert(c:IsForbidden());assert(f:GetName()=='ForbiddenFixture' and f:GetObjectType()=='Frame')").unwrap();
 }
+
+#[test]
+fn a_long_advance_gives_each_frame_its_own_task_allowance() {
+    // A frame that resizes another every frame queues a transition per frame;
+    // over minutes of game time that is many thousands, but no runaway.
+    let s = Sim::new().unwrap();
+    s.ctx().set_budget(100000);
+    s.eval("local a=CreateFrame('Frame');a:SetSize(1,1);local sized=0;a:SetScript('OnSizeChanged',function() sized=sized+1 end);local d=CreateFrame('Frame');local n=0;d:SetScript('OnUpdate',function() n=n+1;a:SetWidth(n%7+1) end);function Sized() return sized end").unwrap();
+    s.advance_time(300.0);
+    assert!(
+        !s.logs().iter().any(|x| x.contains("budget")),
+        "{:?}",
+        s.logs()
+    );
+    s.eval("assert(Sized()>10000, Sized())").unwrap();
+}
