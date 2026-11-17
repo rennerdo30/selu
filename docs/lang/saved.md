@@ -72,11 +72,13 @@ they use captured `print`. Disabled warning levels follow D4's normal rules.
 After migrations, missing object fields are filled recursively using `nil`
 checks, preserving false and all existing values. Missing arrays/maps and other
 tables are deep-copied. Existing arrays and maps are not traversed to fill
-element fields. Thus adding an object field with a default is compatible;
-changing an array/map element shape, including adding a field, requires a
-version bump and migration. Removing or retyping any existing field also needs
-that bump. Every successful build writes deterministic `selu.saved.toml`;
-commit it. Failed builds preserve the prior history.
+element fields. Thus adding an object field with a default is compatible, and
+so is adding **optional** fields to an object inside an array, map, set, tuple,
+union or optional value: old elements simply lack them, which the optional type
+allows, and nothing has to be filled in. Any other change to an element shape,
+including adding a required field, requires a version bump and migration.
+Removing or retyping any existing field also needs that bump. Every successful
+build writes deterministic `selu.saved.toml`; commit it. Failed builds preserve the prior history.
 
 Read saved data at PLAYER_LOGIN or later. Direct top-level reads/writes,
 including imported bindings and member roots, are SELU0460. Functions may refer

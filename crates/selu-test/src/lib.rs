@@ -1,6 +1,7 @@
 //! Deterministic test runner and reports shared by the CLI and future Studio integration.
 pub mod packages;
 pub mod project;
+mod saved_compat;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

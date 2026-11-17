@@ -122,6 +122,32 @@ fn shape_gate_preserves_previous_file_and_allows_additive_defaults() {
     assert!(!build(&dir).status.success());
 }
 #[test]
+fn map_elements_may_gain_optional_fields_without_a_migration() {
+    let shape = |fields: &str| {
+        format!("type Row = {{ at: number{fields} }}; saved settings = {{ rows: new Map<number, Row>() }};")
+    };
+    let dir = project(&shape(""));
+    success(&dir);
+    // Old elements lack the new optional field, which the type allows.
+    std::fs::write(dir.join("src/main.selu"), shape("; note?: string")).unwrap();
+    success(&dir);
+    let widened = std::fs::read_to_string(dir.join("selu.saved.toml")).unwrap();
+    assert!(widened.contains("note: string?"), "{widened}");
+    // A required field would be missing from every old element.
+    std::fs::write(
+        dir.join("src/main.selu"),
+        shape("; note?: string; count: number"),
+    )
+    .unwrap();
+    let o = build(&dir);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("SELU0468"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("selu.saved.toml")).unwrap(),
+        widened
+    );
+}
+#[test]
 fn early_access_includes_writes_members_and_imports_but_allows_shadowing() {
     for source in [
         "saved s = { x: 1 }; print(s.x);",

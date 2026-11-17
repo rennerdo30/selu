@@ -1538,7 +1538,12 @@ fn validate_saved(
             || before
                 .fields
                 .iter()
-                .any(|(k, v)| after.fields.get(k) != Some(v));
+                .any(|(k, v)| {
+                    after
+                        .fields
+                        .get(k)
+                        .is_none_or(|a| !crate::saved_compat::widens(v, a))
+                });
 
         if before.per_character != after.per_character
             || after.version < before.version
