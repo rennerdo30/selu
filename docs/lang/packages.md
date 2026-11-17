@@ -4,6 +4,10 @@ Status: implemented 2026-11-10 (SL-42; owner-approved). Package 0 of the UI
 toolkit and standard-library work: the mechanism only, plus one small test
 package. `selu-ui` and the standard-library modules come after it.
 
+Shipped packages: `@selu/ui` (the UI toolkit, docs/lang/ui.md), `@selu/comm`
+(addon messages between players) and `@selu/std` (the standard library,
+docs/lang/std.md).
+
 ## What a package is
 
 A package is a library of `.selu` modules that ships inside the Selu compiler.

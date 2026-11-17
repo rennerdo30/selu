@@ -1,0 +1,55 @@
+// Byte-level text helpers: hex, checksums, safe display text.
+
+// Each byte as two upper-case hex digits.
+export function hexEncode(text: string): string {
+  const parts: string[] = [];
+  for (let index = 1; index <= text.length; index++) {
+    parts.push(format("%02X", string.byte(text, index) ?? 0));
+  }
+  return parts.join("");
+}
+
+// The bytes of hex digits written by hexEncode (either case). A digit pair
+// that is not hex gives byte 0; a trailing odd digit is ignored.
+export function hexDecode(digits: string): string {
+  const parts: string[] = [];
+  for (let index = 0; index + 1 < digits.length; index += 2) {
+    parts.push(string.char(tonumber(digits.slice(index, index + 2), 16) ?? 0));
+  }
+  return parts.join("");
+}
+
+// Adler-32 of the bytes, as eight lower-case hex digits (checksum, then sum).
+export function adler32(text: string): string {
+  let a = 1;
+  let b = 0;
+  for (let index = 1; index <= text.length; index++) {
+    a = (a + (string.byte(text, index) ?? 0)) % 65521;
+    b = (b + a) % 65521;
+  }
+  return format("%04x%04x", b % 65536, a % 65536);
+}
+
+// The text cut to at most `maxBytes` bytes without splitting a UTF-8
+// character: a character the cut would split is dropped whole.
+export function truncateBytes(text: string, maxBytes: number): string {
+  if (text.length <= maxBytes) { return text; }
+  const following = string.byte(text, maxBytes + 1) ?? 0;
+  let cut = text.slice(0, maxBytes);
+  if (following >= 128 && following < 192) {
+    let stop = cut.length;
+    while (stop > 0) {
+      const byte = string.byte(cut, stop) ?? 0;
+      if (byte < 128 || byte >= 192) { break; }
+      stop -= 1;
+    }
+    if (stop > 0 && (string.byte(cut, stop) ?? 0) >= 192) { cut = cut.slice(0, stop - 1); }
+  }
+  return cut;
+}
+
+// The text with UI escape bars and control bytes turned into spaces, safe to
+// show in a font string even when it came from another player.
+export function plainText(text: string): string {
+  return text.split("|").join(" ").replaceAll(luaPattern`%c`, " ");
+}

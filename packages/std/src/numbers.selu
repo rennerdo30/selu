@@ -1,0 +1,37 @@
+// Number checks and rounding.
+
+// The value when it is a real number: null for null, NaN and the infinities.
+export function finite(value: number?): number? {
+  return value != null && value == value && value > -math.huge && value < math.huge ? value : null;
+}
+
+// The value when it is a whole number of zero or more (a count, an ID).
+export function wholeNumber(value: number?): number? {
+  const n = finite(value);
+  return n != null && n >= 0 && n % 1 == 0 ? n : null;
+}
+
+// The value limited to [low, high]; `fallback` when it is null or NaN.
+export function clampOr(value: number?, low: number, high: number, fallback: number): number {
+  if (value == null || value != value) { return fallback; }
+  return math.max(low, math.min(high, value));
+}
+
+// True when the value lies in [0, 1], the range of map coordinates.
+export function inUnitRange(value: number?): boolean {
+  return value != null && value >= 0 && value <= 1;
+}
+
+// The value rounded half up to `decimals` whole places (0 rounds to a whole
+// number).
+export function roundTo(value: number, decimals: number = 0): number {
+  let scale = 1;
+  for (let i = 0; i < decimals; i++) { scale *= 10; }
+  return math.floor(value * scale + 0.5) / scale;
+}
+
+// True when `mask` has the flag `bit` (a power of two) set. Works on the
+// whole numbers Lua numbers hold exactly, without the client's bit library.
+export function hasBit(mask: number, bit: number): boolean {
+  return math.floor(mask / bit) % 2 == 1;
+}

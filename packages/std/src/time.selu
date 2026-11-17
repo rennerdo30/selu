@@ -1,0 +1,35 @@
+// The game clock, durations and timers.
+
+// The client's clock in seconds (GetTime), or 0 while it cannot be read.
+export function now(): number {
+  try { return readable(GetTime()) ?? 0; } catch { return 0; }
+}
+
+export type DurationParts = { days: number; hours: number; minutes: number; seconds: number };
+
+// Whole days, hours, minutes and seconds of a duration; negative counts as 0.
+// Addons format the parts with their own localised strings.
+export function durationParts(seconds: number): DurationParts {
+  const total = math.max(0, math.floor(seconds));
+  return {
+    days: math.floor(total / 86400),
+    hours: math.floor((total % 86400) / 3600),
+    minutes: math.floor((total % 3600) / 60),
+    seconds: total % 60
+  };
+}
+
+// A running timer or ticker; `cancel` stops it and may be called again.
+export type TimerHandle = { cancel: () => void };
+
+// Runs `callback` once after `seconds`.
+export function after(seconds: number, callback: () => void): TimerHandle {
+  const handle = C_Timer.NewTimer(seconds, callback);
+  return { cancel: () => { handle.Cancel(); } };
+}
+
+// Runs `callback` every `seconds` until cancelled.
+export function every(seconds: number, callback: () => void): TimerHandle {
+  const handle = C_Timer.NewTicker(seconds, callback);
+  return { cancel: () => { handle.Cancel(); } };
+}

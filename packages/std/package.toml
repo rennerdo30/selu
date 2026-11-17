@@ -1,0 +1,3 @@
+name = "std"
+description = "Standard library: number checks and rounding, bit flags, text encodings and checksums, the game clock, durations, timers, warn-once logging and safe reads of the player's state."
+products = ["wow", "wowf", "wow_classic", "wow_classic_era", "wow_anniversary", "wow_classic_titan"]

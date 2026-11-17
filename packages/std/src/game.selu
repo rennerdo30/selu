@@ -1,0 +1,37 @@
+// Safe reads of the player's state. Each read is protected: a client that
+// refuses or hides a value gives the stated fallback, never a Lua error.
+
+// True during combat lockdown (protected frames cannot change). `assume` is
+// returned when the client gives no readable answer: callers that protect
+// secure actions pass true, callers that only skip work pass false.
+export function inCombatLockdown(assume: boolean = false): boolean {
+  try {
+    const locked = readable(InCombatLockdown());
+    return locked == null ? assume : locked;
+  } catch { return assume; }
+}
+
+// True while the player is in combat (lockdown, or affecting combat).
+export function playerInCombat(): boolean {
+  if (inCombatLockdown()) { return true; }
+  try { return readable(UnitAffectingCombat("player")) == true; } catch { return false; }
+}
+
+// The player's class token ("WARRIOR", "MAGE", ...), or null.
+export function playerClassToken(): string? {
+  try {
+    const [_name, token] = UnitClass("player");
+    const t = readable(token);
+    return t != null && t != "" ? t : null;
+  } catch { return null; }
+}
+
+// The player's level, or null.
+export function playerLevel(): number? {
+  try { return readable(UnitLevel("player")); } catch { return null; }
+}
+
+// True while a Shift key is held.
+export function shiftKeyDown(): boolean {
+  try { return readable(IsShiftKeyDown()) == true; } catch { return false; }
+}

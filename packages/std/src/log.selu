@@ -1,0 +1,13 @@
+// Logging helpers.
+
+// A function that passes each message to `log` the first time its key is
+// seen and drops later ones with the same key. Each call gives its own set
+// of keys, so two modules never silence each other.
+export function warnOnceTo(log: (message: string) => void): (key: string, message: string) => void {
+  const seen = new Set<string>();
+  return (key: string, message: string) => {
+    if (seen.has(key)) { return; }
+    seen.add(key);
+    log(message);
+  };
+}
