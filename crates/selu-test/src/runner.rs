@@ -125,6 +125,11 @@ fn overlay(m: &mut selu_manifest::Manifest) {
             json!([]),
         ),
         (
+            "sim.pressKey",
+            json!([{"name":"key","type":"string"}]),
+            json!([]),
+        ),
+        (
             "sim.uiErrors",
             json!([]),
             json!([{"name":"errors","type":"table","attributes":{"InnerType":"string"}}]),
@@ -1181,6 +1186,15 @@ fn install(
         lua.create_function(move |_, (kind, data): (String, Value)| {
             let data = selu_sim::session::HostValue::capture(&data)?;
             s.borrow().interact(&kind, data)
+        })?,
+    )?;
+    let s = session.clone();
+    sim.set(
+        "pressKey",
+        lua.create_function(move |_, key: String| {
+            let session = s.borrow();
+            session.key(&key, true)?;
+            session.key(&key, false)
         })?,
     )?;
     let s = session.clone();

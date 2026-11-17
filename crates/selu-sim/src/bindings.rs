@@ -118,6 +118,89 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
             ))
         })?,
     )?;
+    // Override bindings (SetOverrideBinding*, ClearOverrideBindings): per
+    // owner frame, a key runs another action or clicks a named button. They
+    // win over the ordinary bindings, priority ones first, the most recently
+    // set first within each.
+    lua.set_named_registry_value("selu.override_bindings", lua.create_table()?)?;
+    fn set_override(
+        lua: &Lua,
+        owner: Table,
+        priority: bool,
+        key: String,
+        target: Option<(&str, String, String)>,
+    ) -> mlua::Result<()> {
+        let list = lua.named_registry_value::<Table>("selu.override_bindings")?;
+        let key = key.to_ascii_uppercase();
+        let kept = lua.create_table()?;
+        for entry in list.sequence_values::<Table>() {
+            let entry = entry?;
+            let same = entry.raw_get::<Table>("owner")? == owner
+                && entry.raw_get::<String>("key")? == key;
+            if !same {
+                kept.raw_push(entry)?;
+            }
+        }
+        if let Some((kind, value, button)) = target {
+            let entry = lua.create_table()?;
+            entry.raw_set("owner", owner)?;
+            entry.raw_set("priority", priority)?;
+            entry.raw_set("key", key)?;
+            entry.raw_set("kind", kind)?;
+            entry.raw_set("value", value)?;
+            entry.raw_set("button", button)?;
+            kept.raw_push(entry)?;
+        }
+        lua.set_named_registry_value("selu.override_bindings", kept)
+    }
+    // The frame a click binding names: the frame registered under that name.
+    globals.raw_set(
+        "GetClickFrame",
+        lua.create_function(|lua, name: String| {
+            let value = lua.globals().raw_get::<Option<Table>>(name)?;
+            Ok(value.filter(|t| crate::frames::arena::id(t).is_ok()))
+        })?,
+    )?;
+    globals.raw_set(
+        "SetOverrideBinding",
+        lua.create_function(
+            |lua, (owner, priority, key, command): (Table, Option<bool>, String, Option<String>)| {
+                let target = command.map(|c| ("action", c, String::new()));
+                set_override(lua, owner, priority.unwrap_or(false), key, target)
+            },
+        )?,
+    )?;
+    globals.raw_set(
+        "SetOverrideBindingClick",
+        lua.create_function(
+            |lua,
+             (owner, priority, key, name, button): (
+                Table,
+                Option<bool>,
+                String,
+                Option<String>,
+                Option<String>,
+            )| {
+                let target =
+                    name.map(|n| ("click", n, button.unwrap_or_else(|| "LeftButton".into())));
+                set_override(lua, owner, priority.unwrap_or(false), key, target)
+            },
+        )?,
+    )?;
+    globals.raw_set(
+        "ClearOverrideBindings",
+        lua.create_function(|lua, owner: Table| {
+            let list = lua.named_registry_value::<Table>("selu.override_bindings")?;
+            let kept = lua.create_table()?;
+            for entry in list.sequence_values::<Table>() {
+                let entry = entry?;
+                if entry.raw_get::<Table>("owner")? != owner {
+                    kept.raw_push(entry)?;
+                }
+            }
+            lua.set_named_registry_value("selu.override_bindings", kept)
+        })?,
+    )?;
     globals.raw_set(
         "GetBindingCategoryName",
         lua.create_function(|lua, header: String| {
@@ -155,7 +238,56 @@ fn run(lua: &Lua, action: &str, down: bool) -> mlua::Result<()> {
     })
 }
 
+/// The override binding a key runs now: priority ones first, the most
+/// recently set first within each.
+fn override_for(lua: &Lua, key: &str) -> mlua::Result<Option<Table>> {
+    let Some(list) = lua.named_registry_value::<Option<Table>>("selu.override_bindings")? else {
+        return Ok(None);
+    };
+    let entries: Vec<Table> = list.sequence_values::<Table>().collect::<mlua::Result<_>>()?;
+    for priority in [true, false] {
+        for entry in entries.iter().rev() {
+            if entry.raw_get::<String>("key")? == key && entry.raw_get::<bool>("priority")? == priority {
+                return Ok(Some(entry.clone()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// A click binding clicks its button with the binding's mouse button, on key
+/// down or key up as the button registered for clicks (RegisterForClicks).
+fn click_binding(lua: &Lua, name: &str, button: &str, down: bool) -> mlua::Result<()> {
+    let Some(frame) = lua.globals().raw_get::<Option<Table>>(name)? else {
+        return Ok(());
+    };
+    let Ok(index) = crate::frames::arena::id(&frame) else {
+        return Ok(());
+    };
+    let suffix = if down { "Down" } else { "Up" };
+    let registered = crate::frames::arena::store(lua).borrow().regions[index]
+        .click_buttons
+        .iter()
+        .any(|b| *b == format!("{button}{suffix}") || *b == format!("Any{suffix}"));
+    if !registered {
+        return Ok(());
+    }
+    let click: Function = frame.get("Click")?;
+    let ctx = lua.app_data_ref::<crate::Ctx>().unwrap().clone();
+    crate::core::script_callback(lua, &ctx, || {
+        crate::core::call_lua::<()>(lua, click, (frame.clone(), button, down))
+    })
+}
+
 pub(crate) fn key(lua: &Lua, key: &str, down: bool) -> mlua::Result<()> {
+    if let Some(entry) = override_for(lua, key)? {
+        let value: String = entry.raw_get("value")?;
+        if entry.raw_get::<String>("kind")? == "click" {
+            let button: String = entry.raw_get("button")?;
+            return click_binding(lua, &value, &button, down);
+        }
+        return run(lua, &value, down);
+    }
     let Some(keys) = lua.named_registry_value::<Option<Table>>("selu.binding_keys")? else {
         return Ok(());
     };

@@ -1039,3 +1039,47 @@ test("npc", () => {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn override_bindings_click_their_button_when_a_key_is_pressed() {
+    let dir = project(
+        "override-bindings",
+        r#"
+test("keys", () => {
+  const owner = CreateFrame("Frame");
+  const target = CreateFrame("Button", "RunnerKeyTarget", UIParent);
+  target.RegisterForClicks("AnyDown");
+  const pressed: string[] = [];
+  target.SetScript("OnClick", (_self, button, down) => { pressed.push(`${button}:${tostring(down)}`); });
+  expect(GetClickFrame("RunnerKeyTarget") == target).toBe(true);
+  SetOverrideBindingClick(owner, true, "1", "RunnerKeyTarget", "1");
+  sim.pressKey("1");
+  expect(pressed.join(",")).toBe("1:true");
+  // The most recent priority binding wins; clearing the owner releases it.
+  const other = CreateFrame("Button", "RunnerKeyOther", UIParent);
+  other.RegisterForClicks("AnyUp");
+  other.SetScript("OnClick", (_self, button, down) => { pressed.push(`other ${button}:${tostring(down)}`); });
+  SetOverrideBindingClick(owner, true, "2", "RunnerKeyOther", "LeftButton");
+  sim.pressKey("2");
+  expect(pressed.join(",")).toBe("1:true,other LeftButton:false");
+  ClearOverrideBindings(owner);
+  sim.pressKey("1");
+  sim.pressKey("2");
+  expect(pressed.length).toBe(2);
+});
+"#,
+    );
+    std::fs::write(
+        dir.join("selu.toml"),
+        "[addon]\nname = \"Runner\"\ntargets = [\"wowf@1.60.1.70790\"]\n",
+    )
+    .unwrap();
+    let out = run(&dir, None);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
